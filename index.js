@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v32.1";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v33";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -24,6 +24,47 @@ const humanHandoff = new Set();
 const pendingRatings = new Set();
 let lastCreditAlert = 0;  // timestamp del último aviso de saldo bajo (anti-spam)
 const searchCache = new Map();  // {query: {result, ts}} — evita búsquedas duplicadas en <5min
+
+// Contador persistente (v33) — vive en memoria, se reinicia cuando Render duerme
+const botStats = {
+  startedAt: new Date().toISOString(),
+  messages: { total: 0, today: 0, byDay: {} },
+  uniqueUsers: new Set(),
+  uniqueUsersToday: { date: '', set: new Set() },
+  anthropic: {
+    totalCalls: 0, failedCalls: 0, creditErrors: 0,
+    inputTokens: 0, outputTokens: 0,
+    cacheCreationTokens: 0, cacheReadTokens: 0
+  }
+};
+
+function trackIncomingMessage(userId) {
+  const today = new Date().toISOString().slice(0, 10);
+  botStats.messages.total++;
+  botStats.messages.byDay[today] = (botStats.messages.byDay[today] || 0) + 1;
+  botStats.uniqueUsers.add(userId);
+  if (botStats.uniqueUsersToday.date !== today) {
+    botStats.uniqueUsersToday = { date: today, set: new Set() };
+  }
+  botStats.uniqueUsersToday.set.add(userId);
+  botStats.messages.today = botStats.messages.byDay[today];
+}
+
+function trackAnthropicUsage(usage) {
+  if (!usage) return;
+  botStats.anthropic.totalCalls++;
+  botStats.anthropic.inputTokens += (usage.input_tokens || 0);
+  botStats.anthropic.outputTokens += (usage.output_tokens || 0);
+  botStats.anthropic.cacheCreationTokens += (usage.cache_creation_input_tokens || 0);
+  botStats.anthropic.cacheReadTokens += (usage.cache_read_input_tokens || 0);
+}
+
+function estimateCostUSD() {
+  const a = botStats.anthropic;
+  const cost = (a.inputTokens * 3 / 1e6) + (a.outputTokens * 15 / 1e6) +
+               (a.cacheCreationTokens * 3.75 / 1e6) + (a.cacheReadTokens * 0.3 / 1e6);
+  return Math.round(cost * 10000) / 10000;
+}
 
 const RATING_REQUEST = `⭐ Antes de despedirnos, ¿cómo te pareció la atención del 1 al 5?
 
@@ -868,6 +909,7 @@ async function executeHumanHandoff(userId, input) {
 
 
 async function handleConversation(userId, userMessage) {
+  trackIncomingMessage(userId);
   if (humanHandoff.has(userId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${userId}`);
     return;
@@ -906,6 +948,7 @@ async function handleConversation(userId, userMessage) {
       );
 
       const stopReason = response.data.stop_reason;
+      trackAnthropicUsage(response.data?.usage);
       const content = response.data.content;
 
       if (stopReason === "tool_use") {
@@ -1007,6 +1050,7 @@ async function handleConversation(userId, userMessage) {
       return;
     } catch (err) {
       console.error("Claude error:", err.response?.data || err.message);
+            botStats.anthropic.failedCalls++;
             // Detectar credit_balance_too_low y alertar al equipo (anti-spam: 1 cada 30 min)
             try {
               const errType = err.response?.data?.error?.type;
@@ -1017,6 +1061,7 @@ async function handleConversation(userId, userMessage) {
                 const THIRTY_MIN = 30 * 60 * 1000;
                 if (now - lastCreditAlert > THIRTY_MIN) {
                   lastCreditAlert = now;
+                  botStats.anthropic.creditErrors++;
                   log("warn", "credit_balance_low_alert", { errMsg });
                   await notifyTeam("⚠️ ALERTA: Saldo de Anthropic agotado. El bot no puede responder a clientes hasta recargar.\n\nRecarga: https://platform.claude.com/settings/billing", null);
                 }
@@ -1108,7 +1153,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v32.1 (Sonnet 4.5, BOT_VERSION centralized + endpoints fix)");
+  res.send("RAV-Bot v33 (Sonnet 4.5, persistent counters + cost tracking)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1158,8 +1203,7 @@ app.get("/admin/health", async (req, res) => {
   res.json(result);
 });
 
-// Stats: snapshot del estado actual del bot.
-// No requiere instrumentación pesada — muestra solo lo que tenemos en memoria.
+// Stats con contadores persistentes (v33)
 app.get("/admin/stats", (req, res) => {
   const handoffsList = Array.from(humanHandoff.values());
   const pendingList = Array.from(pendingRatings.values());
@@ -1168,10 +1212,34 @@ app.get("/admin/stats", (req, res) => {
     products: cart.products?.length || 0,
     has_warranty: !!(cart.warranty && Object.keys(cart.warranty).length > 0)
   }));
+  const cachingActive = botStats.anthropic.cacheReadTokens > 0 || botStats.anthropic.cacheCreationTokens > 0;
+  const cacheHitRatio = botStats.anthropic.inputTokens > 0
+    ? (botStats.anthropic.cacheReadTokens / (botStats.anthropic.inputTokens + botStats.anthropic.cacheReadTokens) * 100).toFixed(1) + '%'
+    : '0%';
   res.json({
     bot_version: BOT_VERSION,
     timestamp: new Date().toISOString(),
-    summary: {
+    counters: {
+      uptime_started_at: botStats.startedAt,
+      messages_received_total: botStats.messages.total,
+      messages_received_today: botStats.messages.today,
+      messages_by_day: botStats.messages.byDay,
+      unique_users_total: botStats.uniqueUsers.size,
+      unique_users_today: botStats.uniqueUsersToday.set.size
+    },
+    anthropic: {
+      total_calls: botStats.anthropic.totalCalls,
+      failed_calls: botStats.anthropic.failedCalls,
+      credit_errors: botStats.anthropic.creditErrors,
+      input_tokens: botStats.anthropic.inputTokens,
+      output_tokens: botStats.anthropic.outputTokens,
+      cache_creation_tokens: botStats.anthropic.cacheCreationTokens,
+      cache_read_tokens: botStats.anthropic.cacheReadTokens,
+      caching_active: cachingActive,
+      cache_hit_ratio: cacheHitRatio,
+      estimated_cost_usd: estimateCostUSD()
+    },
+    current_state: {
       active_handoffs: humanHandoff.size,
       pending_ratings: pendingRatings.size,
       active_carts: checkouts.size,
@@ -1180,7 +1248,7 @@ app.get("/admin/stats", (req, res) => {
     active_handoff_users: handoffsList,
     pending_rating_users: pendingList,
     active_checkouts: checkoutsList,
-    note: "Stats are in-memory only. They reset when the bot restarts (free tier sleeps after 15min)."
+    note: "Counters reset when bot restarts (free tier sleeps after 15min)."
   });
 });
 
@@ -1211,7 +1279,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v32.1 (Sonnet 4.5, BOT_VERSION centralized + endpoints fix) running on port ${PORT}`);
+  console.log(`RAV-Bot v33 (Sonnet 4.5, persistent counters + cost tracking) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

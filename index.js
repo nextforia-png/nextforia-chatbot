@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v33";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v33.1";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -158,7 +158,7 @@ Si el cliente está mandando una foto que parece de un producto dañado en garan
 
 PRODUCTOS:
 - LIMITE DURO INFLEXIBLE: máximo 1 search_products POR TURNO. Una sola llamada con términos buenos. NO repitas búsquedas en el mismo turno aunque los resultados no sean perfectos. Usa los productos que sí encontraste y ofrécelos.
-- Si search_products devuelve 0 resultados: NO busques otra vez. Sé honesto con el cliente — dile algo como "No encontré exactamente eso 🙈 ¿Me describes con otras palabras qué buscas?" y ESPERA su respuesta. No improvises búsquedas.
+- Si search_products devuelve 0 resultados: NO es un error ni un problema técnico — significa que no hay productos disponibles con ese término (puede que estén agotados o se llamen distinto en el catálogo). PROHIBIDO decir "problema técnico", "problemita", "error" o similar: el sistema funcionó bien. PROHIBIDO enviar el link de búsqueda de ese mismo término (le mostraría una página vacía al cliente). En su lugar, sé honesto y útil: "Mmm, no encontré disponibles con ese término 🙈 ¿Me cuentas para qué edad es tu peque y qué le gusta? Así te busco opciones que le encanten ✨" y ESPERA su respuesta para buscar con otras palabras (ej: si pidió "muñeca" puedes intentar luego "bebé", "barbie" o "niña").
 - Llama search_products con términos cortos (2-4 palabras).
 - Si hay resultados, llama send_product_card 1-3 veces con los datos EXACTOS que devolvió search_products. NO inventes.
 - Mensaje corto con gancho: "¡Tengo estas joyas! ¿Cuál te late?"
@@ -234,7 +234,7 @@ CASOS ESPECIALES DE COMPRA:
 
   🌐 FLUJO DE RECOMENDACIÓN — 3 opciones + link de búsqueda específica (HAZLO SIEMPRE así):
   PASO 1: Cuando el cliente pida productos, llama search_products UNA SOLA VEZ con términos cortos y relevantes (ej: "carro control remoto", "muñeca 3 años", "lego niña"). Una sola llamada, sin repetir.
-  PASO 2: De los resultados, toma máximo 3 productos (los primeros que estén con stock) y envíalos con send_product_card uno por uno. Si hay menos de 3 con stock, envía los que haya. Si hay 0 resultados: NO busques de nuevo, sé honesto con el cliente.
+  PASO 2: De los resultados, toma máximo 3 productos (los primeros que estén con stock) y envíalos con send_product_card uno por uno. Si hay menos de 3 con stock, envía los que haya. Si hay 0 resultados: NO digas que hubo un error o problema técnico (no lo hubo), NO mandes link de búsqueda de ese término; pregunta edad y gustos del peque para buscar con otras palabras en tu siguiente turno.
   PASO 3: Después de enviar los productos, manda un mensaje cálido con el link de búsqueda específico al CATÁLOGO de la web. Formato del link: https://ravtoys.com/search?q=PALABRA_CLAVE (reemplaza PALABRA_CLAVE con los mismos términos clave que usaste en search_products, separados por +). Ejemplos:
     - Cliente busca "carro control remoto" → link: https://ravtoys.com/search?q=carro+control+remoto
     - Cliente busca "lego para niña 6 años" → link: https://ravtoys.com/search?q=lego+ni%C3%B1a (los acentos van encodificados: ñ=%C3%B1, á=%C3%A1, é=%C3%A9, í=%C3%AD, ó=%C3%B3, ú=%C3%BA)
@@ -1153,7 +1153,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33 (Sonnet 4.5, persistent counters + cost tracking)");
+  res.send("RAV-Bot v33.1 (Sonnet 4.5, honest zero-results handling)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1279,7 +1279,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33 (Sonnet 4.5, persistent counters + cost tracking) running on port ${PORT}`);
+  console.log(`RAV-Bot v33.1 (Sonnet 4.5, honest zero-results handling) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

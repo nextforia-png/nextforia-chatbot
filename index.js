@@ -24,6 +24,7 @@ const humanHandoff = new Set();
 const pendingRatings = new Set();
 let lastCreditAlert = 0;  // timestamp del último aviso de saldo bajo (anti-spam)
 const searchCache = new Map();  // {query: {result, ts}} — evita búsquedas duplicadas en <5min
+const zeroResultAlerts = new Map();  // {query: timestamp} — anti-spam de alertas de 0 resultados
 
 // Contador persistente (v33) — vive en memoria, se reinicia cuando Render duerme
 const botStats = {
@@ -157,9 +158,14 @@ Frases tipo (varía, no las copies idénticas):
 Si el cliente está mandando una foto que parece de un producto dañado en garantía, ofrece pasarlo con un humano: "Soy una IA en aprendizaje y aún no veo imágenes 🙈 Pero te paso con nuestra asesora Eliana que sí puede revisar la foto y ayudarte 💛" y llama request_human_handoff(reason="garantia_con_imagen").
 
 PRODUCTOS:
-- SOLO PRODUCTOS REALES: nunca inventes, sugieras ni menciones marcas, personajes, líneas o productos específicos (nombres de muñecas, juegos, personajes, etc.) que NO hayan aparecido en resultados reales de search_products. Solo hablas de productos que el sistema realmente te devolvió. Si no tienes resultados, no des ejemplos de marcas: pregunta edad y gustos del peque.
+- REGLA SAGRADA: SOLO existes para ofrecer productos que aparezcan en resultados reales de search_products. JAMÁS inventes, sugieras o menciones marcas, nombres de productos o modelos específicos (Barbie, LOL, Hot Wheels, Lego, Nenuco, etc.) que no hayan salido en una búsqueda real de esta conversación. Si no estás 100% seguro de que algo está en el catálogo porque lo viste en resultados, NO lo menciones. Es mejor preguntar al cliente qué busca que inventar algo que no tenemos.
 - LIMITE DURO INFLEXIBLE: máximo 1 search_products POR TURNO. Una sola llamada con términos buenos. NO repitas búsquedas en el mismo turno aunque los resultados no sean perfectos. Usa los productos que sí encontraste y ofrécelos.
-- Si search_products devuelve 0 resultados: NO falló nada. El sistema funcionó bien; simplemente no hay productos publicados con ese término exacto (pueden estar agotados o llamarse distinto). REGLA ABSOLUTA: nunca te atribuyas fallas, errores, despistes, líos ni "problemas técnicos" de ningún tipo — ni con esas palabras ni con sinónimos. Nunca uses la palabra "técnico/técnica". Tampoco envíes el link de búsqueda de un término que dio 0 (le mostraría una página vacía). En su lugar, responde con seguridad y pide contexto, SIN nombrar ninguna marca, personaje ni producto: "¡Claro que sí! 💛 Para mostrarte las mejores opciones, cuéntame para qué edad es tu peque y qué le gusta hacer ✨". Con esa info, en tu siguiente turno busca con términos generales del catálogo.
+- Si search_products devuelve 0 resultados: NADA falló. El sistema funcionó perfecto, simplemente no hay productos con ese término exacto. REGLAS ESTRICTAS:
+  1. NUNCA te atribuyas fallas. Prohibido cualquier insinuación de que TÚ tuviste un problema: nada de "problema técnico", "despiste", "fallo", "error", "lío", "se me complicó", "estoy teniendo dificultades" ni ningún sinónimo. No falló nada tuyo, así que no lo menciones.
+  2. NUNCA inventes marcas, productos o nombres específicos. PROHIBIDO ofrecer "Barbie", "LOL", "Nenuco", "Hot Wheels" o cualquier marca/producto a menos que haya aparecido en resultados reales de search_products en esta conversación. Si no lo viste en una búsqueda, no existe para ti.
+  3. NUNCA mandes el link de búsqueda de un término que dio 0 (mostraría página vacía).
+  4. En su lugar, pregunta de forma cálida y abierta SIN mencionar productos específicos, para poder buscar con otro término después. Ejemplo: "¡Claro que sí! 💛 Para encontrarle algo perfecto a tu peque, cuéntame un poco más: ¿qué edad tiene y qué le gusta o qué tipo de juguete buscas? Así te muestro las mejores opciones que tenemos ✨"
+  5. Cuando el cliente responda con más detalle (edad, gustos, tipo), haz una NUEVA búsqueda con esos términos. SOLO ofrece productos que aparezcan en esos resultados reales.
 - Llama search_products con términos cortos (2-4 palabras).
 - Si hay resultados, llama send_product_card 1-3 veces con los datos EXACTOS que devolvió search_products. NO inventes.
 - Mensaje corto con gancho: "¡Tengo estas joyas! ¿Cuál te late?"
@@ -235,7 +241,7 @@ CASOS ESPECIALES DE COMPRA:
 
   🌐 FLUJO DE RECOMENDACIÓN — 3 opciones + link de búsqueda específica (HAZLO SIEMPRE así):
   PASO 1: Cuando el cliente pida productos, llama search_products UNA SOLA VEZ con términos cortos y relevantes (ej: "carro control remoto", "muñeca 3 años", "lego niña"). Una sola llamada, sin repetir.
-  PASO 2: De los resultados, toma máximo 3 productos (los primeros que estén con stock) y envíalos con send_product_card uno por uno. Si hay menos de 3 con stock, envía los que haya. Si hay 0 resultados: no falló nada, nunca te atribuyas errores/despistes/problemas técnicos (ni la palabra "técnico"), no mandes link de ese término, y NO nombres marcas ni productos que no estén en resultados; pregunta edad y gustos del peque para volver a buscar.
+  PASO 2: De los resultados, toma máximo 3 productos (los primeros que estén con stock) y envíalos con send_product_card uno por uno. Si hay menos de 3 con stock, envía los que haya. Si hay 0 resultados: NO digas que hubo un error o problema técnico (no lo hubo), NO mandes link de búsqueda de ese término; pregunta edad y gustos del peque para buscar con otras palabras en tu siguiente turno.
   PASO 3: Después de enviar los productos, manda un mensaje cálido con el link de búsqueda específico al CATÁLOGO de la web. Formato del link: https://ravtoys.com/search?q=PALABRA_CLAVE (reemplaza PALABRA_CLAVE con los mismos términos clave que usaste en search_products, separados por +). Ejemplos:
     - Cliente busca "carro control remoto" → link: https://ravtoys.com/search?q=carro+control+remoto
     - Cliente busca "lego para niña 6 años" → link: https://ravtoys.com/search?q=lego+ni%C3%B1a (los acentos van encodificados: ñ=%C3%B1, á=%C3%A1, é=%C3%A9, í=%C3%AD, ó=%C3%B3, ú=%C3%BA)
@@ -541,6 +547,23 @@ async function searchShopify(query) {
   console.log(`[searchShopify] query="${query}" returned ${products.length} products (storefront says ${total})`);
   const result = { products, total, query };
   searchCache.set(query, { result, ts: Date.now() });
+  // ALERTA INTERNA (v33.2): si la búsqueda no encontró nada, avisar al equipo.
+  // Esto NO es un error del bot — es info útil: qué buscan los clientes que no tenemos.
+  if (products.length === 0) {
+    try {
+      const now = Date.now();
+      const key = (query || "").toLowerCase().trim();
+      const last = zeroResultAlerts.get(key) || 0;
+      const THIRTY_MIN = 30 * 60 * 1000;
+      if (now - last > THIRTY_MIN) {
+        zeroResultAlerts.set(key, now);
+        log("info", "zero_results_alert", { query });
+        notifyTeam(`🔍 Un cliente buscó "${query}" y no encontramos productos. Puede que falte ese producto en el catálogo o que se llame distinto. Vale la pena revisar si conviene agregarlo o si hay un sinónimo.`, null).catch(e => console.error("zero-results alert failed:", e.message));
+      }
+    } catch (alertErr) {
+      console.error("zero-results alert error:", alertErr.message);
+    }
+  }
   return result;
 }
 
@@ -592,23 +615,6 @@ function log(level, event, data = {}) {
   } else {
     console.log(JSON.stringify(entry));
   }
-}
-
-let lastTechAlert = 0;  // throttle para alertas internas de "problema técnico"
-// Si el bot le dice al cliente algo "técnico" (problema/despiste/fallo técnico), avisa al equipo.
-// Muchas veces NO hay falla real (ej: búsqueda sin resultados) y queremos detectarlo.
-async function alertIfTechnicalExcuse(userId, reply) {
-  try {
-    if (!reply) return;
-    if (/t[ée]cnic[oa]/i.test(reply)) {
-      const now = Date.now();
-      if (now - lastTechAlert > 60000) {
-        lastTechAlert = now;
-        log("warn", "technical_excuse_detected", { userId });
-        await notifyTeam(`🚨 ALERTA INTERNA: el bot le dijo a un cliente que tiene un problema técnico, pero puede que NO sea real (ej: búsqueda sin resultados).\n\nCliente: ${userId}\nRespuesta del bot:\n"${reply.slice(0, 400)}"\n\nRevisa si hay que ajustar algo.`, null);
-      }
-    }
-  } catch (e) { console.error("alertIfTechnicalExcuse error:", e.message); }
 }
 
 async function notifyTeam(text, excludePhone) {
@@ -1062,7 +1068,6 @@ async function handleConversation(userId, userMessage) {
 
       const textBlock = content.find(c => c.type === "text");
       const reply = textBlock ? textBlock.text.trim() : "";
-      await alertIfTechnicalExcuse(userId, reply);
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(userId, history.slice(-8));
       if (reply) await sendText(userId, reply);
@@ -1172,7 +1177,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33.2 (Sonnet 4.5, tech-excuse alert + real-products-only)");
+  res.send("RAV-Bot v33.2 (Sonnet 4.5, zero-results team alert + no invented brands)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1298,7 +1303,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33.2 (Sonnet 4.5, tech-excuse alert + real-products-only) running on port ${PORT}`);
+  console.log(`RAV-Bot v33.2 (Sonnet 4.5, zero-results team alert + no invented brands) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

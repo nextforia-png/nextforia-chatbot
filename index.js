@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v33.5";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v33.6";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -659,7 +659,7 @@ async function notifyTeam(text, excludePhone) {
 // ─── EXECUTORS ───────────────────────────────────────────────────────────────
 
 async function executeSearchProducts(userId, input) {
-  const result = await searchShopifyProducts(input.query);
+  const result = await searchShopify(input.query);
   // Guardar productos mostrados al cliente
   if (result.products && result.products.length > 0) {
     lastSearchResults.set(userId, result.products);
@@ -1201,7 +1201,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33.5 (Sonnet 4.5, unconditional technical-excuse guard)");
+  res.send("RAV-Bot v33.6 (Sonnet 4.5, FIX: search_products tool called undefined function)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1327,7 +1327,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33.5 (Sonnet 4.5, unconditional technical-excuse guard) running on port ${PORT}`);
+  console.log(`RAV-Bot v33.6 (Sonnet 4.5, FIX: search_products tool called undefined function) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

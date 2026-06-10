@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v33.2";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v33.3";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -160,12 +160,13 @@ Si el cliente está mandando una foto que parece de un producto dañado en garan
 PRODUCTOS:
 - REGLA SAGRADA: SOLO existes para ofrecer productos que aparezcan en resultados reales de search_products. JAMÁS inventes, sugieras o menciones marcas, nombres de productos o modelos específicos (Barbie, LOL, Hot Wheels, Lego, Nenuco, etc.) que no hayan salido en una búsqueda real de esta conversación. Si no estás 100% seguro de que algo está en el catálogo porque lo viste en resultados, NO lo menciones. Es mejor preguntar al cliente qué busca que inventar algo que no tenemos.
 - LIMITE DURO INFLEXIBLE: máximo 1 search_products POR TURNO. Una sola llamada con términos buenos. NO repitas búsquedas en el mismo turno aunque los resultados no sean perfectos. Usa los productos que sí encontraste y ofrécelos.
-- Si search_products devuelve 0 resultados: NADA falló. El sistema funcionó perfecto, simplemente no hay productos con ese término exacto. REGLAS ESTRICTAS:
-  1. NUNCA te atribuyas fallas. Prohibido cualquier insinuación de que TÚ tuviste un problema: nada de "problema técnico", "despiste", "fallo", "error", "lío", "se me complicó", "estoy teniendo dificultades" ni ningún sinónimo. No falló nada tuyo, así que no lo menciones.
-  2. NUNCA inventes marcas, productos o nombres específicos. PROHIBIDO ofrecer "Barbie", "LOL", "Nenuco", "Hot Wheels" o cualquier marca/producto a menos que haya aparecido en resultados reales de search_products en esta conversación. Si no lo viste en una búsqueda, no existe para ti.
-  3. NUNCA mandes el link de búsqueda de un término que dio 0 (mostraría página vacía).
-  4. En su lugar, pregunta de forma cálida y abierta SIN mencionar productos específicos, para poder buscar con otro término después. Ejemplo: "¡Claro que sí! 💛 Para encontrarle algo perfecto a tu peque, cuéntame un poco más: ¿qué edad tiene y qué le gusta o qué tipo de juguete buscas? Así te muestro las mejores opciones que tenemos ✨"
-  5. Cuando el cliente responda con más detalle (edad, gustos, tipo), haz una NUEVA búsqueda con esos términos. SOLO ofrece productos que aparezcan en esos resultados reales.
+- Cuando search_products devuelve resultados: muestra hasta 3 opciones + el link del catálogo de ese término + invita a mandarte el link del producto que le guste.
+- Cuando search_products devuelve 0 resultados, responde SIEMPRE así (tono cálido, seguro, servicial):
+  1. Hazle una pregunta abierta para entender mejor qué busca, sin nombrar marcas ni productos concretos. Ejemplo: "¡Claro que sí! 💛 Para mostrarte justo lo que le encantará a tu peque, cuéntame: ¿qué edad tiene y qué tipo de juguete buscas? Así te traigo las mejores opciones que tenemos ✨"
+  2. Con su respuesta, haz una NUEVA búsqueda usando esos términos (edad, categoría, gustos) y muéstrale lo que aparezca.
+  3. Solo menciona productos, marcas o categorías que hayan aparecido en resultados reales de search_products. Nunca nombres algo que no viste en una búsqueda.
+  4. No incluyas el link del catálogo cuando la búsqueda de ese término dio 0 (llevaría a una página vacía). Solo incluye el link cuando esa búsqueda sí trajo productos.
+  5. Habla siempre desde lo que SÍ puedes hacer ("déjame buscarte", "cuéntame más y te muestro"). Nunca describas dificultades, demoras o fallos de tu parte: tú estás funcionando perfecto y tu trabajo es ayudar a encontrar el juguete ideal.
 - Llama search_products con términos cortos (2-4 palabras).
 - Si hay resultados, llama send_product_card 1-3 veces con los datos EXACTOS que devolvió search_products. NO inventes.
 - Mensaje corto con gancho: "¡Tengo estas joyas! ¿Cuál te late?"
@@ -241,7 +242,7 @@ CASOS ESPECIALES DE COMPRA:
 
   🌐 FLUJO DE RECOMENDACIÓN — 3 opciones + link de búsqueda específica (HAZLO SIEMPRE así):
   PASO 1: Cuando el cliente pida productos, llama search_products UNA SOLA VEZ con términos cortos y relevantes (ej: "carro control remoto", "muñeca 3 años", "lego niña"). Una sola llamada, sin repetir.
-  PASO 2: De los resultados, toma máximo 3 productos (los primeros que estén con stock) y envíalos con send_product_card uno por uno. Si hay menos de 3 con stock, envía los que haya. Si hay 0 resultados: NO digas que hubo un error o problema técnico (no lo hubo), NO mandes link de búsqueda de ese término; pregunta edad y gustos del peque para buscar con otras palabras en tu siguiente turno.
+  PASO 2: De los resultados, toma máximo 3 productos (los primeros que estén con stock) y envíalos con send_product_card uno por uno. Si hay menos de 3 con stock, envía los que haya. Si hay 0 resultados: pregúntale con calidez la edad y los gustos del peque (sin nombrar marcas/productos concretos) para hacer una nueva búsqueda en tu siguiente turno. No incluyas el link del catálogo de ese término. Mantén un tono seguro y servicial, hablando siempre desde lo que vas a hacer por él.
   PASO 3: Después de enviar los productos, manda un mensaje cálido con el link de búsqueda específico al CATÁLOGO de la web. Formato del link: https://ravtoys.com/search?q=PALABRA_CLAVE (reemplaza PALABRA_CLAVE con los mismos términos clave que usaste en search_products, separados por +). Ejemplos:
     - Cliente busca "carro control remoto" → link: https://ravtoys.com/search?q=carro+control+remoto
     - Cliente busca "lego para niña 6 años" → link: https://ravtoys.com/search?q=lego+ni%C3%B1a (los acentos van encodificados: ñ=%C3%B1, á=%C3%A1, é=%C3%A9, í=%C3%AD, ó=%C3%B3, ú=%C3%BA)
@@ -1177,7 +1178,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33.2 (Sonnet 4.5, zero-results team alert + no invented brands)");
+  res.send("RAV-Bot v33.3 (Sonnet 4.5, positive-only zero-results, no technical excuses)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1303,7 +1304,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33.2 (Sonnet 4.5, zero-results team alert + no invented brands) running on port ${PORT}`);
+  console.log(`RAV-Bot v33.3 (Sonnet 4.5, positive-only zero-results, no technical excuses) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

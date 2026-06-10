@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v33.6";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v34";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -39,6 +39,33 @@ const botStats = {
     cacheCreationTokens: 0, cacheReadTokens: 0
   }
 };
+
+// ─── LOGGER de conversaciones (Tarea 1) ───────────────────────────────
+// Guarda en memoria las últimas 100 vueltas (turno = mensaje del cliente + respuesta del bot).
+// Se expone en /admin/conversations. Persistencia permanente (Google Sheets) se suma después.
+const conversationLogs = [];
+let turnTools = [];        // tools usadas en el turno actual
+let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
+let turnHandoff = false;   // si el turno derivó a humano (Eliana)
+let turnRating = null;     // rating capturado en el turno
+
+function recordTurn(userId, userMessage, botReply, status) {
+  try {
+    conversationLogs.push({
+      ts: new Date().toISOString(),
+      userId,
+      userMessage: String(userMessage || "").slice(0, 500),
+      botReply: String(botReply || "").slice(0, 1000),
+      tools: turnTools.slice(),
+      zeroResultQueries: turnZeroQueries.slice(),
+      handoff: turnHandoff,
+      rating: turnRating,
+      numTools: turnTools.length,
+      status: status || "ok"
+    });
+    if (conversationLogs.length > 100) conversationLogs.shift();
+  } catch (e) { console.error("recordTurn error:", e.message); }
+}
 
 function trackIncomingMessage(userId) {
   const today = new Date().toISOString().slice(0, 10);
@@ -957,6 +984,7 @@ async function executeHumanHandoff(userId, input) {
 async function handleConversation(userId, userMessage) {
   trackIncomingMessage(userId);
   turnZeroSearchActive = false;  // (v33.4) reset por turno
+  turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
   if (humanHandoff.has(userId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${userId}`);
     return;
@@ -1005,6 +1033,7 @@ async function handleConversation(userId, userMessage) {
 
         const toolResults = [];
         for (const toolUse of toolUses) {
+          turnTools.push(toolUse.name);  // (Tarea 1)
           let result;
           try {
             switch (toolUse.name) {
@@ -1018,6 +1047,7 @@ async function handleConversation(userId, userMessage) {
                   searchedThisTurn = true;
                   lastSearchResultsThisTurn = result;
                   turnZeroSearchActive = (!result || !result.products || result.products.length === 0);  // (v33.4)
+                  if (turnZeroSearchActive && result) turnZeroQueries.push(result.query);  // (Tarea 1)
                 }
                 break;
               case "send_product_card":
@@ -1039,6 +1069,7 @@ async function handleConversation(userId, userMessage) {
                 result = await executeSendRatingRequest(userId);
                 break;
               case "save_rating":
+              turnRating = (toolUse.input && (toolUse.input.rating ?? toolUse.input.stars ?? toolUse.input.score)) ?? true;  // (Tarea 1)
                 result = await executeSaveRating(userId, toolUse.input);
                 break;
               case "save_warranty_field":
@@ -1066,6 +1097,7 @@ async function handleConversation(userId, userMessage) {
                 result = await executeNotifyTeam(userId);
                 break;
               case "request_human_handoff":
+              turnHandoff = true;  // (Tarea 1)
                 result = await executeHumanHandoff(userId, toolUse.input);
                 break;
               default:
@@ -1094,7 +1126,8 @@ async function handleConversation(userId, userMessage) {
       const reply = textBlock ? textBlock.text.trim() : "";
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(userId, history.slice(-8));
-      if (reply) await sendText(userId, reply);
+      if (reply) recordTurn(userId, userMessage, reply, "ok");
+      await sendText(userId, reply);
       return;
     } catch (err) {
       console.error("Claude error:", err.response?.data || err.message);
@@ -1117,10 +1150,12 @@ async function handleConversation(userId, userMessage) {
             } catch (alertErr) {
               console.error("Failed to send credit alert:", alertErr.message);
             }
+      recordTurn(userId, userMessage, "[error interno]", "error");
       await sendText(userId, "Ups, tuve un problemita técnico 😅 ¿Puedes repetir?");
       return;
     }
   }
+  recordTurn(userId, userMessage, "[fallback: sin respuesta del modelo]", "fallback");
   await sendText(userId, "Me enredé un poco 😅 ¿Qué buscas exactamente?");
 }
 
@@ -1201,7 +1236,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33.6 (Sonnet 4.5, FIX: search_products tool called undefined function)");
+  res.send("RAV-Bot v34 (Sonnet 4.5, conversation logger + /admin/conversations)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1252,6 +1287,29 @@ app.get("/admin/health", async (req, res) => {
 });
 
 // Stats con contadores persistentes (v33)
+app.get("/admin/conversations", (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+  const recent = conversationLogs.slice(-limit).reverse();
+  const withRating = conversationLogs.filter(t => t.rating != null);
+  const avgRating = withRating.length
+    ? Math.round(withRating.reduce((s, t) => s + (Number(t.rating) || 0), 0) / withRating.length * 10) / 10
+    : null;
+  res.json({
+    bot_version: BOT_VERSION,
+    total_logged: conversationLogs.length,
+    summary: {
+      turns_logged: conversationLogs.length,
+      turns_with_zero_results: conversationLogs.filter(t => t.zeroResultQueries.length > 0).length,
+      turns_with_handoff: conversationLogs.filter(t => t.handoff).length,
+      turns_with_error: conversationLogs.filter(t => t.status !== "ok").length,
+      ratings_count: withRating.length,
+      avg_rating: avgRating
+    },
+    note: "Log en memoria (últimas 100 vueltas). Se reinicia cuando el bot duerme. Conectar Google Sheets para guardado permanente.",
+    turns: recent
+  });
+});
+
 app.get("/admin/stats", (req, res) => {
   const handoffsList = Array.from(humanHandoff.values());
   const pendingList = Array.from(pendingRatings.values());
@@ -1327,7 +1385,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33.6 (Sonnet 4.5, FIX: search_products tool called undefined function) running on port ${PORT}`);
+  console.log(`RAV-Bot v34 (Sonnet 4.5, conversation logger + /admin/conversations) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

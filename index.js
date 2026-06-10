@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v33.4";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v33.5";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -571,17 +571,24 @@ async function searchShopify(query) {
 
 
 async function sendText(to, text) {
-  // INTERCEPTOR (v33.4): cuando la búsqueda del turno dio 0 resultados, el modelo a veces
-  // inventa una excusa ("problemita técnico"...) o manda un link de catálogo vacío. Aquí, en
-  // código (tras la generación, imposible de esquivar), si el texto trae una excusa o un link
-  // de búsqueda, lo reemplazamos por un mensaje limpio que ofrece ayuda y pide más detalle.
-  if (turnZeroSearchActive && typeof text === "string") {
-    const excusePattern = /probl|t[eé]cnic|despist|fall|l[ií]o|complic|dificult|inconvenient|no puedo mostrar|no logro|no encontr|m[aá]s tarde|intenta de nuevo/i;
-    const emptyCatalogLink = /ravtoys\.com\/search\?q=/i;
-    if (excusePattern.test(text) || emptyCatalogLink.test(text)) {
-      log("warn", "blocked_false_excuse_or_empty_link", { to, original: text.slice(0, 120) });
-      text = "¡Claro que sí! 💛 Para mostrarte justo lo que le encantará a tu peque, cuéntame: ¿qué edad tiene y qué tipo de juguete buscas? Así te traigo las mejores opciones que tenemos ✨";
+  // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
+  // (A) EXCUSAS TÉCNICAS — INCONDICIONAL: este bot JAMÁS debe decirle al cliente que tiene
+  //     un problema/técnico/despiste/lío. Si aparece, reemplazamos TODO el mensaje por una
+  //     respuesta de buen servicio que reconoce que no tenemos eso y ofrece otras opciones.
+  // (B) LINK DE CATÁLOGO VACÍO — solo cuando la búsqueda del turno dio 0 resultados.
+  if (typeof text === "string") {
+    const excusePattern = /t[eé]cnic|despist|inconvenient|se me complic|un (peque[nñ]o )?l[ií]o|dificultad(es)?|no (puedo|logro) (mostrar|cargar|acceder|ver el cat)|(?<!sin |ning[uú]n |no hay )problem/i;
+    if (excusePattern.test(text)) {
+      log("warn", "blocked_technical_excuse", { to, original: text.slice(0, 140) });
+      text = "En este momento no tengo ese exacto en el catálogo, pero con muchísimo gusto te ayudo a encontrar algo perfecto 💛 Cuéntame: ¿qué edad tiene tu peque y qué tipo de juguete le gusta? Así te muestro las mejores opciones que sí tenemos ✨";
       turnZeroSearchActive = false;
+    } else if (turnZeroSearchActive) {
+      const emptyCatalogLink = /https?:\/\/[^\s]*ravtoys\.com\/search\?q=[^\s]*/i;
+      if (emptyCatalogLink.test(text)) {
+        log("warn", "blocked_empty_catalog_link", { to, original: text.slice(0, 140) });
+        text = "En este momento no tengo eso exacto, pero con gusto te ayudo a encontrar algo ideal 💛 Cuéntame qué edad tiene tu peque y qué tipo de juguete busca, y te muestro las mejores opciones que tenemos ✨";
+        turnZeroSearchActive = false;
+      }
     }
   }
   try {
@@ -1194,7 +1201,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33.4 (Sonnet 4.5, code-level guard against false technical excuses + empty links)");
+  res.send("RAV-Bot v33.5 (Sonnet 4.5, unconditional technical-excuse guard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1320,7 +1327,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33.4 (Sonnet 4.5, code-level guard against false technical excuses + empty links) running on port ${PORT}`);
+  console.log(`RAV-Bot v33.5 (Sonnet 4.5, unconditional technical-excuse guard) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

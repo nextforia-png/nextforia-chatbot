@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v33.3";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v33.4";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -25,6 +25,7 @@ const pendingRatings = new Set();
 let lastCreditAlert = 0;  // timestamp del último aviso de saldo bajo (anti-spam)
 const searchCache = new Map();  // {query: {result, ts}} — evita búsquedas duplicadas en <5min
 const zeroResultAlerts = new Map();  // {query: timestamp} — anti-spam de alertas de 0 resultados
+let turnZeroSearchActive = false;  // (v33.4) true cuando la búsqueda del turno dio 0 resultados — activa el blindaje en sendText
 
 // Contador persistente (v33) — vive en memoria, se reinicia cuando Render duerme
 const botStats = {
@@ -570,6 +571,19 @@ async function searchShopify(query) {
 
 
 async function sendText(to, text) {
+  // INTERCEPTOR (v33.4): cuando la búsqueda del turno dio 0 resultados, el modelo a veces
+  // inventa una excusa ("problemita técnico"...) o manda un link de catálogo vacío. Aquí, en
+  // código (tras la generación, imposible de esquivar), si el texto trae una excusa o un link
+  // de búsqueda, lo reemplazamos por un mensaje limpio que ofrece ayuda y pide más detalle.
+  if (turnZeroSearchActive && typeof text === "string") {
+    const excusePattern = /probl|t[eé]cnic|despist|fall|l[ií]o|complic|dificult|inconvenient|no puedo mostrar|no logro|no encontr|m[aá]s tarde|intenta de nuevo/i;
+    const emptyCatalogLink = /ravtoys\.com\/search\?q=/i;
+    if (excusePattern.test(text) || emptyCatalogLink.test(text)) {
+      log("warn", "blocked_false_excuse_or_empty_link", { to, original: text.slice(0, 120) });
+      text = "¡Claro que sí! 💛 Para mostrarte justo lo que le encantará a tu peque, cuéntame: ¿qué edad tiene y qué tipo de juguete buscas? Así te traigo las mejores opciones que tenemos ✨";
+      turnZeroSearchActive = false;
+    }
+  }
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
@@ -935,6 +949,7 @@ async function executeHumanHandoff(userId, input) {
 
 async function handleConversation(userId, userMessage) {
   trackIncomingMessage(userId);
+  turnZeroSearchActive = false;  // (v33.4) reset por turno
   if (humanHandoff.has(userId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${userId}`);
     return;
@@ -995,6 +1010,7 @@ async function handleConversation(userId, userMessage) {
                   console.log(`Search "${toolUse.input.query}": ${result.products?.length || 0} found`);
                   searchedThisTurn = true;
                   lastSearchResultsThisTurn = result;
+                  turnZeroSearchActive = (!result || !result.products || result.products.length === 0);  // (v33.4)
                 }
                 break;
               case "send_product_card":
@@ -1178,7 +1194,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v33.3 (Sonnet 4.5, positive-only zero-results, no technical excuses)");
+  res.send("RAV-Bot v33.4 (Sonnet 4.5, code-level guard against false technical excuses + empty links)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1304,7 +1320,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v33.3 (Sonnet 4.5, positive-only zero-results, no technical excuses) running on port ${PORT}`);
+  console.log(`RAV-Bot v33.4 (Sonnet 4.5, code-level guard against false technical excuses + empty links) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

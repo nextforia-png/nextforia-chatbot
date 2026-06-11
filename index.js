@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v36.2";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v36.3";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const WA_TOKEN = process.env.WA_TOKEN;
@@ -1240,7 +1240,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v36.2 (Sonnet 4.5, add shipping price to SHIPPING_INFO)");
+  res.send("RAV-Bot v36.3 (Sonnet 4.5, dashboard polish: eval button, empty-state, auto-refresh, vv fix)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1288,7 +1288,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .cv.sm{height:170px}
 @media(max-width:720px){.charts{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
-<div class="head"><div class="brand"><div class="logo">RAV</div><div><h1>RAV Toys - Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="refresh" onclick="location.reload()">Actualizar</div></div>
+<div class="head"><div class="brand"><div class="logo">RAV</div><div><h1>RAV Toys - Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div style="display:flex;gap:6px"><div class="refresh" id="evalBtn" onclick="runEval()">Evaluar ahora</div><div class="refresh" onclick="location.reload()">Actualizar</div></div></div>
 <div class="grid">
 <div class="card"><div class="lbl">Clientes atendidos</div><div class="val" id="m-users">-</div><div class="sub" id="s-users"></div></div>
 <div class="card"><div class="lbl">Pedidos iniciados</div><div class="val" id="m-orders">-</div><div class="sub">productos seleccionados</div></div>
@@ -1311,6 +1311,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <script>
 var TEAL="#1D9E75",AMBER="#BA7517",CORAL="#D85A30",BLUE="#378ADD",GRAY="#888780";
 function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
+function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}fetch("/admin/evaluate?limit=30").then(function(r){return r.json();}).then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
 function go(){
 Promise.all([fetch("/admin/stats").then(function(r){return r.json();}),fetch("/admin/conversations?limit=100").then(function(r){return r.json();})]).then(function(res){
 var stats=res[0],conv=res[1];render(stats,conv);}).catch(function(e){document.getElementById("meta").textContent="error cargando datos";});
@@ -1319,7 +1320,7 @@ function render(stats,conv){
 var ct=(stats.counters)||{},an=(stats.anthropic)||{},sm=(conv.summary)||{},turns=(conv.turns)||[];
 var clientes=ct.unique_users_total||0;
 var msgs=ct.messages_received_total||0;
-document.getElementById("meta").textContent=msgs+" mensajes - "+clientes+" clientes - v"+(stats.bot_version||"");
+document.getElementById("meta").textContent=(msgs===0?"Aún sin conversaciones — el panel se llenará cuando lleguen clientes":(msgs+" mensajes · "+clientes+" clientes"))+" · "+(stats.bot_version||"");
 var orderUsers={};turns.forEach(function(t){if(t.tools&&t.tools.indexOf("select_product_for_purchase")>=0){orderUsers[t.userId]=1;}});
 var pedidos=Object.keys(orderUsers).length;
 document.getElementById("m-users").textContent=clientes;
@@ -1355,7 +1356,7 @@ var sugs=evald.map(function(t){return t.eval.sugerencia;}).filter(function(s){re
 if(sugs.length){document.getElementById("learn").textContent=sugs.join("  -  ");}
 else if(gArr.length){document.getElementById("learn").textContent="Tus clientes buscaron "+gArr[0][0]+" ("+gArr[0][1]+" veces) sin resultados. Considera agregarlo al catalogo o mapear el termino.";}
 }
-go();
+go();setInterval(go,60000);
 </script>
 </body></html>`);
 });
@@ -1595,7 +1596,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v36.2 (Sonnet 4.5, add shipping price to SHIPPING_INFO) running on port ${PORT}`);
+  console.log(`RAV-Bot v36.3 (Sonnet 4.5, dashboard polish: eval button, empty-state, auto-refresh, vv fix) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

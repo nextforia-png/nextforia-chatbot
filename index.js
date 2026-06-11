@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v36";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v36.1";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const WA_TOKEN = process.env.WA_TOKEN;
@@ -1237,7 +1237,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v36 (Sonnet 4.5, visual dashboard /admin/dashboard)");
+  res.send("RAV-Bot v36.1 (Sonnet 4.5, dashboard quote-escaping fix)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1323,7 +1323,7 @@ document.getElementById("m-users").textContent=clientes;
 document.getElementById("m-orders").textContent=pedidos;
 document.getElementById("m-conv").textContent=pct(pedidos,clientes);
 document.getElementById("s-conv").textContent=pedidos+" de "+clientes+" clientes";
-var rating=sm.avg_rating;document.getElementById("m-rating").innerHTML=(rating!=null?rating:"-")+"<span style=\"font-size:13px;color:#9AA0A6\"> / 5</span>";
+var rating=sm.avg_rating;document.getElementById("m-rating").innerHTML=(rating!=null?rating:"-")+"<span style='font-size:13px;color:#9AA0A6'> / 5</span>";
 document.getElementById("s-rating").textContent=(sm.ratings_count||0)+" calificaciones";
 var evald=turns.filter(function(t){return t.eval&&!t.eval.error;});
 var si=evald.filter(function(t){return t.eval.resuelto==="si";}).length;
@@ -1342,7 +1342,7 @@ new Chart(document.getElementById("chDay"),{type:"line",data:{labels:days.map(fu
 var oc;var legHtml;
 if(evald.length){oc=[["Resueltas",si,TEAL],["Parciales",parc,AMBER],["Paso a humano",handT,BLUE]];}
 else{oc=[["Atendidas",turns.length-handT,TEAL],["Paso a humano",handT,BLUE]];}
-legHtml="";oc.forEach(function(o){legHtml+="<span><span class=\"dot\" style=\"background:"+o[2]+"\"></span>"+o[0]+" "+o[1]+"</span>";});
+legHtml="";oc.forEach(function(o){legHtml+="<span><span class='dot' style='background:"+o[2]+"'></span>"+o[0]+" "+o[1]+"</span>";});
 document.getElementById("legOut").innerHTML=legHtml;
 new Chart(document.getElementById("chOut"),{type:"doughnut",data:{labels:oc.map(function(o){return o[0];}),datasets:[{data:oc.map(function(o){return o[1];}),backgroundColor:oc.map(function(o){return o[2];}),borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:"62%",plugins:{legend:{display:false}}}});
 var gaps={};turns.forEach(function(t){(t.zeroResultQueries||[]).forEach(function(q){q=(q||"").toLowerCase().trim();if(q){gaps[q]=(gaps[q]||0)+1;}});});
@@ -1592,7 +1592,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v36 (Sonnet 4.5, visual dashboard /admin/dashboard) running on port ${PORT}`);
+  console.log(`RAV-Bot v36.1 (Sonnet 4.5, dashboard quote-escaping fix) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

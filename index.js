@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v34";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v35";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
@@ -1236,7 +1236,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v34 (Sonnet 4.5, conversation logger + /admin/conversations)");
+  res.send("RAV-Bot v35 (Sonnet 4.5, auto-evaluation + /admin/evaluate)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1287,6 +1287,98 @@ app.get("/admin/health", async (req, res) => {
 });
 
 // Stats con contadores persistentes (v33)
+// ─── AUTO-EVALUACIÓN (Tarea 2) ────────────────────────────────────────
+// Evalúa cada interacción con Claude y devuelve KPIs: resuelto, tono,
+// intención de compra, aciertos, errores y sugerencia. Corre BAJO DEMANDA
+// desde /admin/evaluate (no en cada mensaje) para no encarecer cada chat.
+async function evaluateTurn(turn) {
+  const sys = "Eres un evaluador de calidad de un bot de ventas de juguetería por WhatsApp (RAV Toys, Medellín). Evalúa UNA interacción: el mensaje del cliente y la respuesta del bot. Sé objetivo y breve. Responde SOLO con JSON válido, sin texto adicional, sin markdown, sin explicaciones.";
+  const userMsg = [
+    'Mensaje del cliente: "' + (turn.userMessage || "") + '"',
+    'Respuesta del bot: "' + (turn.botReply || "") + '"',
+    "Herramientas usadas: " + ((turn.tools && turn.tools.length) ? turn.tools.join(", ") : "ninguna"),
+    "Búsquedas sin resultados: " + ((turn.zeroResultQueries && turn.zeroResultQueries.length) ? turn.zeroResultQueries.join(", ") : "ninguna"),
+    "Pasó a humano: " + (turn.handoff ? "sí" : "no"),
+    "Rating del cliente: " + (turn.rating != null ? turn.rating : "ninguno"),
+    "",
+    "Evalúa y responde SOLO este JSON (sin nada más):",
+    '{"resuelto":"si|no|parcial","tono":1,"intencion_compra":false,"aciertos":"máx 12 palabras","errores":"máx 12 palabras","sugerencia":"máx 15 palabras"}'
+  ].join("\n");
+
+  const resp = await axios.post("https://api.anthropic.com/v1/messages", {
+    model: "claude-sonnet-4-5-20250929",
+    max_tokens: 300,
+    system: sys,
+    messages: [{ role: "user", content: userMsg }]
+  }, {
+    headers: {
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json"
+    },
+    timeout: 20000
+  });
+  trackAnthropicUsage(resp.data && resp.data.usage);
+  let txt = "";
+  const blocks = (resp.data && resp.data.content) || [];
+  for (const b of blocks) { if (b.type === "text") txt += b.text; }
+  txt = txt.replace(/\`\`\`json|\`\`\`/g, "").trim();
+  const parsed = JSON.parse(txt);
+  return {
+    resuelto: String(parsed.resuelto || "").toLowerCase(),
+    tono: Number(parsed.tono) || null,
+    intencion_compra: !!parsed.intencion_compra,
+    aciertos: String(parsed.aciertos || "").slice(0, 160),
+    errores: String(parsed.errores || "").slice(0, 160),
+    sugerencia: String(parsed.sugerencia || "").slice(0, 200),
+    evaluatedAt: new Date().toISOString()
+  };
+}
+
+// Endpoint: evalúa bajo demanda los turnos que aún no tienen evaluación.
+// ?limit=N (default 10, máx 30) para controlar costo/tiempo por corrida.
+app.get("/admin/evaluate", async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 30);
+  const pending = conversationLogs.filter(t => !t.eval);
+  const batch = pending.slice(0, limit);
+  let evaluated = 0, failed = 0;
+  for (const turn of batch) {
+    try {
+      turn.eval = await evaluateTurn(turn);
+      evaluated++;
+    } catch (e) {
+      turn.eval = { error: true, message: (e.message || "eval failed").slice(0, 120) };
+      failed++;
+      log("error", "eval_failed", { error: e.message });
+    }
+  }
+  // KPIs agregados sobre TODO lo evaluado hasta ahora
+  const done = conversationLogs.filter(t => t.eval && !t.eval.error);
+  const resByCat = { si: 0, parcial: 0, no: 0 };
+  let tonoSum = 0, tonoN = 0, intentN = 0;
+  for (const t of done) {
+    if (t.eval.resuelto && resByCat[t.eval.resuelto] != null) resByCat[t.eval.resuelto]++;
+    if (t.eval.tono) { tonoSum += t.eval.tono; tonoN++; }
+    if (t.eval.intencion_compra) intentN++;
+  }
+  const total = done.length;
+  res.json({
+    bot_version: BOT_VERSION,
+    run: { evaluated_now: evaluated, failed_now: failed, pending_remaining: pending.length - batch.length },
+    kpis: {
+      total_evaluadas: total,
+      tasa_resolucion: total ? Math.round((resByCat.si / total) * 100) + "%" : "—",
+      resueltas_si: resByCat.si,
+      resueltas_parcial: resByCat.parcial,
+      resueltas_no: resByCat.no,
+      tono_promedio: tonoN ? Math.round((tonoSum / tonoN) * 10) / 10 : null,
+      tasa_intencion_compra: total ? Math.round((intentN / total) * 100) + "%" : "—"
+    },
+    note: "Evaluación bajo demanda. Llama de nuevo para procesar el siguiente lote. Los resultados se ven por turno en /admin/conversations (campo eval).",
+    evaluated_sample: batch.map(t => ({ userMessage: t.userMessage, eval: t.eval }))
+  });
+});
+
 app.get("/admin/conversations", (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 100);
   const recent = conversationLogs.slice(-limit).reverse();
@@ -1303,7 +1395,9 @@ app.get("/admin/conversations", (req, res) => {
       turns_with_handoff: conversationLogs.filter(t => t.handoff).length,
       turns_with_error: conversationLogs.filter(t => t.status !== "ok").length,
       ratings_count: withRating.length,
-      avg_rating: avgRating
+      avg_rating: avgRating,
+      turns_evaluated: conversationLogs.filter(t => t.eval && !t.eval.error).length,
+      turns_pending_eval: conversationLogs.filter(t => !t.eval).length
     },
     note: "Log en memoria (últimas 100 vueltas). Se reinicia cuando el bot duerme. Conectar Google Sheets para guardado permanente.",
     turns: recent
@@ -1385,7 +1479,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v34 (Sonnet 4.5, conversation logger + /admin/conversations) running on port ${PORT}`);
+  console.log(`RAV-Bot v35 (Sonnet 4.5, auto-evaluation + /admin/evaluate) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

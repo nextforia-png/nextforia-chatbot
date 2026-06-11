@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v36.1";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v36.2";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const WA_TOKEN = process.env.WA_TOKEN;
@@ -143,7 +143,10 @@ const WARRANTY_SHORT = `📋 *Política de garantías RAV Toys*
 
 ¿Me cuentas qué pasó con tu producto? Así te oriento mejor. 🙏`;
 
-const SHIPPING_INFO = `🚚 *Envíos a todo Colombia*
+const SHIPPING_INFO = `
+💰 COSTO DE ENVÍO: $15.000 con entrega a todo Colombia.
+🎁 ENVÍO GRATIS en compras de $199.000 pesos o más.
+🚚 *Envíos a todo Colombia*
 
 Llevamos los juguetes hasta donde estés ✨ Tenemos cobertura en casi todo el país a través de las principales transportadoras:
 
@@ -1237,7 +1240,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v36.1 (Sonnet 4.5, dashboard quote-escaping fix)");
+  res.send("RAV-Bot v36.2 (Sonnet 4.5, add shipping price to SHIPPING_INFO)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1592,7 +1595,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v36.1 (Sonnet 4.5, dashboard quote-escaping fix) running on port ${PORT}`);
+  console.log(`RAV-Bot v36.2 (Sonnet 4.5, add shipping price to SHIPPING_INFO) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

@@ -5,8 +5,9 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v35";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v36";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
+const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -1236,7 +1237,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v35 (Sonnet 4.5, auto-evaluation + /admin/evaluate)");
+  res.send("RAV-Bot v36 (Sonnet 4.5, visual dashboard /admin/dashboard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1244,6 +1245,118 @@ const PORT = process.env.PORT || 3000;
 // ─── ADMIN ENDPOINTS (added in v31 — observability + safety net) ────
 // Health check: verifica que dependencias externas respondan, sin gastar
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
+app.get("/admin/dashboard", (req, res) => {
+  if (req.query.key !== DASHBOARD_KEY) {
+    res.status(401).send("<html><body style=\"font-family:sans-serif;text-align:center;padding:60px;color:#444\"><h2>Acceso restringido</h2><p>Agrega tu clave a la URL: <code>/admin/dashboard?key=TU_CLAVE</code></p></body></html>");
+    return;
+  }
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel RAV Toys</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F5F6F8;color:#1F2A44;padding:24px;line-height:1.5}
+.wrap{max-width:980px;margin:0 auto}
+.head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:36px;height:36px;border-radius:9px;background:#E6F1FB;display:flex;align-items:center;justify-content:center;font-size:20px}
+.brand h1{font-size:17px;font-weight:600}
+.brand p{font-size:12px;color:#6B7280}
+.refresh{font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #cfe3e3;background:#fff;padding:6px 12px;border-radius:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:12px}
+.card{background:#fff;border-radius:10px;padding:14px 16px;border:0.5px solid #E5E8EC}
+.card .lbl{font-size:12px;color:#6B7280;display:flex;align-items:center;gap:5px}
+.card .val{font-size:24px;font-weight:600;margin-top:5px}
+.card .sub{font-size:11px;color:#9AA0A6;margin-top:2px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.panel{background:#fff;border-radius:12px;padding:16px 18px;border:0.5px solid #E5E8EC}
+.panel h3{font-size:14px;font-weight:600;margin-bottom:12px}
+.full{grid-column:1/-1}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:8px;font-size:12px;color:#6B7280}
+.legend span{display:flex;align-items:center;gap:4px}
+.dot{width:10px;height:10px;border-radius:2px;display:inline-block}
+.tip{background:#E6F1FB;border-radius:12px;padding:14px 18px;margin-top:4px}
+.tip h3{font-size:14px;font-weight:600;color:#185FA5;margin-bottom:6px}
+.tip p{font-size:13px;color:#185FA5}
+.cv{position:relative;width:100%;height:200px}
+.cv.sm{height:170px}
+@media(max-width:720px){.charts{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<div class="head"><div class="brand"><div class="logo">RAV</div><div><h1>RAV Toys - Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="refresh" onclick="location.reload()">Actualizar</div></div>
+<div class="grid">
+<div class="card"><div class="lbl">Clientes atendidos</div><div class="val" id="m-users">-</div><div class="sub" id="s-users"></div></div>
+<div class="card"><div class="lbl">Pedidos iniciados</div><div class="val" id="m-orders">-</div><div class="sub">productos seleccionados</div></div>
+<div class="card"><div class="lbl">Conversion</div><div class="val" id="m-conv">-</div><div class="sub" id="s-conv"></div></div>
+<div class="card"><div class="lbl">Rating promedio</div><div class="val" id="m-rating">-</div><div class="sub" id="s-rating"></div></div>
+</div>
+<div class="grid">
+<div class="card"><div class="lbl">Tasa de resolucion</div><div class="val" id="m-res">-</div></div>
+<div class="card"><div class="lbl">Paso a humano</div><div class="val" id="m-hand">-</div></div>
+<div class="card"><div class="lbl">Busqueda exitosa</div><div class="val" id="m-search">-</div></div>
+<div class="card"><div class="lbl">Costo / chat</div><div class="val" id="m-cost">-</div></div>
+</div>
+<div class="charts">
+<div class="panel"><h3>Actividad por dia</h3><div class="cv"><canvas id="chDay"></canvas></div></div>
+<div class="panel"><h3>Resultado de conversaciones</h3><div class="legend" id="legOut"></div><div class="cv sm"><canvas id="chOut"></canvas></div></div>
+</div>
+<div class="panel full"><h3>Busquedas sin resultados - oportunidades de inventario</h3><div class="cv"><canvas id="chGap"></canvas></div></div>
+<div class="tip"><h3>Aprendizajes</h3><p id="learn">Aun no hay suficientes datos evaluados. Corre /admin/evaluate cuando haya conversaciones.</p></div>
+</div>
+<script>
+var TEAL="#1D9E75",AMBER="#BA7517",CORAL="#D85A30",BLUE="#378ADD",GRAY="#888780";
+function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
+function go(){
+Promise.all([fetch("/admin/stats").then(function(r){return r.json();}),fetch("/admin/conversations?limit=100").then(function(r){return r.json();})]).then(function(res){
+var stats=res[0],conv=res[1];render(stats,conv);}).catch(function(e){document.getElementById("meta").textContent="error cargando datos";});
+}
+function render(stats,conv){
+var ct=(stats.counters)||{},an=(stats.anthropic)||{},sm=(conv.summary)||{},turns=(conv.turns)||[];
+var clientes=ct.unique_users_total||0;
+var msgs=ct.messages_received_total||0;
+document.getElementById("meta").textContent=msgs+" mensajes - "+clientes+" clientes - v"+(stats.bot_version||"");
+var orderUsers={};turns.forEach(function(t){if(t.tools&&t.tools.indexOf("select_product_for_purchase")>=0){orderUsers[t.userId]=1;}});
+var pedidos=Object.keys(orderUsers).length;
+document.getElementById("m-users").textContent=clientes;
+document.getElementById("m-orders").textContent=pedidos;
+document.getElementById("m-conv").textContent=pct(pedidos,clientes);
+document.getElementById("s-conv").textContent=pedidos+" de "+clientes+" clientes";
+var rating=sm.avg_rating;document.getElementById("m-rating").innerHTML=(rating!=null?rating:"-")+"<span style=\"font-size:13px;color:#9AA0A6\"> / 5</span>";
+document.getElementById("s-rating").textContent=(sm.ratings_count||0)+" calificaciones";
+var evald=turns.filter(function(t){return t.eval&&!t.eval.error;});
+var si=evald.filter(function(t){return t.eval.resuelto==="si";}).length;
+var parc=evald.filter(function(t){return t.eval.resuelto==="parcial";}).length;
+document.getElementById("m-res").textContent=evald.length?pct(si,evald.length):"-";
+var handT=turns.filter(function(t){return t.handoff;}).length;
+document.getElementById("m-hand").textContent=pct(handT,turns.length);
+var searchT=turns.filter(function(t){return t.tools&&t.tools.indexOf("search_products")>=0;}).length;
+var zeroT=turns.filter(function(t){return t.zeroResultQueries&&t.zeroResultQueries.length>0;}).length;
+document.getElementById("m-search").textContent=searchT?pct(searchT-zeroT,searchT):"-";
+var costTotal=an.estimated_cost_usd||0;var costChat=clientes?costTotal/clientes:0;
+document.getElementById("m-cost").textContent="$"+costChat.toFixed(3);
+document.getElementById("s-users").textContent=(ct.unique_users_today||0)+" hoy";
+var byDay=ct.messages_by_day||{};var days=Object.keys(byDay).sort();
+new Chart(document.getElementById("chDay"),{type:"line",data:{labels:days.map(function(d){return d.slice(5);}),datasets:[{data:days.map(function(d){return byDay[d];}),borderColor:TEAL,backgroundColor:"rgba(29,158,117,0.15)",fill:true,tension:0.35,pointRadius:3,pointBackgroundColor:TEAL}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}},x:{grid:{display:false}}}}});
+var oc;var legHtml;
+if(evald.length){oc=[["Resueltas",si,TEAL],["Parciales",parc,AMBER],["Paso a humano",handT,BLUE]];}
+else{oc=[["Atendidas",turns.length-handT,TEAL],["Paso a humano",handT,BLUE]];}
+legHtml="";oc.forEach(function(o){legHtml+="<span><span class=\"dot\" style=\"background:"+o[2]+"\"></span>"+o[0]+" "+o[1]+"</span>";});
+document.getElementById("legOut").innerHTML=legHtml;
+new Chart(document.getElementById("chOut"),{type:"doughnut",data:{labels:oc.map(function(o){return o[0];}),datasets:[{data:oc.map(function(o){return o[1];}),backgroundColor:oc.map(function(o){return o[2];}),borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:"62%",plugins:{legend:{display:false}}}});
+var gaps={};turns.forEach(function(t){(t.zeroResultQueries||[]).forEach(function(q){q=(q||"").toLowerCase().trim();if(q){gaps[q]=(gaps[q]||0)+1;}});});
+var gArr=Object.keys(gaps).map(function(k){return [k,gaps[k]];}).sort(function(a,b){return b[1]-a[1];}).slice(0,6);
+new Chart(document.getElementById("chGap"),{type:"bar",data:{labels:gArr.map(function(g){return g[0];}),datasets:[{data:gArr.map(function(g){return g[1];}),backgroundColor:CORAL,borderRadius:4,barThickness:22}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0}},y:{grid:{display:false}}}}});
+var sugs=evald.map(function(t){return t.eval.sugerencia;}).filter(function(s){return s&&s.length>3;}).slice(0,3);
+if(sugs.length){document.getElementById("learn").textContent=sugs.join("  -  ");}
+else if(gArr.length){document.getElementById("learn").textContent="Tus clientes buscaron "+gArr[0][0]+" ("+gArr[0][1]+" veces) sin resultados. Considera agregarlo al catalogo o mapear el termino.";}
+}
+go();
+</script>
+</body></html>`);
+});
+
 app.get("/admin/health", async (req, res) => {
   const result = {
     bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
@@ -1479,7 +1592,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v35 (Sonnet 4.5, auto-evaluation + /admin/evaluate) running on port ${PORT}`);
+  console.log(`RAV-Bot v36 (Sonnet 4.5, visual dashboard /admin/dashboard) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

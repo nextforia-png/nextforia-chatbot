@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v38";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v39";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -610,6 +610,7 @@ async function searchShopify(query) {
       product_url: fullUrl,
       image_url: p.thumbnail || "",
       price: p.price || "",
+      price_amount: parseInt(String(p.price || "").replace(/[^0-9]/g, ""), 10) || 0,
       product_type: p.type || "",
       available: true,  // El storefront solo devuelve productos disponibles para venta
       stock: 999        // Placeholder: storefront ya filtró agotados
@@ -836,6 +837,7 @@ async function executeNotifyWarrantyTeam(userId) {
 async function executeSelectProductForPurchase(userId, input) {
   const products = lastSearchResults.get(userId) || [];
   const chosen = products.find(p => p.product_url === input.product_url);
+  if (chosen && !chosen.price_amount) chosen.price_amount = parseInt(String(chosen.price || "").replace(/[^0-9]/g, ""), 10) || 0;
   if (!chosen) {
     return {
       error: "Producto no encontrado. Debes elegir un product_url que viene del último search_products. Haz un search_products primero si es necesario.",
@@ -869,6 +871,22 @@ async function executeSelectProductForPurchase(userId, input) {
     cart_total: `${total.toLocaleString("es-CO")} ${state.products[0].currency}`,
     next_action: "Pregunta al cliente si quiere agregar algo más a su pedido. Algo como '¡Genial! ¿Quieres agregar otro juguete a tu pedido?'. Si dice que sí, busca otra cosa. Si dice que no, procede a recoger los datos del cliente."
   };
+}
+
+// ─── Alerta interna al equipo cuando algo sale mal (v39) ───
+const errorAlerts = new Map();
+async function alertTeam(kind, detail) {
+  try {
+    const now = Date.now();
+    const last = errorAlerts.get(kind) || 0;
+    if (now - last < 30 * 60 * 1000) return;
+    errorAlerts.set(kind, now);
+    const msg = "🚨 ALERTA INTERNA · RAV BOT\n\nTipo: " + kind + "\n" + detail + "\n\nRevisar el bot lo antes posible.";
+    for (const phone of NOTIFICATION_PHONES) {
+      try { await sendText(phone, msg); } catch (e) { console.error("alertTeam send error:", e.message); }
+    }
+    console.error("[ALERTA INTERNA] " + kind + ": " + detail);
+  } catch (e) { console.error("alertTeam error:", e.message); }
 }
 
 // ─── Inyección del carrito como fuente de verdad (v38) ───
@@ -940,6 +958,9 @@ async function executeSendPaymentLink(userId, input) {
     return { error: "No hay productos en el carrito. Llama select_product_for_purchase primero." };
   }
   const totalAmount = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
+  if (totalAmount === 0 && state.products && state.products.length > 0) {
+    alertTeam("cobro_cero", "Pedido con total $0 pero hay " + state.products.length + " producto(s) en el carrito (cliente " + userId + "). Posible problema de precios.");
+  }
   const currency = state.products[0].currency || "COP";
   const amount = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
   let msg;
@@ -983,6 +1004,9 @@ async function executeNotifyTeam(userId) {
   }
   const d = state.data;
   const totalAmount = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
+  if (totalAmount === 0 && state.products && state.products.length > 0) {
+    alertTeam("cobro_cero", "Pedido con total $0 pero hay " + state.products.length + " producto(s) en el carrito (cliente " + userId + "). Posible problema de precios.");
+  }
   const currency = state.products[0].currency || "COP";
   const formattedTotal = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
   const productsList = state.products.map((p, i) => `  ${i+1}. ${p.title} — ${p.price}\n     ${p.product_url}`).join("\n");
@@ -1291,7 +1315,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v38 (Sonnet 4.5, inject cart state as source of truth + proactive checkout close)");
+  res.send("RAV-Bot v39 (Sonnet 4.5, fix price_amount $0 bug at source + internal error alert)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1686,7 +1710,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v38 (Sonnet 4.5, inject cart state as source of truth + proactive checkout close) running on port ${PORT}`);
+  console.log(`RAV-Bot v39 (Sonnet 4.5, fix price_amount $0 bug at source + internal error alert) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

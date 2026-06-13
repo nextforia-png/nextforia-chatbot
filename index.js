@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v37";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v38";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -871,6 +871,16 @@ async function executeSelectProductForPurchase(userId, input) {
   };
 }
 
+// ─── Inyección del carrito como fuente de verdad (v38) ───
+function cartContextFor(userId) {
+  try {
+    const co = checkouts.get(userId);
+    if (!co || !co.products || !co.products.length) return "";
+    const lines = co.products.map(function (p) { return "• " + (p.title || "Producto") + (p.price ? " — $" + p.price : ""); }).join("\n");
+    return "🛒 CARRITO ACTUAL DE ESTE CLIENTE (FUENTE DE VERDAD, confirmado en el sistema — ignora cualquier duda del historial):\n" + lines + "\n\nEl cliente YA tiene estos productos seleccionados. REGLAS OBLIGATORIAS:\n- Si el cliente dice \"déjalo así\", \"solo eso\", \"con eso\", \"nada más\", \"ya\", \"listo\", \"eso es todo\", \"así está bien\" o similar: NO te despidas ni digas que no hay nada elegido. PROCEDE de inmediato y de forma PROACTIVA a cerrar el pedido (pide o confirma los datos de envío que falten para finalizar la compra).\n- NUNCA digas que no tienes registro del producto: lo tienes listado aquí arriba.\n- Si el cliente pide tomar el pedido, hazlo con estos productos sin volver a preguntar qué quiere.";
+  } catch (e) { return ""; }
+}
+
 async function executeViewCurrentPurchase(userId) {
   const state = checkouts.get(userId);
   if (!state || !state.products || state.products.length === 0) {
@@ -1051,6 +1061,8 @@ async function handleConversation(userId, userMessage) {
           system: [
         { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
         ...(pendingRatings.has(userId) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : [])
+      ,
+        ...(cartContextFor(userId) ? [{ type: "text", text: cartContextFor(userId) }] : [])
       ],
           tools: TOOLS.map((t, i) => i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t),
           messages: workingHistory,
@@ -1279,7 +1291,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v37 (Sonnet 4.5, Supabase persistence for conversation logs)");
+  res.send("RAV-Bot v38 (Sonnet 4.5, inject cart state as source of truth + proactive checkout close)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1674,7 +1686,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v37 (Sonnet 4.5, Supabase persistence for conversation logs) running on port ${PORT}`);
+  console.log(`RAV-Bot v38 (Sonnet 4.5, inject cart state as source of truth + proactive checkout close) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

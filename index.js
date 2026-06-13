@@ -5,9 +5,13 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v36.4";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v37";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
+const SUPABASE_TABLE = "conversation_logs";
+const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de conversaciones
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -50,9 +54,42 @@ let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
 let turnHandoff = false;   // si el turno derivó a humano (Eliana)
 let turnRating = null;     // rating capturado en el turno
 
+// ─── Persistencia en Supabase (v37) ───────────────────────────────────
+const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+async function supabaseInsert(rec) {
+  if (!SUPABASE_ENABLED) return;
+  try {
+    await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+      ts: rec.ts, user_id: rec.userId, user_message: rec.userMessage, bot_reply: rec.botReply,
+      tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
+      rating: rec.rating, num_tools: rec.numTools, status: rec.status
+    }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 8000 });
+  } catch (e) { console.error("supabaseInsert error:", e.response ? JSON.stringify(e.response.data).slice(0,200) : e.message); }
+}
+async function supabaseFetchRecent(limit) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
+    return r.data;
+  } catch (e) { console.error("supabaseFetchRecent error:", e.message); return null; }
+}
+async function supabaseFetchPending(limit) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&eval=is.null&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
+    return r.data;
+  } catch (e) { console.error("supabaseFetchPending error:", e.message); return null; }
+}
+async function supabaseUpdateEval(id, ev) {
+  if (!SUPABASE_ENABLED) return;
+  try {
+    await axios.patch(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?id=eq." + id, { eval: ev }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 8000 });
+  } catch (e) { console.error("supabaseUpdateEval error:", e.message); }
+}
+
 function recordTurn(userId, userMessage, botReply, status) {
   try {
-    conversationLogs.push({
+    const rec = {
       ts: new Date().toISOString(),
       userId,
       userMessage: String(userMessage || "").slice(0, 500),
@@ -63,8 +100,10 @@ function recordTurn(userId, userMessage, botReply, status) {
       rating: turnRating,
       numTools: turnTools.length,
       status: status || "ok"
-    });
+    };
+    conversationLogs.push(rec);
     if (conversationLogs.length > 100) conversationLogs.shift();
+    supabaseInsert(rec);
   } catch (e) { console.error("recordTurn error:", e.message); }
 }
 
@@ -1240,7 +1279,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v36.4 (Sonnet 4.5, dashboard redesign + customizable logo)");
+  res.send("RAV-Bot v37 (Sonnet 4.5, Supabase persistence for conversation logs)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1479,68 +1518,84 @@ async function evaluateTurn(turn) {
 // ?limit=N (default 10, máx 30) para controlar costo/tiempo por corrida.
 app.get("/admin/evaluate", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 10, 30);
-  const pending = conversationLogs.filter(t => !t.eval);
-  const batch = pending.slice(0, limit);
   let evaluated = 0, failed = 0;
-  for (const turn of batch) {
-    try {
-      turn.eval = await evaluateTurn(turn);
-      evaluated++;
-    } catch (e) {
-      turn.eval = { error: true, message: (e.message || "eval failed").slice(0, 120) };
-      failed++;
-      log("error", "eval_failed", { error: e.message });
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchPending(limit);
+    if (rows) {
+      for (const r of rows) {
+        const turn = { userMessage: r.user_message, botReply: r.bot_reply, tools: r.tools || [], zeroResultQueries: r.zero_result_queries || [], handoff: r.handoff, rating: r.rating };
+        try { const ev = await evaluateTurn(turn); await supabaseUpdateEval(r.id, ev); evaluated++; }
+        catch (e) { await supabaseUpdateEval(r.id, { error: true, message: (e.message || "eval failed").slice(0, 120) }); failed++; log("error", "eval_failed", { error: e.message }); }
+      }
+    }
+  } else {
+    const pending = conversationLogs.filter(t => !t.eval);
+    const batch = pending.slice(0, limit);
+    for (const turn of batch) {
+      try { turn.eval = await evaluateTurn(turn); evaluated++; }
+      catch (e) { turn.eval = { error: true, message: (e.message || "eval failed").slice(0, 120) }; failed++; log("error", "eval_failed", { error: e.message }); }
     }
   }
-  // KPIs agregados sobre TODO lo evaluado hasta ahora
-  const done = conversationLogs.filter(t => t.eval && !t.eval.error);
+  let done = [];
+  if (SUPABASE_ENABLED) { const all = await supabaseFetchRecent(100); done = (all || []).filter(r => r.eval && !r.eval.error).map(r => r.eval); }
+  else { done = conversationLogs.filter(t => t.eval && !t.eval.error).map(t => t.eval); }
   const resByCat = { si: 0, parcial: 0, no: 0 };
   let tonoSum = 0, tonoN = 0, intentN = 0;
-  for (const t of done) {
-    if (t.eval.resuelto && resByCat[t.eval.resuelto] != null) resByCat[t.eval.resuelto]++;
-    if (t.eval.tono) { tonoSum += t.eval.tono; tonoN++; }
-    if (t.eval.intencion_compra) intentN++;
+  for (const ev of done) {
+    if (ev.resuelto && resByCat[ev.resuelto] != null) resByCat[ev.resuelto]++;
+    if (ev.tono) { tonoSum += ev.tono; tonoN++; }
+    if (ev.intencion_compra) intentN++;
   }
   const total = done.length;
   res.json({
     bot_version: BOT_VERSION,
-    run: { evaluated_now: evaluated, failed_now: failed, pending_remaining: pending.length - batch.length },
+    run: { evaluated_now: evaluated, failed_now: failed },
     kpis: {
       total_evaluadas: total,
       tasa_resolucion: total ? Math.round((resByCat.si / total) * 100) + "%" : "—",
-      resueltas_si: resByCat.si,
-      resueltas_parcial: resByCat.parcial,
-      resueltas_no: resByCat.no,
+      resueltas_si: resByCat.si, resueltas_parcial: resByCat.parcial, resueltas_no: resByCat.no,
       tono_promedio: tonoN ? Math.round((tonoSum / tonoN) * 10) / 10 : null,
       tasa_intencion_compra: total ? Math.round((intentN / total) * 100) + "%" : "—"
     },
-    note: "Evaluación bajo demanda. Llama de nuevo para procesar el siguiente lote. Los resultados se ven por turno en /admin/conversations (campo eval).",
-    evaluated_sample: batch.map(t => ({ userMessage: t.userMessage, eval: t.eval }))
+    note: "Evaluación bajo demanda. Resultados guardados en Supabase, visibles en /admin/conversations."
   });
 });
 
-app.get("/admin/conversations", (req, res) => {
+app.get("/admin/conversations", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 50, 100);
-  const recent = conversationLogs.slice(-limit).reverse();
-  const withRating = conversationLogs.filter(t => t.rating != null);
+  let turns = null; let source = "memory";
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchRecent(limit);
+    if (rows) {
+      source = "supabase";
+      turns = rows.map(function (r) {
+        return { ts: r.ts, userId: r.user_id, userMessage: r.user_message, botReply: r.bot_reply,
+          tools: r.tools || [], zeroResultQueries: r.zero_result_queries || [], handoff: r.handoff,
+          rating: r.rating, numTools: r.num_tools, status: r.status, eval: r.eval || undefined, _id: r.id };
+      });
+    }
+  }
+  if (!turns) turns = conversationLogs.slice(-limit).reverse();
+  const withRating = turns.filter(t => t.rating != null);
   const avgRating = withRating.length
     ? Math.round(withRating.reduce((s, t) => s + (Number(t.rating) || 0), 0) / withRating.length * 10) / 10
     : null;
   res.json({
     bot_version: BOT_VERSION,
-    total_logged: conversationLogs.length,
+    total_logged: turns.length,
+    source: source,
     summary: {
-      turns_logged: conversationLogs.length,
-      turns_with_zero_results: conversationLogs.filter(t => t.zeroResultQueries.length > 0).length,
-      turns_with_handoff: conversationLogs.filter(t => t.handoff).length,
-      turns_with_error: conversationLogs.filter(t => t.status !== "ok").length,
+      turns_logged: turns.length,
+      turns_with_zero_results: turns.filter(t => t.zeroResultQueries && t.zeroResultQueries.length > 0).length,
+      turns_with_handoff: turns.filter(t => t.handoff).length,
+      turns_with_error: turns.filter(t => t.status !== "ok").length,
       ratings_count: withRating.length,
       avg_rating: avgRating,
-      turns_evaluated: conversationLogs.filter(t => t.eval && !t.eval.error).length,
-      turns_pending_eval: conversationLogs.filter(t => !t.eval).length
+      turns_evaluated: turns.filter(t => t.eval && !t.eval.error).length,
+      turns_pending_eval: turns.filter(t => !t.eval).length
     },
-    note: "Log en memoria (últimas 100 vueltas). Se reinicia cuando el bot duerme. Conectar Google Sheets para guardado permanente.",
-    turns: recent
+    note: SUPABASE_ENABLED ? "Persistente en Supabase — sobrevive a redeploys." : "Log en memoria (se reinicia al redeploy).",
+    turns: turns
   });
 });
 
@@ -1619,7 +1674,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v36.4 (Sonnet 4.5, dashboard redesign + customizable logo) running on port ${PORT}`);
+  console.log(`RAV-Bot v37 (Sonnet 4.5, Supabase persistence for conversation logs) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

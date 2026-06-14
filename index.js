@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v39";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v40";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1315,7 +1315,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v39 (Sonnet 4.5, fix price_amount $0 bug at source + internal error alert)");
+  res.send("RAV-Bot v40 (Sonnet 4.5, read-only conversation viewer in dashboard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1392,7 +1392,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <div class="panel"><h3>Resultado de conversaciones</h3><div class="cv sm"><canvas id="chOut"></canvas><div class="center"><div style="font-size:21px;font-weight:600" id="donutTotal">0</div><div style="font-size:11px;color:#9AA0A6">chats</div></div></div><div class="legend" id="legOut"></div></div>
 </div>
 <div class="panel" style="margin-bottom:14px"><h3 style="margin-bottom:2px">&#128230; Búsquedas sin resultados</h3><div style="font-size:12px;color:#9AA0A6;margin-bottom:10px">Lo que tus clientes pidieron y no encontraron — oportunidades de inventario</div><div class="cv"><canvas id="chGap"></canvas></div></div>
-<div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
+<div class="panel" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px"><h3 style="margin:0">💬 Conversaciones recientes</h3><span class="badge" id="convBadge"></span></div><div style="font-size:12px;color:#9AA0A6;margin-bottom:10px">Lo que está haciendo el bot, en vivo (solo lectura)</div><div id="convList" style="display:flex;flex-direction:column;gap:10px;max-height:540px;overflow-y:auto"></div></div><div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
 </div>
 <script>
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
@@ -1452,7 +1452,38 @@ var gColors=gArr.map(function(g,idx){return idx===0?"#D85A30":(idx<3?"#F0997B":"
 new Chart(document.getElementById("chGap"),{type:"bar",data:{labels:gArr.map(function(g){return g[0];}),datasets:[{data:gArr.map(function(g){return g[1];}),backgroundColor:gColors,borderRadius:5,barThickness:20}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0},grid:{color:"rgba(136,135,128,0.12)"}},y:{grid:{display:false}}}}});
 var sugs=evald.map(function(t){return t.eval.sugerencia;}).filter(function(s){return s&&s.length>3;}).slice(0,3);
 if(sugs.length){document.getElementById("learn").textContent=sugs.join("  ·  ");}
-else if(gArr.length){document.getElementById("learn").textContent="Tus clientes buscaron "+gArr[0][0]+" ("+gArr[0][1]+" veces) sin resultados. Considera agregarlo al catálogo o mapear el término.";}
+else if(gArr.length){document.getElementById("learn").textContent="Tus clientes buscaron "+gArr[0][0]+" ("+gArr[0][1]+" veces) sin resultados. Considera agregarlo al catálogo o mapear el término.";
+try {
+  var _cl = document.getElementById("convList");
+  if (_cl) {
+    var _groups = {}, _order = [];
+    turns.forEach(function(t){ var id = t.userId || "?"; if (!_groups[id]) { _groups[id] = []; _order.push(id); } _groups[id].push(t); });
+    var _cb = document.getElementById("convBadge"); if (_cb) _cb.textContent = _order.length + " cliente" + (_order.length===1?"":"s");
+    var _esc = function(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); };
+    var _html = "";
+    _order.slice(0,25).forEach(function(id){
+      var ms = _groups[id].slice().sort(function(a,b){ return new Date(a.ts) - new Date(b.ts); });
+      var masked = "•••" + String(id).slice(-4);
+      var anyHand = ms.some(function(t){ return t.handoff; });
+      var anyErr = ms.some(function(t){ return t.status && t.status !== "ok"; });
+      var lastTs = ms[ms.length-1].ts || "";
+      var when = lastTs ? new Date(lastTs).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "";
+      var pills = "";
+      if (anyHand) pills += "<span style=\"font-size:10px;background:#E6F1FB;color:#2C6FB3;padding:2px 8px;border-radius:8px;margin-left:6px\">Pasó a humano</span>";
+      if (anyErr) pills += "<span style=\"font-size:10px;background:#FAECE7;color:#C0492B;padding:2px 8px;border-radius:8px;margin-left:6px\">Revisar</span>";
+      var bubbles = "";
+      ms.forEach(function(t){
+        var u = _esc(t.userMessage), b = _esc(t.botReply);
+        if (u) bubbles += "<div style=\"background:#F4F5F7;border-radius:8px;padding:6px 10px;margin:4px 0;font-size:12px\"><b>Cliente:</b> " + u + "</div>";
+        if (b) bubbles += "<div style=\"background:#E1F5EE;border-radius:8px;padding:6px 10px;margin:4px 0;font-size:12px\"><b>Bot:</b> " + b + "</div>";
+        if (t.tools && t.tools.length) bubbles += "<div style=\"font-size:10px;color:#9AA0A6;margin:0 0 6px 2px\">🔧 " + t.tools.join(", ") + "</div>";
+      });
+      _html += "<div style=\"border:0.5px solid #E5E8EC;border-radius:10px;padding:10px 12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:6px\"><span style=\"font-size:13px;font-weight:600\">📱 " + masked + pills + "</span><span style=\"font-size:11px;color:#9AA0A6\">" + when + "</span></div>" + bubbles + "</div>";
+    });
+    _cl.innerHTML = _html || "<div style=\"color:#9AA0A6;font-size:13px\">Aún no hay conversaciones.</div>";
+  }
+} catch(e){}
+}
 }
 initLogo();go();setInterval(go,60000);
 </script>
@@ -1710,7 +1741,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v39 (Sonnet 4.5, fix price_amount $0 bug at source + internal error alert) running on port ${PORT}`);
+  console.log(`RAV-Bot v40 (Sonnet 4.5, read-only conversation viewer in dashboard) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

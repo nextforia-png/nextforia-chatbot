@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v40";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v41";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1315,7 +1315,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v40 (Sonnet 4.5, read-only conversation viewer in dashboard)");
+  res.send("RAV-Bot v41 (Sonnet 4.5, conversation viewer runs unconditionally in render)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1453,6 +1453,8 @@ new Chart(document.getElementById("chGap"),{type:"bar",data:{labels:gArr.map(fun
 var sugs=evald.map(function(t){return t.eval.sugerencia;}).filter(function(s){return s&&s.length>3;}).slice(0,3);
 if(sugs.length){document.getElementById("learn").textContent=sugs.join("  ·  ");}
 else if(gArr.length){document.getElementById("learn").textContent="Tus clientes buscaron "+gArr[0][0]+" ("+gArr[0][1]+" veces) sin resultados. Considera agregarlo al catálogo o mapear el término.";
+}
+
 try {
   var _cl = document.getElementById("convList");
   if (_cl) {
@@ -1483,7 +1485,6 @@ try {
     _cl.innerHTML = _html || "<div style=\"color:#9AA0A6;font-size:13px\">Aún no hay conversaciones.</div>";
   }
 } catch(e){}
-}
 }
 initLogo();go();setInterval(go,60000);
 </script>
@@ -1741,7 +1742,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v40 (Sonnet 4.5, read-only conversation viewer in dashboard) running on port ${PORT}`);
+  console.log(`RAV-Bot v41 (Sonnet 4.5, conversation viewer runs unconditionally in render) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

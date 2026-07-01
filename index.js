@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v47";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v48";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1421,7 +1421,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v47 (Sonnet 4.5, dashboard tabs)");
+  res.send("RAV-Bot v48 (Sonnet 4.5, nonblocking dashboard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1474,7 +1474,6 @@ app.get("/admin/dashboard", (req, res) => {
 <!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panel RAV Toys</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:22px;line-height:1.5}
@@ -1559,8 +1558,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <script>
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
 var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={};
-function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}if(!summary){location.hash="human-control";renderOpsChat();}else{if(location.hash==="human-control"||location.hash==="#human-control"||location.hash==="#intervencion"){history.replaceState(null,"",location.pathname+location.search);}setTimeout(function(){["chDay","chOut","chGap"].forEach(function(id){var c=document.getElementById(id),ch=c&&Chart.getChart(c);if(ch)ch.resize();});},0);}}
+var chartLibPromise=null;
+function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}if(!summary){location.hash="human-control";renderOpsChat();}else{if(location.hash==="human-control"||location.hash==="#human-control"||location.hash==="#intervencion"){history.replaceState(null,"",location.pathname+location.search);}setTimeout(resizeCharts,0);}}
 function initTabs(){var tab="summary";try{tab=localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab);}
+function ensureChartLib(){if(window.Chart)return Promise.resolve(true);if(chartLibPromise)return chartLibPromise;chartLibPromise=new Promise(function(resolve){var done=false;function finish(ok){if(done)return;done=true;if(!ok)chartLibPromise=null;resolve(ok);}var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";s.async=true;s.onload=function(){finish(true);};s.onerror=function(){finish(false);};document.head.appendChild(s);setTimeout(function(){finish(!!window.Chart);},5000);});return chartLibPromise;}
+function drawChart(id,config){var c=document.getElementById(id);if(!c||!window.Chart)return;var old=Chart.getChart(c);if(old)old.destroy();new Chart(c,config);}
+function resizeCharts(){if(!window.Chart)return;["chDay","chOut","chGap"].forEach(function(id){var c=document.getElementById(id),ch=c&&Chart.getChart(c);if(ch)ch.resize();});}
+function renderCharts(dayConfig,outConfig,gapConfig){ensureChartLib().then(function(ok){if(!ok){var b=document.getElementById("dayBadge");if(b)b.textContent=(b.textContent||"sin datos")+" · gráfica pendiente";return;}drawChart("chDay",dayConfig);drawChart("chOut",outConfig);drawChart("chGap",gapConfig);});}
 function adminApi(url,opts){opts=opts||{};opts.headers=Object.assign({"content-type":"application/json","x-dashboard-key":DASHBOARD_KEY},opts.headers||{});return fetch(url+(url.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(DASHBOARD_KEY),opts).then(function(r){return r.json().then(function(j){if(!r.ok){throw new Error(j.error||("HTTP "+r.status));}return j;});});}
 function opsEsc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function opsAttr(s){return opsEsc(s).replace(/"/g,"&quot;");}
@@ -1639,7 +1643,7 @@ document.getElementById("m-cost").textContent="$"+costChat.toFixed(3);
 document.getElementById("a-cost").style.background=clientes===0?NEUTRAL:(costChat<=0.10?GOOD:WARN);
 var byDay=ct.messages_by_day||{};var days=Object.keys(byDay).sort();
 document.getElementById("dayBadge").textContent=days.length?("últimos "+days.length+" días"):"sin datos";
-new Chart(document.getElementById("chDay"),{type:"bar",data:{labels:days.map(function(d){return d.slice(5);}),datasets:[{data:days.map(function(d){return byDay[d];}),backgroundColor:"rgba(29,158,117,0.25)",borderColor:TEAL,borderWidth:{top:2,left:0,right:0,bottom:0},borderRadius:5,barPercentage:0.65}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:"rgba(136,135,128,0.12)"}},x:{grid:{display:false}}}}});
+var chDayConfig={type:"bar",data:{labels:days.map(function(d){return d.slice(5);}),datasets:[{data:days.map(function(d){return byDay[d];}),backgroundColor:"rgba(29,158,117,0.25)",borderColor:TEAL,borderWidth:{top:2,left:0,right:0,bottom:0},borderRadius:5,barPercentage:0.65}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0},grid:{color:"rgba(136,135,128,0.12)"}},x:{grid:{display:false}}}}};
 var oc;
 if(evald.length){oc=[["Resueltas",si,TEAL],["Parciales",parc,AMBER],["A humano",handT,BLUE]];}
 else{oc=[["Atendidas",Math.max(turns.length-handT,0),TEAL],["A humano",handT,BLUE]];}
@@ -1647,11 +1651,12 @@ var ocTotal=0;oc.forEach(function(o){ocTotal+=o[1];});
 document.getElementById("donutTotal").textContent=turns.length;
 var legHtml="";oc.forEach(function(o){var p=ocTotal?Math.round(o[1]/ocTotal*100):0;legHtml+="<span><span class='dot' style='background:"+o[2]+"'></span>"+o[0]+" "+p+"%</span>";});
 document.getElementById("legOut").innerHTML=legHtml;
-new Chart(document.getElementById("chOut"),{type:"doughnut",data:{labels:oc.map(function(o){return o[0];}),datasets:[{data:oc.map(function(o){return o[1];}),backgroundColor:oc.map(function(o){return o[2];}),borderWidth:2,borderColor:"rgba(255,255,255,0.9)",hoverOffset:6}]},options:{responsive:true,maintainAspectRatio:false,cutout:"70%",plugins:{legend:{display:false}}}});
+var chOutConfig={type:"doughnut",data:{labels:oc.map(function(o){return o[0];}),datasets:[{data:oc.map(function(o){return o[1];}),backgroundColor:oc.map(function(o){return o[2];}),borderWidth:2,borderColor:"rgba(255,255,255,0.9)",hoverOffset:6}]},options:{responsive:true,maintainAspectRatio:false,cutout:"70%",plugins:{legend:{display:false}}}};
 var gaps={};turns.forEach(function(t){(t.zeroResultQueries||[]).forEach(function(q){q=(q||"").toLowerCase().trim();if(q){gaps[q]=(gaps[q]||0)+1;}});});
 var gArr=Object.keys(gaps).map(function(k){return [k,gaps[k]];}).sort(function(a,b){return b[1]-a[1];}).slice(0,6);
 var gColors=gArr.map(function(g,idx){return idx===0?"#D85A30":(idx<3?"#F0997B":"#F5C4B3");});
-new Chart(document.getElementById("chGap"),{type:"bar",data:{labels:gArr.map(function(g){return g[0];}),datasets:[{data:gArr.map(function(g){return g[1];}),backgroundColor:gColors,borderRadius:5,barThickness:20}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0},grid:{color:"rgba(136,135,128,0.12)"}},y:{grid:{display:false}}}}});
+var chGapConfig={type:"bar",data:{labels:gArr.map(function(g){return g[0];}),datasets:[{data:gArr.map(function(g){return g[1];}),backgroundColor:gColors,borderRadius:5,barThickness:20}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0},grid:{color:"rgba(136,135,128,0.12)"}},y:{grid:{display:false}}}}};
+renderCharts(chDayConfig,chOutConfig,chGapConfig);
 var sugs=evald.map(function(t){return t.eval.sugerencia;}).filter(function(s){return s&&s.length>3;}).slice(0,3);
 if(sugs.length){document.getElementById("learn").textContent=sugs.join("  ·  ");}
 else if(gArr.length){document.getElementById("learn").textContent="Tus clientes buscaron "+gArr[0][0]+" ("+gArr[0][1]+" veces) sin resultados. Considera agregarlo al catálogo o mapear el término.";
@@ -2196,7 +2201,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v47 (Sonnet 4.5, dashboard tabs) running on port ${PORT}`);
+  console.log(`RAV-Bot v48 (Sonnet 4.5, nonblocking dashboard) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

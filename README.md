@@ -51,6 +51,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify y Meta, presencia de keys |
 | `GET /admin/stats` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N` | Conversaciones recientes desde Supabase si está disponible |
+| `GET /admin/inbox?key=XXXX` | Bandeja operativa para tomar control, responder y devolver chats al bot |
 | `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
 | `GET /admin/test-search?q=XXXX` | Prueba la búsqueda de productos sin afectar a clientes reales |
@@ -63,6 +64,16 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 ## 🛡️ Red de seguridad y monitoreo
 
 Los scripts usan por defecto producción (`https://rav-whatsapp-bot.onrender.com`) y leen secretos desde variables de entorno. No pegues llaves en el código.
+
+### Intervención humana
+
+Antes de migrar un número real a WhatsApp Cloud API, usa la bandeja operativa:
+
+```text
+https://rav-whatsapp-bot.onrender.com/admin/inbox?key=TU_DASHBOARD_KEY
+```
+
+Desde ahí el equipo puede tomar control de un chat, responder por WhatsApp usando la Cloud API y devolver la conversación al bot. El estado de control humano se registra en Supabase para sobrevivir reinicios de Render.
 
 Variables útiles:
 
@@ -81,7 +92,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v43 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v44 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -95,7 +106,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v43 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v44 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.

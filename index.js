@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v43";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v44";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -73,6 +73,14 @@ async function supabaseFetchRecent(limit) {
     return r.data;
   } catch (e) { console.error("supabaseFetchRecent error:", e.message); return null; }
 }
+async function supabaseFetchUserRecent(userId, limit) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&user_id=eq." + encodeURIComponent(userId) + "&order=ts.desc&limit=" + (limit || 20);
+    const r = await axios.get(url, { headers: SB_HEADERS, timeout: 8000 });
+    return r.data;
+  } catch (e) { console.error("supabaseFetchUserRecent error:", e.message); return null; }
+}
 async function supabaseFetchPending(limit) {
   if (!SUPABASE_ENABLED) return null;
   try {
@@ -105,6 +113,41 @@ function recordTurn(userId, userMessage, botReply, status) {
     if (conversationLogs.length > 100) conversationLogs.shift();
     supabaseInsert(rec);
   } catch (e) { console.error("recordTurn error:", e.message); }
+}
+
+function recordAdminEvent(userId, tool, message) {
+  try {
+    const rec = {
+      ts: new Date().toISOString(),
+      userId,
+      userMessage: "",
+      botReply: String(message || "").slice(0, 1000),
+      tools: [tool],
+      zeroResultQueries: [],
+      handoff: tool !== "admin_release",
+      rating: null,
+      numTools: 1,
+      status: "ok"
+    };
+    conversationLogs.push(rec);
+    if (conversationLogs.length > 100) conversationLogs.shift();
+    supabaseInsert(rec);
+  } catch (e) { console.error("recordAdminEvent error:", e.message); }
+}
+
+async function humanControlActiveFor(userId) {
+  if (humanHandoff.has(userId)) return true;
+  const rows = await supabaseFetchUserRecent(userId, 20);
+  if (!rows || !rows.length) return false;
+  for (const row of rows) {
+    const tools = row.tools || [];
+    if (tools.includes("admin_release")) return false;
+    if (tools.includes("admin_takeover") || tools.includes("admin_send_message") || tools.includes("request_human_handoff") || row.handoff) {
+      humanHandoff.add(userId);
+      return true;
+    }
+  }
+  return false;
 }
 
 function trackIncomingMessage(userId) {
@@ -670,8 +713,10 @@ async function sendText(to, text) {
       { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
     );
     console.log(`Text sent to ${to}`);
+    return true;
   } catch (err) {
     console.error("WA text error:", err.response?.data?.error || err.message);
+    return false;
   }
 }
 
@@ -1063,8 +1108,11 @@ async function handleConversation(userId, userMessage) {
   trackIncomingMessage(userId);
   turnZeroSearchActive = false;  // (v33.4) reset por turno
   turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
-  if (humanHandoff.has(userId)) {
+  if (await humanControlActiveFor(userId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${userId}`);
+    turnHandoff = true;
+    turnTools.push("human_handoff_active");
+    recordTurn(userId, userMessage, "", "ok");
     return;
   }
 
@@ -1293,20 +1341,73 @@ function adminKeyOk(req) {
 }
 
 app.get("/admin/release/:userId", (req, res) => {
-  const userId = req.params.userId;
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = String(req.params.userId || "").replace(/\D/g, "");
+  if (!userId) {
+    res.status(400).json({ ok: false, error: "missing_user_id" });
+    return;
+  }
   const wasActive = humanHandoff.delete(userId);
   pendingRatings.add(userId);
+  recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.");
   console.log(`[ADMIN] Released ${userId} (was handoff: ${wasActive})`);
   res.json({ ok: true, userId, wasInHandoff: wasActive });
 });
 
+app.post("/admin/takeover/:userId", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = String(req.params.userId || "").replace(/\D/g, "");
+  if (!userId) {
+    res.status(400).json({ ok: false, error: "missing_user_id" });
+    return;
+  }
+  humanHandoff.add(userId);
+  recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.");
+  res.json({ ok: true, userId, handoff: true });
+});
+
+app.post("/admin/send-message", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = String(req.body && req.body.userId || "").replace(/\D/g, "");
+  const text = String(req.body && req.body.text || "").trim();
+  if (!userId || !text) {
+    res.status(400).json({ ok: false, error: "missing_user_or_text" });
+    return;
+  }
+  if (text.length > 1200) {
+    res.status(400).json({ ok: false, error: "message_too_long" });
+    return;
+  }
+  humanHandoff.add(userId);
+  const sent = await sendText(userId, text);
+  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text);
+  res.json({ ok: !!sent, userId, handoff: true });
+});
+
 app.get("/admin/reset-checkout/:userId", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
   const userId = req.params.userId;
   const had = checkouts.delete(userId);
   res.json({ ok: true, userId, hadCheckout: had });
 });
 
 app.get("/admin/status", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
   res.json({
     activeHandoffs: [...humanHandoff],
     activeCheckouts: [...checkouts.entries()].map(([k, v]) => ({
@@ -1320,7 +1421,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v43 (Sonnet 4.5, Supabase health diagnostics)");
+  res.send("RAV-Bot v44 (Sonnet 4.5, human inbox console)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1499,6 +1600,145 @@ try {
 } catch(e){}
 }
 initLogo();go();setInterval(go,60000);
+</script>
+</body></html>`);
+});
+
+app.get("/admin/inbox", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).send("<html><body style='font-family:sans-serif;text-align:center;padding:60px;color:#444'><h2>Acceso restringido</h2><p>Agrega tu clave a la URL: <code>/admin/inbox?key=TU_CLAVE</code></p></body></html>");
+    return;
+  }
+  const pageKey = JSON.stringify(req.query.key || "");
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox RAV Bot</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F5F6F8;color:#1F2A44}
+.app{height:100vh;display:grid;grid-template-columns:340px 1fr}
+.side{border-right:1px solid #E2E5EA;background:#fff;display:flex;flex-direction:column;min-width:0}
+.top{height:64px;padding:12px 16px;border-bottom:1px solid #E2E5EA;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.top h1{font-size:16px;margin:0}.top p{font-size:12px;color:#6B7280;margin:2px 0 0}
+.btn{border:1px solid #CBD5E1;background:#fff;color:#1F2A44;border-radius:8px;padding:8px 11px;font-size:12px;cursor:pointer}
+.btn:hover{background:#F1F5F9}.btn.primary{background:#0F766E;color:#fff;border-color:#0F766E}.btn.danger{background:#B42318;color:#fff;border-color:#B42318}.btn:disabled{opacity:.45;cursor:not-allowed}
+.search{padding:10px 12px;border-bottom:1px solid #E2E5EA}.search input{width:100%;border:1px solid #CBD5E1;border-radius:8px;padding:9px 10px;font-size:13px}
+.threads{overflow:auto;padding:8px;display:flex;flex-direction:column;gap:6px}.thread{border:1px solid transparent;border-radius:8px;padding:10px;cursor:pointer}.thread:hover{background:#F8FAFC}.thread.active{background:#E7F5F2;border-color:#A7D8CF}.thread .row{display:flex;justify-content:space-between;gap:8px;align-items:center}.phone{font-size:13px;font-weight:650}.time{font-size:11px;color:#64748B;white-space:nowrap}.preview{font-size:12px;color:#64748B;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pill{font-size:10px;border-radius:999px;padding:2px 7px;background:#E2E8F0;color:#475569;margin-left:6px}.pill.live{background:#DCFCE7;color:#166534}.pill.human{background:#FEF3C7;color:#92400E}
+.main{display:flex;flex-direction:column;min-width:0}.chatHead{height:64px;background:#fff;border-bottom:1px solid #E2E5EA;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px}.chatHead h2{font-size:15px;margin:0}.chatHead p{font-size:12px;color:#64748B;margin:2px 0 0}
+.messages{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:10px}.empty{margin:auto;color:#64748B;font-size:14px}.bubble{max-width:78%;border-radius:10px;padding:9px 11px;font-size:13px;line-height:1.45;white-space:pre-wrap}.incoming{align-self:flex-start;background:#fff;border:1px solid #E2E5EA}.bot{align-self:flex-start;background:#E7F5F2;border:1px solid #BFE3DB}.human{align-self:flex-end;background:#1F2A44;color:#fff}.meta{font-size:10px;color:#94A3B8;margin-top:4px}.human .meta{color:#CBD5E1}.tools{font-size:10px;color:#94A3B8;margin-left:4px}
+.composer{background:#fff;border-top:1px solid #E2E5EA;padding:12px 18px;display:grid;grid-template-columns:1fr auto;gap:10px}.composer textarea{width:100%;min-height:58px;max-height:140px;resize:vertical;border:1px solid #CBD5E1;border-radius:8px;padding:10px;font-size:14px;font-family:inherit}.status{font-size:12px;color:#64748B;padding:0 18px 10px;background:#fff}
+@media(max-width:780px){.app{grid-template-columns:1fr}.side{height:42vh}.main{height:58vh}.chatHead{height:auto;align-items:flex-start}.composer{grid-template-columns:1fr}.bubble{max-width:92%}}
+</style></head><body>
+<div class="app">
+  <aside class="side">
+    <div class="top"><div><h1>Inbox RAV Bot</h1><p id="sideMeta">Cargando...</p></div><button class="btn" onclick="loadData()">Actualizar</button></div>
+    <div class="search"><input id="filter" placeholder="Buscar teléfono o texto" oninput="renderThreads()"></div>
+    <div class="threads" id="threads"></div>
+  </aside>
+  <main class="main">
+    <div class="chatHead">
+      <div><h2 id="chatTitle">Selecciona una conversación</h2><p id="chatSub">Toma control antes de responder. Mientras esté en humano, el bot no contesta.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn primary" id="takeBtn" onclick="takeControl()" disabled>Tomar control</button>
+        <button class="btn" id="releaseBtn" onclick="releaseControl()" disabled>Devolver al bot</button>
+      </div>
+    </div>
+    <div class="messages" id="messages"><div class="empty">Sin conversación seleccionada.</div></div>
+    <div class="composer">
+      <textarea id="reply" placeholder="Escribe como RAV Toys..."></textarea>
+      <button class="btn primary" id="sendBtn" onclick="sendReply()" disabled>Enviar</button>
+    </div>
+    <div class="status" id="status">Listo.</div>
+  </main>
+</div>
+<script>
+var KEY = ${pageKey};
+var turns = [], stats = {}, groups = {}, order = [], activeHandoffs = {}, selected = null;
+function api(url, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"content-type":"application/json","x-dashboard-key":KEY}, opts.headers || {});
+  return fetch(url + (url.indexOf("?")>=0 ? "&" : "?") + "key=" + encodeURIComponent(KEY), opts).then(function(r){ return r.json().then(function(j){ if(!r.ok){ throw new Error(j.error || ("HTTP " + r.status)); } return j; }); });
+}
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function when(ts){try{return new Date(ts).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(e){return "";}}
+function lastText(ms){var t=ms[ms.length-1]||{};return t.userMessage || t.botReply || "";}
+function loadData(){
+  document.getElementById("status").textContent = "Actualizando...";
+  Promise.all([api("/admin/stats"), api("/admin/conversations?limit=100")]).then(function(res){
+    stats = res[0] || {}; turns = (res[1] && res[1].turns) || [];
+    activeHandoffs = {}; (stats.active_handoff_users || []).forEach(function(id){ activeHandoffs[id]=true; });
+    groups = {}; order = [];
+    turns.slice().reverse().forEach(function(t){
+      var id = t.userId || "?";
+      if(!groups[id]){ groups[id]=[]; order.push(id); }
+      groups[id].push(t);
+      if(t.handoff) activeHandoffs[id]=true;
+      if(t.tools && t.tools.indexOf("admin_release")>=0) activeHandoffs[id]=false;
+      if(t.tools && (t.tools.indexOf("admin_takeover")>=0 || t.tools.indexOf("admin_send_message")>=0)) activeHandoffs[id]=true;
+    });
+    order.sort(function(a,b){ return new Date((groups[b][groups[b].length-1]||{}).ts||0) - new Date((groups[a][groups[a].length-1]||{}).ts||0); });
+    document.getElementById("sideMeta").textContent = order.length + " conversaciones";
+    if(!selected && order.length) selected = order[0];
+    renderThreads(); renderChat();
+    document.getElementById("status").textContent = "Actualizado " + new Date().toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit"});
+  }).catch(function(e){ document.getElementById("status").textContent = "Error: " + e.message; });
+}
+function renderThreads(){
+  var q = document.getElementById("filter").value.toLowerCase().trim();
+  var html = "";
+  order.forEach(function(id){
+    var ms = groups[id] || [], txt = lastText(ms);
+    if(q && (id + " " + txt).toLowerCase().indexOf(q)<0) return;
+    var cls = "thread" + (id===selected ? " active" : "");
+    var mode = activeHandoffs[id] ? "<span class='pill human'>Humano</span>" : "<span class='pill live'>Bot</span>";
+    html += "<div class='"+cls+"' onclick='selected=\\\"" + esc(id) + "\\\";renderThreads();renderChat();'><div class='row'><span class='phone'>+" + esc(id) + mode + "</span><span class='time'>" + when((ms[ms.length-1]||{}).ts) + "</span></div><div class='preview'>" + esc(txt) + "</div></div>";
+  });
+  document.getElementById("threads").innerHTML = html || "<div class='empty'>No hay conversaciones.</div>";
+}
+function renderChat(){
+  var ms = groups[selected] || [];
+  document.getElementById("chatTitle").textContent = selected ? ("+" + selected) : "Selecciona una conversación";
+  document.getElementById("chatSub").textContent = selected ? (activeHandoffs[selected] ? "Control humano activo. El bot no responderá." : "Bot activo. Toma control antes de intervenir.") : "Toma control antes de responder.";
+  document.getElementById("takeBtn").disabled = !selected || !!activeHandoffs[selected];
+  document.getElementById("releaseBtn").disabled = !selected || !activeHandoffs[selected];
+  document.getElementById("sendBtn").disabled = !selected;
+  var html = "";
+  ms.forEach(function(t){
+    if(t.userMessage){ html += "<div class='bubble incoming'>" + esc(t.userMessage) + "<div class='meta'>Cliente · " + when(t.ts) + "</div></div>"; }
+    if(t.botReply){
+      var isHuman = t.botReply.indexOf("[Humano]") === 0;
+      var body = isHuman ? t.botReply.replace("[Humano]","").trim() : t.botReply;
+      html += "<div class='bubble " + (isHuman ? "human" : "bot") + "'>" + esc(body) + "<div class='meta'>" + (isHuman ? "Humano" : "Bot") + " · " + when(t.ts) + "</div></div>";
+    }
+    if(t.tools && t.tools.length){ html += "<div class='tools'>" + esc(t.tools.join(", ")) + "</div>"; }
+  });
+  document.getElementById("messages").innerHTML = html || "<div class='empty'>No hay mensajes para este cliente.</div>";
+  var box = document.getElementById("messages"); box.scrollTop = box.scrollHeight;
+}
+function takeControl(){
+  if(!selected) return;
+  api("/admin/takeover/" + encodeURIComponent(selected), {method:"POST", body:"{}"}).then(function(){ activeHandoffs[selected]=true; loadData(); }).catch(function(e){ document.getElementById("status").textContent="Error: "+e.message; });
+}
+function releaseControl(){
+  if(!selected) return;
+  api("/admin/release/" + encodeURIComponent(selected)).then(function(){ activeHandoffs[selected]=false; loadData(); }).catch(function(e){ document.getElementById("status").textContent="Error: "+e.message; });
+}
+function sendReply(){
+  if(!selected) return;
+  var text = document.getElementById("reply").value.trim();
+  if(!text){ document.getElementById("status").textContent = "Escribe un mensaje antes de enviar."; return; }
+  document.getElementById("sendBtn").disabled = true;
+  document.getElementById("status").textContent = "Enviando...";
+  api("/admin/send-message", {method:"POST", body:JSON.stringify({userId:selected,text:text})}).then(function(r){
+    document.getElementById("reply").value = "";
+    activeHandoffs[selected] = true;
+    document.getElementById("status").textContent = r.ok ? "Mensaje enviado." : "Meta no confirmó el envío.";
+    loadData();
+  }).catch(function(e){ document.getElementById("status").textContent = "Error: " + e.message; document.getElementById("sendBtn").disabled = false; });
+}
+document.getElementById("reply").addEventListener("keydown", function(e){ if((e.metaKey||e.ctrlKey) && e.key === "Enter"){ sendReply(); } });
+loadData(); setInterval(loadData, 15000);
 </script>
 </body></html>`);
 });
@@ -1855,7 +2095,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v43 (Sonnet 4.5, Supabase health diagnostics) running on port ${PORT}`);
+  console.log(`RAV-Bot v44 (Sonnet 4.5, human inbox console) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

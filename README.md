@@ -81,7 +81,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v42 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v43 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -95,7 +95,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v42 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v43 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.

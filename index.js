@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v42";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v43";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1320,7 +1320,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v42 (Sonnet 4.5, safety monitoring endpoints enabled)");
+  res.send("RAV-Bot v43 (Sonnet 4.5, Supabase health diagnostics)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1542,6 +1542,16 @@ app.get("/admin/health", async (req, res) => {
   }
   result.checks.shopify_admin_api = SHOPIFY_ADMIN_TOKEN ? "key_present_not_tested" : "missing_key";
   result.checks.anthropic_api = ANTHROPIC_API_KEY ? "key_present_not_tested_to_save_credits" : "missing_key";
+  if (SUPABASE_ENABLED) {
+    try {
+      const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=id&limit=1", { headers: SB_HEADERS, timeout: 8000 });
+      result.checks.supabase_conversation_logs = r.status === 200 ? "ok" : `status_${r.status}`;
+    } catch (e) {
+      result.checks.supabase_conversation_logs = `error: ${e.response?.status || ""} ${e.response?.data?.message || e.message}`.trim();
+    }
+  } else {
+    result.checks.supabase_conversation_logs = "missing_env";
+  }
   res.json(result);
 });
 
@@ -1845,7 +1855,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v42 (Sonnet 4.5, safety monitoring endpoints enabled) running on port ${PORT}`);
+  console.log(`RAV-Bot v43 (Sonnet 4.5, Supabase health diagnostics) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v48";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v49";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1421,7 +1421,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v48 (Sonnet 4.5, nonblocking dashboard)");
+  res.send("RAV-Bot v49 (Sonnet 4.5, robust dashboard tabs)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1431,7 +1431,7 @@ const PORT = process.env.PORT || 3000;
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
 function renderAdminLogin(res, targetPath) {
   const target = JSON.stringify(targetPath || "/admin/dashboard");
-  res.status(401).setHeader("content-type", "text/html; charset=utf-8");
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ingresar al panel RAV</title>
@@ -1453,22 +1453,31 @@ button{width:100%;border:1px solid #0F766E;background:#0F766E;color:#fff;border-
 <script>
 var target=${target};
 var stored="";try{stored=localStorage.getItem("rav_dashboard_key")||"";}catch(e){}
-if(!location.search&&stored){location.href=target+"?key="+encodeURIComponent(stored)+(target==="/admin/dashboard"?"#human-control":"");}
+function destination(key){var url=target;if(url==="/admin/dashboard"){url="/admin/dashboard?tab=human";}var sep=url.indexOf("?")>=0?"&":"?";return url+sep+"key="+encodeURIComponent(key);}
+var hasKey=false;try{hasKey=new URL(location.href).searchParams.has("key");}catch(e){}
+if(!hasKey&&stored){location.href=destination(stored);}
 if(stored){document.getElementById("key").value=stored;}
-function go(e){e.preventDefault();var key=document.getElementById("key").value.trim();if(!key)return;try{localStorage.setItem("rav_dashboard_key",key);}catch(err){}location.href=target+"?key="+encodeURIComponent(key)+(target==="/admin/dashboard"?"#human-control":"");}
+function go(e){e.preventDefault();var key=document.getElementById("key").value.trim();if(!key)return;try{localStorage.setItem("rav_dashboard_key",key);}catch(err){}location.href=destination(key);}
 </script></body></html>`);
 }
 
 app.get("/admin", (req, res) => {
-  res.redirect("/admin/dashboard");
+  res.redirect("/admin/dashboard?tab=human");
 });
 
 app.get("/admin/dashboard", (req, res) => {
   if (!adminKeyOk(req)) {
-    renderAdminLogin(res, "/admin/dashboard");
+    const loginTab = req.query.tab === "summary" ? "summary" : "human";
+    renderAdminLogin(res, "/admin/dashboard?tab=" + loginTab);
     return;
   }
   const pageKey = JSON.stringify(req.query.key || "");
+  const rawKey = encodeURIComponent(String(req.query.key || ""));
+  const initialTab = req.query.tab === "human" ? "human" : "summary";
+  const summaryActive = initialTab === "summary" ? " active" : "";
+  const humanActive = initialTab === "human" ? " active" : "";
+  const summaryHref = "/admin/dashboard?key=" + rawKey + "&tab=summary";
+  const humanHref = "/admin/dashboard?key=" + rawKey + "&tab=human";
   res.setHeader("content-type", "text/html; charset=utf-8");
   res.send(`
 <!doctype html>
@@ -1489,7 +1498,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .btn{font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #cfe3e3;background:#fff;padding:6px 14px;border-radius:8px}
 .btn:hover{background:#F0FAF7}
 .tabs{display:flex;gap:6px;margin:0 0 14px;border-bottom:1px solid #E5E8EC}
-.tabBtn{border:0;background:transparent;color:#6B7280;font-size:13px;padding:10px 14px;border-radius:8px 8px 0 0;cursor:pointer;border-bottom:2px solid transparent}
+.tabBtn{border:0;background:transparent;color:#6B7280;font-size:13px;padding:10px 14px;border-radius:8px 8px 0 0;cursor:pointer;border-bottom:2px solid transparent;text-decoration:none;display:inline-flex;align-items:center}
 .tabBtn:hover{background:#fff;color:#1F2A44}
 .tabBtn.active{background:#fff;color:#0F6E56;border-bottom-color:#0F766E;font-weight:600}
 .tabPanel{display:none}.tabPanel.active{display:block}
@@ -1530,8 +1539,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 @media(max-width:760px){.opsShell{grid-template-columns:1fr}.opsThreads{height:240px;border-right:0;border-bottom:1px solid #E5E8EC}.opsMessages{min-height:320px}.opsBubble{max-width:92%}.opsComposer{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
 <div class="headcard"><div class="brand"><div class="logo" id="logo" onclick="changeLogo()" title="Clic para cambiar el logo">RAV<div class="pencil">&#9998;</div></div><div><h1>RAV Toys · Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="btns"><div class="btn" id="evalBtn" onclick="runEval()">&#10024; Evaluar ahora</div><div class="btn" onclick="location.reload()">&#8635; Actualizar</div></div></div>
-<div class="tabs" role="tablist"><button class="tabBtn active" id="tab-summary" onclick="showTab('summary')" type="button">Resumen</button><button class="tabBtn" id="tab-human" onclick="showTab('human')" type="button">Intervención humana</button></div>
-<section class="tabPanel active" id="panel-summary">
+<div class="tabs" role="tablist"><a class="tabBtn${summaryActive}" id="tab-summary" href="${summaryHref}" onclick="showTab('summary');return false;">Resumen</a><a class="tabBtn${humanActive}" id="tab-human" href="${humanHref}" onclick="showTab('human');return false;">Intervención humana</a></div>
+<section class="tabPanel${summaryActive}" id="panel-summary">
 <div class="grid">
 <div class="kpi"><div class="top"><div class="chip" style="background:#E1F5EE">&#128101;</div><span class="lbl">Clientes atendidos</span></div><div class="val" id="m-users">-</div><div class="sub" id="s-users"></div></div>
 <div class="kpi"><div class="top"><div class="chip" style="background:#E6F1FB">&#128722;</div><span class="lbl">Pedidos iniciados</span></div><div class="val" id="m-orders">-</div><div class="sub">productos seleccionados</div></div>
@@ -1551,7 +1560,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <div class="panel" style="margin-bottom:14px"><h3 style="margin-bottom:2px">&#128230; Búsquedas sin resultados</h3><div style="font-size:12px;color:#9AA0A6;margin-bottom:10px">Lo que tus clientes pidieron y no encontraron — oportunidades de inventario</div><div class="cv"><canvas id="chGap"></canvas></div></div>
 <div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
 </section>
-<section class="tabPanel" id="panel-human">
+<section class="tabPanel${humanActive}" id="panel-human">
 <div class="panel" id="human-control" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px"><h3 style="margin:0">Intervención humana</h3><span class="badge" id="opsBadge"></span></div><div class="opsShell"><aside class="opsThreads"><div class="opsSearch"><input id="opsFilter" placeholder="Buscar cliente o mensaje" oninput="renderOpsThreads()"></div><div class="opsThreadList" id="opsThreadList"></div></aside><section class="opsChat"><div class="opsChatHead"><div><h4 id="opsTitle">Selecciona una conversación</h4><p id="opsSub">El control humano pausa las respuestas automáticas del bot.</p></div><div class="opsActions"><button class="btn" id="opsTakeBtn" onclick="takeOpsControl()" disabled>Tomar control</button><button class="btn" id="opsReleaseBtn" onclick="releaseOpsControl()" disabled>Devolver al bot</button></div></div><div class="opsMessages" id="opsMessages"><div class="opsEmpty">Sin conversación seleccionada.</div></div><div class="opsComposer"><textarea id="opsReply" placeholder="Escribe como RAV Toys"></textarea><button class="btn" id="opsSendBtn" onclick="sendOpsReply()" disabled>Enviar</button></div><div class="opsStatus" id="opsStatus">Listo.</div></section></div></div>
 </section>
 </div>
@@ -1559,8 +1568,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
 var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={};
 var chartLibPromise=null;
-function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}if(!summary){location.hash="human-control";renderOpsChat();}else{if(location.hash==="human-control"||location.hash==="#human-control"||location.hash==="#intervencion"){history.replaceState(null,"",location.pathname+location.search);}setTimeout(resizeCharts,0);}}
-function initTabs(){var tab="summary";try{tab=localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab);}
+function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
+function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
+function initTabs(){var tab="summary";try{tab=new URL(location.href).searchParams.get("tab")||localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab==="human"?"human":"summary");}
 function ensureChartLib(){if(window.Chart)return Promise.resolve(true);if(chartLibPromise)return chartLibPromise;chartLibPromise=new Promise(function(resolve){var done=false;function finish(ok){if(done)return;done=true;if(!ok)chartLibPromise=null;resolve(ok);}var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";s.async=true;s.onload=function(){finish(true);};s.onerror=function(){finish(false);};document.head.appendChild(s);setTimeout(function(){finish(!!window.Chart);},5000);});return chartLibPromise;}
 function drawChart(id,config){var c=document.getElementById(id);if(!c||!window.Chart)return;var old=Chart.getChart(c);if(old)old.destroy();new Chart(c,config);}
 function resizeCharts(){if(!window.Chart)return;["chDay","chOut","chGap"].forEach(function(id){var c=document.getElementById(id),ch=c&&Chart.getChart(c);if(ch)ch.resize();});}
@@ -2201,7 +2211,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v48 (Sonnet 4.5, nonblocking dashboard) running on port ${PORT}`);
+  console.log(`RAV-Bot v49 (Sonnet 4.5, robust dashboard tabs) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

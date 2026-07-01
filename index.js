@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v45";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v46";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1421,7 +1421,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v45 (Sonnet 4.5, unified operator dashboard)");
+  res.send("RAV-Bot v46 (Sonnet 4.5, dashboard login)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1429,9 +1429,43 @@ const PORT = process.env.PORT || 3000;
 // ─── ADMIN ENDPOINTS (added in v31 — observability + safety net) ────
 // Health check: verifica que dependencias externas respondan, sin gastar
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
+function renderAdminLogin(res, targetPath) {
+  const target = JSON.stringify(targetPath || "/admin/dashboard");
+  res.status(401).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingresar al panel RAV</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:20px}
+.box{width:min(420px,100%);background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:22px;box-shadow:0 12px 28px rgba(31,42,68,.08)}
+h1{font-size:18px;margin:0 0 6px}p{font-size:13px;color:#6B7280;margin:0 0 18px;line-height:1.5}
+label{display:block;font-size:12px;color:#475569;margin-bottom:6px}input{width:100%;border:1px solid #CBD5E1;border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px}
+button{width:100%;border:1px solid #0F766E;background:#0F766E;color:#fff;border-radius:8px;padding:10px 12px;font-size:14px;cursor:pointer}.hint{font-size:11px;color:#94A3B8;margin-top:12px;text-align:center}
+</style></head><body>
+<form class="box" onsubmit="go(event)">
+  <h1>Panel RAV Toys</h1>
+  <p>Ingresa la clave del dashboard para ver métricas, conversaciones e intervención humana.</p>
+  <label for="key">Clave del dashboard</label>
+  <input id="key" type="password" autocomplete="current-password" autofocus>
+  <button type="submit">Entrar</button>
+  <div class="hint">Si la clave es correcta, el panel se abrirá automáticamente.</div>
+</form>
+<script>
+var target=${target};
+var stored="";try{stored=localStorage.getItem("rav_dashboard_key")||"";}catch(e){}
+if(!location.search&&stored){location.href=target+"?key="+encodeURIComponent(stored)+(target==="/admin/dashboard"?"#human-control":"");}
+if(stored){document.getElementById("key").value=stored;}
+function go(e){e.preventDefault();var key=document.getElementById("key").value.trim();if(!key)return;try{localStorage.setItem("rav_dashboard_key",key);}catch(err){}location.href=target+"?key="+encodeURIComponent(key)+(target==="/admin/dashboard"?"#human-control":"");}
+</script></body></html>`);
+}
+
+app.get("/admin", (req, res) => {
+  res.redirect("/admin/dashboard");
+});
+
 app.get("/admin/dashboard", (req, res) => {
   if (!adminKeyOk(req)) {
-    res.status(401).send("<html><body style='font-family:sans-serif;text-align:center;padding:60px;color:#444'><h2>Acceso restringido</h2><p>Agrega tu clave a la URL: <code>/admin/dashboard?key=TU_CLAVE</code></p></body></html>");
+    renderAdminLogin(res, "/admin/dashboard");
     return;
   }
   const pageKey = JSON.stringify(req.query.key || "");
@@ -1648,7 +1682,7 @@ initLogo();go();setInterval(go,60000);
 
 app.get("/admin/inbox", (req, res) => {
   if (!adminKeyOk(req)) {
-    res.status(401).send("<html><body style='font-family:sans-serif;text-align:center;padding:60px;color:#444'><h2>Acceso restringido</h2><p>Agrega tu clave a la URL: <code>/admin/inbox?key=TU_CLAVE</code></p></body></html>");
+    renderAdminLogin(res, "/admin/inbox");
     return;
   }
   const pageKey = JSON.stringify(req.query.key || "");
@@ -2149,7 +2183,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v45 (Sonnet 4.5, unified operator dashboard) running on port ${PORT}`);
+  console.log(`RAV-Bot v46 (Sonnet 4.5, dashboard login) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

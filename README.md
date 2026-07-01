@@ -48,6 +48,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 
 | Endpoint | Para qué |
 |---|---|
+| `GET /admin` | Entrada corta al panel operativo con pantalla de clave |
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify y Meta, presencia de keys |
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
@@ -71,7 +72,7 @@ Los scripts usan por defecto producción (`https://rav-whatsapp-bot.onrender.com
 Antes de migrar un número real a WhatsApp Cloud API, usa la sección de intervención humana dentro del dashboard:
 
 ```text
-https://rav-whatsapp-bot.onrender.com/admin/dashboard?key=TU_DASHBOARD_KEY#human-control
+https://rav-whatsapp-bot.onrender.com/admin
 ```
 
 Desde ahí el equipo puede tomar control de un chat, responder por WhatsApp usando la Cloud API y devolver la conversación al bot. El estado de control humano se registra en Supabase para sobrevivir reinicios de Render.
@@ -93,7 +94,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v45 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v46 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -107,7 +108,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v45 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v46 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.

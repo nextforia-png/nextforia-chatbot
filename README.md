@@ -23,7 +23,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 - **Webhook:** Meta WhatsApp Business Cloud API
 - **IA:** Anthropic Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`)
 - **Catálogo:** Shopify storefront search JSON endpoint (`ravtoys.com/search?q=X&view=json`)
-- **Memoria:** in-memory (Maps) — se reinicia cuando Render duerme
+- **Memoria:** Supabase para logs persistentes + Maps en memoria para carritos/estado activo
 
 ---
 
@@ -37,6 +37,9 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
 | `SHOPIFY_STORE_DOMAIN` | Dominio Shopify (default: `ravtoys.myshopify.com`) |
 | `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) |
+| `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
+| `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
+| `DASHBOARD_KEY` | Clave para endpoints admin protegidos |
 | `NOTIFICATION_PHONES` | Números a notificar (CSV sin +): `573013507371,573046653449` |
 
 ---
@@ -47,10 +50,112 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 |---|---|
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify y Meta, presencia de keys |
 | `GET /admin/stats` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
+| `GET /admin/conversations?limit=N` | Conversaciones recientes desde Supabase si está disponible |
+| `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
+| `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
 | `GET /admin/test-search?q=XXXX` | Prueba la búsqueda de productos sin afectar a clientes reales |
 | `GET /admin/release/:userId` | Libera un handoff manual de Eliana (vuelve el bot a atender) y marca para pedir rating |
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
+
+---
+
+## 🛡️ Red de seguridad y monitoreo
+
+Los scripts usan por defecto producción (`https://rav-whatsapp-bot.onrender.com`) y leen secretos desde variables de entorno. No pegues llaves en el código.
+
+Variables útiles:
+
+| Variable | Default | Para qué sirve |
+|---|---:|---|
+| `BOT_BASE_URL` | `https://rav-whatsapp-bot.onrender.com` | URL del bot a verificar |
+| `DASHBOARD_KEY` | *(requerida para smoke/alertas)* | Autoriza `/admin/smoke-check` y `/admin/alert` |
+| `EXPECTED_BOT_VERSION` | lee `BOT_VERSION` local en `verify-deploy.js` | Versión esperada post-deploy |
+| `SMOKE_QUERY` | `juguete` | Término real para la prueba de búsqueda |
+| `ALERT_ON_FAILURE` | `1` | Usa `0` para no alertar por WhatsApp |
+| `COLD_START_RETRIES` | `2` | Reintentos para Render free tier |
+| `COLD_START_DELAY_MS` | `60000` | Espera entre reintentos por cold start |
+
+### Prueba de humo post-deploy
+
+Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
+
+```bash
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v42 npm run smoke
+```
+
+También puedes apuntar a staging:
+
+```bash
+BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm run smoke
+```
+
+### Verificación de deploy
+
+Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
+
+```bash
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v42 npm run verify-deploy
+```
+
+Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.
+
+### Monitoreo de salud
+
+Revisa `/admin/health`, `/admin/stats` y `/admin/conversations?limit=100`. Alerta si hay errores, Supabase no responde, Meta/Shopify fallan, handoff alto, búsquedas sin resultados repetidas, o saldo Anthropic agotado.
+
+```bash
+DASHBOARD_KEY=... npm run monitor
+```
+
+Umbrales configurables:
+
+```bash
+MONITOR_MAX_HANDOFF_RATE=0.4 \
+MONITOR_MAX_ZERO_RESULT_RATE=0.35 \
+MONITOR_REPEATED_ZERO_QUERY_COUNT=3 \
+DASHBOARD_KEY=... npm run monitor
+```
+
+Para correrlo como proceso continuo:
+
+```bash
+DASHBOARD_KEY=... MONITOR_INTERVAL_MS=300000 node monitor.js --loop
+```
+
+### Cron sugerido
+
+```cron
+*/5 * * * * cd /ruta/rav-whatsapp-bot && DASHBOARD_KEY=... npm run monitor >> monitor.log 2>&1
+```
+
+### GitHub Action sugerida
+
+```yaml
+name: RAV Bot Safety Checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run verify-deploy
+        env:
+          DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
+          BOT_BASE_URL: https://rav-whatsapp-bot.onrender.com
+      - run: npm run smoke
+        env:
+          DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
+          BOT_BASE_URL: https://rav-whatsapp-bot.onrender.com
+```
 
 ---
 

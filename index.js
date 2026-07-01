@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v41";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v42";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -611,6 +611,7 @@ async function searchShopify(query) {
       image_url: p.thumbnail || "",
       price: p.price || "",
       price_amount: parseInt(String(p.price || "").replace(/[^0-9]/g, ""), 10) || 0,
+      currency: "COP",
       product_type: p.type || "",
       available: true,  // El storefront solo devuelve productos disponibles para venta
       stock: 999        // Placeholder: storefront ya filtró agotados
@@ -1287,6 +1288,10 @@ app.post("/webhook", async (req, res) => {
 
 // ─── ADMIN ENDPOINTS ─────────────────────────────────────────────────────────
 
+function adminKeyOk(req) {
+  return req.query.key === DASHBOARD_KEY || req.get("x-dashboard-key") === DASHBOARD_KEY;
+}
+
 app.get("/admin/release/:userId", (req, res) => {
   const userId = req.params.userId;
   const wasActive = humanHandoff.delete(userId);
@@ -1315,7 +1320,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v41 (Sonnet 4.5, conversation viewer runs unconditionally in render)");
+  res.send("RAV-Bot v42 (Sonnet 4.5, safety monitoring endpoints enabled)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1324,7 +1329,7 @@ const PORT = process.env.PORT || 3000;
 // Health check: verifica que dependencias externas respondan, sin gastar
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
 app.get("/admin/dashboard", (req, res) => {
-  if (req.query.key !== DASHBOARD_KEY) {
+  if (!adminKeyOk(req)) {
     res.status(401).send("<html><body style='font-family:sans-serif;text-align:center;padding:60px;color:#444'><h2>Acceso restringido</h2><p>Agrega tu clave a la URL: <code>/admin/dashboard?key=TU_CLAVE</code></p></body></html>");
     return;
   }
@@ -1400,8 +1405,15 @@ function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
 function initLogo(){var el=document.getElementById("logo");var url=null;try{url=localStorage.getItem("rav_logo");}catch(e){}if(url){el.innerHTML="<img src='"+url+"' alt='logo'><div class='pencil'>&#9998;</div>";}}
 function changeLogo(){var cur="";try{cur=localStorage.getItem("rav_logo")||"";}catch(e){}var url=prompt("Pega la URL de la imagen de tu logo (deja vacío para volver al texto RAV):",cur);if(url===null)return;try{if(url.trim()===""){localStorage.removeItem("rav_logo");document.getElementById("logo").innerHTML="RAV<div class='pencil'>&#9998;</div>";}else{localStorage.setItem("rav_logo",url.trim());initLogo();}}catch(e){}}
 function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}fetch("/admin/evaluate?limit=30").then(function(r){return r.json();}).then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
-function go(){
-Promise.all([fetch("/admin/stats").then(function(r){return r.json();}),fetch("/admin/conversations?limit=100").then(function(r){return r.json();})]).then(function(res){render(res[0],res[1]);}).catch(function(e){document.getElementById("meta").textContent="error cargando datos";});
+function go(attempt){
+attempt=attempt||0;
+Promise.all([fetch("/admin/stats").then(function(r){return r.json();}),fetch("/admin/conversations?limit=100").then(function(r){return r.json();})]).then(function(res){
+  if(attempt<1&&res[1]&&res[1].source&&res[1].source!=="supabase"){document.getElementById("meta").textContent="despertando historial...";setTimeout(function(){go(attempt+1);},3000);return;}
+  render(res[0],res[1]);
+}).catch(function(e){
+  if(attempt<1){document.getElementById("meta").textContent="reintentando datos...";setTimeout(function(){go(attempt+1);},3000);return;}
+  document.getElementById("meta").textContent="error cargando datos";
+});
 }
 function render(stats,conv){
 var ct=(stats.counters)||{},an=(stats.anthropic)||{},sm=(conv.summary)||{},turns=(conv.turns)||[];
@@ -1531,6 +1543,97 @@ app.get("/admin/health", async (req, res) => {
   result.checks.shopify_admin_api = SHOPIFY_ADMIN_TOKEN ? "key_present_not_tested" : "missing_key";
   result.checks.anthropic_api = ANTHROPIC_API_KEY ? "key_present_not_tested_to_save_credits" : "missing_key";
   res.json(result);
+});
+
+app.post("/admin/alert", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const kind = String(req.body && req.body.kind || "monitor_alert").slice(0, 80);
+  const detail = String(req.body && req.body.detail || "Sin detalle").slice(0, 1500);
+  await alertTeam(kind, detail);
+  res.json({ ok: true, kind, notified_count: NOTIFICATION_PHONES.length });
+});
+
+app.get("/admin/smoke-check", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const query = String(req.query.q || "juguete").slice(0, 80);
+  const smokeUserId = "__smoke_test__" + Date.now();
+  try {
+    const search = await searchShopify(query);
+    if (!search.products || search.products.length === 0) {
+      res.status(503).json({
+        ok: false,
+        query,
+        error: "search_returned_zero_products",
+        total: search.total || 0,
+        products_returned: 0
+      });
+      return;
+    }
+
+    lastSearchResults.set(smokeUserId, search.products);
+    const chosen = search.products.find(p => p.price_amount > 0) || search.products[0];
+    const selection = await executeSelectProductForPurchase(smokeUserId, { product_url: chosen.product_url });
+    const checkoutFixture = {
+      nombre: "Smoke Test RAV",
+      cedula: "0000000000",
+      direccion: "Carrera 00 #00-00, Medellin",
+      telefono: "3000000000",
+      metodo_pago: "transferencia"
+    };
+    const savedFields = [];
+    for (const field of CHECKOUT_FIELDS) {
+      const saved = await executeSaveCheckoutField(smokeUserId, { field, value: checkoutFixture[field] });
+      savedFields.push({ field, complete: !!saved.complete, missing_fields: saved.missing_fields || [] });
+    }
+    const state = checkouts.get(smokeUserId) || { products: [] };
+    const total = (state.products || []).reduce((sum, p) => sum + (p.price_amount || 0), 0);
+    const productUrls = new Set(search.products.map(p => p.product_url));
+    const checkoutComplete = CHECKOUT_FIELDS.every(field => state.data && state.data[field]);
+
+    res.json({
+      ok: total > 0 && !!productUrls.has(chosen.product_url) && checkoutComplete,
+      bot_version: BOT_VERSION,
+      query,
+      search: {
+        total: search.total || 0,
+        products_returned: search.products.length
+      },
+      selected: {
+        title: chosen.title,
+        price: chosen.price,
+        price_amount: chosen.price_amount || 0,
+        product_url: chosen.product_url,
+        product_from_search: productUrls.has(chosen.product_url)
+      },
+      cart: {
+        products_count: state.products.length,
+        total_amount: total,
+        selection
+      },
+      checkout: {
+        fields_saved: savedFields.map(item => item.field),
+        complete: checkoutComplete,
+        final_missing_fields: savedFields.length ? savedFields[savedFields.length - 1].missing_fields : CHECKOUT_FIELDS
+      },
+      checks: {
+        search_has_results: search.products.length > 0,
+        selected_product_from_real_search: productUrls.has(chosen.product_url),
+        cart_total_nonzero: total > 0,
+        checkout_fields_complete: checkoutComplete
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, query, error: e.message });
+  } finally {
+    lastSearchResults.delete(smokeUserId);
+    checkouts.delete(smokeUserId);
+  }
 });
 
 // Stats con contadores persistentes (v33)
@@ -1742,7 +1845,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v41 (Sonnet 4.5, conversation viewer runs unconditionally in render) running on port ${PORT}`);
+  console.log(`RAV-Bot v42 (Sonnet 4.5, safety monitoring endpoints enabled) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

@@ -80,13 +80,14 @@ async function requestJson({ method = "get", url, key = "", data, timeoutMs = 70
   throw lastError;
 }
 
-async function requestConversations({ baseUrl, limit = 100, timeoutMs = 70000, retries = 0, retryDelayMs = 60000 }) {
+async function requestConversations({ baseUrl, key = "", limit = 100, timeoutMs = 70000, retries = 0, retryDelayMs = 60000 }) {
   let lastData;
   let lastError;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       lastData = await requestJson({
-        url: `${baseUrl}/admin/conversations?limit=${encodeURIComponent(limit)}`,
+        url: withKey(`${baseUrl}/admin/conversations?limit=${encodeURIComponent(limit)}`, key),
+        key,
         timeoutMs,
         retries: 0,
       });

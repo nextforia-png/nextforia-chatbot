@@ -36,12 +36,14 @@ async function runOnce(cfg, thresholds) {
   });
   const stats = await requestJson({
     url: `${cfg.baseUrl}/admin/stats`,
+    key: cfg.dashboardKey,
     timeoutMs: cfg.timeoutMs,
     retries: cfg.coldStartRetries,
     retryDelayMs: cfg.coldStartDelayMs,
   });
   const conversations = await requestConversations({
     baseUrl: cfg.baseUrl,
+    key: cfg.dashboardKey,
     limit: 100,
     timeoutMs: cfg.timeoutMs,
     retries: cfg.coldStartRetries,

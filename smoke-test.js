@@ -62,6 +62,7 @@ async function main() {
 
   const conversations = await requestConversations({
     baseUrl: cfg.baseUrl,
+    key: cfg.dashboardKey,
     limit: 5,
     timeoutMs: cfg.timeoutMs,
     retries: cfg.coldStartRetries,

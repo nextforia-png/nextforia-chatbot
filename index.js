@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v44";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v45";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1421,7 +1421,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v44 (Sonnet 4.5, human inbox console)");
+  res.send("RAV-Bot v45 (Sonnet 4.5, unified operator dashboard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1434,6 +1434,7 @@ app.get("/admin/dashboard", (req, res) => {
     res.status(401).send("<html><body style='font-family:sans-serif;text-align:center;padding:60px;color:#444'><h2>Acceso restringido</h2><p>Agrega tu clave a la URL: <code>/admin/dashboard?key=TU_CLAVE</code></p></body></html>");
     return;
   }
+  const pageKey = JSON.stringify(req.query.key || "");
   res.setHeader("content-type", "text/html; charset=utf-8");
   res.send(`
 <!doctype html>
@@ -1478,7 +1479,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .cv{position:relative;width:100%;height:190px}
 .cv.sm{height:150px}
 .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+.opsShell{display:grid;grid-template-columns:minmax(220px,300px) 1fr;border:0.5px solid #E5E8EC;border-radius:10px;overflow:hidden;min-height:560px;background:#fff}
+.opsThreads{border-right:1px solid #E5E8EC;background:#FBFCFD;display:flex;flex-direction:column;min-width:0}
+.opsSearch{padding:10px;border-bottom:1px solid #E5E8EC}.opsSearch input{width:100%;border:1px solid #CBD5E1;border-radius:8px;padding:8px 10px;font-size:12px}
+.opsThreadList{overflow:auto;display:flex;flex-direction:column;gap:5px;padding:8px}.opsThread{border:1px solid transparent;border-radius:8px;padding:9px 10px;cursor:pointer;background:transparent;text-align:left}.opsThread:hover{background:#F4F5F7}.opsThread.active{background:#E1F5EE;border-color:#B8E2D4}
+.opsThreadTop{display:flex;justify-content:space-between;gap:8px;align-items:center}.opsPhone{font-size:12px;font-weight:650}.opsTime{font-size:10px;color:#9AA0A6;white-space:nowrap}.opsPreview{font-size:11px;color:#6B7280;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.opsPill{font-size:10px;border-radius:999px;padding:2px 7px;background:#E6F1FB;color:#2C6FB3;margin-left:5px}.opsPill.human{background:#FAEEDA;color:#9A6216}.opsPill.bot{background:#E1F5EE;color:#0F6E56}
+.opsChat{min-width:0;display:flex;flex-direction:column;background:#fff}.opsChatHead{padding:12px 14px;border-bottom:1px solid #E5E8EC;display:flex;align-items:center;justify-content:space-between;gap:10px}.opsChatHead h4{font-size:14px;margin:0}.opsChatHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.opsActions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.opsMessages{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px;background:#F8FAFC}.opsEmpty{margin:auto;color:#9AA0A6;font-size:13px}.opsBubble{max-width:78%;border-radius:9px;padding:8px 10px;font-size:12px;line-height:1.45;white-space:pre-wrap}.opsIncoming{align-self:flex-start;background:#fff;border:1px solid #E5E8EC}.opsBot{align-self:flex-start;background:#E1F5EE;border:1px solid #B8E2D4}.opsHuman{align-self:flex-end;background:#1F2A44;color:#fff}.opsMeta{font-size:10px;color:#9AA0A6;margin-top:4px}.opsHuman .opsMeta{color:#CBD5E1}.opsTools{font-size:10px;color:#9AA0A6;margin-left:4px}
+.opsComposer{border-top:1px solid #E5E8EC;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;background:#fff}.opsComposer textarea{width:100%;min-height:54px;max-height:130px;resize:vertical;border:1px solid #CBD5E1;border-radius:8px;padding:9px 10px;font-size:13px;font-family:inherit}.opsStatus{font-size:11px;color:#6B7280;padding:0 12px 10px;background:#fff}
 @media(max-width:760px){.charts{grid-template-columns:1fr}}
+@media(max-width:760px){.opsShell{grid-template-columns:1fr}.opsThreads{height:240px;border-right:0;border-bottom:1px solid #E5E8EC}.opsMessages{min-height:320px}.opsBubble{max-width:92%}.opsComposer{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
 <div class="headcard"><div class="brand"><div class="logo" id="logo" onclick="changeLogo()" title="Clic para cambiar el logo">RAV<div class="pencil">&#9998;</div></div><div><h1>RAV Toys · Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="btns"><div class="btn" id="evalBtn" onclick="runEval()">&#10024; Evaluar ahora</div><div class="btn" onclick="location.reload()">&#8635; Actualizar</div></div></div>
 <div class="grid">
@@ -1498,17 +1509,47 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <div class="panel"><h3>Resultado de conversaciones</h3><div class="cv sm"><canvas id="chOut"></canvas><div class="center"><div style="font-size:21px;font-weight:600" id="donutTotal">0</div><div style="font-size:11px;color:#9AA0A6">chats</div></div></div><div class="legend" id="legOut"></div></div>
 </div>
 <div class="panel" style="margin-bottom:14px"><h3 style="margin-bottom:2px">&#128230; Búsquedas sin resultados</h3><div style="font-size:12px;color:#9AA0A6;margin-bottom:10px">Lo que tus clientes pidieron y no encontraron — oportunidades de inventario</div><div class="cv"><canvas id="chGap"></canvas></div></div>
-<div class="panel" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px"><h3 style="margin:0">💬 Conversaciones recientes</h3><span class="badge" id="convBadge"></span></div><div style="font-size:12px;color:#9AA0A6;margin-bottom:10px">Lo que está haciendo el bot, en vivo (solo lectura)</div><div id="convList" style="display:flex;flex-direction:column;gap:10px;max-height:540px;overflow-y:auto"></div></div><div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
+<div class="panel" id="human-control" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px"><h3 style="margin:0">Intervención humana</h3><span class="badge" id="opsBadge"></span></div><div class="opsShell"><aside class="opsThreads"><div class="opsSearch"><input id="opsFilter" placeholder="Buscar cliente o mensaje" oninput="renderOpsThreads()"></div><div class="opsThreadList" id="opsThreadList"></div></aside><section class="opsChat"><div class="opsChatHead"><div><h4 id="opsTitle">Selecciona una conversación</h4><p id="opsSub">El control humano pausa las respuestas automáticas del bot.</p></div><div class="opsActions"><button class="btn" id="opsTakeBtn" onclick="takeOpsControl()" disabled>Tomar control</button><button class="btn" id="opsReleaseBtn" onclick="releaseOpsControl()" disabled>Devolver al bot</button></div></div><div class="opsMessages" id="opsMessages"><div class="opsEmpty">Sin conversación seleccionada.</div></div><div class="opsComposer"><textarea id="opsReply" placeholder="Escribe como RAV Toys"></textarea><button class="btn" id="opsSendBtn" onclick="sendOpsReply()" disabled>Enviar</button></div><div class="opsStatus" id="opsStatus">Listo.</div></section></div></div><div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
 </div>
 <script>
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
+var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={};
+function adminApi(url,opts){opts=opts||{};opts.headers=Object.assign({"content-type":"application/json","x-dashboard-key":DASHBOARD_KEY},opts.headers||{});return fetch(url+(url.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(DASHBOARD_KEY),opts).then(function(r){return r.json().then(function(j){if(!r.ok){throw new Error(j.error||("HTTP "+r.status));}return j;});});}
+function opsEsc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function opsAttr(s){return opsEsc(s).replace(/"/g,"&quot;");}
+function opsWhen(ts){try{return new Date(ts).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(e){return "";}}
+function opsLastText(ms){var t=ms[ms.length-1]||{};return t.userMessage||t.botReply||"";}
+function buildOpsFromTurns(){
+opsHandoffs={};((opsStats||{}).active_handoff_users||[]).forEach(function(id){opsHandoffs[id]=true;});
+opsGroups={};opsOrder=[];
+opsTurns.slice().reverse().forEach(function(t){var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&t.tools.indexOf("admin_release")>=0)opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0))opsHandoffs[id]=true;});
+opsOrder.sort(function(a,b){return new Date((opsGroups[b][opsGroups[b].length-1]||{}).ts||0)-new Date((opsGroups[a][opsGroups[a].length-1]||{}).ts||0);});
+if(!opsSelected&&opsOrder.length)opsSelected=opsOrder[0];if(opsSelected&&!opsGroups[opsSelected])opsSelected=opsOrder[0]||null;
+renderOpsThreads();renderOpsChat();
+}
+function renderOpsThreads(){
+var el=document.getElementById("opsThreadList");if(!el)return;var q=(document.getElementById("opsFilter").value||"").toLowerCase().trim();var html="";
+opsOrder.forEach(function(id){var ms=opsGroups[id]||[],txt=opsLastText(ms);if(q&&(id+" "+txt).toLowerCase().indexOf(q)<0)return;var cls="opsThread"+(id===opsSelected?" active":"");var mode=opsHandoffs[id]?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";html+="<button class='"+cls+"' data-user=\""+opsAttr(id)+"\" onclick=\"selectOpsThread(this.getAttribute('data-user'))\"><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+"</span><span class='opsTime'>"+opsWhen((ms[ms.length-1]||{}).ts)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div></button>";});
+el.innerHTML=html||"<div class='opsEmpty'>No hay conversaciones.</div>";var badge=document.getElementById("opsBadge");if(badge)badge.textContent=opsOrder.length+" conversación"+(opsOrder.length===1?"":"es");
+}
+function selectOpsThread(id){opsSelected=id;renderOpsThreads();renderOpsChat();}
+function renderOpsChat(){
+var ms=opsGroups[opsSelected]||[],title=document.getElementById("opsTitle"),sub=document.getElementById("opsSub");if(title)title.textContent=opsSelected?("+"+opsSelected):"Selecciona una conversación";if(sub)sub.textContent=opsSelected?(opsHandoffs[opsSelected]?"Control humano activo. El bot no responderá.":"Bot activo. Toma control antes de intervenir."):"El control humano pausa las respuestas automáticas del bot.";
+var take=document.getElementById("opsTakeBtn"),rel=document.getElementById("opsReleaseBtn"),send=document.getElementById("opsSendBtn");if(take)take.disabled=!opsSelected||!!opsHandoffs[opsSelected];if(rel)rel.disabled=!opsSelected||!opsHandoffs[opsSelected];if(send)send.disabled=!opsSelected;
+var html="";ms.forEach(function(t){if(t.userMessage){html+="<div class='opsBubble opsIncoming'>"+opsEsc(t.userMessage)+"<div class='opsMeta'>Cliente · "+opsWhen(t.ts)+"</div></div>";}if(t.botReply){var isHuman=t.botReply.indexOf("[Humano]")===0;var body=isHuman?t.botReply.replace("[Humano]","").trim():t.botReply;html+="<div class='opsBubble "+(isHuman?"opsHuman":"opsBot")+"'>"+opsEsc(body)+"<div class='opsMeta'>"+(isHuman?"Humano":"Bot")+" · "+opsWhen(t.ts)+"</div></div>";}if(t.tools&&t.tools.length){html+="<div class='opsTools'>"+opsEsc(t.tools.join(", "))+"</div>";}});
+var box=document.getElementById("opsMessages");if(box){box.innerHTML=html||"<div class='opsEmpty'>No hay mensajes para este cliente.</div>";box.scrollTop=box.scrollHeight;}
+}
+function takeOpsControl(){if(!opsSelected)return;adminApi("/admin/takeover/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent="Control humano activo.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
+function releaseOpsControl(){if(!opsSelected)return;adminApi("/admin/release/"+encodeURIComponent(opsSelected)).then(function(){opsHandoffs[opsSelected]=false;document.getElementById("opsStatus").textContent="Conversación devuelta al bot.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
+function sendOpsReply(){if(!opsSelected)return;var text=(document.getElementById("opsReply").value||"").trim();if(!text){document.getElementById("opsStatus").textContent="Escribe un mensaje antes de enviar.";return;}document.getElementById("opsSendBtn").disabled=true;document.getElementById("opsStatus").textContent="Enviando...";adminApi("/admin/send-message",{method:"POST",body:JSON.stringify({userId:opsSelected,text:text})}).then(function(r){document.getElementById("opsReply").value="";opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent=r.ok?"Mensaje enviado.":"Meta no confirmó el envío.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;document.getElementById("opsSendBtn").disabled=false;});}
+document.addEventListener("keydown",function(e){var el=document.getElementById("opsReply");if(el&&document.activeElement===el&&(e.metaKey||e.ctrlKey)&&e.key==="Enter"){sendOpsReply();}});
 function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
 function initLogo(){var el=document.getElementById("logo");var url=null;try{url=localStorage.getItem("rav_logo");}catch(e){}if(url){el.innerHTML="<img src='"+url+"' alt='logo'><div class='pencil'>&#9998;</div>";}}
 function changeLogo(){var cur="";try{cur=localStorage.getItem("rav_logo")||"";}catch(e){}var url=prompt("Pega la URL de la imagen de tu logo (deja vacío para volver al texto RAV):",cur);if(url===null)return;try{if(url.trim()===""){localStorage.removeItem("rav_logo");document.getElementById("logo").innerHTML="RAV<div class='pencil'>&#9998;</div>";}else{localStorage.setItem("rav_logo",url.trim());initLogo();}}catch(e){}}
-function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}fetch("/admin/evaluate?limit=30").then(function(r){return r.json();}).then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
+function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}adminApi("/admin/evaluate?limit=30").then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
 function go(attempt){
 attempt=attempt||0;
-Promise.all([fetch("/admin/stats").then(function(r){return r.json();}),fetch("/admin/conversations?limit=100").then(function(r){return r.json();})]).then(function(res){
+Promise.all([adminApi("/admin/stats"),adminApi("/admin/conversations?limit=100")]).then(function(res){
   if(attempt<1&&res[1]&&res[1].source&&res[1].source!=="supabase"){document.getElementById("meta").textContent="despertando historial...";setTimeout(function(){go(attempt+1);},3000);return;}
   render(res[0],res[1]);
 }).catch(function(e){
@@ -1518,6 +1559,7 @@ Promise.all([fetch("/admin/stats").then(function(r){return r.json();}),fetch("/a
 }
 function render(stats,conv){
 var ct=(stats.counters)||{},an=(stats.anthropic)||{},sm=(conv.summary)||{},turns=(conv.turns)||[];
+opsStats=stats||{};opsTurns=turns||[];buildOpsFromTurns();
 var clientes=ct.unique_users_total||0;var msgs=ct.messages_received_total||0;
 var hora=new Date().toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit"});
 document.getElementById("meta").textContent=(msgs===0?"Aún sin conversaciones — el panel se llenará cuando lleguen clientes":(msgs+" mensajes · "+clientes+" clientes"))+" · "+(stats.bot_version||"")+" · actualizado "+hora;
@@ -1938,6 +1980,10 @@ async function evaluateTurn(turn) {
 // Endpoint: evalúa bajo demanda los turnos que aún no tienen evaluación.
 // ?limit=N (default 10, máx 30) para controlar costo/tiempo por corrida.
 app.get("/admin/evaluate", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
   const limit = Math.min(parseInt(req.query.limit) || 10, 30);
   let evaluated = 0, failed = 0;
   if (SUPABASE_ENABLED) {
@@ -1983,6 +2029,10 @@ app.get("/admin/evaluate", async (req, res) => {
 });
 
 app.get("/admin/conversations", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
   const limit = Math.min(parseInt(req.query.limit) || 50, 100);
   let turns = null; let source = "memory";
   if (SUPABASE_ENABLED) {
@@ -2021,6 +2071,10 @@ app.get("/admin/conversations", async (req, res) => {
 });
 
 app.get("/admin/stats", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
   const handoffsList = Array.from(humanHandoff.values());
   const pendingList = Array.from(pendingRatings.values());
   const checkoutsList = Array.from(checkouts.entries()).map(([userId, cart]) => ({
@@ -2095,7 +2149,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v44 (Sonnet 4.5, human inbox console) running on port ${PORT}`);
+  console.log(`RAV-Bot v45 (Sonnet 4.5, unified operator dashboard) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

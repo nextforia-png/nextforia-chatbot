@@ -55,6 +55,9 @@ async function runOnce(cfg, thresholds) {
   assertCheck(health.env && health.env.anthropic_key_present === true, "ANTHROPIC_API_KEY no aparece presente.", failures);
   assertCheck(health.env && health.env.wa_token_present === true, "WA_TOKEN no aparece presente.", failures);
   assertCheck(conversations.source === "supabase", `Conversaciones no vienen de Supabase; source=${conversations.source}.`, failures);
+  if (health.production_readiness && health.production_readiness.infrastructure_ready !== true) {
+    failures.push(`Infraestructura no lista para produccion: ${(health.production_readiness.blockers || []).join(", ") || "sin detalle"}.`);
+  }
 
   const summary = conversations.summary || {};
   const turns = conversations.turns || [];
@@ -99,6 +102,7 @@ async function runOnce(cfg, thresholds) {
     handoff_rate: Math.round(handoffRate * 100),
     zero_result_rate: Math.round(zeroRate * 100),
     active_handoffs: activeHandoffs,
+    infrastructure_ready: !!(health.production_readiness && health.production_readiness.infrastructure_ready),
     failures,
     warnings,
   };

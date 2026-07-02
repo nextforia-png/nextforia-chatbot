@@ -39,6 +39,9 @@ async function main() {
   assertCheck(health.env && health.env.wa_token_present === true, "WA_TOKEN no aparece presente.", failures);
   assertCheck(health.checks && health.checks.shopify_storefront === "ok", `Shopify storefront no esta ok: ${health.checks && health.checks.shopify_storefront}.`, failures);
   assertCheck(health.checks && health.checks.meta_whatsapp === "ok", `Meta WhatsApp no esta ok: ${health.checks && health.checks.meta_whatsapp}.`, failures);
+  if (health.production_readiness && health.production_readiness.infrastructure_ready !== true) {
+    failures.push(`Infraestructura no lista para produccion: ${(health.production_readiness.blockers || []).join(", ") || "sin detalle"}.`);
+  }
 
   if (cfg.dashboardKey) {
     const smoke = await requestJson({

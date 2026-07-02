@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v49";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v50";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -95,6 +95,68 @@ async function supabaseUpdateEval(id, ev) {
   } catch (e) { console.error("supabaseUpdateEval error:", e.message); }
 }
 
+function normalizeTurnRow(r) {
+  return {
+    ts: r.ts,
+    userId: r.user_id,
+    userMessage: r.user_message,
+    botReply: r.bot_reply,
+    tools: Array.isArray(r.tools) ? r.tools : [],
+    zeroResultQueries: Array.isArray(r.zero_result_queries) ? r.zero_result_queries : [],
+    handoff: !!r.handoff,
+    rating: r.rating,
+    numTools: r.num_tools,
+    status: r.status,
+    eval: r.eval || undefined,
+    _id: r.id
+  };
+}
+
+function inferHandoffStates(turns, activeUsers) {
+  const states = {};
+  (activeUsers || []).forEach(function (id) {
+    const userId = String(id || "").replace(/\D/g, "");
+    if (userId) states[userId] = { active: true, source: "memory", last_change_ts: null };
+  });
+
+  (turns || []).slice().sort(function (a, b) {
+    return new Date(a.ts || 0) - new Date(b.ts || 0);
+  }).forEach(function (turn) {
+    const userId = String(turn.userId || "").replace(/\D/g, "");
+    if (!userId) return;
+    const tools = Array.isArray(turn.tools) ? turn.tools : [];
+    if (tools.includes("admin_release")) {
+      states[userId] = { active: false, source: "admin_release", last_change_ts: turn.ts || null };
+      return;
+    }
+    if (
+      tools.includes("admin_takeover") ||
+      tools.includes("admin_send_message") ||
+      tools.includes("request_human_handoff") ||
+      tools.includes("human_handoff_active") ||
+      turn.handoff
+    ) {
+      states[userId] = { active: true, source: tools[0] || "handoff", last_change_ts: turn.ts || null };
+    }
+  });
+
+  return states;
+}
+
+async function inferRecentHandoffs(limit) {
+  const activeMemory = Array.from(humanHandoff.values());
+  let turns = conversationLogs.slice();
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchRecent(limit || 100);
+    if (rows) turns = rows.map(normalizeTurnRow);
+  }
+  const states = inferHandoffStates(turns, activeMemory);
+  return {
+    states,
+    activeUsers: Object.keys(states).filter(function (id) { return states[id].active; })
+  };
+}
+
 function recordTurn(userId, userMessage, botReply, status) {
   try {
     const rec = {
@@ -115,7 +177,7 @@ function recordTurn(userId, userMessage, botReply, status) {
   } catch (e) { console.error("recordTurn error:", e.message); }
 }
 
-function recordAdminEvent(userId, tool, message) {
+function recordAdminEvent(userId, tool, message, status) {
   try {
     const rec = {
       ts: new Date().toISOString(),
@@ -127,12 +189,33 @@ function recordAdminEvent(userId, tool, message) {
       handoff: tool !== "admin_release",
       rating: null,
       numTools: 1,
-      status: "ok"
+      status: status || "ok"
     };
     conversationLogs.push(rec);
     if (conversationLogs.length > 100) conversationLogs.shift();
     supabaseInsert(rec);
   } catch (e) { console.error("recordAdminEvent error:", e.message); }
+}
+
+function describeInboundMessage(message) {
+  const type = message && message.type;
+  if (type === "text") return message.text && message.text.body || "";
+  if (type === "audio" || type === "voice") return "[Audio recibido]";
+  if (type === "image") return "[Imagen recibida]";
+  if (type === "document") return "[Documento recibido]";
+  if (type === "video") return "[Video recibido]";
+  if (type === "sticker") return "[Sticker recibido]";
+  return "[" + (type || "mensaje") + " recibido]";
+}
+
+function recordHumanPausedInbound(userId, message) {
+  trackIncomingMessage(userId);
+  turnZeroSearchActive = false;
+  turnTools = ["human_handoff_active"];
+  turnZeroQueries = [];
+  turnHandoff = true;
+  turnRating = null;
+  recordTurn(userId, describeInboundMessage(message), "", "ok");
 }
 
 async function humanControlActiveFor(userId) {
@@ -1318,14 +1401,21 @@ app.post("/webhook", async (req, res) => {
       await handleConversation(from, text);
     } else if (type === "audio" || type === "voice") {
       console.log(`From ${from}: [voice note]`);
-      if (!humanHandoff.has(from)) {
+      if (await humanControlActiveFor(from)) {
+        recordHumanPausedInbound(from, message);
+      } else {
         await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
       }
     } else if (type === "image" || type === "document") {
       console.log(`From ${from}: [${type}] (possibly payment proof)`);
+      if (await humanControlActiveFor(from)) {
+        recordHumanPausedInbound(from, message);
+      }
     } else {
       console.log(`From ${from}: [${type}]`);
-      if (!humanHandoff.has(from)) {
+      if (await humanControlActiveFor(from)) {
+        recordHumanPausedInbound(from, message);
+      } else {
         await sendText(from, "Solo puedo leer texto por ahora 😊 ¿En qué te ayudo?");
       }
     }
@@ -1389,8 +1479,8 @@ app.post("/admin/send-message", async (req, res) => {
   }
   humanHandoff.add(userId);
   const sent = await sendText(userId, text);
-  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text);
-  res.json({ ok: !!sent, userId, handoff: true });
+  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error");
+  res.json({ ok: !!sent, userId, handoff: true, meta_sent: !!sent });
 });
 
 app.get("/admin/reset-checkout/:userId", (req, res) => {
@@ -1421,7 +1511,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v49 (Sonnet 4.5, robust dashboard tabs)");
+  res.send("RAV-Bot v50 (ops-ready dashboard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1530,11 +1620,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .opsThreads{border-right:1px solid #E5E8EC;background:#FBFCFD;display:flex;flex-direction:column;min-width:0}
 .opsSearch{padding:10px;border-bottom:1px solid #E5E8EC}.opsSearch input{width:100%;border:1px solid #CBD5E1;border-radius:8px;padding:8px 10px;font-size:12px}
 .opsThreadList{overflow:auto;display:flex;flex-direction:column;gap:5px;padding:8px}.opsThread{border:1px solid transparent;border-radius:8px;padding:9px 10px;cursor:pointer;background:transparent;text-align:left}.opsThread:hover{background:#F4F5F7}.opsThread.active{background:#E1F5EE;border-color:#B8E2D4}
+.opsThread.pending{border-color:#F3B65A;background:#FFF8EA}.opsThread.pending.active{background:#FAEEDA;border-color:#D9932E}
 .opsThreadTop{display:flex;justify-content:space-between;gap:8px;align-items:center}.opsPhone{font-size:12px;font-weight:650}.opsTime{font-size:10px;color:#9AA0A6;white-space:nowrap}.opsPreview{font-size:11px;color:#6B7280;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .opsPill{font-size:10px;border-radius:999px;padding:2px 7px;background:#E6F1FB;color:#2C6FB3;margin-left:5px}.opsPill.human{background:#FAEEDA;color:#9A6216}.opsPill.bot{background:#E1F5EE;color:#0F6E56}
+.opsFlag{font-size:10px;border-radius:999px;padding:2px 7px;margin-left:5px;background:#F4F5F7;color:#6B7280}.opsFlag.need{background:#FAECE7;color:#B94723}
+.opsToolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}.opsSegments{display:flex;gap:4px;background:#F4F5F7;border:1px solid #E5E8EC;border-radius:8px;padding:3px}.opsSegments button{border:0;background:transparent;color:#6B7280;border-radius:6px;padding:5px 9px;font-size:11px;cursor:pointer}.opsSegments button.active{background:#fff;color:#1F2A44;box-shadow:0 1px 3px rgba(31,42,68,.08)}.opsMiniMetric{font-size:11px;color:#6B7280}.opsTopBadges{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.opsHealth.ok{background:#E1F5EE;color:#0F6E56}.opsHealth.warn{background:#FAEEDA;color:#9A6216}.opsHealth.err{background:#FAECE7;color:#B94723}
 .opsChat{min-width:0;display:flex;flex-direction:column;background:#fff}.opsChatHead{padding:12px 14px;border-bottom:1px solid #E5E8EC;display:flex;align-items:center;justify-content:space-between;gap:10px}.opsChatHead h4{font-size:14px;margin:0}.opsChatHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.opsActions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
 .opsMessages{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px;background:#F8FAFC}.opsEmpty{margin:auto;color:#9AA0A6;font-size:13px}.opsBubble{max-width:78%;border-radius:9px;padding:8px 10px;font-size:12px;line-height:1.45;white-space:pre-wrap}.opsIncoming{align-self:flex-start;background:#fff;border:1px solid #E5E8EC}.opsBot{align-self:flex-start;background:#E1F5EE;border:1px solid #B8E2D4}.opsHuman{align-self:flex-end;background:#1F2A44;color:#fff}.opsMeta{font-size:10px;color:#9AA0A6;margin-top:4px}.opsHuman .opsMeta{color:#CBD5E1}.opsTools{font-size:10px;color:#9AA0A6;margin-left:4px}
 .opsComposer{border-top:1px solid #E5E8EC;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;background:#fff}.opsComposer textarea{width:100%;min-height:54px;max-height:130px;resize:vertical;border:1px solid #CBD5E1;border-radius:8px;padding:9px 10px;font-size:13px;font-family:inherit}.opsStatus{font-size:11px;color:#6B7280;padding:0 12px 10px;background:#fff}
+.opsComposerMeta{display:flex;justify-content:flex-end;font-size:10px;color:#9AA0A6;margin:-6px 12px 7px}
 @media(max-width:760px){.charts{grid-template-columns:1fr}}
 @media(max-width:760px){.opsShell{grid-template-columns:1fr}.opsThreads{height:240px;border-right:0;border-bottom:1px solid #E5E8EC}.opsMessages{min-height:320px}.opsBubble{max-width:92%}.opsComposer{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
@@ -1561,12 +1655,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
 </section>
 <section class="tabPanel${humanActive}" id="panel-human">
-<div class="panel" id="human-control" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px"><h3 style="margin:0">Intervención humana</h3><span class="badge" id="opsBadge"></span></div><div class="opsShell"><aside class="opsThreads"><div class="opsSearch"><input id="opsFilter" placeholder="Buscar cliente o mensaje" oninput="renderOpsThreads()"></div><div class="opsThreadList" id="opsThreadList"></div></aside><section class="opsChat"><div class="opsChatHead"><div><h4 id="opsTitle">Selecciona una conversación</h4><p id="opsSub">El control humano pausa las respuestas automáticas del bot.</p></div><div class="opsActions"><button class="btn" id="opsTakeBtn" onclick="takeOpsControl()" disabled>Tomar control</button><button class="btn" id="opsReleaseBtn" onclick="releaseOpsControl()" disabled>Devolver al bot</button></div></div><div class="opsMessages" id="opsMessages"><div class="opsEmpty">Sin conversación seleccionada.</div></div><div class="opsComposer"><textarea id="opsReply" placeholder="Escribe como RAV Toys"></textarea><button class="btn" id="opsSendBtn" onclick="sendOpsReply()" disabled>Enviar</button></div><div class="opsStatus" id="opsStatus">Listo.</div></section></div></div>
+<div class="panel" id="human-control" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px"><h3 style="margin:0">Intervención humana</h3><div class="opsTopBadges"><span class="badge opsHealth" id="opsHealth">verificando...</span><span class="badge" id="opsBadge"></span></div></div><div class="opsToolbar"><div class="opsSegments" aria-label="Filtro de conversaciones"><button id="opsModeAll" class="active" onclick="setOpsFilter('all')">Todos</button><button id="opsModePending" onclick="setOpsFilter('pending')">Pendientes</button><button id="opsModeHuman" onclick="setOpsFilter('human')">Humano</button><button id="opsModeBot" onclick="setOpsFilter('bot')">Bot</button></div><span class="opsMiniMetric" id="opsPendingCount">0 pendientes</span></div><div class="opsShell"><aside class="opsThreads"><div class="opsSearch"><input id="opsFilter" placeholder="Buscar cliente o mensaje" oninput="renderOpsThreads()"></div><div class="opsThreadList" id="opsThreadList"></div></aside><section class="opsChat"><div class="opsChatHead"><div><h4 id="opsTitle">Selecciona una conversación</h4><p id="opsSub">El control humano pausa las respuestas automáticas del bot.</p></div><div class="opsActions"><button class="btn" id="opsCopyBtn" onclick="copyOpsPhone()" disabled>Copiar número</button><button class="btn" id="opsTakeBtn" onclick="takeOpsControl()" disabled>Tomar control</button><button class="btn" id="opsReleaseBtn" onclick="releaseOpsControl()" disabled>Devolver al bot</button></div></div><div class="opsMessages" id="opsMessages"><div class="opsEmpty">Sin conversación seleccionada.</div></div><div class="opsComposer"><textarea id="opsReply" maxlength="1200" placeholder="Escribe como RAV Toys" oninput="updateOpsChar()"></textarea><button class="btn" id="opsSendBtn" onclick="sendOpsReply()" disabled>Enviar</button></div><div class="opsComposerMeta"><span id="opsChar">0/1200</span></div><div class="opsStatus" id="opsStatus">Listo.</div></section></div></div>
 </section>
 </div>
 <script>
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
-var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={};
+var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={}, opsFilterMode="all", opsLastHealth=null;
 var chartLibPromise=null;
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
@@ -1579,35 +1673,47 @@ function adminApi(url,opts){opts=opts||{};opts.headers=Object.assign({"content-t
 function opsEsc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function opsAttr(s){return opsEsc(s).replace(/"/g,"&quot;");}
 function opsWhen(ts){try{return new Date(ts).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(e){return "";}}
-function opsLastText(ms){var t=ms[ms.length-1]||{};return t.userMessage||t.botReply||"";}
+function opsLastText(ms){var info=opsThreadInfoFromMessages(ms);return info.lastText||"";}
+function opsThreadInfoFromMessages(ms){
+var lastText="",lastTs="",lastInbound=0,lastHumanReply=0,lastBot=0,lastTools=[];
+(ms||[]).forEach(function(t){var ts=Date.parse(t.ts||"")||0;if(ts){lastTs=t.ts;}var tools=t.tools||[];if(t.userMessage){lastInbound=ts||lastInbound;lastText=t.userMessage;}if(t.botReply){var clean=String(t.botReply||"").replace("[Humano]","").trim();if(tools.indexOf("admin_send_message")>=0){lastHumanReply=ts||lastHumanReply;}else if(tools.indexOf("admin_takeover")<0&&tools.indexOf("admin_release")<0){lastBot=ts||lastBot;}lastText=clean||lastText;}if(tools.length){lastTools=tools;}});
+return {lastText:lastText,lastTs:lastTs,lastInbound:lastInbound,lastHumanReply:lastHumanReply,lastBot:lastBot,lastTools:lastTools};
+}
+function opsThreadInfo(id){var ms=opsGroups[id]||[],info=opsThreadInfoFromMessages(ms),active=!!opsHandoffs[id];info.active=active;info.needsReply=active&&info.lastInbound>Math.max(info.lastHumanReply,0);return info;}
+function opsMatchesMode(id){var info=opsThreadInfo(id);if(opsFilterMode==="pending")return info.needsReply;if(opsFilterMode==="human")return info.active;if(opsFilterMode==="bot")return !info.active;return true;}
+function setOpsFilter(mode){opsFilterMode=mode||"all";["All","Pending","Human","Bot"].forEach(function(name){var el=document.getElementById("opsMode"+name);if(el)el.classList.toggle("active",opsFilterMode===name.toLowerCase()||(name==="All"&&opsFilterMode==="all"));});renderOpsThreads();}
 function buildOpsFromTurns(){
 opsHandoffs={};((opsStats||{}).active_handoff_users||[]).forEach(function(id){opsHandoffs[id]=true;});
 opsGroups={};opsOrder=[];
-opsTurns.slice().reverse().forEach(function(t){var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&t.tools.indexOf("admin_release")>=0)opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0))opsHandoffs[id]=true;});
+opsTurns.slice().reverse().forEach(function(t){var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&t.tools.indexOf("admin_release")>=0)opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0||t.tools.indexOf("human_handoff_active")>=0||t.tools.indexOf("request_human_handoff")>=0))opsHandoffs[id]=true;});
 opsOrder.sort(function(a,b){return new Date((opsGroups[b][opsGroups[b].length-1]||{}).ts||0)-new Date((opsGroups[a][opsGroups[a].length-1]||{}).ts||0);});
 if(!opsSelected&&opsOrder.length)opsSelected=opsOrder[0];if(opsSelected&&!opsGroups[opsSelected])opsSelected=opsOrder[0]||null;
 renderOpsThreads();renderOpsChat();
 }
 function renderOpsThreads(){
-var el=document.getElementById("opsThreadList");if(!el)return;var q=(document.getElementById("opsFilter").value||"").toLowerCase().trim();var html="";
-opsOrder.forEach(function(id){var ms=opsGroups[id]||[],txt=opsLastText(ms);if(q&&(id+" "+txt).toLowerCase().indexOf(q)<0)return;var cls="opsThread"+(id===opsSelected?" active":"");var mode=opsHandoffs[id]?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";html+="<button class='"+cls+"' data-user='"+opsAttr(id)+"' onclick='selectOpsThread(this.getAttribute(&quot;data-user&quot;))'><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+"</span><span class='opsTime'>"+opsWhen((ms[ms.length-1]||{}).ts)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div></button>";});
-el.innerHTML=html||"<div class='opsEmpty'>No hay conversaciones.</div>";var badge=document.getElementById("opsBadge");if(badge)badge.textContent=opsOrder.length+" conversación"+(opsOrder.length===1?"":"es");
+var el=document.getElementById("opsThreadList");if(!el)return;setOpsFilterButtons();var q=(document.getElementById("opsFilter").value||"").toLowerCase().trim();var html="",shown=0,pending=0,active=0;
+opsOrder.forEach(function(id){var info=opsThreadInfo(id),txt=info.lastText||"";if(info.needsReply)pending++;if(info.active)active++;if(!opsMatchesMode(id))return;if(q&&(id+" "+txt).toLowerCase().indexOf(q)<0)return;shown++;var cls="opsThread"+(id===opsSelected?" active":"")+(info.needsReply?" pending":"");var mode=info.active?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";var flag=info.needsReply?"<span class='opsFlag need'>Pendiente</span>":"";html+="<button class='"+cls+"' data-user='"+opsAttr(id)+"' onclick='selectOpsThread(this.getAttribute(&quot;data-user&quot;))'><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+flag+"</span><span class='opsTime'>"+opsWhen(info.lastTs)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div></button>";});
+el.innerHTML=html||"<div class='opsEmpty'>No hay conversaciones en este filtro.</div>";var badge=document.getElementById("opsBadge");if(badge)badge.textContent=opsOrder.length+" chats · "+active+" humano";var pc=document.getElementById("opsPendingCount");if(pc)pc.textContent=pending+" pendiente"+(pending===1?"":"s")+" · "+shown+" visible"+(shown===1?"":"s");
 }
+function setOpsFilterButtons(){var map={all:"opsModeAll",pending:"opsModePending",human:"opsModeHuman",bot:"opsModeBot"};Object.keys(map).forEach(function(mode){var el=document.getElementById(map[mode]);if(el)el.classList.toggle("active",opsFilterMode===mode);});}
 function selectOpsThread(id){opsSelected=id;renderOpsThreads();renderOpsChat();}
 function renderOpsChat(){
-var ms=opsGroups[opsSelected]||[],title=document.getElementById("opsTitle"),sub=document.getElementById("opsSub");if(title)title.textContent=opsSelected?("+"+opsSelected):"Selecciona una conversación";if(sub)sub.textContent=opsSelected?(opsHandoffs[opsSelected]?"Control humano activo. El bot no responderá.":"Bot activo. Toma control antes de intervenir."):"El control humano pausa las respuestas automáticas del bot.";
-var take=document.getElementById("opsTakeBtn"),rel=document.getElementById("opsReleaseBtn"),send=document.getElementById("opsSendBtn");if(take)take.disabled=!opsSelected||!!opsHandoffs[opsSelected];if(rel)rel.disabled=!opsSelected||!opsHandoffs[opsSelected];if(send)send.disabled=!opsSelected;
+var ms=opsGroups[opsSelected]||[],info=opsSelected?opsThreadInfo(opsSelected):{},title=document.getElementById("opsTitle"),sub=document.getElementById("opsSub");if(title)title.textContent=opsSelected?("+"+opsSelected):"Selecciona una conversación";if(sub)sub.textContent=opsSelected?(info.needsReply?"Pendiente de respuesta humana.":(info.active?"Control humano activo. El bot no responderá.":"Bot activo. Puedes tomar control o responder directamente.")):"El control humano pausa las respuestas automáticas del bot.";
+var take=document.getElementById("opsTakeBtn"),rel=document.getElementById("opsReleaseBtn"),send=document.getElementById("opsSendBtn"),copy=document.getElementById("opsCopyBtn");if(take)take.disabled=!opsSelected||!!opsHandoffs[opsSelected];if(rel)rel.disabled=!opsSelected||!opsHandoffs[opsSelected];if(send)send.disabled=!opsSelected;if(copy)copy.disabled=!opsSelected;updateOpsChar();
 var html="";ms.forEach(function(t){if(t.userMessage){html+="<div class='opsBubble opsIncoming'>"+opsEsc(t.userMessage)+"<div class='opsMeta'>Cliente · "+opsWhen(t.ts)+"</div></div>";}if(t.botReply){var isHuman=t.botReply.indexOf("[Humano]")===0;var body=isHuman?t.botReply.replace("[Humano]","").trim():t.botReply;html+="<div class='opsBubble "+(isHuman?"opsHuman":"opsBot")+"'>"+opsEsc(body)+"<div class='opsMeta'>"+(isHuman?"Humano":"Bot")+" · "+opsWhen(t.ts)+"</div></div>";}if(t.tools&&t.tools.length){html+="<div class='opsTools'>"+opsEsc(t.tools.join(", "))+"</div>";}});
 var box=document.getElementById("opsMessages");if(box){box.innerHTML=html||"<div class='opsEmpty'>No hay mensajes para este cliente.</div>";box.scrollTop=box.scrollHeight;}
 }
+function copyOpsPhone(){if(!opsSelected)return;var value="+"+opsSelected;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(value).then(function(){document.getElementById("opsStatus").textContent="Número copiado.";}).catch(function(){document.getElementById("opsStatus").textContent=value;});}else{document.getElementById("opsStatus").textContent=value;}}
+function updateOpsChar(){var el=document.getElementById("opsReply"),out=document.getElementById("opsChar");if(out)out.textContent=((el&&el.value)||"").length+"/1200";}
 function takeOpsControl(){if(!opsSelected)return;adminApi("/admin/takeover/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent="Control humano activo.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
 function releaseOpsControl(){if(!opsSelected)return;adminApi("/admin/release/"+encodeURIComponent(opsSelected)).then(function(){opsHandoffs[opsSelected]=false;document.getElementById("opsStatus").textContent="Conversación devuelta al bot.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
-function sendOpsReply(){if(!opsSelected)return;var text=(document.getElementById("opsReply").value||"").trim();if(!text){document.getElementById("opsStatus").textContent="Escribe un mensaje antes de enviar.";return;}document.getElementById("opsSendBtn").disabled=true;document.getElementById("opsStatus").textContent="Enviando...";adminApi("/admin/send-message",{method:"POST",body:JSON.stringify({userId:opsSelected,text:text})}).then(function(r){document.getElementById("opsReply").value="";opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent=r.ok?"Mensaje enviado.":"Meta no confirmó el envío.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;document.getElementById("opsSendBtn").disabled=false;});}
+function sendOpsReply(){if(!opsSelected)return;var text=(document.getElementById("opsReply").value||"").trim();if(!text){document.getElementById("opsStatus").textContent="Escribe un mensaje antes de enviar.";return;}document.getElementById("opsSendBtn").disabled=true;document.getElementById("opsStatus").textContent="Enviando...";adminApi("/admin/send-message",{method:"POST",body:JSON.stringify({userId:opsSelected,text:text})}).then(function(r){document.getElementById("opsReply").value="";updateOpsChar();opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent=r.ok?"Mensaje enviado.":"Meta no confirmó el envío.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;document.getElementById("opsSendBtn").disabled=false;});}
 document.addEventListener("keydown",function(e){var el=document.getElementById("opsReply");if(el&&document.activeElement===el&&(e.metaKey||e.ctrlKey)&&e.key==="Enter"){sendOpsReply();}});
 function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
 function initLogo(){var el=document.getElementById("logo");var url=null;try{url=localStorage.getItem("rav_logo");}catch(e){}if(url){el.innerHTML="<img src='"+url+"' alt='logo'><div class='pencil'>&#9998;</div>";}}
 function changeLogo(){var cur="";try{cur=localStorage.getItem("rav_logo")||"";}catch(e){}var url=prompt("Pega la URL de la imagen de tu logo (deja vacío para volver al texto RAV):",cur);if(url===null)return;try{if(url.trim()===""){localStorage.removeItem("rav_logo");document.getElementById("logo").innerHTML="RAV<div class='pencil'>&#9998;</div>";}else{localStorage.setItem("rav_logo",url.trim());initLogo();}}catch(e){}}
 function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}adminApi("/admin/evaluate?limit=30").then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
+function refreshOpsHealth(){var el=document.getElementById("opsHealth");if(el&&!opsLastHealth){el.textContent="verificando...";el.className="badge opsHealth";}adminApi("/admin/health").then(function(h){opsLastHealth=h;var ready=h.production_readiness&&h.production_readiness.infrastructure_ready;var blockers=(h.production_readiness&&h.production_readiness.blockers)||[];if(!el)return;el.className="badge opsHealth "+(ready?"ok":(blockers.length?"err":"warn"));el.textContent=ready?"Infra OK":("Revisar: "+(blockers.slice(0,2).join(", ")||"salud"));}).catch(function(){if(el){el.className="badge opsHealth err";el.textContent="Salud no disponible";}});}
 function go(attempt){
 attempt=attempt||0;
 Promise.all([adminApi("/admin/stats"),adminApi("/admin/conversations?limit=100")]).then(function(res){
@@ -1703,7 +1809,7 @@ try {
   }
 } catch(e){}
 }
-initLogo();initTabs();go();setInterval(go,60000);
+initLogo();initTabs();go();refreshOpsHealth();setInterval(go,30000);setInterval(refreshOpsHealth,120000);
 </script>
 </body></html>`);
 });
@@ -1896,6 +2002,18 @@ app.get("/admin/health", async (req, res) => {
   } else {
     result.checks.supabase_conversation_logs = "missing_env";
   }
+  const blockers = [];
+  if (!result.env.anthropic_key_present) blockers.push("missing_anthropic_key");
+  if (!result.env.wa_token_present) blockers.push("missing_wa_token");
+  if (!PHONE_NUMBER_ID) blockers.push("missing_phone_number_id");
+  if (result.checks.meta_whatsapp !== "ok") blockers.push("meta_whatsapp_not_ok");
+  if (result.checks.shopify_storefront !== "ok") blockers.push("shopify_storefront_not_ok");
+  if (result.checks.supabase_conversation_logs !== "ok") blockers.push("supabase_not_ok");
+  result.production_readiness = {
+    infrastructure_ready: blockers.length === 0,
+    blockers,
+    app_review_status: "external_meta_review_not_checked_here"
+  };
   res.json(result);
 });
 
@@ -2101,11 +2219,7 @@ app.get("/admin/conversations", async (req, res) => {
     const rows = await supabaseFetchRecent(limit);
     if (rows) {
       source = "supabase";
-      turns = rows.map(function (r) {
-        return { ts: r.ts, userId: r.user_id, userMessage: r.user_message, botReply: r.bot_reply,
-          tools: r.tools || [], zeroResultQueries: r.zero_result_queries || [], handoff: r.handoff,
-          rating: r.rating, numTools: r.num_tools, status: r.status, eval: r.eval || undefined, _id: r.id };
-      });
+      turns = rows.map(normalizeTurnRow);
     }
   }
   if (!turns) turns = conversationLogs.slice(-limit).reverse();
@@ -2132,12 +2246,13 @@ app.get("/admin/conversations", async (req, res) => {
   });
 });
 
-app.get("/admin/stats", (req, res) => {
+app.get("/admin/stats", async (req, res) => {
   if (!adminKeyOk(req)) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const handoffsList = Array.from(humanHandoff.values());
+  const handoffInfo = await inferRecentHandoffs(100);
+  const handoffsList = handoffInfo.activeUsers;
   const pendingList = Array.from(pendingRatings.values());
   const checkoutsList = Array.from(checkouts.entries()).map(([userId, cart]) => ({
     user: userId,
@@ -2172,12 +2287,13 @@ app.get("/admin/stats", (req, res) => {
       estimated_cost_usd: estimateCostUSD()
     },
     current_state: {
-      active_handoffs: humanHandoff.size,
+      active_handoffs: handoffsList.length,
       pending_ratings: pendingRatings.size,
       active_carts: checkouts.size,
       conversations_in_memory: conversations.size
     },
     active_handoff_users: handoffsList,
+    handoff_states: handoffInfo.states,
     pending_rating_users: pendingList,
     active_checkouts: checkoutsList,
     note: "Counters reset when bot restarts (free tier sleeps after 15min)."
@@ -2211,7 +2327,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot v49 (Sonnet 4.5, robust dashboard tabs) running on port ${PORT}`);
+  console.log(`RAV-Bot ${BOT_VERSION} (ops-ready dashboard) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

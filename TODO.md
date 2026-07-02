@@ -8,6 +8,10 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
   - Archivo base: `docs/whatsapp-templates.md`
   - Registro tecnico: `whatsapp-templates.js`
   - Dry run: `POST /admin/template-test`
+  - Estado 2026-07-02: las 9 plantillas iniciales fueron cargadas en WhatsApp Manager.
+  - Activas con calidad pendiente: `order_confirmation_rav`, `payment_instructions_rav`, `shipping_update_rav`, `warranty_case_received_rav`, `human_followup_rav`.
+  - En revision: `post_sale_review_rav`, `abandoned_cart_rav`, `back_in_stock_rav`, `product_recommendation_rav`.
+  - Nota: Meta reclasifico `human_followup_rav` como `MARKETING`.
   - Done: plantillas aprobadas en WhatsApp Manager y probadas con el numero de RAV.
 
 ## Alta prioridad

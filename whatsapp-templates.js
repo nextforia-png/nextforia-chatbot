@@ -47,14 +47,15 @@ module.exports = [
   },
   {
     name: "human_followup_rav",
-    category: "UTILITY",
+    category: "MARKETING",
     language: "es_CO",
     useCase: "Retomar un chat donde el cliente pidio asesora o quedo en control humano.",
     bodyVariables: [
       { key: "customer_name", sample: "Daniela" },
       { key: "agent_name", sample: "Eliana" },
       { key: "topic", sample: "el pedido del juguete sensorial" }
-    ]
+    ],
+    requiresOptOut: true
   },
   {
     name: "abandoned_cart_rav",

@@ -146,7 +146,7 @@ Botones sugeridos:
 
 ### human_followup_rav
 
-Categoria: `UTILITY`
+Categoria: `MARKETING`
 Idioma: `es_CO`
 Objetivo: retomar un chat donde el cliente pidio asesora o quedo en control humano.
 
@@ -170,6 +170,8 @@ Botones sugeridos:
 
 - Quick reply: `Continuar`
 - Quick reply: `Ya no necesito`
+
+Notas: originalmente se intento como `UTILITY`, pero Meta la reclasifico como `MARKETING` al cargarla en WhatsApp Manager el 2026-07-02. Usarla solo con contexto claro del cliente y controles de consentimiento/opt-out cuando se automatice.
 
 ## Prioridad 2
 

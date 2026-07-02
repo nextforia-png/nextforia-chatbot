@@ -23,9 +23,10 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
   - Pendiente: activar el workflow en `.github/workflows/` con una sesion/token que tenga permiso `workflow`, y confirmar que existe el secret `DASHBOARD_KEY` en GitHub Actions.
   - Done: alertas configurables por env vars y prueba manual desde `/admin/alert`.
 
-- [ ] Playbook comercial.
+- [x] Playbook comercial.
   - Definir cuando toma control una asesora, cuando devuelve al bot y como cerrar venta.
   - Incluir scripts para pago, contraentrega, Addi, garantia, envio Medellin y objeciones.
+  - Estado 2026-07-02: creado `docs/commercial-playbook.md` y enlazado desde README.
   - Done: documento operativo usable por una asesora nueva.
 
 - [ ] Hardening del panel.

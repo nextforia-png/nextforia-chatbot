@@ -68,6 +68,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 ## 🧭 Operación y próximos pasos
 
 - Plantillas WhatsApp iniciales: [`docs/whatsapp-templates.md`](docs/whatsapp-templates.md)
+- Playbook comercial para asesoras: [`docs/commercial-playbook.md`](docs/commercial-playbook.md)
 - Backlog priorizado: [`TODO.md`](TODO.md)
 
 ---

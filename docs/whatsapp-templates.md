@@ -323,13 +323,48 @@ Notas: usar despues de una compra, garantia o handoff finalizado.
 
 ## Siguiente paso tecnico
 
-Cuando Meta apruebe las plantillas, crear una tabla/config local con:
+Ya existe un registro local en `whatsapp-templates.js` y endpoints admin para probar payloads:
 
-- `template_name`
-- `category`
-- `language`
-- `body_params`
-- `enabled`
-- `use_case`
+```bash
+curl "https://rav-whatsapp-bot.onrender.com/admin/templates?key=TU_DASHBOARD_KEY"
+```
 
-Luego agregar un endpoint admin para probar envios de plantilla sin tocar conversaciones reales.
+Dry run, no envia WhatsApp:
+
+```bash
+curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test?key=TU_DASHBOARD_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "templateName": "order_confirmation_rav",
+    "params": {
+      "customer_name": "Maria",
+      "channel": "WhatsApp",
+      "product": "LOOKY LOOKY Juguete Sensorial",
+      "total": "$79.950 COP"
+    }
+  }'
+```
+
+Envio real solo despues de que Meta apruebe la plantilla:
+
+```bash
+curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test?key=TU_DASHBOARD_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "send": true,
+    "userId": "573001112233",
+    "templateName": "order_confirmation_rav",
+    "params": {
+      "customer_name": "Maria",
+      "channel": "WhatsApp",
+      "product": "LOOKY LOOKY Juguete Sensorial",
+      "total": "$79.950 COP"
+    }
+  }'
+```
+
+Pendiente despues de aprobacion:
+
+- Confirmar nombres exactos en WhatsApp Manager.
+- Probar una plantilla `UTILITY` con el numero de RAV.
+- Probar una plantilla `MARKETING` solo con opt-out claro y consentimiento.

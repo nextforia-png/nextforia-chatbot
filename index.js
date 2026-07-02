@@ -1,11 +1,12 @@
 const express = require("express");
 const axios = require("axios");
+const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 
 const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v50";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v51";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -177,8 +178,9 @@ function recordTurn(userId, userMessage, botReply, status) {
   } catch (e) { console.error("recordTurn error:", e.message); }
 }
 
-function recordAdminEvent(userId, tool, message, status) {
+function recordAdminEvent(userId, tool, message, status, handoffOverride) {
   try {
+    const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : tool !== "admin_release";
     const rec = {
       ts: new Date().toISOString(),
       userId,
@@ -186,7 +188,7 @@ function recordAdminEvent(userId, tool, message, status) {
       botReply: String(message || "").slice(0, 1000),
       tools: [tool],
       zeroResultQueries: [],
-      handoff: tool !== "admin_release",
+      handoff: handoffState,
       rating: null,
       numTools: 1,
       status: status || "ok"
@@ -800,6 +802,73 @@ async function sendText(to, text) {
   } catch (err) {
     console.error("WA text error:", err.response?.data?.error || err.message);
     return false;
+  }
+}
+
+function findTemplateDefinition(name) {
+  return WHATSAPP_TEMPLATES.find(function (template) {
+    return template.name === name;
+  });
+}
+
+function resolveTemplateParams(def, input) {
+  const variables = def.bodyVariables || [];
+  if (Array.isArray(input)) {
+    return variables.map(function (variable, index) {
+      return String(input[index] != null ? input[index] : variable.sample || "");
+    });
+  }
+  const params = input && typeof input === "object" ? input : {};
+  return variables.map(function (variable, index) {
+    const numberedKey = String(index + 1);
+    const moustacheKey = "{{" + (index + 1) + "}}";
+    const value = params[variable.key] ?? params[numberedKey] ?? params[moustacheKey] ?? variable.sample ?? "";
+    return String(value);
+  });
+}
+
+function buildTemplatePayload(to, templateName, params) {
+  const def = findTemplateDefinition(templateName);
+  if (!def) {
+    const allowed = WHATSAPP_TEMPLATES.map(function (template) { return template.name; }).join(", ");
+    throw new Error("unknown_template: " + templateName + ". Allowed: " + allowed);
+  }
+  const bodyParams = resolveTemplateParams(def, params);
+  const components = [];
+  if (bodyParams.length) {
+    components.push({
+      type: "body",
+      parameters: bodyParams.map(function (value) {
+        return { type: "text", text: value };
+      })
+    });
+  }
+  return {
+    messaging_product: "whatsapp",
+    to,
+    type: "template",
+    template: {
+      name: def.name,
+      language: { code: def.language || "es_CO" },
+      components
+    }
+  };
+}
+
+async function sendTemplate(to, templateName, params) {
+  const payload = buildTemplatePayload(to, templateName, params);
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      payload,
+      { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+    );
+    console.log(`Template ${templateName} sent to ${to}`);
+    return { ok: true, meta: response.data };
+  } catch (err) {
+    const error = err.response?.data?.error || { message: err.message };
+    console.error("WA template error:", error);
+    return { ok: false, error };
   }
 }
 
@@ -1483,6 +1552,61 @@ app.post("/admin/send-message", async (req, res) => {
   res.json({ ok: !!sent, userId, handoff: true, meta_sent: !!sent });
 });
 
+app.get("/admin/templates", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    count: WHATSAPP_TEMPLATES.length,
+    templates: WHATSAPP_TEMPLATES.map(function (template) {
+      return {
+        name: template.name,
+        category: template.category,
+        language: template.language,
+        useCase: template.useCase,
+        bodyVariables: template.bodyVariables,
+        requiresOptOut: !!template.requiresOptOut
+      };
+    })
+  });
+});
+
+app.post("/admin/template-test", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = String(req.body && req.body.userId || "").replace(/\D/g, "");
+  const templateName = String(req.body && req.body.templateName || "").trim();
+  const params = (req.body && (req.body.params || req.body.bodyParams)) || {};
+  const shouldSend = req.body && req.body.send === true;
+
+  if (!templateName) {
+    res.status(400).json({ ok: false, error: "missing_template_name" });
+    return;
+  }
+  if (shouldSend && !userId) {
+    res.status(400).json({ ok: false, error: "missing_user_id_for_send" });
+    return;
+  }
+
+  try {
+    const payload = buildTemplatePayload(userId || "573000000000", templateName, params);
+    if (!shouldSend) {
+      res.json({ ok: true, dry_run: true, templateName, payload });
+      return;
+    }
+    const result = await sendTemplate(userId, templateName, params);
+    recordAdminEvent(userId, "admin_send_template", "[Plantilla] " + templateName, result.ok ? "ok" : "error", false);
+    res.status(result.ok ? 200 : 502).json({ ok: result.ok, templateName, userId, result });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/admin/reset-checkout/:userId", (req, res) => {
   if (!adminKeyOk(req)) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -1511,7 +1635,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v50 (ops-ready dashboard)");
+  res.send("RAV-Bot v51 (template-ready ops)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -2327,7 +2451,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot ${BOT_VERSION} (ops-ready dashboard) running on port ${PORT}`);
+  console.log(`RAV-Bot ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

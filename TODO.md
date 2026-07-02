@@ -1,11 +1,13 @@
 # TODO RAV WhatsApp Bot
 
-Backlog operativo despues de dejar App Review enviada y produccion en `v50`.
+Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
 
 ## En curso
 
 - [ ] Cargar y aprobar plantillas WhatsApp iniciales.
   - Archivo base: `docs/whatsapp-templates.md`
+  - Registro tecnico: `whatsapp-templates.js`
+  - Dry run: `POST /admin/template-test`
   - Done: plantillas aprobadas en WhatsApp Manager y probadas con el numero de RAV.
 
 ## Alta prioridad
@@ -45,10 +47,15 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v50`.
 
 ## Baja prioridad
 
-- [ ] Automatizar envio de plantillas aprobadas.
+- [x] Preparar envio tecnico de plantillas aprobadas.
   - Crear helper `sendTemplate`.
   - Agregar endpoint admin de prueba.
+  - Mantener `send: true` como requisito para envio real.
+  - Done: payload dry-run probado localmente.
+
+- [ ] Automatizar uso de plantillas dentro de flujos reales.
   - Agregar proteccion para no enviar marketing sin consentimiento/opt-out.
+  - Conectar `order_confirmation_rav`, `payment_instructions_rav` y `post_sale_review_rav` al flujo cuando Meta las apruebe.
   - Done: envio probado con templates aprobadas y logs en Supabase.
 
 - [ ] Panel de metricas comerciales.

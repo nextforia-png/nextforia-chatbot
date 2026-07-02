@@ -54,6 +54,8 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
 | `GET /admin/dashboard?key=XXXX` | Panel operativo con tabs para métricas e intervención humana |
 | `GET /admin/inbox?key=XXXX` | Acceso directo opcional a la bandeja operativa |
+| `GET /admin/templates?key=XXXX` | Lista plantillas WhatsApp configuradas localmente |
+| `POST /admin/template-test` | Genera payload de plantilla o envia con `send: true` si ya fue aprobada |
 | `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
 | `GET /admin/test-search?q=XXXX` | Prueba la búsqueda de productos sin afectar a clientes reales |
@@ -109,7 +111,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v50 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v51 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -123,7 +125,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v50 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v51 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.

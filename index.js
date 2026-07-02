@@ -1590,7 +1590,7 @@ renderOpsThreads();renderOpsChat();
 }
 function renderOpsThreads(){
 var el=document.getElementById("opsThreadList");if(!el)return;var q=(document.getElementById("opsFilter").value||"").toLowerCase().trim();var html="";
-opsOrder.forEach(function(id){var ms=opsGroups[id]||[],txt=opsLastText(ms);if(q&&(id+" "+txt).toLowerCase().indexOf(q)<0)return;var cls="opsThread"+(id===opsSelected?" active":"");var mode=opsHandoffs[id]?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";html+="<button class='"+cls+"' data-user=\""+opsAttr(id)+"\" onclick=\"selectOpsThread(this.getAttribute('data-user'))\"><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+"</span><span class='opsTime'>"+opsWhen((ms[ms.length-1]||{}).ts)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div></button>";});
+opsOrder.forEach(function(id){var ms=opsGroups[id]||[],txt=opsLastText(ms);if(q&&(id+" "+txt).toLowerCase().indexOf(q)<0)return;var cls="opsThread"+(id===opsSelected?" active":"");var mode=opsHandoffs[id]?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";html+="<button class='"+cls+"' data-user='"+opsAttr(id)+"' onclick='selectOpsThread(this.getAttribute(&quot;data-user&quot;))'><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+"</span><span class='opsTime'>"+opsWhen((ms[ms.length-1]||{}).ts)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div></button>";});
 el.innerHTML=html||"<div class='opsEmpty'>No hay conversaciones.</div>";var badge=document.getElementById("opsBadge");if(badge)badge.textContent=opsOrder.length+" conversación"+(opsOrder.length===1?"":"es");
 }
 function selectOpsThread(id){opsSelected=id;renderOpsThreads();renderOpsChat();}
@@ -1688,18 +1688,18 @@ try {
       var lastTs = ms[ms.length-1].ts || "";
       var when = lastTs ? new Date(lastTs).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "";
       var pills = "";
-      if (anyHand) pills += "<span style=\"font-size:10px;background:#E6F1FB;color:#2C6FB3;padding:2px 8px;border-radius:8px;margin-left:6px\">Pasó a humano</span>";
-      if (anyErr) pills += "<span style=\"font-size:10px;background:#FAECE7;color:#C0492B;padding:2px 8px;border-radius:8px;margin-left:6px\">Revisar</span>";
+      if (anyHand) pills += "<span style='font-size:10px;background:#E6F1FB;color:#2C6FB3;padding:2px 8px;border-radius:8px;margin-left:6px'>Pasó a humano</span>";
+      if (anyErr) pills += "<span style='font-size:10px;background:#FAECE7;color:#C0492B;padding:2px 8px;border-radius:8px;margin-left:6px'>Revisar</span>";
       var bubbles = "";
       ms.forEach(function(t){
         var u = _esc(t.userMessage), b = _esc(t.botReply);
-        if (u) bubbles += "<div style=\"background:#F4F5F7;border-radius:8px;padding:6px 10px;margin:4px 0;font-size:12px\"><b>Cliente:</b> " + u + "</div>";
-        if (b) bubbles += "<div style=\"background:#E1F5EE;border-radius:8px;padding:6px 10px;margin:4px 0;font-size:12px\"><b>Bot:</b> " + b + "</div>";
-        if (t.tools && t.tools.length) bubbles += "<div style=\"font-size:10px;color:#9AA0A6;margin:0 0 6px 2px\">🔧 " + t.tools.join(", ") + "</div>";
+        if (u) bubbles += "<div style='background:#F4F5F7;border-radius:8px;padding:6px 10px;margin:4px 0;font-size:12px'><b>Cliente:</b> " + u + "</div>";
+        if (b) bubbles += "<div style='background:#E1F5EE;border-radius:8px;padding:6px 10px;margin:4px 0;font-size:12px'><b>Bot:</b> " + b + "</div>";
+        if (t.tools && t.tools.length) bubbles += "<div style='font-size:10px;color:#9AA0A6;margin:0 0 6px 2px'>🔧 " + t.tools.join(", ") + "</div>";
       });
-      _html += "<div style=\"border:0.5px solid #E5E8EC;border-radius:10px;padding:10px 12px\"><div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:6px\"><span style=\"font-size:13px;font-weight:600\">📱 " + masked + pills + "</span><span style=\"font-size:11px;color:#9AA0A6\">" + when + "</span></div>" + bubbles + "</div>";
+      _html += "<div style='border:0.5px solid #E5E8EC;border-radius:10px;padding:10px 12px'><div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px'><span style='font-size:13px;font-weight:600'>📱 " + masked + pills + "</span><span style='font-size:11px;color:#9AA0A6'>" + when + "</span></div>" + bubbles + "</div>";
     });
-    _cl.innerHTML = _html || "<div style=\"color:#9AA0A6;font-size:13px\">Aún no hay conversaciones.</div>";
+    _cl.innerHTML = _html || "<div style='color:#9AA0A6;font-size:13px'>Aún no hay conversaciones.</div>";
   }
 } catch(e){}
 }

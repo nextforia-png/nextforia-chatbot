@@ -105,6 +105,7 @@ Variables útiles:
 | `ALERT_ON_FAILURE` | `1` | Usa `0` para no alertar por WhatsApp |
 | `COLD_START_RETRIES` | `2` | Reintentos para Render free tier |
 | `COLD_START_DELAY_MS` | `60000` | Espera entre reintentos por cold start |
+| `MONITOR_PENDING_HANDOFF_MINUTES` | `10` | Minutos máximos para chats en humano pendientes de respuesta |
 
 ### Prueba de humo post-deploy
 
@@ -132,7 +133,7 @@ Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directa
 
 ### Monitoreo de salud
 
-Revisa `/admin/health`, `/admin/stats` y `/admin/conversations?limit=100`. Alerta si hay errores, Supabase no responde, Meta/Shopify fallan, handoff alto, búsquedas sin resultados repetidas, o saldo Anthropic agotado.
+Revisa `/admin/health`, `/admin/stats` y `/admin/conversations?limit=100`. Alerta si hay errores, Supabase no responde, Meta/Shopify fallan, handoff alto, búsquedas sin resultados repetidas, saldo Anthropic agotado, o chats en intervención humana pendientes por más de `MONITOR_PENDING_HANDOFF_MINUTES`.
 
 ```bash
 DASHBOARD_KEY=... npm run monitor
@@ -144,6 +145,7 @@ Umbrales configurables:
 MONITOR_MAX_HANDOFF_RATE=0.4 \
 MONITOR_MAX_ZERO_RESULT_RATE=0.35 \
 MONITOR_REPEATED_ZERO_QUERY_COUNT=3 \
+MONITOR_PENDING_HANDOFF_MINUTES=10 \
 DASHBOARD_KEY=... npm run monitor
 ```
 
@@ -159,33 +161,9 @@ DASHBOARD_KEY=... MONITOR_INTERVAL_MS=300000 node monitor.js --loop
 */5 * * * * cd /ruta/rav-whatsapp-bot && DASHBOARD_KEY=... npm run monitor >> monitor.log 2>&1
 ```
 
-### GitHub Action sugerida
+### GitHub Action
 
-```yaml
-name: RAV Bot Safety Checks
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-
-jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npm install
-      - run: npm run verify-deploy
-        env:
-          DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
-          BOT_BASE_URL: https://rav-whatsapp-bot.onrender.com
-      - run: npm run smoke
-        env:
-          DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
-          BOT_BASE_URL: https://rav-whatsapp-bot.onrender.com
-```
+La plantilla `docs/github-actions-safety-checks.yml` corre `npm run monitor` cada 10 minutos, en pushes a `main` y manualmente con `workflow_dispatch`. Para activarla como workflow real en `.github/workflows/`, el token o sesión de GitHub debe tener permiso `workflow`, y debe existir el secret `DASHBOARD_KEY` en GitHub Actions.
 
 ---
 

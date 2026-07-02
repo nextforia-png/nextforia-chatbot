@@ -19,6 +19,8 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
 - [ ] Alertas operativas de chats pendientes.
   - Avisar por WhatsApp si hay chats en filtro `Pendientes` por mas de X minutos.
   - Avisar si `Meta`, `Shopify`, `Supabase` o `Anthropic` fallan en `/admin/health`.
+  - Estado 2026-07-02: `monitor.js` detecta handoffs pendientes por `MONITOR_PENDING_HANDOFF_MINUTES` y `docs/github-actions-safety-checks.yml` deja listo el workflow programado.
+  - Pendiente: activar el workflow en `.github/workflows/` con una sesion/token que tenga permiso `workflow`, y confirmar que existe el secret `DASHBOARD_KEY` en GitHub Actions.
   - Done: alertas configurables por env vars y prueba manual desde `/admin/alert`.
 
 - [ ] Playbook comercial.

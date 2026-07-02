@@ -1,0 +1,34 @@
+name: RAV Bot Safety Checks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+  push:
+    branches: [main]
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    env:
+      BOT_BASE_URL: https://rav-whatsapp-bot.onrender.com
+      DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
+      MONITOR_PENDING_HANDOFF_MINUTES: "10"
+      ALERT_ON_FAILURE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+
+      - name: Skip when dashboard secret is missing
+        if: env.DASHBOARD_KEY == ''
+        run: echo "DASHBOARD_KEY secret is not configured; skipping monitor."
+
+      - name: Run production monitor
+        if: env.DASHBOARD_KEY != ''
+        run: npm run monitor
+

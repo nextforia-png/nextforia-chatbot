@@ -37,7 +37,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `VERIFY_TOKEN` | Token de verificación del webhook (default: `rav_toys_webhook_2026`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
 | `SHOPIFY_STORE_DOMAIN` | Dominio Shopify (default: `ravtoys.myshopify.com`) |
-| `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) |
+| `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) con permisos para leer pedidos y fulfillments |
 | `SHOPIFY_ADMIN_API_VERSION` | Versión Admin API para pedidos (default: `2026-04`) |
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |

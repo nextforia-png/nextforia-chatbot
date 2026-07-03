@@ -8,7 +8,7 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
   - Bot consulta pedido por numero + nombre, valida identidad y devuelve guia/rastreo si coincide.
   - Endpoint tecnico: `POST /admin/order-status-test`.
   - Estado 2026-07-02: implementado en `v53` con Shopify Admin GraphQL validado.
-  - Pendiente: probar con un pedido real y confirmar que `SHOPIFY_ADMIN_TOKEN` tiene permisos `read_orders` + fulfillment reads.
+  - Pendiente: Shopify devolvio `Access denied for orders field`; activar permisos de lectura de pedidos en el Custom App, regenerar/actualizar `SHOPIFY_ADMIN_TOKEN` en Render y probar con un pedido real.
   - Done: prueba real por admin y por WhatsApp devuelve estado/guia sin revelar datos cuando no coincide.
 
 - [ ] Cargar y aprobar plantillas WhatsApp iniciales.

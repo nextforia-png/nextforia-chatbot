@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v52";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v53";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -1006,7 +1006,7 @@ function buildOrderStatusNextAction(order, tracking) {
   return `Dile al cliente: "Encontré tu pedido ${order.name}: está ${status}. Por ahora no veo número de guía cargado en Shopify."`;
 }
 
-async function lookupOrderStatus(input) {
+async function lookupOrderStatus(input, options = {}) {
   const orderNumber = String(input.order_number || "").trim();
   const customerName = String(input.customer_name || "").trim();
   const phoneOrEmail = String(input.phone_or_email || "").trim();
@@ -1099,12 +1099,14 @@ async function lookupOrderStatus(input) {
       status,
       message: String(err.message || "").slice(0, 240)
     });
-    return {
+    const result = {
       found: false,
       matched: false,
       error: code,
       next_action: "Dile al cliente con calidez que vas a validar el pedido con una asesora y llama request_human_handoff(reason='estado_pedido')."
     };
+    if (options.includeDiagnostic) result.diagnostic = String(err.message || "").slice(0, 500);
+    return result;
   }
 }
 
@@ -2597,7 +2599,7 @@ app.post("/admin/order-status-test", async (req, res) => {
     order_number: req.body && req.body.order_number,
     customer_name: req.body && req.body.customer_name,
     phone_or_email: req.body && req.body.phone_or_email
-  });
+  }, { includeDiagnostic: true });
 
   res.status(result.error ? 502 : 200).json({
     ok: !!(result.found && result.matched),

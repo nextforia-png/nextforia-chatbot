@@ -116,7 +116,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v52 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v53 npm run smoke
 ```
 
 También puedes apuntar a staging:

@@ -1,6 +1,6 @@
 # TODO RAV WhatsApp Bot
 
-Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
+Backlog operativo despues de dejar App Review enviada y produccion en `v54`.
 
 ## En curso
 
@@ -39,9 +39,10 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
 
 - [ ] Hardening del panel.
   - Usuarios/roles en vez de una sola clave compartida.
-  - Notas internas por cliente.
-  - Etiquetas: `venta`, `garantia`, `pendiente_pago`, `envio`, `revisar`.
+  - [x] Notas internas por cliente.
+  - [x] Etiquetas: `venta`, `garantia`, `pendiente_pago`, `envio`, `revisar`.
   - Historial por cliente con busqueda y paginacion.
+  - Estado 2026-07-03: `v54` agrega notas/etiquetas en la tab Intervención humana, persistidas como eventos internos en `conversation_logs`.
   - Done: panel listo para mas de una persona operando.
 
 ## Media prioridad

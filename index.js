@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v53";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v54";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -20,6 +20,14 @@ const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "ravtoys.myshop
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
 const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "573013507371").split(",").map(s => s.trim()).filter(Boolean);
+const CUSTOMER_META_TOOL = "admin_customer_meta";
+const CUSTOMER_META_TAGS = [
+  { id: "venta", label: "Venta" },
+  { id: "garantia", label: "Garantia" },
+  { id: "pendiente_pago", label: "Pendiente pago" },
+  { id: "envio", label: "Envio" },
+  { id: "revisar", label: "Revisar" }
+];
 // ─────────────────────────────────────────────────────────────────────────────────
 
 if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
@@ -61,11 +69,13 @@ const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_K
 async function supabaseInsert(rec) {
   if (!SUPABASE_ENABLED) return;
   try {
-    await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+    const payload = {
       ts: rec.ts, user_id: rec.userId, user_message: rec.userMessage, bot_reply: rec.botReply,
       tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
       rating: rec.rating, num_tools: rec.numTools, status: rec.status
-    }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 8000 });
+    };
+    if (rec.eval !== undefined) payload.eval = rec.eval;
+    await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, payload, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 8000 });
   } catch (e) { console.error("supabaseInsert error:", e.response ? JSON.stringify(e.response.data).slice(0,200) : e.message); }
 }
 async function supabaseFetchRecent(limit) {
@@ -112,6 +122,77 @@ function normalizeTurnRow(r) {
     eval: r.eval || undefined,
     _id: r.id
   };
+}
+
+function isCustomerMetaTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(CUSTOMER_META_TOOL);
+}
+
+function normalizeCustomerTags(tags) {
+  const allowed = new Set(CUSTOMER_META_TAGS.map(t => t.id));
+  const out = [];
+  (Array.isArray(tags) ? tags : []).forEach(function (tag) {
+    const id = String(tag || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+    if (allowed.has(id) && !out.includes(id)) out.push(id);
+  });
+  return out.slice(0, 8);
+}
+
+function normalizeCustomerNote(note) {
+  return String(note || "").replace(/\s+\n/g, "\n").trim().slice(0, 1200);
+}
+
+function parseCustomerMetaTurn(turn) {
+  if (!isCustomerMetaTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[Meta\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      tags: normalizeCustomerTags(parsed.tags),
+      note: normalizeCustomerNote(parsed.note),
+      updated_at: turn.ts || null
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function customerMetaFromTurns(turns) {
+  const meta = {};
+  (turns || []).slice().sort(function (a, b) {
+    return new Date(a.ts || 0) - new Date(b.ts || 0);
+  }).forEach(function (turn) {
+    const userId = String(turn.userId || "").replace(/\D/g, "");
+    if (!userId) return;
+    const parsed = parseCustomerMetaTurn(turn);
+    if (parsed) meta[userId] = parsed;
+  });
+  return meta;
+}
+
+function recordCustomerMeta(userId, meta) {
+  const payload = {
+    tags: normalizeCustomerTags(meta && meta.tags),
+    note: normalizeCustomerNote(meta && meta.note)
+  };
+  const rec = {
+    ts: new Date().toISOString(),
+    userId,
+    userMessage: "",
+    botReply: "[Meta] " + JSON.stringify(payload),
+    tools: [CUSTOMER_META_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: CUSTOMER_META_TOOL }
+  };
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  supabaseInsert(rec);
+  return { ...payload, updated_at: rec.ts };
 }
 
 function inferHandoffStates(turns, activeUsers) {
@@ -1908,6 +1989,42 @@ app.post("/admin/send-message", async (req, res) => {
   res.json({ ok: !!sent, userId, handoff: true, meta_sent: !!sent });
 });
 
+app.get("/admin/customer-meta", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
+  let turns = conversationLogs.slice();
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchRecent(limit);
+    if (rows) turns = rows.map(normalizeTurnRow);
+  }
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    tags: CUSTOMER_META_TAGS,
+    customers: customerMetaFromTurns(turns)
+  });
+});
+
+app.post("/admin/customer-meta/:userId", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = String(req.params.userId || "").replace(/\D/g, "");
+  if (!userId) {
+    res.status(400).json({ ok: false, error: "missing_user_id" });
+    return;
+  }
+  const meta = recordCustomerMeta(userId, {
+    tags: req.body && req.body.tags,
+    note: req.body && req.body.note
+  });
+  res.json({ ok: true, userId, meta });
+});
+
 app.get("/admin/templates", (req, res) => {
   if (!adminKeyOk(req)) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -1991,7 +2108,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot v51 (template-ready ops)");
+  res.send("RAV-Bot " + BOT_VERSION + " (ops dashboard)");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -2106,6 +2223,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .opsFlag{font-size:10px;border-radius:999px;padding:2px 7px;margin-left:5px;background:#F4F5F7;color:#6B7280}.opsFlag.need{background:#FAECE7;color:#B94723}
 .opsToolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}.opsSegments{display:flex;gap:4px;background:#F4F5F7;border:1px solid #E5E8EC;border-radius:8px;padding:3px}.opsSegments button{border:0;background:transparent;color:#6B7280;border-radius:6px;padding:5px 9px;font-size:11px;cursor:pointer}.opsSegments button.active{background:#fff;color:#1F2A44;box-shadow:0 1px 3px rgba(31,42,68,.08)}.opsMiniMetric{font-size:11px;color:#6B7280}.opsTopBadges{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.opsHealth.ok{background:#E1F5EE;color:#0F6E56}.opsHealth.warn{background:#FAEEDA;color:#9A6216}.opsHealth.err{background:#FAECE7;color:#B94723}
 .opsChat{min-width:0;display:flex;flex-direction:column;background:#fff}.opsChatHead{padding:12px 14px;border-bottom:1px solid #E5E8EC;display:flex;align-items:center;justify-content:space-between;gap:10px}.opsChatHead h4{font-size:14px;margin:0}.opsChatHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.opsActions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.opsMetaPanel{border-bottom:1px solid #E5E8EC;background:#FCFDFD;padding:10px 12px;display:grid;gap:8px}.opsTagRow{display:flex;gap:6px;flex-wrap:wrap}.opsTag{border:1px solid #D5DCE5;background:#fff;color:#475569;border-radius:999px;padding:4px 9px;font-size:11px;cursor:pointer}.opsTag.active{background:#1F2A44;border-color:#1F2A44;color:#fff}.opsTag:disabled{opacity:.45;cursor:not-allowed}.opsNoteGrid{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start}.opsNoteGrid textarea{width:100%;min-height:46px;max-height:90px;resize:vertical;border:1px solid #CBD5E1;border-radius:8px;padding:8px 9px;font-size:12px;font-family:inherit}.opsMetaHint{font-size:10px;color:#9AA0A6}.opsThreadTags{display:flex;gap:4px;flex-wrap:wrap;margin-top:5px}.opsThreadTag{font-size:9px;border-radius:999px;padding:1px 6px;background:#EEF2F7;color:#475569}.opsThreadTag.revisar{background:#FAECE7;color:#B94723}.opsThreadTag.venta{background:#E1F5EE;color:#0F6E56}.opsThreadTag.pendiente_pago{background:#FAEEDA;color:#9A6216}
 .opsMessages{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px;background:#F8FAFC}.opsEmpty{margin:auto;color:#9AA0A6;font-size:13px}.opsBubble{max-width:78%;border-radius:9px;padding:8px 10px;font-size:12px;line-height:1.45;white-space:pre-wrap}.opsIncoming{align-self:flex-start;background:#fff;border:1px solid #E5E8EC}.opsBot{align-self:flex-start;background:#E1F5EE;border:1px solid #B8E2D4}.opsHuman{align-self:flex-end;background:#1F2A44;color:#fff}.opsMeta{font-size:10px;color:#9AA0A6;margin-top:4px}.opsHuman .opsMeta{color:#CBD5E1}.opsTools{font-size:10px;color:#9AA0A6;margin-left:4px}
 .opsComposer{border-top:1px solid #E5E8EC;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;background:#fff}.opsComposer textarea{width:100%;min-height:54px;max-height:130px;resize:vertical;border:1px solid #CBD5E1;border-radius:8px;padding:9px 10px;font-size:13px;font-family:inherit}.opsStatus{font-size:11px;color:#6B7280;padding:0 12px 10px;background:#fff}
 .opsComposerMeta{display:flex;justify-content:flex-end;font-size:10px;color:#9AA0A6;margin:-6px 12px 7px}
@@ -2135,12 +2253,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 <div class="tip"><h3>&#128161; Aprendizajes</h3><p id="learn">Aún no hay suficientes datos evaluados. Usa el botón Evaluar ahora cuando haya conversaciones.</p></div>
 </section>
 <section class="tabPanel${humanActive}" id="panel-human">
-<div class="panel" id="human-control" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px"><h3 style="margin:0">Intervención humana</h3><div class="opsTopBadges"><span class="badge opsHealth" id="opsHealth">verificando...</span><span class="badge" id="opsBadge"></span></div></div><div class="opsToolbar"><div class="opsSegments" aria-label="Filtro de conversaciones"><button id="opsModeAll" class="active" onclick="setOpsFilter('all')">Todos</button><button id="opsModePending" onclick="setOpsFilter('pending')">Pendientes</button><button id="opsModeHuman" onclick="setOpsFilter('human')">Humano</button><button id="opsModeBot" onclick="setOpsFilter('bot')">Bot</button></div><span class="opsMiniMetric" id="opsPendingCount">0 pendientes</span></div><div class="opsShell"><aside class="opsThreads"><div class="opsSearch"><input id="opsFilter" placeholder="Buscar cliente o mensaje" oninput="renderOpsThreads()"></div><div class="opsThreadList" id="opsThreadList"></div></aside><section class="opsChat"><div class="opsChatHead"><div><h4 id="opsTitle">Selecciona una conversación</h4><p id="opsSub">El control humano pausa las respuestas automáticas del bot.</p></div><div class="opsActions"><button class="btn" id="opsCopyBtn" onclick="copyOpsPhone()" disabled>Copiar número</button><button class="btn" id="opsTakeBtn" onclick="takeOpsControl()" disabled>Tomar control</button><button class="btn" id="opsReleaseBtn" onclick="releaseOpsControl()" disabled>Devolver al bot</button></div></div><div class="opsMessages" id="opsMessages"><div class="opsEmpty">Sin conversación seleccionada.</div></div><div class="opsComposer"><textarea id="opsReply" maxlength="1200" placeholder="Escribe como RAV Toys" oninput="updateOpsChar()"></textarea><button class="btn" id="opsSendBtn" onclick="sendOpsReply()" disabled>Enviar</button></div><div class="opsComposerMeta"><span id="opsChar">0/1200</span></div><div class="opsStatus" id="opsStatus">Listo.</div></section></div></div>
+<div class="panel" id="human-control" style="margin-bottom:14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px"><h3 style="margin:0">Intervención humana</h3><div class="opsTopBadges"><span class="badge opsHealth" id="opsHealth">verificando...</span><span class="badge" id="opsBadge"></span></div></div><div class="opsToolbar"><div class="opsSegments" aria-label="Filtro de conversaciones"><button id="opsModeAll" class="active" onclick="setOpsFilter('all')">Todos</button><button id="opsModePending" onclick="setOpsFilter('pending')">Pendientes</button><button id="opsModeHuman" onclick="setOpsFilter('human')">Humano</button><button id="opsModeBot" onclick="setOpsFilter('bot')">Bot</button></div><span class="opsMiniMetric" id="opsPendingCount">0 pendientes</span></div><div class="opsShell"><aside class="opsThreads"><div class="opsSearch"><input id="opsFilter" placeholder="Buscar cliente, etiqueta o mensaje" oninput="renderOpsThreads()"></div><div class="opsThreadList" id="opsThreadList"></div></aside><section class="opsChat"><div class="opsChatHead"><div><h4 id="opsTitle">Selecciona una conversación</h4><p id="opsSub">El control humano pausa las respuestas automáticas del bot.</p></div><div class="opsActions"><button class="btn" id="opsCopyBtn" onclick="copyOpsPhone()" disabled>Copiar número</button><button class="btn" id="opsTakeBtn" onclick="takeOpsControl()" disabled>Tomar control</button><button class="btn" id="opsReleaseBtn" onclick="releaseOpsControl()" disabled>Devolver al bot</button></div></div><div class="opsMetaPanel" id="opsCustomerPanel"><div class="opsTagRow" id="opsTags"></div><div class="opsNoteGrid"><textarea id="opsNote" maxlength="1200" placeholder="Nota interna del cliente" oninput="markOpsMetaDirty()"></textarea><button class="btn" id="opsSaveMetaBtn" onclick="saveOpsMeta()" disabled>Guardar</button></div><div class="opsMetaHint" id="opsMetaStatus">Selecciona una conversación.</div></div><div class="opsMessages" id="opsMessages"><div class="opsEmpty">Sin conversación seleccionada.</div></div><div class="opsComposer"><textarea id="opsReply" maxlength="1200" placeholder="Escribe como RAV Toys" oninput="updateOpsChar()"></textarea><button class="btn" id="opsSendBtn" onclick="sendOpsReply()" disabled>Enviar</button></div><div class="opsComposerMeta"><span id="opsChar">0/1200</span></div><div class="opsStatus" id="opsStatus">Listo.</div></section></div></div>
 </section>
 </div>
 <script>
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
-var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={}, opsFilterMode="all", opsLastHealth=null;
+var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={}, opsFilterMode="all", opsLastHealth=null, opsCustomerMeta={}, opsAllowedTags=[{id:"venta",label:"Venta"},{id:"garantia",label:"Garantia"},{id:"pendiente_pago",label:"Pendiente pago"},{id:"envio",label:"Envio"},{id:"revisar",label:"Revisar"}], opsDraftTags=[], opsMetaDirty=false, opsMetaDirtyUser=null;
 var chartLibPromise=null;
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
@@ -2154,6 +2272,8 @@ function opsEsc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;
 function opsAttr(s){return opsEsc(s).replace(/"/g,"&quot;");}
 function opsWhen(ts){try{return new Date(ts).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(e){return "";}}
 function opsLastText(ms){var info=opsThreadInfoFromMessages(ms);return info.lastText||"";}
+function opsTagLabel(id){var t=(opsAllowedTags||[]).find(function(x){return x.id===id;});return t?t.label:id;}
+function opsMetaFor(id){return (opsCustomerMeta&&opsCustomerMeta[id])||{tags:[],note:""};}
 function opsThreadInfoFromMessages(ms){
 var lastText="",lastTs="",lastInbound=0,lastHumanReply=0,lastBot=0,lastTools=[];
 (ms||[]).forEach(function(t){var ts=Date.parse(t.ts||"")||0;if(ts){lastTs=t.ts;}var tools=t.tools||[];if(t.userMessage){lastInbound=ts||lastInbound;lastText=t.userMessage;}if(t.botReply){var clean=String(t.botReply||"").replace("[Humano]","").trim();if(tools.indexOf("admin_send_message")>=0){lastHumanReply=ts||lastHumanReply;}else if(tools.indexOf("admin_takeover")<0&&tools.indexOf("admin_release")<0){lastBot=ts||lastBot;}lastText=clean||lastText;}if(tools.length){lastTools=tools;}});
@@ -2165,24 +2285,38 @@ function setOpsFilter(mode){opsFilterMode=mode||"all";["All","Pending","Human","
 function buildOpsFromTurns(){
 opsHandoffs={};((opsStats||{}).active_handoff_users||[]).forEach(function(id){opsHandoffs[id]=true;});
 opsGroups={};opsOrder=[];
-opsTurns.slice().reverse().forEach(function(t){var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&t.tools.indexOf("admin_release")>=0)opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0||t.tools.indexOf("human_handoff_active")>=0||t.tools.indexOf("request_human_handoff")>=0))opsHandoffs[id]=true;});
+opsTurns.slice().reverse().forEach(function(t){if(t.tools&&t.tools.indexOf("admin_customer_meta")>=0)return;var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&t.tools.indexOf("admin_release")>=0)opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0||t.tools.indexOf("human_handoff_active")>=0||t.tools.indexOf("request_human_handoff")>=0))opsHandoffs[id]=true;});
 opsOrder.sort(function(a,b){return new Date((opsGroups[b][opsGroups[b].length-1]||{}).ts||0)-new Date((opsGroups[a][opsGroups[a].length-1]||{}).ts||0);});
 if(!opsSelected&&opsOrder.length)opsSelected=opsOrder[0];if(opsSelected&&!opsGroups[opsSelected])opsSelected=opsOrder[0]||null;
 renderOpsThreads();renderOpsChat();
 }
 function renderOpsThreads(){
 var el=document.getElementById("opsThreadList");if(!el)return;setOpsFilterButtons();var q=(document.getElementById("opsFilter").value||"").toLowerCase().trim();var html="",shown=0,pending=0,active=0;
-opsOrder.forEach(function(id){var info=opsThreadInfo(id),txt=info.lastText||"";if(info.needsReply)pending++;if(info.active)active++;if(!opsMatchesMode(id))return;if(q&&(id+" "+txt).toLowerCase().indexOf(q)<0)return;shown++;var cls="opsThread"+(id===opsSelected?" active":"")+(info.needsReply?" pending":"");var mode=info.active?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";var flag=info.needsReply?"<span class='opsFlag need'>Pendiente</span>":"";html+="<button class='"+cls+"' data-user='"+opsAttr(id)+"' onclick='selectOpsThread(this.getAttribute(&quot;data-user&quot;))'><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+flag+"</span><span class='opsTime'>"+opsWhen(info.lastTs)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div></button>";});
+opsOrder.forEach(function(id){var info=opsThreadInfo(id),txt=info.lastText||"",meta=opsMetaFor(id),tagText=(meta.tags||[]).map(opsTagLabel).join(" "),haystack=(id+" "+txt+" "+tagText+" "+(meta.note||"")).toLowerCase();if(info.needsReply)pending++;if(info.active)active++;if(!opsMatchesMode(id))return;if(q&&haystack.indexOf(q)<0)return;shown++;var cls="opsThread"+(id===opsSelected?" active":"")+(info.needsReply?" pending":"");var mode=info.active?"<span class='opsPill human'>Humano</span>":"<span class='opsPill bot'>Bot</span>";var flag=info.needsReply?"<span class='opsFlag need'>Pendiente</span>":"";var tags=(meta.tags||[]).map(function(tag){return "<span class='opsThreadTag "+opsAttr(tag)+"'>"+opsEsc(opsTagLabel(tag))+"</span>";}).join("");html+="<button class='"+cls+"' data-user='"+opsAttr(id)+"' onclick='selectOpsThread(this.getAttribute(&quot;data-user&quot;))'><div class='opsThreadTop'><span class='opsPhone'>+"+opsEsc(id)+mode+flag+"</span><span class='opsTime'>"+opsWhen(info.lastTs)+"</span></div><div class='opsPreview'>"+opsEsc(txt)+"</div>"+(tags?"<div class='opsThreadTags'>"+tags+"</div>":"")+"</button>";});
 el.innerHTML=html||"<div class='opsEmpty'>No hay conversaciones en este filtro.</div>";var badge=document.getElementById("opsBadge");if(badge)badge.textContent=opsOrder.length+" chats · "+active+" humano";var pc=document.getElementById("opsPendingCount");if(pc)pc.textContent=pending+" pendiente"+(pending===1?"":"s")+" · "+shown+" visible"+(shown===1?"":"s");
 }
 function setOpsFilterButtons(){var map={all:"opsModeAll",pending:"opsModePending",human:"opsModeHuman",bot:"opsModeBot"};Object.keys(map).forEach(function(mode){var el=document.getElementById(map[mode]);if(el)el.classList.toggle("active",opsFilterMode===mode);});}
-function selectOpsThread(id){opsSelected=id;renderOpsThreads();renderOpsChat();}
+function selectOpsThread(id){opsSelected=id;opsMetaDirty=false;opsMetaDirtyUser=null;renderOpsThreads();renderOpsChat();}
 function renderOpsChat(){
 var ms=opsGroups[opsSelected]||[],info=opsSelected?opsThreadInfo(opsSelected):{},title=document.getElementById("opsTitle"),sub=document.getElementById("opsSub");if(title)title.textContent=opsSelected?("+"+opsSelected):"Selecciona una conversación";if(sub)sub.textContent=opsSelected?(info.needsReply?"Pendiente de respuesta humana.":(info.active?"Control humano activo. El bot no responderá.":"Bot activo. Puedes tomar control o responder directamente.")):"El control humano pausa las respuestas automáticas del bot.";
 var take=document.getElementById("opsTakeBtn"),rel=document.getElementById("opsReleaseBtn"),send=document.getElementById("opsSendBtn"),copy=document.getElementById("opsCopyBtn");if(take)take.disabled=!opsSelected||!!opsHandoffs[opsSelected];if(rel)rel.disabled=!opsSelected||!opsHandoffs[opsSelected];if(send)send.disabled=!opsSelected;if(copy)copy.disabled=!opsSelected;updateOpsChar();
+renderOpsMetaPanel();
 var html="";ms.forEach(function(t){if(t.userMessage){html+="<div class='opsBubble opsIncoming'>"+opsEsc(t.userMessage)+"<div class='opsMeta'>Cliente · "+opsWhen(t.ts)+"</div></div>";}if(t.botReply){var isHuman=t.botReply.indexOf("[Humano]")===0;var body=isHuman?t.botReply.replace("[Humano]","").trim():t.botReply;html+="<div class='opsBubble "+(isHuman?"opsHuman":"opsBot")+"'>"+opsEsc(body)+"<div class='opsMeta'>"+(isHuman?"Humano":"Bot")+" · "+opsWhen(t.ts)+"</div></div>";}if(t.tools&&t.tools.length){html+="<div class='opsTools'>"+opsEsc(t.tools.join(", "))+"</div>";}});
 var box=document.getElementById("opsMessages");if(box){box.innerHTML=html||"<div class='opsEmpty'>No hay mensajes para este cliente.</div>";box.scrollTop=box.scrollHeight;}
 }
+function renderOpsMetaPanel(){
+var tagsEl=document.getElementById("opsTags"),noteEl=document.getElementById("opsNote"),saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");
+if(!tagsEl||!noteEl||!saveEl||!statusEl)return;
+if(opsSelected&&opsMetaDirty&&opsMetaDirtyUser===opsSelected){saveEl.disabled=false;return;}
+var meta=opsSelected?opsMetaFor(opsSelected):{tags:[],note:""};
+opsDraftTags=(meta.tags||[]).slice();
+tagsEl.innerHTML=(opsAllowedTags||[]).map(function(tag){var active=opsDraftTags.indexOf(tag.id)>=0;return "<button type='button' class='opsTag"+(active?" active":"")+"' data-tag='"+opsAttr(tag.id)+"' onclick='toggleOpsTag(this.getAttribute(&quot;data-tag&quot;))' "+(!opsSelected?"disabled":"")+">"+opsEsc(tag.label)+"</button>";}).join("");
+noteEl.value=opsSelected?(meta.note||""):"";
+noteEl.disabled=!opsSelected;saveEl.disabled=true;statusEl.textContent=opsSelected?(meta.updated_at?("Guardado "+opsWhen(meta.updated_at)):"Sin nota guardada"):"Selecciona una conversación.";
+}
+function markOpsMetaDirty(){opsMetaDirty=!!opsSelected;opsMetaDirtyUser=opsSelected;var saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");if(saveEl)saveEl.disabled=!opsSelected;if(statusEl&&opsSelected)statusEl.textContent="Cambios sin guardar.";}
+function toggleOpsTag(tag){if(!opsSelected)return;var idx=opsDraftTags.indexOf(tag);if(idx>=0)opsDraftTags.splice(idx,1);else opsDraftTags.push(tag);var buttons=document.querySelectorAll(".opsTag");for(var i=0;i<buttons.length;i++){buttons[i].classList.toggle("active",opsDraftTags.indexOf(buttons[i].getAttribute("data-tag"))>=0);}markOpsMetaDirty();}
+function saveOpsMeta(){if(!opsSelected)return;var note=(document.getElementById("opsNote").value||"").trim(),saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");if(saveEl)saveEl.disabled=true;if(statusEl)statusEl.textContent="Guardando...";adminApi("/admin/customer-meta/"+encodeURIComponent(opsSelected),{method:"POST",body:JSON.stringify({tags:opsDraftTags,note:note})}).then(function(r){opsCustomerMeta[opsSelected]=r.meta||{tags:opsDraftTags,note:note};opsMetaDirty=false;opsMetaDirtyUser=null;if(statusEl)statusEl.textContent="Guardado "+opsWhen((r.meta||{}).updated_at);renderOpsThreads();}).catch(function(e){if(statusEl)statusEl.textContent="Error: "+e.message;if(saveEl)saveEl.disabled=false;});}
 function copyOpsPhone(){if(!opsSelected)return;var value="+"+opsSelected;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(value).then(function(){document.getElementById("opsStatus").textContent="Número copiado.";}).catch(function(){document.getElementById("opsStatus").textContent=value;});}else{document.getElementById("opsStatus").textContent=value;}}
 function updateOpsChar(){var el=document.getElementById("opsReply"),out=document.getElementById("opsChar");if(out)out.textContent=((el&&el.value)||"").length+"/1200";}
 function takeOpsControl(){if(!opsSelected)return;adminApi("/admin/takeover/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent="Control humano activo.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
@@ -2196,16 +2330,17 @@ function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent=
 function refreshOpsHealth(){var el=document.getElementById("opsHealth");if(el&&!opsLastHealth){el.textContent="verificando...";el.className="badge opsHealth";}adminApi("/admin/health").then(function(h){opsLastHealth=h;var ready=h.production_readiness&&h.production_readiness.infrastructure_ready;var blockers=(h.production_readiness&&h.production_readiness.blockers)||[];if(!el)return;el.className="badge opsHealth "+(ready?"ok":(blockers.length?"err":"warn"));el.textContent=ready?"Infra OK":("Revisar: "+(blockers.slice(0,2).join(", ")||"salud"));}).catch(function(){if(el){el.className="badge opsHealth err";el.textContent="Salud no disponible";}});}
 function go(attempt){
 attempt=attempt||0;
-Promise.all([adminApi("/admin/stats"),adminApi("/admin/conversations?limit=100")]).then(function(res){
+Promise.all([adminApi("/admin/stats"),adminApi("/admin/conversations?limit=100"),adminApi("/admin/customer-meta?limit=500").catch(function(){return {tags:opsAllowedTags,customers:{}};})]).then(function(res){
   if(attempt<1&&res[1]&&res[1].source&&res[1].source!=="supabase"){document.getElementById("meta").textContent="despertando historial...";setTimeout(function(){go(attempt+1);},3000);return;}
-  render(res[0],res[1]);
+  render(res[0],res[1],res[2]);
 }).catch(function(e){
   if(attempt<1){document.getElementById("meta").textContent="reintentando datos...";setTimeout(function(){go(attempt+1);},3000);return;}
   document.getElementById("meta").textContent="error cargando datos";
 });
 }
-function render(stats,conv){
+function render(stats,conv,metaData){
 var ct=(stats.counters)||{},an=(stats.anthropic)||{},sm=(conv.summary)||{},turns=(conv.turns)||[];
+if(metaData&&metaData.tags)opsAllowedTags=metaData.tags;if(metaData&&metaData.customers)opsCustomerMeta=metaData.customers;
 opsStats=stats||{};opsTurns=turns||[];buildOpsFromTurns();
 var clientes=ct.unique_users_total||0;var msgs=ct.messages_received_total||0;
 var hora=new Date().toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit"});
@@ -2724,6 +2859,7 @@ app.get("/admin/conversations", async (req, res) => {
     }
   }
   if (!turns) turns = conversationLogs.slice(-limit).reverse();
+  turns = turns.filter(t => !isCustomerMetaTurn(t));
   const withRating = turns.filter(t => t.rating != null);
   const avgRating = withRating.length
     ? Math.round(withRating.reduce((s, t) => s + (Number(t.rating) || 0), 0) / withRating.length * 10) / 10

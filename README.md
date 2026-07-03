@@ -121,7 +121,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v55 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v56 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -135,7 +135,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v55 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v56 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.
@@ -172,7 +172,7 @@ DASHBOARD_KEY=... MONITOR_INTERVAL_MS=300000 node monitor.js --loop
 
 ### GitHub Action
 
-El workflow activo `.github/workflows/rav-bot-safety-checks.yml` corre `npm run monitor` cada 10 minutos, en pushes a `main` y manualmente con `workflow_dispatch`. Requiere el secret `DASHBOARD_KEY` en GitHub Actions. Si detecta fallas o chats humanos pendientes por encima del umbral, envía alerta por WhatsApp al equipo usando `/admin/alert`, con cooldown anti-spam de 30 minutos por tipo de alerta.
+El workflow listo para activar `.github/workflows/rav-bot-safety-checks.yml` corre `npm run monitor` cada 10 minutos, en pushes a `main` y manualmente con `workflow_dispatch`. Requiere un token/sesion de GitHub con permiso `workflow` para poder subirlo al repo, y el secret `DASHBOARD_KEY` en GitHub Actions. Si detecta fallas o chats humanos pendientes por encima del umbral, envia alerta por WhatsApp al equipo usando `/admin/alert`, con cooldown anti-spam de 30 minutos por tipo de alerta.
 
 La copia en `docs/github-actions-safety-checks.yml` queda como referencia editable.
 

@@ -1,6 +1,6 @@
 # TODO RAV WhatsApp Bot
 
-Backlog operativo despues de dejar App Review enviada y produccion en `v55`.
+Backlog operativo despues de dejar App Review enviada y produccion en `v56`.
 
 ## En curso
 
@@ -31,7 +31,8 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v55`.
   - Avisar si `Meta`, `Shopify`, `Supabase` o `Anthropic` fallan en `/admin/health`.
   - Estado 2026-07-02: `monitor.js` detecta handoffs pendientes por `MONITOR_PENDING_HANDOFF_MINUTES` y `docs/github-actions-safety-checks.yml` deja listo el workflow programado.
   - Estado 2026-07-03: workflow activo en `.github/workflows/rav-bot-safety-checks.yml`; `/admin/alert` envia WhatsApp al equipo con cooldown anti-spam.
-  - Pendiente: confirmar ejecucion automatica en GitHub Actions y que existe el secret `DASHBOARD_KEY`.
+  - Estado 2026-07-03: backend de alertas desplegado en `v56`; el token actual de GitHub no tiene permiso `workflow`, por eso el workflow queda listo localmente pero falta subirlo con un token que incluya ese scope.
+  - Pendiente: subir `.github/workflows/rav-bot-safety-checks.yml` con permiso `workflow` y confirmar que existe el secret `DASHBOARD_KEY`.
   - Done: alertas configurables por env vars y prueba manual desde `/admin/alert`.
 
 - [x] Playbook comercial.

@@ -11,6 +11,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 - ✨ **Recomendaciones inteligentes** — 3 opciones + link al catálogo filtrado por la búsqueda del cliente
 - 🛡️ **Garantías** — flujo guiado con factura, cédula, fecha, motivo + handoff a humano
 - 🚚 **Envíos** — info de transportadoras + same-day para Medellín con handoff opcional
+- 📦 **Estado de pedidos** — consulta Shopify Admin por número de pedido + nombre y devuelve guía/rastreo si coincide
 - ⭐ **Calificaciones** — pide rating 1-5 al cierre o post-handoff; rating bajo escala a humano
 - 🤝 **Handoff a humano** — Eliana (asesora comercial) recibe alertas en su WhatsApp
 - 🙈 **Manejo cálido de multimedia** — explica que aún no ve imágenes y guía al cliente a mandar links
@@ -37,6 +38,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
 | `SHOPIFY_STORE_DOMAIN` | Dominio Shopify (default: `ravtoys.myshopify.com`) |
 | `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) |
+| `SHOPIFY_ADMIN_API_VERSION` | Versión Admin API para pedidos (default: `2026-04`) |
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DASHBOARD_KEY` | Clave para endpoints admin protegidos |
@@ -57,6 +59,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/templates?key=XXXX` | Lista plantillas WhatsApp configuradas localmente |
 | `POST /admin/template-test` | Genera payload de plantilla o envia con `send: true` si ya fue aprobada |
 | `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
+| `POST /admin/order-status-test` | Prueba consulta de pedido Shopify con `order_number`, `customer_name`, `phone_or_email` opcional |
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
 | `GET /admin/test-search?q=XXXX` | Prueba la búsqueda de productos sin afectar a clientes reales |
 | `GET /admin/release/:userId` | Libera un handoff manual de Eliana (vuelve el bot a atender) y marca para pedir rating |
@@ -113,7 +116,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v51 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v52 npm run smoke
 ```
 
 También puedes apuntar a staging:

@@ -4,6 +4,13 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v51`.
 
 ## En curso
 
+- [ ] Estado de pedidos Shopify.
+  - Bot consulta pedido por numero + nombre, valida identidad y devuelve guia/rastreo si coincide.
+  - Endpoint tecnico: `POST /admin/order-status-test`.
+  - Estado 2026-07-02: implementado en `v52` con Shopify Admin GraphQL validado.
+  - Pendiente: probar con un pedido real y confirmar que `SHOPIFY_ADMIN_TOKEN` tiene permisos `read_orders` + fulfillment reads.
+  - Done: prueba real por admin y por WhatsApp devuelve estado/guia sin revelar datos cuando no coincide.
+
 - [ ] Cargar y aprobar plantillas WhatsApp iniciales.
   - Archivo base: `docs/whatsapp-templates.md`
   - Registro tecnico: `whatsapp-templates.js`

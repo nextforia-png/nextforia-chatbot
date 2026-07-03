@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v51";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v52";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -18,6 +18,7 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "ravtoys.myshopify.com";
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
+const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
 const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "573013507371").split(",").map(s => s.trim()).filter(Boolean);
 // ─────────────────────────────────────────────────────────────────────────────────
 
@@ -387,6 +388,14 @@ ENVÍOS:
 - send_shipping_info cuando el cliente pregunte por envíos, cobertura, transportadoras, ciudades, despachos, tiempos de entrega, o "¿llega a mi ciudad?".
 - Si después de send_shipping_info el cliente CONFIRMA que está en Medellín, o pide explícitamente confirmar el tiempo de entrega del mismo día (frases como "sí, soy de Medellín", "yo estoy en Medellín", "confírmame para Medellín", "hoy llega?", "puedo recibirlo hoy?"): pregúntale si quiere que lo pases con una asesora para confirmarle. Si dice que sí, llama request_human_handoff(reason="confirmar_envio_medellin"). Si dice que no o que ya tiene la info, no llames la tool y sigue la conversación normal.
 
+ESTADO DE PEDIDOS Y GUÍAS:
+- Si el cliente pregunta por estado de pedido, guía, rastreo, seguimiento, despacho, "mi pedido", "mi orden", "cuándo llega" o similar, pídele número de pedido y nombre completo si falta alguno.
+- Cuando ya tengas número de pedido Y nombre completo, llama lookup_order_status(order_number, customer_name). Si además te da teléfono o correo, inclúyelo en phone_or_email.
+- NUNCA inventes número de guía, transportadora, estado o fecha. Solo responde con datos devueltos por lookup_order_status.
+- Si lookup_order_status devuelve matched=true, resume el estado en 1-2 líneas y comparte guía/link si existe.
+- Si devuelve matched=false, NO reveles datos del pedido. Pide confirmar nombre completo o teléfono/correo de la compra; si sigue sin coincidir, ofrece pasarlo con una asesora y llama request_human_handoff(reason="validar_pedido").
+- Si devuelve not_found o error, responde con calidez pidiendo revisar número de pedido/nombre. Si el cliente necesita ayuda inmediata, llama request_human_handoff(reason="estado_pedido").
+
 CALIFICACIONES:
 - Cuando el cliente cierra la conversación con frases como "gracias", "listo", "todo bien", "perfecto", "muchas gracias", "buenísimo": llama send_rating_request para pedirle calificar la atención.
 - Cuando recibas la NOTA DEL SISTEMA al inicio de un turno diciendo "Cliente acaba de salir de handoff con humano. Pide calificación.", lo PRIMERO que haces es llamar send_rating_request. Aún si el cliente escribe sobre otra cosa, primero pide la calificación con calidez (ej: "¡Hola otra vez! Antes de seguir, ¿cómo te pareció la atención del 1 al 5? Tu opinión nos ayuda muchísimo 💛").
@@ -565,6 +574,19 @@ const TOOLS = [
     name: "send_shipping_info",
     description: "Envía la información de envíos: cobertura, transportadoras y tiempos de entrega. Úsalo cuando el cliente pregunte por envíos, despachos, cobertura, ciudades, transportadoras, cuánto tarda el pedido, o algo similar.",
     input_schema: { type: "object", properties: {}, required: [] }
+  },
+  {
+    name: "lookup_order_status",
+    description: "Consulta en Shopify el estado real de un pedido y sus guías. Úsalo cuando el cliente pregunta por estado, guía, rastreo o seguimiento, y ya dio número de pedido y nombre completo. No revela datos si el nombre no coincide.",
+    input_schema: {
+      type: "object",
+      properties: {
+        order_number: { type: "string", description: "Número o nombre del pedido tal como lo da el cliente. Ej: '#1234', '1234', 'RAV1234'." },
+        customer_name: { type: "string", description: "Nombre completo o nombre y apellido que da el cliente para validar identidad." },
+        phone_or_email: { type: "string", description: "Teléfono o correo opcional de la compra, si el cliente lo da." }
+      },
+      required: ["order_number", "customer_name"]
+    }
   },
   {
     name: "send_rating_request",
@@ -769,6 +791,323 @@ async function searchShopify(query) {
   return result;
 }
 
+const ORDER_STATUS_QUERY = `
+query RavOrderStatus($query: String!) {
+  orders(first: 5, query: $query, sortKey: CREATED_AT, reverse: true) {
+    nodes {
+      id
+      name
+      email
+      phone
+      createdAt
+      displayFinancialStatus
+      displayFulfillmentStatus
+      billingAddress {
+        name
+        phone
+        city
+        province
+        country
+      }
+      shippingAddress {
+        name
+        phone
+        city
+        province
+        country
+      }
+      fulfillments(first: 10) {
+        status
+        displayStatus
+        createdAt
+        estimatedDeliveryAt
+        trackingInfo(first: 10) {
+          company
+          number
+          url
+        }
+      }
+    }
+  }
+}`;
+
+function cleanShopifyDomain(domain) {
+  return String(domain || "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "");
+}
+
+async function shopifyAdminGraphql(query, variables) {
+  if (!SHOPIFY_ADMIN_TOKEN) {
+    const err = new Error("shopify_admin_token_missing");
+    err.code = "shopify_admin_token_missing";
+    throw err;
+  }
+
+  const domain = cleanShopifyDomain(SHOPIFY_STORE_DOMAIN);
+  const url = `https://${domain}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
+  const response = await axios.post(
+    url,
+    { query, variables },
+    {
+      headers: {
+        "X-Shopify-Access-Token": SHOPIFY_ADMIN_TOKEN,
+        "Content-Type": "application/json"
+      },
+      timeout: 15000
+    }
+  );
+
+  if (response.data && response.data.errors && response.data.errors.length) {
+    const message = response.data.errors.map(e => e.message).join("; ");
+    const err = new Error(message || "shopify_graphql_error");
+    err.code = "shopify_graphql_error";
+    throw err;
+  }
+
+  return response.data && response.data.data;
+}
+
+function compactOrderNumber(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[^A-Za-z0-9#-]/g, "");
+}
+
+function buildOrderSearchQueries(orderNumber) {
+  const compact = compactOrderNumber(orderNumber);
+  const noHash = compact.replace(/^#+/, "");
+  const candidates = [];
+  if (compact) candidates.push(compact.startsWith("#") ? `name:${compact}` : `name:#${compact}`);
+  if (noHash) {
+    candidates.push(`name:${noHash}`);
+    candidates.push(noHash);
+  }
+  return Array.from(new Set(candidates.filter(Boolean))).slice(0, 4);
+}
+
+function orderNumberMatches(orderName, inputNumber) {
+  const orderCompact = compactOrderNumber(orderName).toLowerCase();
+  const inputCompact = compactOrderNumber(inputNumber).toLowerCase();
+  const inputNoHash = inputCompact.replace(/^#+/, "");
+  if (!orderCompact || !inputNoHash) return false;
+  return (
+    orderCompact === inputCompact ||
+    orderCompact === "#" + inputNoHash ||
+    orderCompact.replace(/^#+/, "") === inputNoHash
+  );
+}
+
+function normalizeLookupText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function meaningfulNameTokens(name) {
+  const stopwords = new Set(["de", "del", "la", "las", "los", "y", "el", "al", "da", "do"]);
+  return normalizeLookupText(name)
+    .split(" ")
+    .filter(token => token.length >= 2 && !stopwords.has(token));
+}
+
+function getOrderNameCandidates(order) {
+  const names = [];
+  if (order && order.shippingAddress && order.shippingAddress.name) names.push(order.shippingAddress.name);
+  if (order && order.billingAddress && order.billingAddress.name) names.push(order.billingAddress.name);
+  return names.filter(Boolean);
+}
+
+function customerNameMatchesOrder(order, customerName) {
+  const input = normalizeLookupText(customerName);
+  const tokens = meaningfulNameTokens(customerName);
+  if (!input || tokens.length === 0) return false;
+
+  return getOrderNameCandidates(order).some(candidate => {
+    const normalized = normalizeLookupText(candidate);
+    if (!normalized) return false;
+    if (normalized === input || normalized.includes(input) || input.includes(normalized)) return true;
+    const hits = tokens.filter(token => normalized.includes(token)).length;
+    return tokens.length === 1 ? (tokens[0].length >= 4 && hits === 1) : hits >= Math.min(2, tokens.length);
+  });
+}
+
+function contactMatchesOrder(order, phoneOrEmail) {
+  const value = String(phoneOrEmail || "").trim();
+  if (!value) return null;
+  if (value.includes("@")) {
+    const email = String(order.email || "").trim().toLowerCase();
+    return !!email && email === value.toLowerCase();
+  }
+
+  const inputDigits = value.replace(/\D/g, "");
+  if (!inputDigits) return null;
+  const phones = [order.phone, order.shippingAddress && order.shippingAddress.phone, order.billingAddress && order.billingAddress.phone]
+    .map(v => String(v || "").replace(/\D/g, ""))
+    .filter(Boolean);
+  return phones.some(phone => {
+    if (phone === inputDigits) return true;
+    const minLength = Math.min(10, inputDigits.length, phone.length);
+    if (minLength < 7) return false;
+    return phone.slice(-minLength) === inputDigits.slice(-minLength);
+  });
+}
+
+function collectTrackingInfo(order) {
+  const tracking = [];
+  for (const fulfillment of (order.fulfillments || [])) {
+    for (const item of (fulfillment.trackingInfo || [])) {
+      if (!item || (!item.number && !item.url)) continue;
+      tracking.push({
+        company: item.company || "",
+        number: item.number || "",
+        url: item.url || "",
+        fulfillment_status: fulfillment.displayStatus || fulfillment.status || "",
+        estimated_delivery_at: fulfillment.estimatedDeliveryAt || null
+      });
+    }
+  }
+  return tracking;
+}
+
+function humanizeFulfillmentStatus(status) {
+  const value = String(status || "").toUpperCase();
+  const labels = {
+    FULFILLED: "despachado",
+    PARTIALLY_FULFILLED: "parcialmente despachado",
+    UNFULFILLED: "en preparación, aún sin despacho",
+    IN_PROGRESS: "en alistamiento",
+    ON_HOLD: "en espera",
+    OPEN: "pendiente",
+    RESTOCKED: "devuelto al inventario"
+  };
+  return labels[value] || String(status || "sin estado visible").toLowerCase();
+}
+
+function buildOrderStatusNextAction(order, tracking) {
+  const status = humanizeFulfillmentStatus(order.displayFulfillmentStatus);
+  if (tracking.length > 0) {
+    const lines = tracking.map(item => {
+      const company = item.company || "transportadora";
+      const number = item.number ? `guía ${item.number}` : "guía disponible";
+      return item.url ? `${company}: ${number} ${item.url}` : `${company}: ${number}`;
+    }).join("; ");
+    return `Dile al cliente: "Encontré tu pedido ${order.name}: está ${status}. Guía: ${lines}"`;
+  }
+  if (String(order.displayFulfillmentStatus || "").toUpperCase() === "UNFULFILLED") {
+    return `Dile al cliente: "Encontré tu pedido ${order.name}: está ${status}. Aún no veo guía generada; apenas se despache aparecerá el rastreo."`;
+  }
+  return `Dile al cliente: "Encontré tu pedido ${order.name}: está ${status}. Por ahora no veo número de guía cargado en Shopify."`;
+}
+
+async function lookupOrderStatus(input) {
+  const orderNumber = String(input.order_number || "").trim();
+  const customerName = String(input.customer_name || "").trim();
+  const phoneOrEmail = String(input.phone_or_email || "").trim();
+
+  if (!orderNumber || !customerName) {
+    return {
+      found: false,
+      matched: false,
+      missing_fields: [!orderNumber ? "order_number" : null, !customerName ? "customer_name" : null].filter(Boolean),
+      next_action: "Pide el número de pedido y el nombre completo para poder validar el estado sin exponer datos."
+    };
+  }
+
+  const searchQueries = buildOrderSearchQueries(orderNumber);
+  if (searchQueries.length === 0) {
+    return {
+      found: false,
+      matched: false,
+      not_found: true,
+      next_action: "Pide al cliente revisar el número de pedido y enviarlo de nuevo."
+    };
+  }
+
+  try {
+    let orders = [];
+    let queryUsed = "";
+    for (const query of searchQueries) {
+      const data = await shopifyAdminGraphql(ORDER_STATUS_QUERY, { query });
+      const nodes = (data && data.orders && data.orders.nodes) || [];
+      const exact = nodes.filter(order => orderNumberMatches(order.name, orderNumber));
+      if (exact.length > 0) {
+        orders = exact;
+        queryUsed = query;
+        break;
+      }
+    }
+
+    if (!orders.length) {
+      return {
+        found: false,
+        matched: false,
+        not_found: true,
+        order_number: orderNumber,
+        next_action: "Dile al cliente que no encontraste ese pedido con ese número. Pídele revisarlo o enviar captura/foto del pedido y ofrece pasar con una asesora si necesita ayuda."
+      };
+    }
+
+    const candidates = orders.map(order => {
+      const nameMatched = customerNameMatchesOrder(order, customerName);
+      const contactMatched = contactMatchesOrder(order, phoneOrEmail);
+      return { order, nameMatched, contactMatched };
+    });
+
+    const matched = candidates.find(item => item.nameMatched && item.contactMatched !== false);
+    if (!matched) {
+      return {
+        found: true,
+        matched: false,
+        order_number: orderNumber,
+        candidates_found: orders.length,
+        validation: {
+          name_matched: candidates.some(item => item.nameMatched),
+          contact_matched: phoneOrEmail ? candidates.some(item => item.contactMatched === true) : null
+        },
+        next_action: "No reveles datos del pedido. Pide confirmar el nombre completo de la compra y, si puede, teléfono o correo. Si vuelve a fallar, pasa con una asesora."
+      };
+    }
+
+    const order = matched.order;
+    const tracking = collectTrackingInfo(order);
+    return {
+      found: true,
+      matched: true,
+      order_name: order.name,
+      created_at: order.createdAt,
+      financial_status: order.displayFinancialStatus,
+      fulfillment_status: order.displayFulfillmentStatus,
+      fulfillment_status_label: humanizeFulfillmentStatus(order.displayFulfillmentStatus),
+      delivery_city: (order.shippingAddress && order.shippingAddress.city) || (order.billingAddress && order.billingAddress.city) || "",
+      delivery_region: (order.shippingAddress && order.shippingAddress.province) || (order.billingAddress && order.billingAddress.province) || "",
+      tracking,
+      query_used: queryUsed,
+      next_action: buildOrderStatusNextAction(order, tracking)
+    };
+  } catch (err) {
+    const status = err.response && err.response.status;
+    const code = err.code || (status ? `shopify_http_${status}` : "shopify_lookup_failed");
+    log("error", "shopify_order_lookup_failed", {
+      code,
+      status,
+      message: String(err.message || "").slice(0, 240)
+    });
+    return {
+      found: false,
+      matched: false,
+      error: code,
+      next_action: "Dile al cliente con calidez que vas a validar el pedido con una asesora y llama request_human_handoff(reason='estado_pedido')."
+    };
+  }
+}
+
 
 async function sendText(to, text) {
   // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
@@ -962,6 +1301,18 @@ async function executeSendWarrantyInfo(to) {
 async function executeSendShippingInfo(userId) {
   await sendText(userId, SHIPPING_INFO);
   return { sent: true };
+}
+
+async function executeLookupOrderStatus(userId, input) {
+  const result = await lookupOrderStatus(input || {});
+  log("info", "order_status_lookup", {
+    userId,
+    found: !!result.found,
+    matched: !!result.matched,
+    order_name: result.order_name || null,
+    error: result.error || null
+  });
+  return result;
 }
 
 async function executeSendRatingRequest(userId) {
@@ -1344,6 +1695,9 @@ async function handleConversation(userId, userMessage) {
                 break;
               case "send_shipping_info":
                 result = await executeSendShippingInfo(userId);
+                break;
+              case "lookup_order_status":
+                result = await executeLookupOrderStatus(userId, toolUse.input);
                 break;
               case "send_rating_request":
                 result = await executeSendRatingRequest(userId);
@@ -2086,6 +2440,7 @@ app.get("/admin/health", async (req, res) => {
       wa_token_present: !!WA_TOKEN,
       phone_number_id: PHONE_NUMBER_ID,
       shopify_domain: SHOPIFY_STORE_DOMAIN,
+      shopify_admin_api_version: SHOPIFY_ADMIN_API_VERSION,
       notification_phones_count: NOTIFICATION_PHONES.length
     },
     state: {
@@ -2230,6 +2585,26 @@ app.get("/admin/smoke-check", async (req, res) => {
     lastSearchResults.delete(smokeUserId);
     checkouts.delete(smokeUserId);
   }
+});
+
+app.post("/admin/order-status-test", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+
+  const result = await lookupOrderStatus({
+    order_number: req.body && req.body.order_number,
+    customer_name: req.body && req.body.customer_name,
+    phone_or_email: req.body && req.body.phone_or_email
+  });
+
+  res.status(result.error ? 502 : 200).json({
+    ok: !!(result.found && result.matched),
+    bot_version: BOT_VERSION,
+    shopify_api_version: SHOPIFY_ADMIN_API_VERSION,
+    result
+  });
 });
 
 // Stats con contadores persistentes (v33)

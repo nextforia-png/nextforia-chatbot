@@ -15,6 +15,7 @@ jobs:
       DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
       MONITOR_PENDING_HANDOFF_MINUTES: "10"
       ALERT_ON_FAILURE: "1"
+      ALERT_COOLDOWN_MINUTES: "30"
     steps:
       - uses: actions/checkout@v4
 
@@ -31,4 +32,3 @@ jobs:
       - name: Run production monitor
         if: env.DASHBOARD_KEY != ''
         run: npm run monitor
-

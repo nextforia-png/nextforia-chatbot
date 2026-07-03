@@ -101,13 +101,16 @@ async function requestConversations({ baseUrl, key = "", limit = 100, timeoutMs 
   return lastData;
 }
 
-async function alertTeam({ baseUrl, key, kind, detail, timeoutMs = 70000 }) {
+async function alertTeam({ baseUrl, key, kind, detail, timeoutMs = 70000, dedupeKey = "", cooldownMinutes, force = false }) {
   if (!key) return { skipped: true, reason: "missing_dashboard_key" };
+  const cooldown = cooldownMinutes == null
+    ? numberFrom(process.env.ALERT_COOLDOWN_MINUTES, 30)
+    : cooldownMinutes;
   return requestJson({
     method: "post",
     url: `${baseUrl}/admin/alert`,
     key,
-    data: { kind, detail },
+    data: { kind, detail, dedupe_key: dedupeKey || kind, cooldown_minutes: cooldown, force },
     timeoutMs,
     retries: 0,
   });

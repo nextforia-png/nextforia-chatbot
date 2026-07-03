@@ -114,6 +114,7 @@ Variables útiles:
 | `COLD_START_RETRIES` | `2` | Reintentos para Render free tier |
 | `COLD_START_DELAY_MS` | `60000` | Espera entre reintentos por cold start |
 | `MONITOR_PENDING_HANDOFF_MINUTES` | `10` | Minutos máximos para chats en humano pendientes de respuesta |
+| `ALERT_COOLDOWN_MINUTES` | `30` | Ventana anti-spam para no repetir la misma alerta operativa |
 
 ### Prueba de humo post-deploy
 
@@ -171,7 +172,9 @@ DASHBOARD_KEY=... MONITOR_INTERVAL_MS=300000 node monitor.js --loop
 
 ### GitHub Action
 
-La plantilla `docs/github-actions-safety-checks.yml` corre `npm run monitor` cada 10 minutos, en pushes a `main` y manualmente con `workflow_dispatch`. Para activarla como workflow real en `.github/workflows/`, el token o sesión de GitHub debe tener permiso `workflow`, y debe existir el secret `DASHBOARD_KEY` en GitHub Actions.
+El workflow activo `.github/workflows/rav-bot-safety-checks.yml` corre `npm run monitor` cada 10 minutos, en pushes a `main` y manualmente con `workflow_dispatch`. Requiere el secret `DASHBOARD_KEY` en GitHub Actions. Si detecta fallas o chats humanos pendientes por encima del umbral, envía alerta por WhatsApp al equipo usando `/admin/alert`, con cooldown anti-spam de 30 minutos por tipo de alerta.
+
+La copia en `docs/github-actions-safety-checks.yml` queda como referencia editable.
 
 ---
 

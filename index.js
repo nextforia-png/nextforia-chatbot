@@ -1359,6 +1359,7 @@ async function notifyTeam(text, excludePhone) {
     }
   }
   console.log(`Notified team (${sent}/${NOTIFICATION_PHONES.length} numbers)`);
+  return { sent, total: NOTIFICATION_PHONES.length };
 }
 
 // ─── EXECUTORS ───────────────────────────────────────────────────────────────
@@ -2654,8 +2655,28 @@ app.post("/admin/alert", async (req, res) => {
   }
   const kind = String(req.body && req.body.kind || "monitor_alert").slice(0, 80);
   const detail = String(req.body && req.body.detail || "Sin detalle").slice(0, 1500);
-  await alertTeam(kind, detail);
-  res.json({ ok: true, kind, notified_count: NOTIFICATION_PHONES.length });
+  const dedupeKey = "admin_alert:" + String(req.body && req.body.dedupe_key || kind).slice(0, 160);
+  const cooldownMinutes = Math.max(0, Math.min(1440, Number(req.body && req.body.cooldown_minutes) || 30));
+  const force = req.body && (req.body.force === true || req.body.force === "true");
+  const now = Date.now();
+  const lastSent = errorAlerts.get(dedupeKey) || 0;
+  if (!force && cooldownMinutes > 0 && now - lastSent < cooldownMinutes * 60 * 1000) {
+    res.json({ ok: true, kind, skipped: true, reason: "cooldown_active", cooldown_minutes: cooldownMinutes });
+    return;
+  }
+
+  const message = [
+    "⚠️ *ALERTA OPERATIVA RAV Bot*",
+    "",
+    `Tipo: ${kind}`,
+    "",
+    detail,
+    "",
+    `Fecha: ${new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })}`
+  ].join("\n");
+  const notified = await notifyTeam(message, null);
+  errorAlerts.set(dedupeKey, now);
+  res.json({ ok: true, kind, notified_count: notified.sent, notification_targets: notified.total });
 });
 
 app.get("/admin/smoke-check", async (req, res) => {

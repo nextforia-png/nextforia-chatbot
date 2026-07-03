@@ -10,7 +10,8 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v55`.
   - Estado 2026-07-02: implementado en `v53` con Shopify Admin GraphQL validado.
   - Estado 2026-07-03: permisos de lectura de pedidos/fulfillments aprobados en Shopify (`rav-whatsapp-bot-4` activa). Prueba tecnica con pedido ficticio ya devuelve `not_found` en vez de `Access denied`.
   - Estado 2026-07-03: `v55` soporta pedidos con prefijo de tienda (`RAV-1154`) aunque el cliente escriba solo `1154`.
-  - Pendiente: probar con un pedido real y nombre correcto.
+  - Estado 2026-07-03: prueba admin real con pedido `1154` + nombre correcto devuelve `despachado` y guia; nombre incorrecto no revela tracking.
+  - Pendiente: prueba por WhatsApp con un mensaje real de cliente: "estado de mi pedido 1154, nombre ...".
   - Done: prueba real por admin y por WhatsApp devuelve estado/guia sin revelar datos cuando no coincide.
 
 - [ ] Cargar y aprobar plantillas WhatsApp iniciales.

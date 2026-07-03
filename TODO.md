@@ -1,6 +1,6 @@
 # TODO RAV WhatsApp Bot
 
-Backlog operativo despues de dejar App Review enviada y produccion en `v54`.
+Backlog operativo despues de dejar App Review enviada y produccion en `v55`.
 
 ## En curso
 
@@ -9,6 +9,7 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v54`.
   - Endpoint tecnico: `POST /admin/order-status-test`.
   - Estado 2026-07-02: implementado en `v53` con Shopify Admin GraphQL validado.
   - Estado 2026-07-03: permisos de lectura de pedidos/fulfillments aprobados en Shopify (`rav-whatsapp-bot-4` activa). Prueba tecnica con pedido ficticio ya devuelve `not_found` en vez de `Access denied`.
+  - Estado 2026-07-03: `v55` soporta pedidos con prefijo de tienda (`RAV-1154`) aunque el cliente escriba solo `1154`.
   - Pendiente: probar con un pedido real y nombre correcto.
   - Done: prueba real por admin y por WhatsApp devuelve estado/guia sin revelar datos cuando no coincide.
 

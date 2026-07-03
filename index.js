@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v54";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v55";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -19,6 +19,10 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "ravtoys.myshopify.com";
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
+const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.env.SHOPIFY_ORDER_PREFIX || "RAV")
+  .split(",")
+  .map(s => s.trim().replace(/[^A-Za-z0-9-]/g, "").replace(/-+$/g, ""))
+  .filter(Boolean);
 const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "573013507371").split(",").map(s => s.trim()).filter(Boolean);
 const CUSTOMER_META_TOOL = "admin_customer_meta";
 const CUSTOMER_META_TAGS = [
@@ -965,19 +969,29 @@ function buildOrderSearchQueries(orderNumber) {
   if (noHash) {
     candidates.push(`name:${noHash}`);
     candidates.push(noHash);
+    if (!/^[A-Za-z]+-/.test(noHash)) {
+      for (const prefix of SHOPIFY_ORDER_PREFIXES) {
+        const prefixed = `${prefix}-${noHash}`;
+        candidates.push(`name:${prefixed}`);
+        candidates.push(prefixed);
+      }
+    }
   }
-  return Array.from(new Set(candidates.filter(Boolean))).slice(0, 4);
+  return Array.from(new Set(candidates.filter(Boolean))).slice(0, 10);
 }
 
 function orderNumberMatches(orderName, inputNumber) {
   const orderCompact = compactOrderNumber(orderName).toLowerCase();
   const inputCompact = compactOrderNumber(inputNumber).toLowerCase();
   const inputNoHash = inputCompact.replace(/^#+/, "");
+  const inputSuffix = inputNoHash.includes("-") ? inputNoHash.split("-").pop() : inputNoHash;
+  const orderNoHash = orderCompact.replace(/^#+/, "");
   if (!orderCompact || !inputNoHash) return false;
   return (
     orderCompact === inputCompact ||
     orderCompact === "#" + inputNoHash ||
-    orderCompact.replace(/^#+/, "") === inputNoHash
+    orderNoHash === inputNoHash ||
+    (!!inputSuffix && orderNoHash.endsWith("-" + inputSuffix))
   );
 }
 

@@ -43,6 +43,9 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DASHBOARD_KEY` | Clave para endpoints admin protegidos |
+| `DASHBOARD_USERS` | Usuarios del panel: `admin:clave:admin,eliana:clave:agent,visor:clave:viewer` o JSON equivalente |
+| `DASHBOARD_SESSION_SECRET` | Secreto para firmar cookies del panel; si falta usa `DASHBOARD_KEY` |
+| `DASHBOARD_SESSION_TTL_HOURS` | Duración de sesión del panel (default: `12`) |
 | `NOTIFICATION_PHONES` | Números a notificar (CSV sin +): `573013507371,573046653449` |
 
 ---
@@ -52,6 +55,9 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | Endpoint | Para qué |
 |---|---|
 | `GET /admin` | Entrada corta al panel operativo con pantalla de clave |
+| `POST /admin/login` | Crea sesión del dashboard por usuario/clave o clave maestra |
+| `POST /admin/logout` | Cierra la sesión del dashboard |
+| `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify/Meta/Supabase y readiness de infraestructura |
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
@@ -64,7 +70,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
 | `POST /admin/order-status-test` | Prueba consulta de pedido Shopify con `order_number`, `customer_name`, `phone_or_email` opcional |
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
-| `GET /admin/test-search?q=XXXX` | Prueba la búsqueda de productos sin afectar a clientes reales |
+| `GET /admin/test-search?q=XXXX&key=YYYY` | Prueba la búsqueda de productos sin afectar a clientes reales |
 | `GET /admin/release/:userId` | Libera un handoff manual de Eliana (vuelve el bot a atender) y marca para pedir rating |
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
@@ -121,7 +127,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v56 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v57 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -135,7 +141,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v56 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v57 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.

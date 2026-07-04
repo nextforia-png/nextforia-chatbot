@@ -1,14 +1,20 @@
 const express = require("express");
 const axios = require("axios");
+const crypto = require("crypto");
 const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 
 const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v56";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v57";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
+const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
+const DASHBOARD_ROLES = { viewer: 1, agent: 2, admin: 3 };
+const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
+const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || DASHBOARD_KEY;
+const DASHBOARD_SESSION_TTL_HOURS = Math.max(1, Number(process.env.DASHBOARD_SESSION_TTL_HOURS || 12));
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const SUPABASE_TABLE = "conversation_logs";
@@ -1947,12 +1953,185 @@ app.post("/webhook", async (req, res) => {
 
 // ─── ADMIN ENDPOINTS ─────────────────────────────────────────────────────────
 
-function adminKeyOk(req) {
-  return req.query.key === DASHBOARD_KEY || req.get("x-dashboard-key") === DASHBOARD_KEY;
+function cleanDashboardRole(role) {
+  const value = String(role || "agent").trim().toLowerCase();
+  return DASHBOARD_ROLES[value] ? value : "agent";
 }
 
+function parseDashboardUsers(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    const list = Array.isArray(parsed)
+      ? parsed
+      : Object.keys(parsed || {}).map(username => Object.assign({ username }, parsed[username]));
+    return list.map(user => ({
+      username: String(user.username || user.user || "").trim(),
+      password: String(user.password || user.pass || "").trim(),
+      name: String(user.name || user.username || user.user || "").trim(),
+      role: cleanDashboardRole(user.role)
+    })).filter(user => user.username && user.password);
+  } catch (_) {
+    return value.split(/[,\n;]/).map(chunk => {
+      const parts = chunk.split(":");
+      return {
+        username: String(parts[0] || "").trim(),
+        password: String(parts[1] || "").trim(),
+        role: cleanDashboardRole(parts[2] || "agent"),
+        name: String(parts[3] || parts[0] || "").trim()
+      };
+    }).filter(user => user.username && user.password);
+  }
+}
+
+function safeEqualText(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function parseCookies(header) {
+  const cookies = {};
+  String(header || "").split(";").forEach(part => {
+    const idx = part.indexOf("=");
+    if (idx < 0) return;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (key) {
+      try { cookies[key] = decodeURIComponent(val); }
+      catch (_) { cookies[key] = val; }
+    }
+  });
+  return cookies;
+}
+
+function signDashboardPayload(payload) {
+  return crypto.createHmac("sha256", DASHBOARD_SESSION_SECRET).update(payload).digest("base64url");
+}
+
+function createDashboardSession(user) {
+  const payload = Buffer.from(JSON.stringify({
+    u: user.username,
+    n: user.name || user.username,
+    r: cleanDashboardRole(user.role),
+    exp: Date.now() + DASHBOARD_SESSION_TTL_HOURS * 60 * 60 * 1000
+  })).toString("base64url");
+  return payload + "." + signDashboardPayload(payload);
+}
+
+function readDashboardSession(req) {
+  const token = parseCookies(req.get("cookie"))[DASHBOARD_SESSION_COOKIE];
+  if (!token || token.indexOf(".") < 0) return null;
+  const parts = token.split(".");
+  const payload = parts[0];
+  const sig = parts[1];
+  if (!safeEqualText(sig, signDashboardPayload(payload))) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (!session.exp || session.exp < Date.now()) return null;
+    return {
+      ok: true,
+      username: String(session.u || "usuario"),
+      name: String(session.n || session.u || "usuario"),
+      role: cleanDashboardRole(session.r),
+      method: "session"
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function dashboardCookieOptions(req, maxAgeSeconds) {
+  const secure = req.secure || req.get("x-forwarded-proto") === "https" || process.env.NODE_ENV === "production";
+  return [
+    DASHBOARD_SESSION_COOKIE,
+    "=",
+    maxAgeSeconds > 0 ? "" : "",
+    "; Path=/admin",
+    "; HttpOnly",
+    "; SameSite=Lax",
+    secure ? "; Secure" : "",
+    "; Max-Age=" + Math.max(0, maxAgeSeconds)
+  ].join("");
+}
+
+function setDashboardSessionCookie(req, res, user) {
+  const token = createDashboardSession(user);
+  res.setHeader("Set-Cookie", DASHBOARD_SESSION_COOKIE + "=" + encodeURIComponent(token) + dashboardCookieOptions(req, DASHBOARD_SESSION_TTL_HOURS * 60 * 60).replace(DASHBOARD_SESSION_COOKIE + "=", ""));
+}
+
+function clearDashboardSessionCookie(req, res) {
+  res.setHeader("Set-Cookie", dashboardCookieOptions(req, 0));
+}
+
+function dashboardUserFromCredentials(username, password) {
+  const cleanUser = String(username || "").trim();
+  const cleanPass = String(password || "");
+  return DASHBOARD_USERS.find(user => user.username === cleanUser && safeEqualText(user.password, cleanPass)) || null;
+}
+
+function dashboardAuth(req) {
+  if (req.query.key === DASHBOARD_KEY || req.get("x-dashboard-key") === DASHBOARD_KEY) {
+    return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "admin", method: "key" };
+  }
+  return readDashboardSession(req) || { ok: false, role: "none" };
+}
+
+function adminAuthOk(req, minRole = "viewer") {
+  const auth = dashboardAuth(req);
+  const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
+  const actual = DASHBOARD_ROLES[auth.role] || 0;
+  return !!auth.ok && actual >= required;
+}
+
+function adminKeyOk(req) {
+  return adminAuthOk(req, "viewer");
+}
+
+app.post("/admin/login", (req, res) => {
+  const username = String(req.body && req.body.username || "").trim();
+  const password = String(req.body && req.body.password || "");
+  const key = String(req.body && req.body.key || "").trim();
+
+  if (key && safeEqualText(key, DASHBOARD_KEY)) {
+    const user = { username: "clave-maestra", name: "Clave maestra", role: "admin" };
+    setDashboardSessionCookie(req, res, user);
+    res.json({ ok: true, user: { username: user.username, name: user.name, role: user.role, method: "key" } });
+    return;
+  }
+
+  const user = dashboardUserFromCredentials(username, password);
+  if (!user) {
+    res.status(401).json({ ok: false, error: "invalid_credentials" });
+    return;
+  }
+  setDashboardSessionCookie(req, res, user);
+  res.json({ ok: true, user: { username: user.username, name: user.name, role: user.role, method: "session" } });
+});
+
+app.post("/admin/logout", (req, res) => {
+  clearDashboardSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/admin/session", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok) {
+    res.status(401).json({ ok: false, error: "unauthorized", users_enabled: DASHBOARD_USERS.length > 0 });
+    return;
+  }
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    users_enabled: DASHBOARD_USERS.length > 0,
+    user: { username: auth.username, name: auth.name, role: auth.role, method: auth.method }
+  });
+});
+
 app.get("/admin/release/:userId", (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -1969,7 +2148,7 @@ app.get("/admin/release/:userId", (req, res) => {
 });
 
 app.post("/admin/takeover/:userId", (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -1984,7 +2163,7 @@ app.post("/admin/takeover/:userId", (req, res) => {
 });
 
 app.post("/admin/send-message", async (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2024,7 +2203,7 @@ app.get("/admin/customer-meta", async (req, res) => {
 });
 
 app.post("/admin/customer-meta/:userId", (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2071,6 +2250,10 @@ app.post("/admin/template-test", async (req, res) => {
   const templateName = String(req.body && req.body.templateName || "").trim();
   const params = (req.body && (req.body.params || req.body.bodyParams)) || {};
   const shouldSend = req.body && req.body.send === true;
+  if (shouldSend && !adminAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
 
   if (!templateName) {
     res.status(400).json({ ok: false, error: "missing_template_name" });
@@ -2096,7 +2279,7 @@ app.post("/admin/template-test", async (req, res) => {
 });
 
 app.get("/admin/reset-checkout/:userId", (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2133,6 +2316,7 @@ const PORT = process.env.PORT || 3000;
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
 function renderAdminLogin(res, targetPath) {
   const target = JSON.stringify(targetPath || "/admin/dashboard");
+  const usersEnabled = DASHBOARD_USERS.length > 0;
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2142,24 +2326,40 @@ function renderAdminLogin(res, targetPath) {
 .box{width:min(420px,100%);background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:22px;box-shadow:0 12px 28px rgba(31,42,68,.08)}
 h1{font-size:18px;margin:0 0 6px}p{font-size:13px;color:#6B7280;margin:0 0 18px;line-height:1.5}
 label{display:block;font-size:12px;color:#475569;margin-bottom:6px}input{width:100%;border:1px solid #CBD5E1;border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px}
-button{width:100%;border:1px solid #0F766E;background:#0F766E;color:#fff;border-radius:8px;padding:10px 12px;font-size:14px;cursor:pointer}.hint{font-size:11px;color:#94A3B8;margin-top:12px;text-align:center}
+button{width:100%;border:1px solid #0F766E;background:#0F766E;color:#fff;border-radius:8px;padding:10px 12px;font-size:14px;cursor:pointer}.hint{font-size:11px;color:#94A3B8;margin-top:12px;text-align:center}.err{font-size:12px;color:#B94723;margin-top:10px;min-height:18px}
 </style></head><body>
 <form class="box" onsubmit="go(event)">
   <h1>Panel RAV Toys</h1>
-  <p>Ingresa la clave del dashboard para ver métricas, conversaciones e intervención humana.</p>
-  <label for="key">Clave del dashboard</label>
-  <input id="key" type="password" autocomplete="current-password" autofocus>
+  <p>${usersEnabled ? "Ingresa con tu usuario del equipo para ver métricas, conversaciones e intervención humana." : "Ingresa la clave del dashboard para ver métricas, conversaciones e intervención humana."}</p>
+  ${usersEnabled ? '<label for="username">Usuario</label><input id="username" type="text" autocomplete="username" autofocus>' : ''}
+  <label for="password">${usersEnabled ? "Clave" : "Clave del dashboard"}</label>
+  <input id="password" type="password" autocomplete="current-password" ${usersEnabled ? "" : "autofocus"}>
   <button type="submit">Entrar</button>
-  <div class="hint">Si la clave es correcta, el panel se abrirá automáticamente.</div>
+  <div class="err" id="err"></div>
+  <div class="hint">${usersEnabled ? "Los accesos quedan separados por rol del equipo." : "Si la clave es correcta, el panel se abrirá automáticamente."}</div>
 </form>
 <script>
 var target=${target};
+var usersEnabled=${JSON.stringify(usersEnabled)};
 var stored="";try{stored=localStorage.getItem("rav_dashboard_key")||"";}catch(e){}
-function destination(key){var url=target;if(url==="/admin/dashboard"){url="/admin/dashboard?tab=human";}var sep=url.indexOf("?")>=0?"&":"?";return url+sep+"key="+encodeURIComponent(key);}
+function baseDestination(){var url=target;if(url==="/admin/dashboard"){url="/admin/dashboard?tab=human";}return url;}
+function destination(key){var url=baseDestination();if(!key)return url;var sep=url.indexOf("?")>=0?"&":"?";return url+sep+"key="+encodeURIComponent(key);}
 var hasKey=false;try{hasKey=new URL(location.href).searchParams.has("key");}catch(e){}
-if(!hasKey&&stored){location.href=destination(stored);}
-if(stored){document.getElementById("key").value=stored;}
-function go(e){e.preventDefault();var key=document.getElementById("key").value.trim();if(!key)return;try{localStorage.setItem("rav_dashboard_key",key);}catch(err){}location.href=destination(key);}
+if(!usersEnabled&&!hasKey&&stored){location.href=destination(stored);}
+if(!usersEnabled&&stored){document.getElementById("password").value=stored;}
+function showError(msg){document.getElementById("err").textContent=msg||"";}
+function go(e){
+  e.preventDefault();showError("");
+  var usernameEl=document.getElementById("username"),username=usernameEl?usernameEl.value.trim():"";
+  var password=document.getElementById("password").value.trim();
+  if(!password)return;
+  if(usersEnabled&&username){
+    fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:username,password:password})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"No autorizado");return j;});}).then(function(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}location.href=destination("");}).catch(function(){showError("Usuario o clave incorrectos.");});
+    return;
+  }
+  try{localStorage.setItem("rav_dashboard_key",password);}catch(err){}
+  fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:password})}).finally(function(){location.href=destination(password);});
+}
 </script></body></html>`);
 }
 
@@ -2173,13 +2373,16 @@ app.get("/admin/dashboard", (req, res) => {
     renderAdminLogin(res, "/admin/dashboard?tab=" + loginTab);
     return;
   }
+  const auth = dashboardAuth(req);
   const pageKey = JSON.stringify(req.query.key || "");
   const rawKey = encodeURIComponent(String(req.query.key || ""));
+  const pageUser = JSON.stringify(auth.name || auth.username || "Panel");
+  const pageRole = JSON.stringify(auth.role || "admin");
   const initialTab = req.query.tab === "human" ? "human" : "summary";
   const summaryActive = initialTab === "summary" ? " active" : "";
   const humanActive = initialTab === "human" ? " active" : "";
-  const summaryHref = "/admin/dashboard?key=" + rawKey + "&tab=summary";
-  const humanHref = "/admin/dashboard?key=" + rawKey + "&tab=human";
+  const summaryHref = "/admin/dashboard?" + (rawKey ? "key=" + rawKey + "&" : "") + "tab=summary";
+  const humanHref = "/admin/dashboard?" + (rawKey ? "key=" + rawKey + "&" : "") + "tab=human";
   res.setHeader("content-type", "text/html; charset=utf-8");
   res.send(`
 <!doctype html>
@@ -2219,6 +2422,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .panel{background:#fff;border-radius:12px;padding:16px 18px;border:0.5px solid #E5E8EC}
 .panel h3{font-size:14px;font-weight:600;margin-bottom:10px}
 .badge{font-size:11px;color:#9AA0A6;background:#F4F5F7;padding:3px 10px;border-radius:10px}
+.roleBadge{font-size:11px;color:#475569;background:#F4F5F7;border:1px solid #E5E8EC;padding:6px 10px;border-radius:8px}
 .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:11px;color:#6B7280}
 .legend span{display:flex;align-items:center;gap:4px}
 .dot{width:9px;height:9px;border-radius:2px;display:inline-block}
@@ -2245,7 +2449,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 @media(max-width:760px){.charts{grid-template-columns:1fr}}
 @media(max-width:760px){.opsShell{grid-template-columns:1fr}.opsThreads{height:240px;border-right:0;border-bottom:1px solid #E5E8EC}.opsMessages{min-height:320px}.opsBubble{max-width:92%}.opsComposer{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
-<div class="headcard"><div class="brand"><div class="logo" id="logo" onclick="changeLogo()" title="Clic para cambiar el logo">RAV<div class="pencil">&#9998;</div></div><div><h1>RAV Toys · Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="btns"><div class="btn" id="evalBtn" onclick="runEval()">&#10024; Evaluar ahora</div><div class="btn" onclick="location.reload()">&#8635; Actualizar</div></div></div>
+<div class="headcard"><div class="brand"><div class="logo" id="logo" onclick="changeLogo()" title="Clic para cambiar el logo">RAV<div class="pencil">&#9998;</div></div><div><h1>RAV Toys · Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="btns"><span class="roleBadge" id="roleBadge"></span><div class="btn" id="evalBtn" onclick="runEval()">&#10024; Evaluar ahora</div><div class="btn" onclick="location.reload()">&#8635; Actualizar</div><div class="btn" onclick="logoutDashboard()">Salir</div></div></div>
 <div class="tabs" role="tablist"><a class="tabBtn${summaryActive}" id="tab-summary" href="${summaryHref}" onclick="showTab('summary');return false;">Resumen</a><a class="tabBtn${humanActive}" id="tab-human" href="${humanHref}" onclick="showTab('human');return false;">Intervención humana</a></div>
 <section class="tabPanel${summaryActive}" id="panel-summary">
 <div class="grid">
@@ -2273,8 +2477,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 </div>
 <script>
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
-var DASHBOARD_KEY=${pageKey}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={}, opsFilterMode="all", opsLastHealth=null, opsCustomerMeta={}, opsAllowedTags=[{id:"venta",label:"Venta"},{id:"garantia",label:"Garantia"},{id:"pendiente_pago",label:"Pendiente pago"},{id:"envio",label:"Envio"},{id:"revisar",label:"Revisar"}], opsDraftTags=[], opsMetaDirty=false, opsMetaDirtyUser=null;
+var DASHBOARD_KEY=${pageKey}, DASHBOARD_USER=${pageUser}, DASHBOARD_ROLE=${pageRole}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={}, opsFilterMode="all", opsLastHealth=null, opsCustomerMeta={}, opsAllowedTags=[{id:"venta",label:"Venta"},{id:"garantia",label:"Garantia"},{id:"pendiente_pago",label:"Pendiente pago"},{id:"envio",label:"Envio"},{id:"revisar",label:"Revisar"}], opsDraftTags=[], opsMetaDirty=false, opsMetaDirtyUser=null;
 var chartLibPromise=null;
+function canOpsWrite(){return DASHBOARD_ROLE==="agent"||DASHBOARD_ROLE==="admin";}
+function canAdmin(){return DASHBOARD_ROLE==="admin";}
+function initRoleBadge(){var el=document.getElementById("roleBadge");if(el)el.textContent=(DASHBOARD_USER||"Panel")+" · "+DASHBOARD_ROLE;var ev=document.getElementById("evalBtn");if(ev&&!canAdmin()){ev.style.opacity=".45";ev.title="Solo admin";}}
+function logoutDashboard(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
 function initTabs(){var tab="summary";try{tab=new URL(location.href).searchParams.get("tab")||localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab==="human"?"human":"summary");}
@@ -2314,7 +2522,7 @@ function setOpsFilterButtons(){var map={all:"opsModeAll",pending:"opsModePending
 function selectOpsThread(id){opsSelected=id;opsMetaDirty=false;opsMetaDirtyUser=null;renderOpsThreads();renderOpsChat();}
 function renderOpsChat(){
 var ms=opsGroups[opsSelected]||[],info=opsSelected?opsThreadInfo(opsSelected):{},title=document.getElementById("opsTitle"),sub=document.getElementById("opsSub");if(title)title.textContent=opsSelected?("+"+opsSelected):"Selecciona una conversación";if(sub)sub.textContent=opsSelected?(info.needsReply?"Pendiente de respuesta humana.":(info.active?"Control humano activo. El bot no responderá.":"Bot activo. Puedes tomar control o responder directamente.")):"El control humano pausa las respuestas automáticas del bot.";
-var take=document.getElementById("opsTakeBtn"),rel=document.getElementById("opsReleaseBtn"),send=document.getElementById("opsSendBtn"),copy=document.getElementById("opsCopyBtn");if(take)take.disabled=!opsSelected||!!opsHandoffs[opsSelected];if(rel)rel.disabled=!opsSelected||!opsHandoffs[opsSelected];if(send)send.disabled=!opsSelected;if(copy)copy.disabled=!opsSelected;updateOpsChar();
+var canWrite=canOpsWrite(),take=document.getElementById("opsTakeBtn"),rel=document.getElementById("opsReleaseBtn"),send=document.getElementById("opsSendBtn"),copy=document.getElementById("opsCopyBtn"),reply=document.getElementById("opsReply");if(take)take.disabled=!canWrite||!opsSelected||!!opsHandoffs[opsSelected];if(rel)rel.disabled=!canWrite||!opsSelected||!opsHandoffs[opsSelected];if(send)send.disabled=!canWrite||!opsSelected;if(reply)reply.disabled=!canWrite||!opsSelected;if(copy)copy.disabled=!opsSelected;updateOpsChar();
 renderOpsMetaPanel();
 var html="";ms.forEach(function(t){if(t.userMessage){html+="<div class='opsBubble opsIncoming'>"+opsEsc(t.userMessage)+"<div class='opsMeta'>Cliente · "+opsWhen(t.ts)+"</div></div>";}if(t.botReply){var isHuman=t.botReply.indexOf("[Humano]")===0;var body=isHuman?t.botReply.replace("[Humano]","").trim():t.botReply;html+="<div class='opsBubble "+(isHuman?"opsHuman":"opsBot")+"'>"+opsEsc(body)+"<div class='opsMeta'>"+(isHuman?"Humano":"Bot")+" · "+opsWhen(t.ts)+"</div></div>";}if(t.tools&&t.tools.length){html+="<div class='opsTools'>"+opsEsc(t.tools.join(", "))+"</div>";}});
 var box=document.getElementById("opsMessages");if(box){box.innerHTML=html||"<div class='opsEmpty'>No hay mensajes para este cliente.</div>";box.scrollTop=box.scrollHeight;}
@@ -2322,26 +2530,26 @@ var box=document.getElementById("opsMessages");if(box){box.innerHTML=html||"<div
 function renderOpsMetaPanel(){
 var tagsEl=document.getElementById("opsTags"),noteEl=document.getElementById("opsNote"),saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");
 if(!tagsEl||!noteEl||!saveEl||!statusEl)return;
-if(opsSelected&&opsMetaDirty&&opsMetaDirtyUser===opsSelected){saveEl.disabled=false;return;}
+if(opsSelected&&opsMetaDirty&&opsMetaDirtyUser===opsSelected){saveEl.disabled=!canOpsWrite();return;}
 var meta=opsSelected?opsMetaFor(opsSelected):{tags:[],note:""};
 opsDraftTags=(meta.tags||[]).slice();
-tagsEl.innerHTML=(opsAllowedTags||[]).map(function(tag){var active=opsDraftTags.indexOf(tag.id)>=0;return "<button type='button' class='opsTag"+(active?" active":"")+"' data-tag='"+opsAttr(tag.id)+"' onclick='toggleOpsTag(this.getAttribute(&quot;data-tag&quot;))' "+(!opsSelected?"disabled":"")+">"+opsEsc(tag.label)+"</button>";}).join("");
+tagsEl.innerHTML=(opsAllowedTags||[]).map(function(tag){var active=opsDraftTags.indexOf(tag.id)>=0;return "<button type='button' class='opsTag"+(active?" active":"")+"' data-tag='"+opsAttr(tag.id)+"' onclick='toggleOpsTag(this.getAttribute(&quot;data-tag&quot;))' "+(!opsSelected||!canOpsWrite()?"disabled":"")+">"+opsEsc(tag.label)+"</button>";}).join("");
 noteEl.value=opsSelected?(meta.note||""):"";
-noteEl.disabled=!opsSelected;saveEl.disabled=true;statusEl.textContent=opsSelected?(meta.updated_at?("Guardado "+opsWhen(meta.updated_at)):"Sin nota guardada"):"Selecciona una conversación.";
+noteEl.disabled=!opsSelected||!canOpsWrite();saveEl.disabled=true;statusEl.textContent=opsSelected?(!canOpsWrite()?"Solo lectura":(meta.updated_at?("Guardado "+opsWhen(meta.updated_at)):"Sin nota guardada")):"Selecciona una conversación.";
 }
-function markOpsMetaDirty(){opsMetaDirty=!!opsSelected;opsMetaDirtyUser=opsSelected;var saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");if(saveEl)saveEl.disabled=!opsSelected;if(statusEl&&opsSelected)statusEl.textContent="Cambios sin guardar.";}
-function toggleOpsTag(tag){if(!opsSelected)return;var idx=opsDraftTags.indexOf(tag);if(idx>=0)opsDraftTags.splice(idx,1);else opsDraftTags.push(tag);var buttons=document.querySelectorAll(".opsTag");for(var i=0;i<buttons.length;i++){buttons[i].classList.toggle("active",opsDraftTags.indexOf(buttons[i].getAttribute("data-tag"))>=0);}markOpsMetaDirty();}
-function saveOpsMeta(){if(!opsSelected)return;var note=(document.getElementById("opsNote").value||"").trim(),saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");if(saveEl)saveEl.disabled=true;if(statusEl)statusEl.textContent="Guardando...";adminApi("/admin/customer-meta/"+encodeURIComponent(opsSelected),{method:"POST",body:JSON.stringify({tags:opsDraftTags,note:note})}).then(function(r){opsCustomerMeta[opsSelected]=r.meta||{tags:opsDraftTags,note:note};opsMetaDirty=false;opsMetaDirtyUser=null;if(statusEl)statusEl.textContent="Guardado "+opsWhen((r.meta||{}).updated_at);renderOpsThreads();}).catch(function(e){if(statusEl)statusEl.textContent="Error: "+e.message;if(saveEl)saveEl.disabled=false;});}
+function markOpsMetaDirty(){if(!canOpsWrite())return;opsMetaDirty=!!opsSelected;opsMetaDirtyUser=opsSelected;var saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");if(saveEl)saveEl.disabled=!opsSelected;if(statusEl&&opsSelected)statusEl.textContent="Cambios sin guardar.";}
+function toggleOpsTag(tag){if(!opsSelected||!canOpsWrite())return;var idx=opsDraftTags.indexOf(tag);if(idx>=0)opsDraftTags.splice(idx,1);else opsDraftTags.push(tag);var buttons=document.querySelectorAll(".opsTag");for(var i=0;i<buttons.length;i++){buttons[i].classList.toggle("active",opsDraftTags.indexOf(buttons[i].getAttribute("data-tag"))>=0);}markOpsMetaDirty();}
+function saveOpsMeta(){if(!opsSelected||!canOpsWrite())return;var note=(document.getElementById("opsNote").value||"").trim(),saveEl=document.getElementById("opsSaveMetaBtn"),statusEl=document.getElementById("opsMetaStatus");if(saveEl)saveEl.disabled=true;if(statusEl)statusEl.textContent="Guardando...";adminApi("/admin/customer-meta/"+encodeURIComponent(opsSelected),{method:"POST",body:JSON.stringify({tags:opsDraftTags,note:note})}).then(function(r){opsCustomerMeta[opsSelected]=r.meta||{tags:opsDraftTags,note:note};opsMetaDirty=false;opsMetaDirtyUser=null;if(statusEl)statusEl.textContent="Guardado "+opsWhen((r.meta||{}).updated_at);renderOpsThreads();}).catch(function(e){if(statusEl)statusEl.textContent="Error: "+e.message;if(saveEl)saveEl.disabled=false;});}
 function copyOpsPhone(){if(!opsSelected)return;var value="+"+opsSelected;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(value).then(function(){document.getElementById("opsStatus").textContent="Número copiado.";}).catch(function(){document.getElementById("opsStatus").textContent=value;});}else{document.getElementById("opsStatus").textContent=value;}}
 function updateOpsChar(){var el=document.getElementById("opsReply"),out=document.getElementById("opsChar");if(out)out.textContent=((el&&el.value)||"").length+"/1200";}
-function takeOpsControl(){if(!opsSelected)return;adminApi("/admin/takeover/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent="Control humano activo.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
-function releaseOpsControl(){if(!opsSelected)return;adminApi("/admin/release/"+encodeURIComponent(opsSelected)).then(function(){opsHandoffs[opsSelected]=false;document.getElementById("opsStatus").textContent="Conversación devuelta al bot.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
-function sendOpsReply(){if(!opsSelected)return;var text=(document.getElementById("opsReply").value||"").trim();if(!text){document.getElementById("opsStatus").textContent="Escribe un mensaje antes de enviar.";return;}document.getElementById("opsSendBtn").disabled=true;document.getElementById("opsStatus").textContent="Enviando...";adminApi("/admin/send-message",{method:"POST",body:JSON.stringify({userId:opsSelected,text:text})}).then(function(r){document.getElementById("opsReply").value="";updateOpsChar();opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent=r.ok?"Mensaje enviado.":"Meta no confirmó el envío.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;document.getElementById("opsSendBtn").disabled=false;});}
+function takeOpsControl(){if(!opsSelected||!canOpsWrite())return;adminApi("/admin/takeover/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent="Control humano activo.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
+function releaseOpsControl(){if(!opsSelected||!canOpsWrite())return;adminApi("/admin/release/"+encodeURIComponent(opsSelected)).then(function(){opsHandoffs[opsSelected]=false;document.getElementById("opsStatus").textContent="Conversación devuelta al bot.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
+function sendOpsReply(){if(!opsSelected||!canOpsWrite()){document.getElementById("opsStatus").textContent="Usuario solo lectura.";return;}var text=(document.getElementById("opsReply").value||"").trim();if(!text){document.getElementById("opsStatus").textContent="Escribe un mensaje antes de enviar.";return;}document.getElementById("opsSendBtn").disabled=true;document.getElementById("opsStatus").textContent="Enviando...";adminApi("/admin/send-message",{method:"POST",body:JSON.stringify({userId:opsSelected,text:text})}).then(function(r){document.getElementById("opsReply").value="";updateOpsChar();opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent=r.ok?"Mensaje enviado.":"Meta no confirmó el envío.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;document.getElementById("opsSendBtn").disabled=false;});}
 document.addEventListener("keydown",function(e){var el=document.getElementById("opsReply");if(el&&document.activeElement===el&&(e.metaKey||e.ctrlKey)&&e.key==="Enter"){sendOpsReply();}});
 function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
 function initLogo(){var el=document.getElementById("logo");var url=null;try{url=localStorage.getItem("rav_logo");}catch(e){}if(url){el.innerHTML="<img src='"+url+"' alt='logo'><div class='pencil'>&#9998;</div>";}}
 function changeLogo(){var cur="";try{cur=localStorage.getItem("rav_logo")||"";}catch(e){}var url=prompt("Pega la URL de la imagen de tu logo (deja vacío para volver al texto RAV):",cur);if(url===null)return;try{if(url.trim()===""){localStorage.removeItem("rav_logo");document.getElementById("logo").innerHTML="RAV<div class='pencil'>&#9998;</div>";}else{localStorage.setItem("rav_logo",url.trim());initLogo();}}catch(e){}}
-function runEval(){var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}adminApi("/admin/evaluate?limit=30").then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
+function runEval(){if(!canAdmin())return;var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}adminApi("/admin/evaluate?limit=30").then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
 function refreshOpsHealth(){var el=document.getElementById("opsHealth");if(el&&!opsLastHealth){el.textContent="verificando...";el.className="badge opsHealth";}adminApi("/admin/health").then(function(h){opsLastHealth=h;var ready=h.production_readiness&&h.production_readiness.infrastructure_ready;var blockers=(h.production_readiness&&h.production_readiness.blockers)||[];if(!el)return;el.className="badge opsHealth "+(ready?"ok":(blockers.length?"err":"warn"));el.textContent=ready?"Infra OK":("Revisar: "+(blockers.slice(0,2).join(", ")||"salud"));}).catch(function(){if(el){el.className="badge opsHealth err";el.textContent="Salud no disponible";}});}
 function go(attempt){
 attempt=attempt||0;
@@ -2439,7 +2647,7 @@ try {
   }
 } catch(e){}
 }
-initLogo();initTabs();go();refreshOpsHealth();setInterval(go,30000);setInterval(refreshOpsHealth,120000);
+initLogo();initRoleBadge();initTabs();go();refreshOpsHealth();setInterval(go,30000);setInterval(refreshOpsHealth,120000);
 </script>
 </body></html>`);
 });
@@ -2593,7 +2801,8 @@ app.get("/admin/health", async (req, res) => {
       phone_number_id: PHONE_NUMBER_ID,
       shopify_domain: SHOPIFY_STORE_DOMAIN,
       shopify_admin_api_version: SHOPIFY_ADMIN_API_VERSION,
-      notification_phones_count: NOTIFICATION_PHONES.length
+      notification_phones_count: NOTIFICATION_PHONES.length,
+      dashboard_users_count: DASHBOARD_USERS.length
     },
     state: {
       active_handoffs: humanHandoff.size,
@@ -2649,7 +2858,7 @@ app.get("/admin/health", async (req, res) => {
 });
 
 app.post("/admin/alert", async (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2680,7 +2889,7 @@ app.post("/admin/alert", async (req, res) => {
 });
 
 app.get("/admin/smoke-check", async (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2760,7 +2969,7 @@ app.get("/admin/smoke-check", async (req, res) => {
 });
 
 app.post("/admin/order-status-test", async (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2831,7 +3040,7 @@ async function evaluateTurn(turn) {
 // Endpoint: evalúa bajo demanda los turnos que aún no tienen evaluación.
 // ?limit=N (default 10, máx 30) para controlar costo/tiempo por corrida.
 app.get("/admin/evaluate", async (req, res) => {
-  if (!adminKeyOk(req)) {
+  if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -2975,6 +3184,10 @@ app.get("/admin/stats", async (req, res) => {
 // Test search: yo (Claude) lo uso ANTES de avisarte que cambios de búsqueda
 // están listos. Te permite verificar tú mismo abriendo una URL.
 app.get("/admin/test-search", async (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
   const q = req.query.q || "";
   if (!q) {
     res.status(400).json({ error: "Missing query param: ?q=..." });

@@ -1,6 +1,6 @@
 # TODO RAV WhatsApp Bot
 
-Backlog operativo despues de dejar App Review enviada y produccion en `v57`.
+Backlog operativo despues de dejar App Review enviada y produccion en `v58`.
 
 ## En curso
 
@@ -53,10 +53,12 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v57`.
 ## Media prioridad
 
 - [ ] Preparar comercializacion del modelo.
-  - Demo limpia.
-  - Pitch de 1 pagina.
-  - Pricing inicial.
-  - Checklist de onboarding para futuros clientes.
+  - [ ] Demo limpia.
+  - [ ] Pitch de 1 pagina.
+  - [ ] Pricing inicial.
+  - [x] Checklist de onboarding para futuros clientes.
+  - [x] Roadmap multi-cliente.
+  - Estado 2026-07-07: `v58` agrega `docs/commercial-onboarding.md`, `docs/multi-tenant-roadmap.md` y endpoint `/admin/commercial-readiness`.
   - Done: paquete listo para mostrar a un comercio piloto.
 
 - [ ] Mejorar capacidades del bot.

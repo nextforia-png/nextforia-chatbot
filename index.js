@@ -2,12 +2,13 @@ const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
 const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
+const COMMERCIAL_READINESS = require("./commercial-readiness");
 
 const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v57";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v58";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2238,6 +2239,34 @@ app.get("/admin/templates", (req, res) => {
         requiresOptOut: !!template.requiresOptOut
       };
     })
+  });
+});
+
+app.get("/admin/commercial-readiness", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const stages = COMMERCIAL_READINESS.stages || [];
+  const readyCount = stages.filter(stage => stage.status === "ready").length;
+  const waitingCount = stages.filter(stage => stage.status === "waiting_meta").length;
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    readiness_version: COMMERCIAL_READINESS.version,
+    summary: {
+      stages_total: stages.length,
+      ready_stages: readyCount,
+      waiting_meta_stages: waitingCount,
+      next_best_work: "Crear tenant/configuracion por cliente y checklist visual de onboarding."
+    },
+    current_blocker: {
+      kind: "external_meta_review",
+      detail: "La app NexforIA/RAV sigue esperando aprobacion de permisos WhatsApp antes de operar clientes reales a escala."
+    },
+    stages,
+    default_roles: COMMERCIAL_READINESS.defaultRoles,
+    required_tenant_fields: COMMERCIAL_READINESS.requiredTenantFields
   });
 });
 

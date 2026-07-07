@@ -1,0 +1,120 @@
+# Roadmap multi-cliente
+
+El bot actual funciona como single-tenant para RAV Toys. Para comercializarlo, la meta es convertirlo en una plataforma donde cada comercio tenga configuracion, dashboard, WhatsApp, catalogo y reglas propias.
+
+## Estado actual
+
+- Un solo `PHONE_NUMBER_ID`.
+- Un solo `WA_TOKEN`.
+- Un solo `SHOPIFY_STORE_DOMAIN`.
+- Un solo `SHOPIFY_ADMIN_TOKEN`.
+- Un dashboard compartido, ya preparado con roles (`admin`, `agent`, `viewer`).
+- Logs persistentes en Supabase `conversation_logs`.
+
+## Objetivo de plataforma
+
+Cada mensaje entrante debe resolverse asi:
+
+```text
+Webhook Meta
+  -> identificar phone_number_id
+  -> cargar tenant
+  -> usar token/config del tenant
+  -> cargar prompt/reglas/catalogo del tenant
+  -> responder o pasar a humano
+  -> guardar logs con tenant_id
+```
+
+## Modelo recomendado
+
+### tenants
+
+| Campo | Uso |
+|---|---|
+| `tenant_id` | Slug interno, ejemplo `rav-toys` |
+| `brand_name` | Nombre visible del comercio |
+| `status` | `setup`, `pilot`, `live`, `paused` |
+| `business_manager_id` | ID del BM de Meta |
+| `waba_id` | WhatsApp Business Account |
+| `phone_number_id` | ID del numero en Cloud API |
+| `display_phone` | Numero visible |
+| `privacy_policy_url` | URL publica |
+| `created_at` | Auditoria |
+| `updated_at` | Auditoria |
+
+### tenant_secrets
+
+No deben ir en codigo. Guardar en Render env vars, Supabase Vault o gestor de secretos.
+
+| Campo | Uso |
+|---|---|
+| `tenant_id` | Relacion con tenant |
+| `wa_token` | Token Meta |
+| `shopify_admin_token` | Token Admin |
+| `anthropic_api_key` | Opcional por cliente si se factura separado |
+
+### tenant_integrations
+
+| Campo | Uso |
+|---|---|
+| `tenant_id` | Relacion con tenant |
+| `shopify_store_domain` | Dominio Shopify |
+| `shopify_admin_api_version` | Version Admin API |
+| `order_prefixes` | Prefijos tipo `RAV` |
+| `catalog_source` | `shopify`, `csv`, `api`, etc. |
+
+### tenant_users
+
+| Campo | Uso |
+|---|---|
+| `tenant_id` | Relacion con tenant |
+| `username` | Login |
+| `password_hash` | Hash, nunca texto plano |
+| `role` | `admin`, `agent`, `viewer` |
+| `active` | Control de acceso |
+
+### conversation_logs
+
+Agregar gradualmente:
+
+- `tenant_id`
+- `phone_number_id`
+- `channel`
+- `customer_id`
+
+## Fases tecnicas
+
+1. Fase A: simulacion multi-cliente
+   - Mantener RAV como tenant default.
+   - Agregar `tenant_id` a logs nuevos.
+   - Crear endpoint admin de readiness/comercializacion.
+   - Mantener variables actuales para no romper produccion.
+
+2. Fase B: configuracion por tenant
+   - Resolver tenant por `phone_number_id` del webhook.
+   - Mover Shopify/token/notificaciones a configuracion por tenant.
+   - Separar dashboard por tenant.
+
+3. Fase C: onboarding autoservicio
+   - Boton `Conectar WhatsApp`.
+   - Embedded Signup.
+   - Captura de WABA ID y phone_number_id.
+   - Checklist visual por cliente.
+
+4. Fase D: operacion comercial
+   - Facturacion por cliente.
+   - Staging por tenant.
+   - Export de metricas.
+   - SLA/monitoreo por cliente.
+
+## Riesgos que debemos controlar
+
+- Mezclar conversaciones de clientes distintos.
+- Exponer tokens o llaves en logs.
+- Enviar mensajes con el `phone_number_id` equivocado.
+- Permitir que una asesora vea tenants que no le corresponden.
+- Prometer tiempos que dependen de Meta.
+
+## Decision recomendada
+
+Antes de implementar Embedded Signup, completar Fase A y B. Eso permite vender demos, preparar pilotos y conectar clientes manualmente sin reescribir el bot completo.

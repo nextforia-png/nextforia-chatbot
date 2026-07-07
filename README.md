@@ -66,6 +66,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/customer-meta?key=XXXX` | Etiquetas y notas internas por cliente para el panel |
 | `POST /admin/customer-meta/:userId` | Guarda etiquetas/notas internas del cliente seleccionado |
 | `GET /admin/templates?key=XXXX` | Lista plantillas WhatsApp configuradas localmente |
+| `GET /admin/commercial-readiness?key=XXXX` | Checklist comercial/multi-cliente para preparar onboarding de futuros clientes |
 | `POST /admin/template-test` | Genera payload de plantilla o envia con `send: true` si ya fue aprobada |
 | `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
 | `POST /admin/order-status-test` | Prueba consulta de pedido Shopify con `order_number`, `customer_name`, `phone_or_email` opcional |
@@ -81,6 +82,8 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 
 - Plantillas WhatsApp iniciales: [`docs/whatsapp-templates.md`](docs/whatsapp-templates.md)
 - Playbook comercial para asesoras: [`docs/commercial-playbook.md`](docs/commercial-playbook.md)
+- Onboarding comercial para futuros clientes: [`docs/commercial-onboarding.md`](docs/commercial-onboarding.md)
+- Roadmap multi-cliente: [`docs/multi-tenant-roadmap.md`](docs/multi-tenant-roadmap.md)
 - Backlog priorizado: [`TODO.md`](TODO.md)
 
 ---

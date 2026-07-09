@@ -8,11 +8,50 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v58";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v59";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
-const DASHBOARD_ROLES = { viewer: 1, agent: 2, admin: 3 };
+const DASHBOARD_ROLES = { viewer: 1, agent: 2, admin: 3, super_admin: 4 };
+const DASHBOARD_ROLE_LABELS = {
+  viewer: "Viewer",
+  agent: "Agent",
+  admin: "Admin cliente",
+  super_admin: "Super admin NexforIA"
+};
+const DASHBOARD_ACCESS_MODEL = {
+  version: "2026-07-09",
+  current_mode: "single_tenant_rav",
+  future_panels: [
+    {
+      id: "client_admin",
+      label: "Admin",
+      owner: "Cliente",
+      roles: ["admin", "agent", "viewer"],
+      purpose: "Operacion diaria del comercio: metricas, conversaciones, intervencion humana, notas y pruebas controladas."
+    },
+    {
+      id: "platform_super_admin",
+      label: "Super admin",
+      owner: "NexforIA",
+      roles: ["super_admin"],
+      purpose: "Operacion de plataforma: tenants, integraciones, salud global, readiness comercial y configuracion tecnica sensible."
+    }
+  ],
+  roles: [
+    { role: "super_admin", level: 4, scope: "platform", owner: "NexforIA", purpose: "Administra todos los clientes, tenants, integraciones y herramientas sensibles." },
+    { role: "admin", level: 3, scope: "tenant", owner: "Cliente", purpose: "Administra el negocio asignado, usuarios operativos, metricas y pruebas del bot." },
+    { role: "agent", level: 2, scope: "tenant", owner: "Cliente", purpose: "Atiende chats, toma control humano, responde y guarda notas/etiquetas." },
+    { role: "viewer", level: 1, scope: "tenant", owner: "Cliente", purpose: "Consulta metricas y conversaciones sin intervenir." }
+  ],
+  migration_steps: [
+    "Mantener RAV Toys como tenant default.",
+    "Crear usuarios super_admin para NexforIA y admin/agent/viewer por cliente.",
+    "Separar visualmente el dashboard en Admin y Super admin.",
+    "Agregar tenant_id a logs, usuarios y configuracion.",
+    "Mover tokens e integraciones a configuracion por tenant antes de vender multi-cliente."
+  ]
+};
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || DASHBOARD_KEY;
 const DASHBOARD_SESSION_TTL_HOURS = Math.max(1, Number(process.env.DASHBOARD_SESSION_TTL_HOURS || 12));
@@ -2075,7 +2114,7 @@ function dashboardUserFromCredentials(username, password) {
 
 function dashboardAuth(req) {
   if (req.query.key === DASHBOARD_KEY || req.get("x-dashboard-key") === DASHBOARD_KEY) {
-    return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "admin", method: "key" };
+    return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "super_admin", method: "key" };
   }
   return readDashboardSession(req) || { ok: false, role: "none" };
 }
@@ -2097,7 +2136,7 @@ app.post("/admin/login", (req, res) => {
   const key = String(req.body && req.body.key || "").trim();
 
   if (key && safeEqualText(key, DASHBOARD_KEY)) {
-    const user = { username: "clave-maestra", name: "Clave maestra", role: "admin" };
+    const user = { username: "clave-maestra", name: "Clave maestra", role: "super_admin" };
     setDashboardSessionCookie(req, res, user);
     res.json({ ok: true, user: { username: user.username, name: user.name, role: user.role, method: "key" } });
     return;
@@ -2127,7 +2166,33 @@ app.get("/admin/session", (req, res) => {
     ok: true,
     bot_version: BOT_VERSION,
     users_enabled: DASHBOARD_USERS.length > 0,
+    access_model_version: DASHBOARD_ACCESS_MODEL.version,
     user: { username: auth.username, name: auth.name, role: auth.role, method: auth.method }
+  });
+});
+
+app.get("/admin/access-model", (req, res) => {
+  if (!adminKeyOk(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    access_model: DASHBOARD_ACCESS_MODEL,
+    current_user: {
+      username: auth.username,
+      name: auth.name,
+      role: auth.role,
+      role_label: DASHBOARD_ROLE_LABELS[auth.role] || auth.role,
+      method: auth.method
+    },
+    compatibility: {
+      current_dashboard_still_single_panel: true,
+      dashboard_key_maps_to: "super_admin",
+      admin_endpoints_accept_super_admin: true
+    }
   });
 });
 
@@ -2508,9 +2573,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 var TEAL="#1D9E75",AMBER="#EF9F27",CORAL="#D85A30",BLUE="#378ADD",GOOD="#5DCAA5",WARN="#FAC775",NEUTRAL="#D3D1C7";
 var DASHBOARD_KEY=${pageKey}, DASHBOARD_USER=${pageUser}, DASHBOARD_ROLE=${pageRole}, opsTurns=[], opsStats={}, opsGroups={}, opsOrder=[], opsSelected=null, opsHandoffs={}, opsFilterMode="all", opsLastHealth=null, opsCustomerMeta={}, opsAllowedTags=[{id:"venta",label:"Venta"},{id:"garantia",label:"Garantia"},{id:"pendiente_pago",label:"Pendiente pago"},{id:"envio",label:"Envio"},{id:"revisar",label:"Revisar"}], opsDraftTags=[], opsMetaDirty=false, opsMetaDirtyUser=null;
 var chartLibPromise=null;
-function canOpsWrite(){return DASHBOARD_ROLE==="agent"||DASHBOARD_ROLE==="admin";}
-function canAdmin(){return DASHBOARD_ROLE==="admin";}
-function initRoleBadge(){var el=document.getElementById("roleBadge");if(el)el.textContent=(DASHBOARD_USER||"Panel")+" · "+DASHBOARD_ROLE;var ev=document.getElementById("evalBtn");if(ev&&!canAdmin()){ev.style.opacity=".45";ev.title="Solo admin";}}
+function canOpsWrite(){return DASHBOARD_ROLE==="agent"||DASHBOARD_ROLE==="admin"||DASHBOARD_ROLE==="super_admin";}
+function canAdmin(){return DASHBOARD_ROLE==="admin"||DASHBOARD_ROLE==="super_admin";}
+function roleLabel(role){return role==="super_admin"?"Super admin":(role==="admin"?"Admin":(role==="agent"?"Agent":"Viewer"));}
+function initRoleBadge(){var el=document.getElementById("roleBadge");if(el)el.textContent=(DASHBOARD_USER||"Panel")+" · "+roleLabel(DASHBOARD_ROLE);var ev=document.getElementById("evalBtn");if(ev&&!canAdmin()){ev.style.opacity=".45";ev.title="Solo admin";}}
 function logoutDashboard(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}

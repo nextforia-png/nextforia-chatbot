@@ -43,7 +43,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DASHBOARD_KEY` | Clave para endpoints admin protegidos |
-| `DASHBOARD_USERS` | Usuarios del panel: `admin:clave:admin,eliana:clave:agent,visor:clave:viewer` o JSON equivalente |
+| `DASHBOARD_USERS` | Usuarios del panel: `nexforia:clave:super_admin,admin:clave:admin,eliana:clave:agent,visor:clave:viewer` o JSON equivalente |
 | `DASHBOARD_SESSION_SECRET` | Secreto para firmar cookies del panel; si falta usa `DASHBOARD_KEY` |
 | `DASHBOARD_SESSION_TTL_HOURS` | Duración de sesión del panel (default: `12`) |
 | `NOTIFICATION_PHONES` | Números a notificar (CSV sin +): `573013507371,573046653449` |
@@ -58,6 +58,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `POST /admin/login` | Crea sesión del dashboard por usuario/clave o clave maestra |
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
+| `GET /admin/access-model?key=XXXX` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify/Meta/Supabase y readiness de infraestructura |
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
@@ -84,6 +85,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 - Playbook comercial para asesoras: [`docs/commercial-playbook.md`](docs/commercial-playbook.md)
 - Onboarding comercial para futuros clientes: [`docs/commercial-onboarding.md`](docs/commercial-onboarding.md)
 - Roadmap multi-cliente: [`docs/multi-tenant-roadmap.md`](docs/multi-tenant-roadmap.md)
+- División futura Admin/Super admin: [`docs/admin-super-admin-split.md`](docs/admin-super-admin-split.md)
 - Informe ejecutivo para socios: [`docs/informe-socios-rav-whatsapp-bot.md`](docs/informe-socios-rav-whatsapp-bot.md)
 - Backlog priorizado: [`TODO.md`](TODO.md)
 

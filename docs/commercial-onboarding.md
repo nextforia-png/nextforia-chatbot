@@ -23,7 +23,7 @@ Objetivo: que un comercio nuevo pueda pasar de interes comercial a bot operativo
    - Crear tenant del cliente.
    - Configurar `phone_number_id`, WABA ID y token del cliente.
    - Configurar catalogo y pedidos.
-   - Crear usuarios del dashboard: `admin`, `agent`, `viewer`.
+   - Crear usuarios del dashboard: `super_admin` para NexforIA; `admin`, `agent`, `viewer` para el cliente.
    - Configurar alertas internas del cliente.
    - Cargar plantillas WhatsApp iniciales.
 
@@ -64,6 +64,9 @@ Objetivo: que un comercio nuevo pueda pasar de interes comercial a bot operativo
   "display_phone": "",
   "shopify_store_domain": "ravtoys.myshopify.com",
   "privacy_policy_url": "",
+  "platform_users": [
+    { "username": "nexforia", "role": "super_admin" }
+  ],
   "dashboard_users": [
     { "username": "admin", "role": "admin" },
     { "username": "asesora", "role": "agent" },

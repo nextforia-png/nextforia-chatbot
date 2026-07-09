@@ -66,6 +66,7 @@ const COMMERCIAL_READINESS = {
     }
   ],
   defaultRoles: [
+    { role: "super_admin", purpose: "Equipo NexforIA; administra tenants, integraciones, salud global y configuracion sensible de plataforma." },
     { role: "admin", purpose: "Duenos o lider operativo; configura usuarios, pruebas y metricas." },
     { role: "agent", purpose: "Asesora; toma control, responde chats y gestiona notas/etiquetas." },
     { role: "viewer", purpose: "Solo lectura; ve metricas y conversaciones sin intervenir." }

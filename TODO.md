@@ -43,11 +43,14 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v58`.
 
 - [ ] Hardening del panel.
   - [x] Usuarios/roles en vez de una sola clave compartida.
+  - [x] Base futura `super_admin` NexforIA vs `admin` del cliente.
   - [x] Notas internas por cliente.
   - [x] Etiquetas: `venta`, `garantia`, `pendiente_pago`, `envio`, `revisar`.
+  - Separar visualmente panel Admin y panel Super admin.
   - Historial por cliente con busqueda y paginacion.
   - Estado 2026-07-03: `v54` agrega notas/etiquetas en la tab Intervención humana, persistidas como eventos internos en `conversation_logs`.
   - Estado 2026-07-04: `v57` agrega login por usuarios `admin`/`agent`/`viewer` con cookie firmada, manteniendo `DASHBOARD_KEY` como clave maestra.
+  - Estado 2026-07-09: `v59` agrega rol `super_admin`, endpoint `/admin/access-model` y documento `docs/admin-super-admin-split.md`.
   - Done: panel listo para mas de una persona operando.
 
 ## Media prioridad

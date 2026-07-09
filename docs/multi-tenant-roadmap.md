@@ -8,7 +8,7 @@ El bot actual funciona como single-tenant para RAV Toys. Para comercializarlo, l
 - Un solo `WA_TOKEN`.
 - Un solo `SHOPIFY_STORE_DOMAIN`.
 - Un solo `SHOPIFY_ADMIN_TOKEN`.
-- Un dashboard compartido, ya preparado con roles (`admin`, `agent`, `viewer`).
+- Un dashboard compartido, ya preparado con roles (`super_admin`, `admin`, `agent`, `viewer`).
 - Logs persistentes en Supabase `conversation_logs`.
 
 ## Objetivo de plataforma
@@ -73,6 +73,18 @@ No deben ir en codigo. Guardar en Render env vars, Supabase Vault o gestor de se
 | `role` | `admin`, `agent`, `viewer` |
 | `active` | Control de acceso |
 
+### platform_users
+
+Usuarios internos de NexforIA. No pertenecen a un tenant unico y deben tener acceso transversal solo desde el panel Super admin.
+
+| Campo | Uso |
+|---|---|
+| `username` | Login interno |
+| `password_hash` | Hash, nunca texto plano |
+| `role` | `super_admin` |
+| `active` | Control de acceso |
+| `allowed_tenants` | Lista opcional de tenants si se quiere restringir soporte |
+
 ### conversation_logs
 
 Agregar gradualmente:
@@ -88,12 +100,14 @@ Agregar gradualmente:
    - Mantener RAV como tenant default.
    - Agregar `tenant_id` a logs nuevos.
    - Crear endpoint admin de readiness/comercializacion.
+   - Mantener `super_admin` como rol de plataforma y `admin` como rol del cliente.
    - Mantener variables actuales para no romper produccion.
 
 2. Fase B: configuracion por tenant
    - Resolver tenant por `phone_number_id` del webhook.
    - Mover Shopify/token/notificaciones a configuracion por tenant.
    - Separar dashboard por tenant.
+   - Separar visualmente panel Admin y panel Super admin.
 
 3. Fase C: onboarding autoservicio
    - Boton `Conectar WhatsApp`.
@@ -113,6 +127,7 @@ Agregar gradualmente:
 - Exponer tokens o llaves en logs.
 - Enviar mensajes con el `phone_number_id` equivocado.
 - Permitir que una asesora vea tenants que no le corresponden.
+- Permitir que un admin de cliente vea configuracion o conversaciones de otro tenant.
 - Prometer tiempos que dependen de Meta.
 
 ## Decision recomendada

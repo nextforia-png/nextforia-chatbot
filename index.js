@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v59";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v60";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -20,7 +20,7 @@ const DASHBOARD_ROLE_LABELS = {
   super_admin: "Super admin NexforIA"
 };
 const DASHBOARD_ACCESS_MODEL = {
-  version: "2026-07-09",
+  version: "2026-07-11",
   current_mode: "single_tenant_rav",
   future_panels: [
     {
@@ -47,7 +47,7 @@ const DASHBOARD_ACCESS_MODEL = {
   migration_steps: [
     "Mantener RAV Toys como tenant default.",
     "Crear usuarios super_admin para NexforIA y admin/agent/viewer por cliente.",
-    "Separar visualmente el dashboard en Admin y Super admin.",
+    "Mantener separado el dashboard Admin del panel Super admin.",
     "Agregar tenant_id a logs, usuarios y configuracion.",
     "Mover tokens e integraciones a configuracion por tenant antes de vender multi-cliente."
   ]
@@ -2189,9 +2189,12 @@ app.get("/admin/access-model", (req, res) => {
       method: auth.method
     },
     compatibility: {
-      current_dashboard_still_single_panel: true,
+      current_dashboard_still_single_panel: false,
       dashboard_key_maps_to: "super_admin",
-      admin_endpoints_accept_super_admin: true
+      admin_endpoints_accept_super_admin: true,
+      client_dashboard_unchanged: true,
+      super_admin_panel_available: true,
+      super_admin_route: "/admin/super-admin"
     }
   });
 });
@@ -2323,7 +2326,7 @@ app.get("/admin/commercial-readiness", (req, res) => {
       stages_total: stages.length,
       ready_stages: readyCount,
       waiting_meta_stages: waitingCount,
-      next_best_work: "Crear tenant/configuracion por cliente y checklist visual de onboarding."
+      next_best_work: "Agregar tenant_id default, configuracion, usuarios, salud e integraciones por tenant."
     },
     current_blocker: {
       kind: "external_meta_review",
@@ -2461,6 +2464,94 @@ app.get("/admin", (req, res) => {
   res.redirect("/admin/dashboard?tab=human");
 });
 
+function escapeAdminHtml(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char];
+  });
+}
+
+app.get("/admin/super-admin", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok) {
+    renderAdminLogin(res, "/admin/super-admin");
+    return;
+  }
+  if (auth.role !== "super_admin") {
+    res.status(403).setHeader("content-type", "text/html; charset=utf-8");
+    res.send(`<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acceso restringido · NexforIA</title>
+<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:20px}.box{width:min(460px,100%);background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:24px;box-shadow:0 12px 28px rgba(31,42,68,.08)}h1{font-size:18px;margin:0 0 8px}p{font-size:13px;color:#6B7280;line-height:1.6;margin:0 0 18px}.badge{display:inline-flex;font-size:11px;color:#9A6216;background:#FAEEDA;padding:4px 10px;border-radius:999px;margin-bottom:14px}.btn{display:inline-flex;text-decoration:none;border:1px solid #cfe3e3;color:#0F6E56;border-radius:8px;padding:8px 12px;font-size:13px}</style></head>
+<body><main class="box"><span class="badge">Rol actual: ${escapeAdminHtml(DASHBOARD_ROLE_LABELS[auth.role] || auth.role)}</span><h1>Acceso restringido</h1><p>Este panel contiene operaciones de plataforma de NexforIA y requiere el rol <strong>super_admin</strong>. Tu acceso al panel operativo de RAV Toys sigue disponible.</p><a class="btn" href="/admin/dashboard">Volver al panel Admin</a></main></body></html>`);
+    return;
+  }
+  if (auth.method === "key") {
+    setDashboardSessionCookie(req, res, auth);
+  }
+
+  const stages = COMMERCIAL_READINESS.stages || [];
+  const readyCount = stages.filter(stage => stage.status === "ready").length;
+  const waitingCount = stages.filter(stage => stage.status === "waiting_meta").length;
+  const draftCount = stages.filter(stage => stage.status === "draft").length;
+  const statusLabels = { ready: "Listo", draft: "Pendiente", waiting_meta: "Esperando Meta" };
+  const statusClasses = { ready: "ready", draft: "draft", waiting_meta: "waiting" };
+  const clientDashboardHref = "/admin/dashboard?tab=summary";
+  const roleCards = (DASHBOARD_ACCESS_MODEL.roles || []).map(role => `
+    <article class="roleCard"><div class="row"><code>${escapeAdminHtml(role.role)}</code><span>Nivel ${escapeAdminHtml(role.level)}</span></div><strong>${escapeAdminHtml(role.owner)} · ${escapeAdminHtml(role.scope)}</strong><p>${escapeAdminHtml(role.purpose)}</p></article>`).join("");
+  const panelCards = (DASHBOARD_ACCESS_MODEL.future_panels || []).map(panel => `
+    <article class="panelCard"><div class="row"><h3>${escapeAdminHtml(panel.label)}</h3><span>${escapeAdminHtml(panel.owner)}</span></div><p>${escapeAdminHtml(panel.purpose)}</p><div class="roleList">${(panel.roles || []).map(role => `<code>${escapeAdminHtml(role)}</code>`).join("")}</div></article>`).join("");
+  const readinessRows = stages.map(stage => {
+    const status = statusLabels[stage.status] || stage.status;
+    const statusClass = statusClasses[stage.status] || "draft";
+    return `<div class="readinessRow"><div><strong>${escapeAdminHtml(stage.label)}</strong><span>${escapeAdminHtml(stage.owner)}</span></div><span class="status ${statusClass}">${escapeAdminHtml(status)}</span></div>`;
+  }).join("");
+  const tenantFields = (COMMERCIAL_READINESS.requiredTenantFields || []).map(field => `<code>${escapeAdminHtml(field)}</code>`).join("");
+  const nextTenantSteps = [
+    { label: "tenant_id default", detail: "Agregar rav-toys a logs y configuracion nueva." },
+    { label: "tenant config", detail: "Crear una fuente de configuracion aislada por comercio." },
+    { label: "users per tenant", detail: "Asociar admin, agent y viewer al tenant correspondiente." },
+    { label: "health per tenant", detail: "Reportar integraciones y alertas por cliente." },
+    { label: "WhatsApp/Shopify config per tenant", detail: "Resolver credenciales e identificadores sin exponer sus valores." }
+  ];
+  const nextSteps = nextTenantSteps.map((step, index) => `<li><span class="stepIndex">${index + 1}</span><div><strong>${escapeAdminHtml(step.label)}</strong><p>${escapeAdminHtml(step.detail)}</p></div><span class="status draft">Siguiente fase</span></li>`).join("");
+
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Super admin · NexforIA</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:22px;line-height:1.5}.wrap{max-width:1120px;margin:0 auto}.headcard{background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:15px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px}.logo{width:42px;height:42px;border-radius:10px;background:#E1F5EE;color:#0F6E56;display:grid;place-items:center;font-size:12px;font-weight:750}.brand h1{font-size:17px;font-weight:650}.brand p{font-size:12px;color:#9AA0A6}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.btn{font:inherit;font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #CFE3E3;background:#fff;padding:7px 12px;border-radius:8px;text-decoration:none}.btn:hover{background:#F0FAF7}.roleBadge{font-size:11px;color:#475569;background:#F4F5F7;border:1px solid #E5E8EC;padding:7px 10px;border-radius:8px}.callout{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;background:#FFF8EA;border:1px solid #F3D19C;border-radius:12px;padding:14px 16px;margin-bottom:14px}.callout strong{font-size:13px;color:#7C4A08}.callout p{font-size:12px;color:#9A6216;margin-top:3px}.status{display:inline-flex;align-items:center;white-space:nowrap;font-size:10px;border-radius:999px;padding:3px 8px;font-weight:650}.status.ready{background:#E1F5EE;color:#0F6E56}.status.draft{background:#F4F5F7;color:#64748B}.status.waiting{background:#FAEEDA;color:#9A6216}.status.error{background:#FAECE7;color:#B94723}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.kpi,.card{background:#fff;border:1px solid #E5E8EC;border-radius:12px}.kpi{padding:14px 16px}.kpi .label{font-size:11px;color:#6B7280}.kpi .value{font-size:23px;font-weight:650;margin-top:6px}.kpi .sub{font-size:10px;color:#9AA0A6;margin-top:2px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}.card{padding:17px 18px}.card.wide{grid-column:1/-1}.cardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:13px}.cardHead h2{font-size:14px}.cardHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.healthList,.readinessList{display:grid;gap:8px}.healthRow,.readinessRow{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #EEF1F4;padding-top:8px;font-size:12px}.healthRow:first-child,.readinessRow:first-child{border-top:0;padding-top:0}.healthRow span:first-child{color:#64748B}.checkValue{font-size:11px;font-weight:650}.checkValue.ok{color:#0F6E56}.checkValue.warn{color:#9A6216}.checkValue.err{color:#B94723}.roleGrid,.panelGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.roleCard,.panelCard{border:1px solid #E5E8EC;border-radius:9px;padding:11px;background:#FBFCFD}.row{display:flex;align-items:center;justify-content:space-between;gap:8px}.roleCard .row span,.panelCard .row span{font-size:10px;color:#9AA0A6}.roleCard strong{display:block;font-size:11px;margin-top:8px}.roleCard p,.panelCard p{font-size:11px;color:#6B7280;margin-top:4px}.panelCard h3{font-size:13px}.roleList,.fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#0F6E56;background:#EDF8F4;border:1px solid #D5EDE4;padding:3px 6px;border-radius:6px}.readinessRow div{display:grid}.readinessRow strong{font-size:12px}.readinessRow div span{font-size:10px;color:#9AA0A6}.summaryLine{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}.summaryLine span{font-size:10px;color:#64748B;background:#F4F5F7;border-radius:999px;padding:3px 8px}.fieldsNote{font-size:10px;color:#9AA0A6;margin-top:10px}.tenantTable{width:100%;border-collapse:collapse;font-size:11px}.tenantTable th{text-align:left;color:#9AA0A6;font-weight:500;padding:0 8px 8px}.tenantTable td{border-top:1px solid #EEF1F4;padding:10px 8px}.tenantName{font-weight:650}.steps{list-style:none;display:grid;gap:0}.steps li{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;border-top:1px solid #EEF1F4;padding:10px 0}.steps li:first-child{border-top:0;padding-top:0}.stepIndex{width:24px;height:24px;border-radius:7px;background:#F4F5F7;color:#64748B;display:grid;place-items:center;font-size:10px;font-weight:700}.steps strong{font-size:12px}.steps p{font-size:10px;color:#9AA0A6;margin-top:2px}.footer{font-size:10px;color:#9AA0A6;text-align:center;padding:2px 0 8px}
+@media(max-width:840px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}.card.wide{grid-column:auto}}@media(max-width:560px){body{padding:12px}.kpis,.roleGrid,.panelGrid{grid-template-columns:1fr}.steps li{grid-template-columns:auto 1fr}.steps li>.status{grid-column:2;justify-self:start}.callout{display:block}.callout>.status{margin-top:8px}}
+</style></head><body><div class="wrap">
+<header class="headcard"><div class="brand"><div class="logo">NX</div><div><h1>NexforIA · Super admin</h1><p>Operaciones de plataforma · RAV Bot ${escapeAdminHtml(BOT_VERSION)}</p></div></div><div class="actions"><span class="roleBadge">${escapeAdminHtml(auth.name || auth.username)} · Super admin</span><a class="btn" href="${clientDashboardHref}">Admin RAV</a><button class="btn" type="button" onclick="loadHealth()">Actualizar salud</button><button class="btn" type="button" onclick="logoutSuperAdmin()">Salir</button></div></header>
+
+<section class="callout"><div><strong>Bloqueador actual: Meta App Review pendiente</strong><p>La infraestructura puede estar operativa, pero la aprobacion de permisos de WhatsApp sigue siendo requisito externo antes de escalar a clientes reales.</p></div><span class="status waiting">Esperando Meta</span></section>
+
+<section class="kpis" aria-label="Resumen de plataforma"><article class="kpi"><div class="label">Version del bot</div><div class="value">${escapeAdminHtml(BOT_VERSION)}</div><div class="sub">Produccion NexforIA Bots</div></article><article class="kpi"><div class="label">Infraestructura</div><div class="value" id="infraValue">Verificando</div><div class="sub" id="infraSub">Consultando /admin/health</div></article><article class="kpi"><div class="label">Readiness comercial</div><div class="value">${readyCount}/${stages.length}</div><div class="sub">etapas listas · version ${escapeAdminHtml(COMMERCIAL_READINESS.version)}</div></article><article class="kpi"><div class="label">Tenants</div><div class="value">1</div><div class="sub">RAV Toys · tenant default</div></article></section>
+
+<div class="layout">
+  <section class="card"><div class="cardHead"><div><h2>Salud de infraestructura</h2><p>Estados normalizados; no se muestran tokens ni identificadores.</p></div><span class="status draft" id="healthBadge">Verificando</span></div><div class="healthList"><div class="healthRow"><span>Uptime</span><span class="checkValue" id="healthUptime">-</span></div><div class="healthRow"><span>Shopify storefront</span><span class="checkValue" id="healthShopify">-</span></div><div class="healthRow"><span>Meta WhatsApp API</span><span class="checkValue" id="healthMeta">-</span></div><div class="healthRow"><span>Supabase</span><span class="checkValue" id="healthSupabase">-</span></div><div class="healthRow"><span>Anthropic</span><span class="checkValue" id="healthAnthropic">-</span></div></div></section>
+  <section class="card"><div class="cardHead"><div><h2>Readiness comercial</h2><p>Resumen directo de COMMERCIAL_READINESS.</p></div><span class="status waiting">${waitingCount} esperando Meta</span></div><div class="summaryLine"><span>${readyCount} lista</span><span>${draftCount} pendientes</span><span>${stages.length} etapas totales</span></div><div class="readinessList">${readinessRows}</div></section>
+  <section class="card wide"><div class="cardHead"><div><h2>Modelo de acceso actual</h2><p>Super admin opera la plataforma; los demas roles permanecen en el alcance del comercio.</p></div><span class="status ready">Modelo ${escapeAdminHtml(DASHBOARD_ACCESS_MODEL.version)}</span></div><div class="roleGrid">${roleCards}</div></section>
+  <section class="card wide"><div class="cardHead"><div><h2>Division de paneles</h2><p>La vista operativa del cliente se mantiene sin cambios.</p></div></div><div class="panelGrid">${panelCards}</div></section>
+  <section class="card"><div class="cardHead"><div><h2>Tenant placeholder</h2><p>Referencia visual; aun no existe routing multi-tenant.</p></div><span class="status draft">Single tenant</span></div><table class="tenantTable"><thead><tr><th>Tenant</th><th>ID</th><th>Estado</th></tr></thead><tbody><tr><td class="tenantName">RAV Toys</td><td><code>rav-toys</code></td><td>Default actual</td></tr></tbody></table></section>
+  <section class="card"><div class="cardHead"><div><h2>Campos requeridos para onboarding</h2><p>Esquema futuro por cliente.</p></div><span class="status draft">${(COMMERCIAL_READINESS.requiredTenantFields || []).length} campos</span></div><div class="fields">${tenantFields}</div><p class="fieldsNote">Solo se muestran nombres de campos. Los valores sensibles deben vivir en configuracion segura por tenant.</p></section>
+  <section class="card wide"><div class="cardHead"><div><h2>Siguientes pasos multi-cliente</h2><p>Checklist tecnico para la proxima fase, sin activar routing multi-tenant todavia.</p></div></div><ol class="steps">${nextSteps}</ol></section>
+</div>
+<footer class="footer">Super Admin Panel v1 · Informacion de plataforma NexforIA</footer>
+</div><script>
+function setSuperText(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
+function checkKind(value){value=String(value||"");if(value==="ok"||value.indexOf("key_present")===0)return "ok";if(value==="missing_env"||value==="missing_key")return "warn";return "err";}
+function checkLabel(value){var kind=checkKind(value);if(kind==="ok")return value==="ok"?"OK":"Configurado";if(kind==="warn")return "No configurado";return "Revisar";}
+function paintCheck(id,value){var el=document.getElementById(id);if(!el)return;el.textContent=checkLabel(value);el.className="checkValue "+checkKind(value);}
+function uptimeLabel(seconds){seconds=Math.max(0,Number(seconds)||0);var days=Math.floor(seconds/86400),hours=Math.floor((seconds%86400)/3600),minutes=Math.floor((seconds%3600)/60);return (days?days+"d ":"")+hours+"h "+minutes+"m";}
+function loadHealth(){setSuperText("infraValue","Verificando");setSuperText("infraSub","Consultando /admin/health");fetch("/admin/health",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error("HTTP "+r.status);return j;});}).then(function(h){var ready=!!(h.production_readiness&&h.production_readiness.infrastructure_ready),blockers=(h.production_readiness&&h.production_readiness.blockers)||[],badge=document.getElementById("healthBadge");setSuperText("infraValue",ready?"Operativa":"Revisar");setSuperText("infraSub",ready?"Servicios base disponibles":blockers.length+" bloqueo"+(blockers.length===1?"":"s")+" tecnico"+(blockers.length===1?"":"s"));if(badge){badge.textContent=ready?"Infra OK":"Requiere revision";badge.className="status "+(ready?"ready":"error");}setSuperText("healthUptime",uptimeLabel(h.bot&&h.bot.uptime_seconds));paintCheck("healthShopify",h.checks&&h.checks.shopify_storefront);paintCheck("healthMeta",h.checks&&h.checks.meta_whatsapp);paintCheck("healthSupabase",h.checks&&h.checks.supabase_conversation_logs);paintCheck("healthAnthropic",h.checks&&h.checks.anthropic_api);}).catch(function(){var badge=document.getElementById("healthBadge");setSuperText("infraValue","No disponible");setSuperText("infraSub","No se pudo consultar salud");if(badge){badge.textContent="Sin respuesta";badge.className="status error";}["healthShopify","healthMeta","healthSupabase","healthAnthropic"].forEach(function(id){var el=document.getElementById(id);if(el){el.textContent="Sin respuesta";el.className="checkValue err";}});});}
+function logoutSuperAdmin(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
+try{var cleanUrl=new URL(location.href);if(cleanUrl.searchParams.has("key")){cleanUrl.searchParams.delete("key");history.replaceState(null,"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);}}catch(e){}
+loadHealth();
+</script></body></html>`);
+});
+
 app.get("/admin/dashboard", (req, res) => {
   if (!adminKeyOk(req)) {
     const loginTab = req.query.tab === "summary" ? "summary" : "human";
@@ -2468,6 +2559,9 @@ app.get("/admin/dashboard", (req, res) => {
     return;
   }
   const auth = dashboardAuth(req);
+  if (auth.method === "key") {
+    setDashboardSessionCookie(req, res, auth);
+  }
   const pageKey = JSON.stringify(req.query.key || "");
   const rawKey = encodeURIComponent(String(req.query.key || ""));
   const pageUser = JSON.stringify(auth.name || auth.username || "Panel");
@@ -2477,6 +2571,8 @@ app.get("/admin/dashboard", (req, res) => {
   const humanActive = initialTab === "human" ? " active" : "";
   const summaryHref = "/admin/dashboard?" + (rawKey ? "key=" + rawKey + "&" : "") + "tab=summary";
   const humanHref = "/admin/dashboard?" + (rawKey ? "key=" + rawKey + "&" : "") + "tab=human";
+  const superAdminHref = "/admin/super-admin";
+  const superAdminButton = auth.role === "super_admin" ? `<a class="btn" href="${superAdminHref}">Super admin</a>` : "";
   res.setHeader("content-type", "text/html; charset=utf-8");
   res.send(`
 <!doctype html>
@@ -2494,7 +2590,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 .brand h1{font-size:16px;font-weight:600}
 .brand p{font-size:12px;color:#9AA0A6}
 .btns{display:flex;gap:8px}
-.btn{font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #cfe3e3;background:#fff;padding:6px 14px;border-radius:8px}
+.btn{font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #cfe3e3;background:#fff;padding:6px 14px;border-radius:8px;text-decoration:none}
 .btn:hover{background:#F0FAF7}
 .tabs{display:flex;gap:6px;margin:0 0 14px;border-bottom:1px solid #E5E8EC}
 .tabBtn{border:0;background:transparent;color:#6B7280;font-size:13px;padding:10px 14px;border-radius:8px 8px 0 0;cursor:pointer;border-bottom:2px solid transparent;text-decoration:none;display:inline-flex;align-items:center}
@@ -2543,7 +2639,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;bac
 @media(max-width:760px){.charts{grid-template-columns:1fr}}
 @media(max-width:760px){.opsShell{grid-template-columns:1fr}.opsThreads{height:240px;border-right:0;border-bottom:1px solid #E5E8EC}.opsMessages{min-height:320px}.opsBubble{max-width:92%}.opsComposer{grid-template-columns:1fr}}
 </style></head><body><div class="wrap">
-<div class="headcard"><div class="brand"><div class="logo" id="logo" onclick="changeLogo()" title="Clic para cambiar el logo">RAV<div class="pencil">&#9998;</div></div><div><h1>RAV Toys · Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="btns"><span class="roleBadge" id="roleBadge"></span><div class="btn" id="evalBtn" onclick="runEval()">&#10024; Evaluar ahora</div><div class="btn" onclick="location.reload()">&#8635; Actualizar</div><div class="btn" onclick="logoutDashboard()">Salir</div></div></div>
+<div class="headcard"><div class="brand"><div class="logo" id="logo" onclick="changeLogo()" title="Clic para cambiar el logo">RAV<div class="pencil">&#9998;</div></div><div><h1>RAV Toys · Panel del bot</h1><p id="meta">cargando datos...</p></div></div><div class="btns"><span class="roleBadge" id="roleBadge"></span>${superAdminButton}<div class="btn" id="evalBtn" onclick="runEval()">&#10024; Evaluar ahora</div><div class="btn" onclick="location.reload()">&#8635; Actualizar</div><div class="btn" onclick="logoutDashboard()">Salir</div></div></div>
 <div class="tabs" role="tablist"><a class="tabBtn${summaryActive}" id="tab-summary" href="${summaryHref}" onclick="showTab('summary');return false;">Resumen</a><a class="tabBtn${humanActive}" id="tab-human" href="${humanHref}" onclick="showTab('human');return false;">Intervención humana</a></div>
 <section class="tabPanel${summaryActive}" id="panel-summary">
 <div class="grid">

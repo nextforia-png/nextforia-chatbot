@@ -1,17 +1,17 @@
-# Division futura: Admin y Super admin
+# Division Admin y Super admin
 
-Fecha: 9 de julio de 2026
+Fecha: 11 de julio de 2026
 
-Estado: base tecnica preparada; division visual pendiente.
+Estado: division visual v1 implementada; aislamiento multi-tenant pendiente.
 
 ## Objetivo
 
-Separar el panel actual en dos experiencias cuando el producto empiece a venderse a otros comercios:
+Mantener dos experiencias con responsabilidades distintas mientras el producto se prepara para otros comercios:
 
 - **Admin:** panel del cliente/comercio.
 - **Super admin:** panel interno de NexforIA.
 
-Por ahora el dashboard sigue siendo uno solo para no frenar la operacion de RAV Toys, pero el modelo de roles ya queda preparado para esa division.
+El dashboard de RAV Toys conserva su operacion actual. La ruta `/admin/super-admin` agrega una vista separada para NexforIA sin mover conversaciones ni configurar routing multi-tenant todavia.
 
 ## Roles
 
@@ -55,6 +55,9 @@ El panel Super admin debe enfocarse en plataforma y soporte tecnico:
 - Los roles `admin`, `agent` y `viewer` siguen funcionando igual.
 - Se agrego el endpoint `/admin/access-model` para exponer el modelo de acceso actual y futuro.
 - El endpoint `/admin/commercial-readiness` ya incluye `super_admin` dentro de los roles recomendados.
+- Se agrego `/admin/super-admin`, protegido por igualdad exacta de rol `super_admin`; `admin`, `agent` y `viewer` reciben acceso restringido.
+- El dashboard operativo muestra el enlace **Super admin** solo para una sesion `super_admin` o la clave maestra.
+- Super Admin Panel v1 resume version, salud, modelo de acceso, readiness comercial, campos de onboarding, tenant default y proximos pasos sin mostrar valores sensibles.
 
 ## Configuracion de usuarios
 
@@ -78,10 +81,10 @@ Formato JSON:
 ## Fases recomendadas
 
 1. **Base de roles:** listo en `v59`.
-2. **Vista Super admin:** agregar una tab o ruta interna con readiness, salud global y configuracion tecnica.
+2. **Vista Super admin:** lista en `v60` con readiness, salud global normalizada y preparacion tecnica.
 3. **Tenant default:** crear `tenant_id = rav-toys` en logs/configuracion nueva.
 4. **Usuarios por tenant:** mover `DASHBOARD_USERS` a una tabla o configuracion por cliente.
-5. **Paneles separados:** `Admin` para cliente y `Super admin` para NexforIA.
+5. **Aislamiento por tenant:** limitar datos, usuarios y configuracion del panel Admin al comercio autenticado.
 6. **Multi-cliente real:** resolver tenant por `phone_number_id` entrante y aislar datos/configuracion.
 
 ## Regla de seguridad

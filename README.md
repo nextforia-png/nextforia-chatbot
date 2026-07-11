@@ -59,6 +59,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
 | `GET /admin/access-model?key=XXXX` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
+| `GET /admin/super-admin?key=XXXX` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify/Meta/Supabase y readiness de infraestructura |
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
@@ -85,7 +86,7 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 - Playbook comercial para asesoras: [`docs/commercial-playbook.md`](docs/commercial-playbook.md)
 - Onboarding comercial para futuros clientes: [`docs/commercial-onboarding.md`](docs/commercial-onboarding.md)
 - Roadmap multi-cliente: [`docs/multi-tenant-roadmap.md`](docs/multi-tenant-roadmap.md)
-- División futura Admin/Super admin: [`docs/admin-super-admin-split.md`](docs/admin-super-admin-split.md)
+- División Admin/Super admin: [`docs/admin-super-admin-split.md`](docs/admin-super-admin-split.md)
 - Informe ejecutivo para socios: [`docs/informe-socios-rav-whatsapp-bot.md`](docs/informe-socios-rav-whatsapp-bot.md)
 - Backlog priorizado: [`TODO.md`](TODO.md)
 
@@ -133,7 +134,7 @@ Variables útiles:
 Valida: health OK, versión esperada opcional, búsqueda real con resultados, selección desde resultados reales, datos de checkout completos, total distinto de `$0`, y lectura de conversaciones desde Supabase.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v57 npm run smoke
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v60 npm run smoke
 ```
 
 También puedes apuntar a staging:
@@ -147,7 +148,7 @@ BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm
 Espera hasta 5 minutos a que Render tenga la versión esperada y falla si el auto-deploy quedó atrás.
 
 ```bash
-DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v57 npm run verify-deploy
+DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v60 npm run verify-deploy
 ```
 
 Si se ejecuta desde el repo, `verify-deploy.js` puede leer `BOT_VERSION` directamente de `index.js`, así que `EXPECTED_BOT_VERSION` es opcional.
@@ -260,6 +261,8 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v31 | Endpoints admin: health, stats, test-search |
 | v32 | Alerta de saldo bajo + cache de búsqueda 5min + logger estructurado |
 | v32.1 | `BOT_VERSION` constante centralizada |
+| v59 | Roles `super_admin`/Admin y endpoint del modelo de acceso |
+| v60 | Panel Super admin v1 separado, protegido y enlazado por rol |
 
 ---
 

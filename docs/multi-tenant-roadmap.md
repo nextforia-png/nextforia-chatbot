@@ -8,7 +8,7 @@ El bot actual funciona como single-tenant para RAV Toys. Para comercializarlo, l
 - Un solo `WA_TOKEN`.
 - Un solo `SHOPIFY_STORE_DOMAIN`.
 - Un solo `SHOPIFY_ADMIN_TOKEN`.
-- Un dashboard compartido, ya preparado con roles (`super_admin`, `admin`, `agent`, `viewer`).
+- Un dashboard operativo para RAV Toys y una vista Super admin v1 separada, ambos sobre datos/configuracion single-tenant y con roles (`super_admin`, `admin`, `agent`, `viewer`).
 - Logs persistentes en Supabase `conversation_logs`.
 
 ## Objetivo de plataforma
@@ -107,7 +107,7 @@ Agregar gradualmente:
    - Resolver tenant por `phone_number_id` del webhook.
    - Mover Shopify/token/notificaciones a configuracion por tenant.
    - Separar dashboard por tenant.
-   - Separar visualmente panel Admin y panel Super admin.
+   - Extender la separacion visual Admin/Super admin de `v60` a datos y configuracion aislados por tenant.
 
 3. Fase C: onboarding autoservicio
    - Boton `Conectar WhatsApp`.

@@ -1,14 +1,17 @@
 const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
+const path = require("path");
 const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 const COMMERCIAL_READINESS = require("./commercial-readiness");
+const renderCustomerPanel = require("./customer-panel");
 
 const app = express();
 app.use(express.json());
+app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v60";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v61";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -78,6 +81,10 @@ const CUSTOMER_META_TAGS = [
   { id: "envio", label: "Envio" },
   { id: "revisar", label: "Revisar" }
 ];
+const CUSTOMER_PANEL_BUSINESS = {
+  id: "rav-toys",
+  name: "RAV Toys"
+};
 // ─────────────────────────────────────────────────────────────────────────────────
 
 if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
@@ -832,7 +839,7 @@ const TOOLS = [
   }
 ];
 
-async function searchShopify(query) {
+async function searchShopify(query, options = {}) {
   // CACHE (v32): si la misma query se buscó hace <5min, reusar resultado.
   // Ahorra llamadas a Shopify y mejora velocidad. Auto-limpia cada llamada.
   const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
@@ -901,10 +908,10 @@ async function searchShopify(query) {
 
   console.log(`[searchShopify] query="${query}" returned ${products.length} products (storefront says ${total})`);
   const result = { products, total, query };
-  searchCache.set(query, { result, ts: Date.now() });
+  if (!options.suppressSideEffects) searchCache.set(query, { result, ts: Date.now() });
   // ALERTA INTERNA (v33.2): si la búsqueda no encontró nada, avisar al equipo.
   // Esto NO es un error del bot — es info útil: qué buscan los clientes que no tenemos.
-  if (products.length === 0) {
+  if (products.length === 0 && !options.suppressSideEffects) {
     try {
       const now = Date.now();
       const key = (query || "").toLowerCase().trim();
@@ -2130,6 +2137,378 @@ function adminKeyOk(req) {
   return adminAuthOk(req, "viewer");
 }
 
+function customerPanelCapabilities(role) {
+  const level = DASHBOARD_ROLES[cleanDashboardRole(role)] || 0;
+  return {
+    view_metrics: level >= DASHBOARD_ROLES.viewer,
+    view_conversations: level >= DASHBOARD_ROLES.viewer,
+    intervene: level >= DASHBOARD_ROLES.agent,
+    respond: level >= DASHBOARD_ROLES.agent,
+    manage_notes_tags: level >= DASHBOARD_ROLES.agent,
+    run_tests: level >= DASHBOARD_ROLES.admin,
+    run_evaluation: level >= DASHBOARD_ROLES.admin,
+    view_operational_settings: level >= DASHBOARD_ROLES.admin,
+    platform_support: cleanDashboardRole(role) === "super_admin"
+  };
+}
+
+function customerPanelWhatsappSetup() {
+  const stage = (COMMERCIAL_READINESS.stages || []).find(function (item) {
+    return item.id === "meta_whatsapp";
+  });
+  const ready = !!stage && stage.status === "ready";
+  return {
+    status: ready ? "ready" : "pending",
+    label: ready ? "WhatsApp listo" : "Configuracion de WhatsApp pendiente"
+  };
+}
+
+function customerPanelControlEvent(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (tools.includes("admin_release")) return "released";
+  if (tools.includes("admin_takeover")) return "taken_over";
+  return null;
+}
+
+function customerPanelReplyActor(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (customerPanelControlEvent(turn)) return "system";
+  if (tools.includes("admin_send_message") || String(turn && turn.botReply || "").indexOf("[Humano]") === 0) return "human";
+  return "bot";
+}
+
+function customerPanelSalesSignal(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  const evalData = turn && turn.eval && !turn.eval.error ? turn.eval : null;
+  return tools.includes("select_product_for_purchase") ||
+    tools.includes("save_checkout_field") ||
+    tools.includes("notify_sale_team") ||
+    (evalData && evalData.intencion_compra === true);
+}
+
+function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
+  const operationalTurns = (rawTurns || []).filter(function (turn) { return !isCustomerMetaTurn(turn); });
+  const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
+  const allTurns = operationalTurns.slice(0, turnLimit);
+  const groups = {};
+  const zeroResultCounts = {};
+  const messagesByDay = {};
+  const ratings = [];
+  let inboundMessages = 0;
+  let zeroResultSearches = 0;
+  let minTs = null;
+  let maxTs = null;
+
+  allTurns.slice().sort(function (a, b) {
+    return new Date(a.ts || 0) - new Date(b.ts || 0);
+  }).forEach(function (turn) {
+    const userId = String(turn.userId || "").replace(/\D/g, "");
+    if (!userId) return;
+    if (!groups[userId]) {
+      groups[userId] = {
+        phone: userId,
+        messages: [],
+        last_inbound_ms: 0,
+        last_human_reply_ms: 0,
+        last_ts_ms: 0,
+        last_ts: null,
+        last_text: "",
+        sales_signal: false,
+        handoff_ever: false,
+        resolved_by_bot: false,
+        partial_resolution: false,
+        evaluated: false
+      };
+    }
+    const group = groups[userId];
+    const ts = turn.ts || null;
+    const tsMs = Date.parse(ts || "") || 0;
+    if (tsMs) {
+      if (!minTs || tsMs < minTs) minTs = tsMs;
+      if (!maxTs || tsMs > maxTs) maxTs = tsMs;
+      if (tsMs >= group.last_ts_ms) {
+        group.last_ts_ms = tsMs;
+        group.last_ts = ts;
+      }
+    }
+
+    const customerText = String(turn.userMessage || "").trim();
+    if (customerText) {
+      inboundMessages++;
+      group.messages.push({ ts, author: "customer", text: customerText });
+      group.last_inbound_ms = Math.max(group.last_inbound_ms, tsMs);
+      group.last_text = customerText;
+      const day = String(ts || "").slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) messagesByDay[day] = (messagesByDay[day] || 0) + 1;
+    }
+
+    const controlEvent = customerPanelControlEvent(turn);
+    const replyText = String(turn.botReply || "").replace(/^\[Humano\]\s*/, "").trim();
+    if (controlEvent) {
+      const eventText = controlEvent === "released" ? "Conversacion devuelta al bot." : "Control humano activado.";
+      group.messages.push({ ts, author: "system", text: eventText, event: controlEvent });
+      group.last_text = eventText;
+    } else if (replyText) {
+      const actor = customerPanelReplyActor(turn);
+      group.messages.push({ ts, author: actor, text: replyText });
+      if (actor === "human") group.last_human_reply_ms = Math.max(group.last_human_reply_ms, tsMs);
+      group.last_text = replyText;
+    }
+
+    const tools = Array.isArray(turn.tools) ? turn.tools : [];
+    if (turn.handoff || tools.includes("request_human_handoff") || tools.includes("human_handoff_active") || tools.includes("admin_takeover") || tools.includes("admin_send_message")) {
+      group.handoff_ever = true;
+    }
+    if (customerPanelSalesSignal(turn)) {
+      group.sales_signal = true;
+    }
+    const evalData = turn.eval && !turn.eval.error ? turn.eval : null;
+    if (evalData) {
+      group.evaluated = true;
+      if (evalData.resuelto === "si" && !group.handoff_ever) group.resolved_by_bot = true;
+      if (evalData.resuelto === "parcial") group.partial_resolution = true;
+    }
+
+    (Array.isArray(turn.zeroResultQueries) ? turn.zeroResultQueries : []).forEach(function (query) {
+      const clean = String(query || "").trim().toLowerCase();
+      if (!clean) return;
+      zeroResultSearches++;
+      zeroResultCounts[clean] = (zeroResultCounts[clean] || 0) + 1;
+    });
+    if (turn.rating != null && Number.isFinite(Number(turn.rating))) ratings.push(Number(turn.rating));
+  });
+
+  const conversations = Object.keys(groups).map(function (userId) {
+    const group = groups[userId];
+    const meta = metaByCustomer[userId] || { tags: [], note: "", updated_at: null };
+    const active = !!(states[userId] && states[userId].active);
+    const tags = normalizeCustomerTags(meta.tags);
+    const salesSignal = group.sales_signal || tags.includes("venta");
+    return {
+      phone: userId,
+      last_ts: group.last_ts,
+      last_text: group.last_text,
+      mode: active ? "human" : "bot",
+      needs_reply: active && group.last_inbound_ms > group.last_human_reply_ms,
+      tags,
+      note: normalizeCustomerNote(meta.note),
+      meta_updated_at: meta.updated_at || null,
+      messages: group.messages,
+      business_signals: {
+        sales_assisted: salesSignal,
+        handoff_ever: group.handoff_ever,
+        resolved_by_bot: group.resolved_by_bot,
+        partial_resolution: group.partial_resolution,
+        evaluated: group.evaluated
+      }
+    };
+  }).sort(function (a, b) {
+    return new Date(b.last_ts || 0) - new Date(a.last_ts || 0);
+  });
+
+  const activeHandoffs = conversations.filter(function (item) { return item.mode === "human"; }).length;
+  const pendingReplies = conversations.filter(function (item) { return item.needs_reply; }).length;
+  const salesAssisted = conversations.filter(function (item) { return item.business_signals.sales_assisted; }).length;
+  const handoffsEver = conversations.filter(function (item) { return item.business_signals.handoff_ever; }).length;
+  const evaluatedConversations = conversations.filter(function (item) { return item.business_signals.evaluated; }).length;
+  const resolvedByBot = conversations.filter(function (item) { return item.business_signals.resolved_by_bot; }).length;
+  const partialResolutions = conversations.filter(function (item) { return item.business_signals.partial_resolution; }).length;
+  const resolvedRate = evaluatedConversations ? Math.round(resolvedByBot / evaluatedConversations * 100) : null;
+  const avgRating = ratings.length
+    ? Math.round(ratings.reduce(function (sum, value) { return sum + value; }, 0) / ratings.length * 10) / 10
+    : null;
+  const gapTerms = Object.keys(zeroResultCounts).map(function (query) {
+    return { query, count: zeroResultCounts[query] };
+  }).sort(function (a, b) { return b.count - a.count; }).slice(0, 8);
+  const activity = Object.keys(messagesByDay).sort().slice(-14).map(function (day) {
+    return { day, messages: messagesByDay[day] };
+  });
+  const capabilities = customerPanelCapabilities(auth.role);
+
+  return {
+    ok: true,
+    bot_version: BOT_VERSION,
+    business: {
+      id: CUSTOMER_PANEL_BUSINESS.id,
+      name: CUSTOMER_PANEL_BUSINESS.name,
+      whatsapp_setup: customerPanelWhatsappSetup()
+    },
+    user: {
+      username: auth.username,
+      name: auth.name,
+      role: auth.role,
+      role_label: DASHBOARD_ROLE_LABELS[auth.role] || auth.role,
+      capabilities
+    },
+    data_window: {
+      source,
+      events_considered: allTurns.length,
+      returned_event_limit: turnLimit,
+      from: minTs ? new Date(minTs).toISOString() : null,
+      to: maxTs ? new Date(maxTs).toISOString() : null
+    },
+    summary: {
+      clients_attended: conversations.length,
+      messages: inboundMessages,
+      active_handoffs: activeHandoffs,
+      handoffs_to_human: handoffsEver,
+      pending_human_replies: pendingReplies,
+      zero_result_searches: zeroResultSearches,
+      opportunities_detected: zeroResultSearches,
+      sales_assisted: {
+        count: salesAssisted,
+        label: salesAssisted === 1 ? "venta o intento de compra" : "ventas o intentos de compra",
+        confidence: "intent_or_checkout_signal"
+      },
+      solutions_provided: {
+        count: resolvedByBot,
+        partial: partialResolutions,
+        evaluated: evaluatedConversations,
+        rate: resolvedRate
+      },
+      rating: { average: avgRating, count: ratings.length },
+      messages_by_day: activity,
+      search_gaps: gapTerms,
+      conversation_modes: {
+        human: activeHandoffs,
+        bot: Math.max(conversations.length - activeHandoffs, 0),
+        pending: pendingReplies
+      }
+    },
+    tags: CUSTOMER_META_TAGS,
+    conversations
+  };
+}
+
+function buildCustomerPanelDemoSnapshot() {
+  const now = Date.now();
+  function iso(minutesAgo) {
+    return new Date(now - minutesAgo * 60 * 1000).toISOString();
+  }
+  const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer" };
+  const capabilities = customerPanelCapabilities("viewer");
+  const conversations = [
+    {
+      phone: "573001112233",
+      last_ts: iso(8),
+      last_text: "¿Me confirmas si el Lego Ferrari tiene envío hoy?",
+      mode: "human",
+      needs_reply: true,
+      tags: ["venta", "envio"],
+      note: "Quiere comprar hoy si confirmamos envío.",
+      meta_updated_at: iso(6),
+      messages: [
+        { ts: iso(22), author: "customer", text: "Hola, ¿tienen el Lego Ferrari disponible?" },
+        { ts: iso(21), author: "bot", text: "🤖 Sí, te ayudo a revisar disponibilidad y envío." },
+        { ts: iso(9), author: "customer", text: "¿Me confirmas si tiene envío hoy?" },
+        { ts: iso(8), author: "system", text: "Control humano activado." }
+      ],
+      business_signals: { sales_assisted: true, handoff_ever: true, resolved_by_bot: false, partial_resolution: true, evaluated: true }
+    },
+    {
+      phone: "573004445566",
+      last_ts: iso(18),
+      last_text: "Necesito garantía de un carro que salió con una rueda suelta.",
+      mode: "human",
+      needs_reply: true,
+      tags: ["garantia", "revisar"],
+      note: "Caso sensible. Responder con tono empático.",
+      meta_updated_at: iso(16),
+      messages: [
+        { ts: iso(31), author: "customer", text: "Buenos días, compré un carro y salió con una rueda suelta." },
+        { ts: iso(30), author: "bot", text: "🤖 Lamento mucho eso. Te puedo ayudar a revisar la garantía." },
+        { ts: iso(18), author: "customer", text: "Prefiero hablar con alguien del equipo." }
+      ],
+      business_signals: { sales_assisted: false, handoff_ever: true, resolved_by_bot: false, partial_resolution: true, evaluated: true }
+    },
+    {
+      phone: "573007778899",
+      last_ts: iso(44),
+      last_text: "Listo, gracias. Entonces paso mañana.",
+      mode: "bot",
+      needs_reply: false,
+      tags: ["venta"],
+      note: "",
+      meta_updated_at: null,
+      messages: [
+        { ts: iso(55), author: "customer", text: "¿Tienen Barbie astronauta?" },
+        { ts: iso(54), author: "bot", text: "🤖 Sí, tenemos unidades disponibles. Puedes pasar mañana o pedir envío." },
+        { ts: iso(44), author: "customer", text: "Listo, gracias. Entonces paso mañana." }
+      ],
+      business_signals: { sales_assisted: true, handoff_ever: false, resolved_by_bot: true, partial_resolution: false, evaluated: true }
+    },
+    {
+      phone: "573002229900",
+      last_ts: iso(75),
+      last_text: "¿Tienen Hot Wheels Ultimate Garage?",
+      mode: "bot",
+      needs_reply: false,
+      tags: ["revisar"],
+      note: "Producto preguntado varias veces.",
+      meta_updated_at: iso(70),
+      messages: [
+        { ts: iso(78), author: "customer", text: "¿Tienen Hot Wheels Ultimate Garage?" },
+        { ts: iso(77), author: "bot", text: "🤖 No lo encontré en el catálogo actual, pero puedo avisar al equipo." }
+      ],
+      business_signals: { sales_assisted: false, handoff_ever: false, resolved_by_bot: false, partial_resolution: true, evaluated: true }
+    }
+  ];
+  return {
+    ok: true,
+    demo: true,
+    bot_version: BOT_VERSION,
+    business: {
+      id: CUSTOMER_PANEL_BUSINESS.id,
+      name: CUSTOMER_PANEL_BUSINESS.name,
+      whatsapp_setup: { status: "ready", label: "WhatsApp listo" }
+    },
+    user: {
+      username: auth.username,
+      name: auth.name,
+      role: auth.role,
+      role_label: DASHBOARD_ROLE_LABELS[auth.role] || auth.role,
+      capabilities
+    },
+    data_window: {
+      source: "demo",
+      events_considered: 18,
+      returned_event_limit: 300,
+      from: iso(10080),
+      to: iso(0)
+    },
+    summary: {
+      clients_attended: 312,
+      messages: 1248,
+      active_handoffs: 2,
+      handoffs_to_human: 18,
+      pending_human_replies: 2,
+      zero_result_searches: 14,
+      opportunities_detected: 14,
+      sales_assisted: { count: 47, label: "ventas o intentos de compra", confidence: "demo" },
+      solutions_provided: { count: 268, partial: 31, evaluated: 312, rate: 86 },
+      rating: { average: 4.8, count: 214 },
+      messages_by_day: [
+        { day: "2026-07-07", messages: 34 },
+        { day: "2026-07-08", messages: 43 },
+        { day: "2026-07-09", messages: 58 },
+        { day: "2026-07-10", messages: 37 },
+        { day: "2026-07-11", messages: 74 },
+        { day: "2026-07-12", messages: 88 },
+        { day: "2026-07-13", messages: 61 }
+      ],
+      search_gaps: [
+        { query: "Lego Technic Ferrari Daytona SP3", count: 5 },
+        { query: "Barbie astronauta edición especial", count: 4 },
+        { query: "Hot Wheels Ultimate Garage", count: 3 },
+        { query: "Nerf Elite 2.0 Commander", count: 2 }
+      ],
+      conversation_modes: { human: 2, bot: 2, pending: 2 }
+    },
+    tags: CUSTOMER_META_TAGS,
+    conversations
+  };
+}
+
 app.post("/admin/login", (req, res) => {
   const username = String(req.body && req.body.username || "").trim();
   const password = String(req.body && req.body.password || "");
@@ -2199,7 +2578,7 @@ app.get("/admin/access-model", (req, res) => {
   });
 });
 
-app.get("/admin/release/:userId", (req, res) => {
+function releaseAdminConversation(req, res) {
   if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
@@ -2214,7 +2593,10 @@ app.get("/admin/release/:userId", (req, res) => {
   recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.");
   console.log(`[ADMIN] Released ${userId} (was handoff: ${wasActive})`);
   res.json({ ok: true, userId, wasInHandoff: wasActive });
-});
+}
+
+app.get("/admin/release/:userId", releaseAdminConversation);
+app.post("/admin/release/:userId", releaseAdminConversation);
 
 app.post("/admin/takeover/:userId", (req, res) => {
   if (!adminAuthOk(req, "agent")) {
@@ -2286,6 +2668,33 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
     note: req.body && req.body.note
   });
   res.json({ ok: true, userId, meta });
+});
+
+app.get("/admin/panel/data", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 200, 500));
+  let source = "memory";
+  let turns = conversationLogs.slice().reverse();
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchRecent(500);
+    if (rows) {
+      source = "supabase";
+      turns = rows.map(normalizeTurnRow);
+    }
+  }
+  turns.sort(function (a, b) {
+    return new Date(b.ts || 0) - new Date(a.ts || 0);
+  });
+  const auth = dashboardAuth(req);
+  const metaByCustomer = customerMetaFromTurns(turns);
+  res.json(buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit));
+});
+
+app.get("/admin/panel/demo-data", (req, res) => {
+  res.json(buildCustomerPanelDemoSnapshot());
 });
 
 app.get("/admin/templates", (req, res) => {
@@ -2495,7 +2904,7 @@ app.get("/admin/super-admin", (req, res) => {
   const draftCount = stages.filter(stage => stage.status === "draft").length;
   const statusLabels = { ready: "Listo", draft: "Pendiente", waiting_meta: "Esperando Meta" };
   const statusClasses = { ready: "ready", draft: "draft", waiting_meta: "waiting" };
-  const clientDashboardHref = "/admin/dashboard?tab=summary";
+  const clientDashboardHref = "/admin/panel?tab=summary";
   const roleCards = (DASHBOARD_ACCESS_MODEL.roles || []).map(role => `
     <article class="roleCard"><div class="row"><code>${escapeAdminHtml(role.role)}</code><span>Nivel ${escapeAdminHtml(role.level)}</span></div><strong>${escapeAdminHtml(role.owner)} · ${escapeAdminHtml(role.scope)}</strong><p>${escapeAdminHtml(role.purpose)}</p></article>`).join("");
   const panelCards = (DASHBOARD_ACCESS_MODEL.future_panels || []).map(panel => `
@@ -2550,6 +2959,50 @@ function logoutSuperAdmin(){try{localStorage.removeItem("rav_dashboard_key");}ca
 try{var cleanUrl=new URL(location.href);if(cleanUrl.searchParams.has("key")){cleanUrl.searchParams.delete("key");history.replaceState(null,"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);}}catch(e){}
 loadHealth();
 </script></body></html>`);
+});
+
+app.get("/admin/panel", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok) {
+    const requestedTab = ["summary", "conversations", "human", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
+    return;
+  }
+  if (auth.method === "key") {
+    setDashboardSessionCookie(req, res, auth);
+  }
+  const capabilities = customerPanelCapabilities(auth.role);
+  let initialTab = ["summary", "conversations", "human", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  if (initialTab === "tests" && !capabilities.run_tests) {
+    initialTab = "plan";
+  }
+  renderCustomerPanel(res, {
+    auth,
+    capabilities,
+    initialTab,
+    botVersion: BOT_VERSION
+  });
+});
+
+app.get("/admin/panel-demo", (req, res) => {
+  const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer", method: "demo" };
+  const initialTab = ["summary", "conversations", "human", "plan"].includes(req.query.tab) ? req.query.tab : "plan";
+  renderCustomerPanel(res, {
+    auth,
+    capabilities: customerPanelCapabilities("viewer"),
+    initialTab,
+    dataPath: "/admin/panel/demo-data",
+    healthPath: null,
+    loginPath: null,
+    botVersion: BOT_VERSION
+  });
+});
+
+app.get("/admin/customer-panel", (req, res) => {
+  const params = new URLSearchParams();
+  if (req.query.tab) params.set("tab", String(req.query.tab));
+  if (req.query.key) params.set("key", String(req.query.key));
+  res.redirect("/admin/panel" + (params.toString() ? "?" + params.toString() : ""));
 });
 
 app.get("/admin/dashboard", (req, res) => {
@@ -2982,7 +3435,7 @@ loadData(); setInterval(loadData, 15000);
 </body></html>`);
 });
 
-app.get("/admin/health", async (req, res) => {
+async function buildAdminHealthResult() {
   const result = {
     bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
     env: {
@@ -3045,7 +3498,35 @@ app.get("/admin/health", async (req, res) => {
     blockers,
     app_review_status: "external_meta_review_not_checked_here"
   };
-  res.json(result);
+  return result;
+}
+
+app.get("/admin/health", async (req, res) => {
+  res.json(await buildAdminHealthResult());
+});
+
+app.get("/admin/panel/health", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const health = await buildAdminHealthResult();
+  const ready = !!(health.production_readiness && health.production_readiness.infrastructure_ready);
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    checked_at: new Date().toISOString(),
+    operational_health: {
+      status: ready ? "ok" : "needs_review",
+      label: ready ? "Infra OK" : "Needs review"
+    },
+    whatsapp_setup: customerPanelWhatsappSetup(),
+    services: [
+      { id: "catalog", label: "Catalogo", status: health.checks.shopify_storefront === "ok" ? "ready" : "needs_review" },
+      { id: "messaging", label: "Mensajeria", status: health.checks.meta_whatsapp === "ok" ? "ready" : "needs_review" },
+      { id: "history", label: "Historial", status: health.checks.supabase_conversation_logs === "ok" ? "ready" : "needs_review" }
+    ]
+  });
 });
 
 app.post("/admin/alert", async (req, res) => {
@@ -3177,6 +3658,104 @@ app.post("/admin/order-status-test", async (req, res) => {
     shopify_api_version: SHOPIFY_ADMIN_API_VERSION,
     result
   });
+});
+
+app.get("/admin/panel/test-search", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const query = String(req.query.q || "").trim().slice(0, 80);
+  if (!query) {
+    res.status(400).json({ ok: false, error: "missing_query" });
+    return;
+  }
+  try {
+    const result = await searchShopify(query, { suppressSideEffects: true });
+    res.json({
+      ok: true,
+      query,
+      total: result.total || 0,
+      products: (result.products || []).slice(0, 12).map(function (product) {
+        return {
+          title: product.title,
+          price: product.price,
+          product_url: product.product_url,
+          product_type: product.product_type
+        };
+      })
+    });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: "catalog_search_unavailable" });
+  }
+});
+
+app.post("/admin/panel/order-status-test", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const result = await lookupOrderStatus({
+    order_number: req.body && req.body.order_number,
+    customer_name: req.body && req.body.customer_name,
+    phone_or_email: req.body && req.body.phone_or_email
+  });
+  if (result.error) {
+    res.status(502).json({
+      ok: false,
+      status: "unavailable",
+      message: "No pudimos consultar pedidos en este momento. Intenta de nuevo en unos minutos."
+    });
+    return;
+  }
+  const status = result.found && result.matched ? "matched" : (result.found ? "validation_failed" : "not_found");
+  const message = status === "matched"
+    ? "Pedido encontrado y datos validados."
+    : (status === "validation_failed"
+      ? "Encontramos el pedido, pero los datos del cliente no coinciden."
+      : "No encontramos un pedido con ese numero.");
+  res.json({
+    ok: status === "matched",
+    status,
+    message,
+    order: status === "matched" ? {
+      name: result.order_name,
+      created_at: result.created_at,
+      financial_status: result.financial_status,
+      fulfillment_status: result.fulfillment_status_label,
+      delivery_city: result.delivery_city,
+      delivery_region: result.delivery_region,
+      tracking: (result.tracking || []).map(function (item) {
+        return { company: item.company, number: item.number, url: item.url };
+      })
+    } : null
+  });
+});
+
+app.get("/admin/panel/smoke-check", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const query = String(req.query.q || "juguete").trim().slice(0, 80) || "juguete";
+  try {
+    const result = await searchShopify(query, { suppressSideEffects: true });
+    const products = result.products || [];
+    const pricedProduct = products.find(function (product) { return Number(product.price_amount) > 0; });
+    const ok = products.length > 0 && !!pricedProduct;
+    res.status(ok ? 200 : 503).json({
+      ok,
+      bot_version: BOT_VERSION,
+      query,
+      label: ok ? "Catalogo operativo" : "El catalogo necesita revision",
+      checks: {
+        catalog_search: products.length > 0 ? "ok" : "needs_review",
+        product_price: pricedProduct ? "ok" : "needs_review"
+      }
+    });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: "smoke_check_unavailable", label: "Prueba no disponible" });
+  }
 });
 
 // Stats con contadores persistentes (v33)

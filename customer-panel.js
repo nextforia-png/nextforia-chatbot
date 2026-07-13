@@ -8,6 +8,17 @@ function escapeHtml(value) {
   });
 }
 
+const PANEL_ICONS = {
+  resumen: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>',
+  conversaciones: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>',
+  intervencion: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><polyline points="16 11 18 13 22 9"></polyline></svg>',
+  plan: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>',
+  package: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="M3.3 7 12 12l8.7-5"></path><path d="M12 22V12"></path></svg>',
+  gift: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"></rect><path d="M12 8v13"></path><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"></path><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"></path></svg>',
+  check: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
+  sparkles: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"></path></svg>'
+};
+
 module.exports = function renderCustomerPanel(res, options) {
   const auth = options.auth || { name: "Panel", role: "viewer" };
   const capabilities = options.capabilities || {};
@@ -18,8 +29,8 @@ module.exports = function renderCustomerPanel(res, options) {
     ? options.initialTab
     : "summary";
   const canRunTests = !!capabilities.run_tests;
-  const planNav = "<button class=\"navItem\" id=\"nav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"navIcon\">◇</span><span>Mi plan</span></button>";
-  const planMobileNav = "<button id=\"mnav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span>◇</span><span>Mi plan</span></button>";
+  const planNav = "<button class=\"navItem\" id=\"nav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"navIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
+  const planMobileNav = "<button id=\"mnav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"mobileNavIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
 
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
@@ -70,7 +81,8 @@ button{cursor:pointer}
 .navItem{height:52px;border:0;border-radius:16px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:17px}
 .navItem:hover{background:rgba(255,255,255,.06);color:#fff}
 .navItem.active{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;box-shadow:0 18px 36px rgba(18,168,244,.24)}
-.navIcon{font-size:22px;line-height:1;opacity:.92}
+.navIcon{font-size:22px;line-height:1;opacity:.92;display:inline-flex;align-items:center;justify-content:center}
+.navIcon svg{width:20px;height:20px;display:block}
 .navBadge{min-width:26px;height:22px;border-radius:999px;background:rgba(148,163,184,.35);color:#fff;display:grid;place-items:center;font-size:12px;padding:0 7px}
 .navBadge.hot{background:var(--amber-500);color:#3C2600}
 .whatsappCard{margin-top:auto;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.06);border-radius:16px;padding:18px 16px;color:#EAF2FF}
@@ -288,9 +300,13 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .planBadge{position:absolute;top:14px;right:14px;border-radius:999px;background:var(--cyan-100);color:#057BB6;padding:6px 9px;font-size:11px;font-weight:950}
 .planOption.dark .planBadge{background:var(--amber-500);color:#3C2600}
 .benefits{display:grid;gap:9px;margin-top:2px}
-.benefits li{list-style:none;font-size:13px;color:#34425C;font-weight:750}
-.benefits li:before{content:"✓";color:var(--green-500);font-weight:950;margin-right:8px}
+.benefits li{list-style:none;font-size:13px;color:#34425C;font-weight:750;display:flex;align-items:flex-start;gap:8px}
+.benefitIcon{color:var(--green-500);display:inline-flex;align-items:center;justify-content:center;margin-top:1px;flex:0 0 auto}
+.benefitIcon svg{width:15px;height:15px;display:block}
 .planOption.dark .benefits li{color:#EEF6FF}
+.sectionIcon{display:inline-flex;align-items:center;justify-content:center;color:var(--cyan-500);vertical-align:-4px;margin-right:8px}
+.promoCard .sectionIcon{color:#5FD2FF}
+.sectionIcon svg{width:20px;height:20px;display:block}
 .planActions{display:grid;gap:8px;margin-top:auto}
 .planActions button:disabled{opacity:.55;cursor:default}
 .rescueGrid,.refPromoGrid,.transparencyGrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
@@ -410,7 +426,9 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .mobilePeriodShell .periods button{flex:1;height:42px;font-size:14px;padding:0}
   .mobileTabbar{display:grid;position:fixed;left:0;right:0;bottom:0;z-index:12;grid-template-columns:repeat(var(--mobile-tabs,4),1fr);gap:4px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);border-top:1px solid var(--line);box-shadow:0 -12px 30px rgba(8,22,52,.08);backdrop-filter:blur(12px)}
   .mobileTabbar button{position:relative;min-height:54px;border:0;border-radius:16px;background:transparent;color:#74839D;font-size:11px;font-weight:900;display:grid;place-items:center;gap:2px}
-  .mobileTabbar button span:first-child{font-size:20px;line-height:1}
+.mobileTabbar button span:first-child{font-size:20px;line-height:1}
+.mobileNavIcon{display:inline-flex;align-items:center;justify-content:center}
+.mobileNavIcon svg{width:20px;height:20px;display:block}
   .mobileTabbar button.active{background:var(--cyan-100);color:#057BB6}
   .mobileBadge{position:absolute;top:5px;right:18px;min-width:18px;height:18px;border-radius:999px;background:var(--amber-500);color:#3C2600;font-size:10px;display:grid;place-items:center;padding:0 5px}
   .planView{gap:12px}
@@ -441,9 +459,9 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
       <div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div>
     </div>
     <nav class="nav" aria-label="Secciones">
-      <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">▦</span><span>Resumen</span></button>
-      <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">○</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
-      <button class="navItem" id="nav-human" type="button" onclick="showTab('human')"><span class="navIcon">♙</span><span>Intervención humana</span><span class="navBadge hot" id="navHumanCount">0</span></button>
+      <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
+      <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
+      <button class="navItem" id="nav-human" type="button" onclick="showTab('human')"><span class="navIcon">${PANEL_ICONS.intervencion}</span><span>Intervención humana</span><span class="navBadge hot" id="navHumanCount">0</span></button>
       ${planNav}
     </nav>
     <div class="whatsappCard">
@@ -505,7 +523,7 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
           </section>
 
           <section class="planBlock recommendation">
-            <div class="recommendationText"><div class="recommendationIcon">✧</div><div><h3>Te recomiendo mirar esto</h3><p id="planRecommendation">Tu plan actual sigue siendo el adecuado para este ritmo de consumo.</p></div></div>
+            <div class="recommendationText"><div class="recommendationIcon">${PANEL_ICONS.sparkles}</div><div><h3>Te recomiendo mirar esto</h3><p id="planRecommendation">Tu plan actual sigue siendo el adecuado para este ritmo de consumo.</p></div></div>
             <div class="recommendationActions"><button class="primaryBtn" type="button" onclick="scrollToPlan('duo')">Ver plan recomendado</button><button class="ghostBtn" type="button">Mantener plan actual</button></div>
           </section>
 
@@ -513,21 +531,21 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
             <h3>Planes disponibles</h3>
             <p>Elige el bot que mejor acompaña la operación de tu negocio.</p>
             <div class="planGrid">
-              <article class="planOption"><h4>Bot Agendamiento de citas</h4><p>Ideal para negocios que necesitan reservar, confirmar y recordar citas automáticamente.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li>Agenda y confirma citas</li><li>Recordatorios automáticos</li><li>Derivación a humano cuando haga falta</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
-              <article class="planOption"><span class="planBadge">Tu plan actual</span><h4>Bot Atención al cliente</h4><p>Responde preguntas frecuentes, guía compras y escala casos importantes a tu equipo.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li>Atención 24/7 en WhatsApp</li><li>Resumen de resultados</li><li>Intervención humana asistida</li></ul><div class="planActions"><button class="primaryBtn" type="button" disabled>Plan activo</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
-              <article class="planOption dark" id="plan-duo"><span class="planBadge">Mejor valor</span><h4>Nextfor Dúo</h4><p>Combina atención al cliente y agendamiento para crecer con menos trabajo operativo.</p><div class="priceLine"><strong>$1.690.000 setup</strong><span>$499.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li>Atención + agendamiento</li><li>Mejor cobertura operativa</li><li>Más automatización por el mismo canal</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
+              <article class="planOption"><h4>Bot Agendamiento de citas</h4><p>Ideal para negocios que necesitan reservar, confirmar y recordar citas automáticamente.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Agenda y confirma citas</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Recordatorios automáticos</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Derivación a humano cuando haga falta</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
+              <article class="planOption"><span class="planBadge">Tu plan actual</span><h4>Bot Atención al cliente</h4><p>Responde preguntas frecuentes, guía compras y escala casos importantes a tu equipo.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Atención 24/7 en WhatsApp</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Resumen de resultados</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Intervención humana asistida</li></ul><div class="planActions"><button class="primaryBtn" type="button" disabled>Plan activo</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
+              <article class="planOption dark" id="plan-duo"><span class="planBadge">Mejor valor</span><h4>Nextfor Dúo</h4><p>Combina atención al cliente y agendamiento para crecer con menos trabajo operativo.</p><div class="priceLine"><strong>$1.690.000 setup</strong><span>$499.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Atención + agendamiento</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Mejor cobertura operativa</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Más automatización por el mismo canal</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
             </div>
           </section>
 
           <section class="planBlock">
             <h3>Paquetes de rescate</h3>
             <p>Si te acercas al límite, puedes sumar chats extra sin cambiar de plan.</p>
-            <div class="rescueGrid"><article class="rescueCard"><strong>20 chats</strong><span>Precio disponible próximamente</span><button class="primaryBtn" type="button" style="margin-top:14px">Comprar chats adicionales</button></article><article class="rescueCard"><strong>50 chats</strong><span>Precio disponible próximamente</span><button class="primaryBtn" type="button" style="margin-top:14px">Comprar chats adicionales</button></article></div>
+            <div class="rescueGrid"><article class="rescueCard"><strong><span class="sectionIcon">${PANEL_ICONS.package}</span>20 chats</strong><span>Precio disponible próximamente</span><button class="primaryBtn" type="button" style="margin-top:14px">Comprar chats adicionales</button></article><article class="rescueCard"><strong><span class="sectionIcon">${PANEL_ICONS.package}</span>50 chats</strong><span>Precio disponible próximamente</span><button class="primaryBtn" type="button" style="margin-top:14px">Comprar chats adicionales</button></article></div>
           </section>
 
           <div class="refPromoGrid">
-            <section class="planBlock"><h3>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">RAVTOYS</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
-            <section class="planBlock promoCard"><h3>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px">Ver promoción</button></section>
+            <section class="planBlock"><h3><span class="sectionIcon">${PANEL_ICONS.gift}</span>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">RAVTOYS</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
+            <section class="planBlock promoCard"><h3><span class="sectionIcon">${PANEL_ICONS.sparkles}</span>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px">Ver promoción</button></section>
           </div>
 
           <section class="planBlock">
@@ -552,9 +570,9 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
     </div>
   </main>
   <nav class="mobileTabbar" aria-label="Navegación móvil" style="--mobile-tabs:4">
-    <button id="mnav-summary" type="button" onclick="showTab('summary')"><span>▦</span><span>Resumen</span></button>
-    <button id="mnav-conversations" type="button" onclick="showTab('conversations')"><span>○</span><span>Chats</span></button>
-    <button id="mnav-human" type="button" onclick="showTab('human')"><span>♙</span><span>Alertas</span><span class="mobileBadge" id="mnavHumanCount">0</span></button>
+    <button id="mnav-summary" type="button" onclick="showTab('summary')"><span class="mobileNavIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
+    <button id="mnav-conversations" type="button" onclick="showTab('conversations')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span></button>
+    <button id="mnav-human" type="button" onclick="showTab('human')"><span class="mobileNavIcon">${PANEL_ICONS.intervencion}</span><span>Alertas</span><span class="mobileBadge" id="mnavHumanCount">0</span></button>
     ${planMobileNav}
   </nav>
 </div>

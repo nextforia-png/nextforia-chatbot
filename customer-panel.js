@@ -25,7 +25,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const dataPath = options.dataPath || "/admin/panel/data?limit=300";
   const healthPath = options.healthPath === null ? "" : (options.healthPath || "/admin/panel/health");
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
-  const initialTab = ["summary", "conversations", "human", "plan", "tests"].includes(options.initialTab)
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(options.initialTab)
     ? options.initialTab
     : "summary";
   const canRunTests = !!capabilities.run_tests;
@@ -70,13 +70,22 @@ body{font-family:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"Segoe UI"
 button,input,textarea{font:inherit}
 button{cursor:pointer}
 .app{min-height:100vh;display:grid;grid-template-columns:282px minmax(0,1fr)}
-.mobileTop,.mobileTabbar,.mobileBack,.mobilePeriodShell{display:none}
+.mobileTop,.mobileModuleBar,.mobileTabbar,.mobileBack,.mobilePeriodShell{display:none}
 .sidebar{height:100vh;position:sticky;top:0;background:linear-gradient(180deg,var(--navy-950),var(--navy-900));color:#fff;padding:26px 18px;display:flex;flex-direction:column;gap:30px}
 .brand{display:flex;align-items:center;gap:14px;padding:0 2px}
 .ravLogo{width:56px;height:56px;border-radius:14px;background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));display:grid;place-items:center;font-size:22px;font-weight:800;letter-spacing:-.04em;box-shadow:0 14px 28px rgba(18,168,244,.24)}
 .brand h1{font-size:21px;line-height:1;font-weight:800;letter-spacing:-.04em}
 .brand p{margin-top:5px;color:#96A7C4;font-size:14px;font-weight:600}
 .brand p span{color:var(--cyan-400)}
+.moduleSwitcher{display:grid;gap:8px;margin-top:-10px}
+.moduleTitle{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:#6F819F;font-weight:950;padding:0 14px}
+.moduleBtn{border:1px solid rgba(255,255,255,.08);border-radius:16px;background:rgba(255,255,255,.04);color:#B9C5D8;padding:12px 14px;text-align:left;display:grid;gap:5px}
+.moduleBtn strong{font-size:14px;color:#fff;font-weight:950}
+.moduleBtn span{font-size:11px;color:#91A2BF;font-weight:800}
+.moduleBtn.active{background:rgba(18,168,244,.14);border-color:rgba(37,191,255,.30);box-shadow:0 14px 26px rgba(18,168,244,.10)}
+.moduleBtn.locked strong{color:#D8E2F2}
+.moduleStatus{display:inline-flex;width:max-content;border-radius:999px;padding:4px 8px;background:rgba(20,169,113,.16);color:#9DF0C8;font-size:10px;font-weight:950}
+.moduleStatus.off{background:rgba(245,165,36,.16);color:#FFD28A}
 .nav{display:grid;gap:12px}
 .navItem{height:52px;border:0;border-radius:16px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:17px}
 .navItem:hover{background:rgba(255,255,255,.06);color:#fff}
@@ -265,6 +274,29 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .contextActions button{width:100%}
 .empty{color:var(--slate-500);font-size:13px;padding:18px 0}
 .planView{display:grid;gap:20px}
+.moduleHero{display:grid;grid-template-columns:1.35fr .65fr;gap:20px;align-items:stretch;border-radius:24px;background:radial-gradient(circle at 80% 12%,rgba(18,168,244,.28),transparent 34%),linear-gradient(145deg,var(--navy-950),var(--navy-700));color:#fff;padding:28px;box-shadow:var(--shadow)}
+.moduleHero h3{font-size:34px;line-height:1;font-weight:950;letter-spacing:-.05em}
+.moduleHero p{margin-top:12px;color:#C8D3E6;font-size:16px;font-weight:700;max-width:680px}
+.moduleHeroCard{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:18px}
+.moduleHeroCard strong{display:block;font-size:13px;color:#fff;font-weight:950}
+.moduleHeroCard p{font-size:13px;margin-top:8px}
+.moduleBadge{display:inline-flex;border-radius:999px;background:rgba(245,165,36,.18);color:#FFD28A;padding:7px 10px;font-size:12px;font-weight:950;margin-bottom:16px}
+.appointmentGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.appointmentMetric{padding:20px;min-height:150px}
+.appointmentMetric span{color:var(--slate-500);font-size:13px;font-weight:900}
+.appointmentMetric strong{display:block;margin-top:18px;font-size:34px;line-height:1;font-weight:950;letter-spacing:-.05em}
+.appointmentMetric p{margin-top:8px;color:var(--slate-500);font-size:12px;font-weight:700}
+.moduleInfoGrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.moduleList{display:grid;gap:12px;margin-top:18px}
+.moduleList li{list-style:none;display:flex;gap:10px;align-items:flex-start;color:#34425C;font-size:14px;font-weight:750}
+.moduleList .benefitIcon{margin-top:2px}
+.serviceGrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
+.serviceCard{border:1px solid var(--line);border-radius:20px;padding:18px;background:#FAFCFF;display:grid;gap:12px}
+.serviceCard.active{background:var(--cyan-050);border-color:#BDEBFF}
+.serviceCard h4{font-size:17px;font-weight:950}
+.serviceCard p{color:var(--slate-500);font-size:13px;font-weight:700}
+.serviceState{display:inline-flex;width:max-content;border-radius:999px;background:var(--green-100);color:#087E50;padding:6px 10px;font-size:11px;font-weight:950}
+.serviceState.off{background:var(--amber-100);color:#98640E}
 .planHero{display:grid;grid-template-columns:1.2fr .8fr;gap:20px;border-radius:24px;background:radial-gradient(circle at 82% 12%,rgba(18,168,244,.30),transparent 34%),linear-gradient(145deg,var(--navy-950),var(--navy-700));color:#fff;padding:26px;box-shadow:var(--shadow)}
 .planHero h3{font-size:30px;line-height:1;font-weight:950;letter-spacing:-.05em}
 .planHero p{margin-top:10px;color:#C8D3E6;font-weight:700}
@@ -335,7 +367,7 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .nav{display:flex;overflow:auto;width:100%}
   .navItem{min-width:max-content}
   .whatsappCard{display:none}
-  .summary,.bottomGrid,.metricRow,.testGrid,.planHero,.planGrid,.rescueGrid,.refPromoGrid{grid-template-columns:1fr 1fr}
+  .summary,.bottomGrid,.metricRow,.testGrid,.planHero,.planGrid,.rescueGrid,.refPromoGrid,.moduleHero,.appointmentGrid,.moduleInfoGrid{grid-template-columns:1fr 1fr}
   .transparencyGrid{grid-template-columns:1fr 1fr}
   .inboxShell{grid-template-columns:300px 1fr}
   .profileColumn{display:none}
@@ -351,8 +383,12 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .mobileBrand .ravLogo{width:42px;height:42px;border-radius:13px;font-size:17px}
   .mobileBrand h1{font-size:18px;line-height:1;font-weight:950;letter-spacing:-.04em}
   .mobileBrand p{font-size:12px;color:var(--slate-500);font-weight:700;margin-top:2px}
-  .mobileBrand p span{color:var(--cyan-500)}
+.mobileBrand p span{color:var(--cyan-500)}
   .mobileAvatar{width:40px;height:40px;border-radius:999px;background:var(--navy-900);color:#fff;display:grid;place-items:center;font-weight:950}
+  .mobileModuleBar{display:flex;gap:8px;overflow:auto;padding:10px 14px 0;background:#fff}
+  .mobileModuleBar button{border:1px solid var(--line);background:#fff;color:var(--slate-700);border-radius:999px;padding:9px 12px;font-size:12px;font-weight:900;white-space:nowrap}
+  .mobileModuleBar button.active{border-color:var(--cyan-500);background:var(--cyan-100);color:#057BB6}
+  .mobileModuleBar button.locked{color:#8A96A8}
   .content{padding:14px}
   .summary{display:block}
   .iaBanner{border-radius:22px;padding:18px;align-items:flex-start;margin-bottom:14px}
@@ -432,6 +468,11 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .mobileTabbar button.active{background:var(--cyan-100);color:#057BB6}
   .mobileBadge{position:absolute;top:5px;right:18px;min-width:18px;height:18px;border-radius:999px;background:var(--amber-500);color:#3C2600;font-size:10px;display:grid;place-items:center;padding:0 5px}
   .planView{gap:12px}
+  .moduleHero{grid-template-columns:1fr;border-radius:22px;padding:20px}
+  .moduleHero h3{font-size:28px}
+  .moduleHero p{font-size:15px}
+  .appointmentGrid,.moduleInfoGrid{grid-template-columns:1fr}
+  .appointmentMetric{min-height:auto;border-radius:18px;padding:18px}
   .planHero{grid-template-columns:1fr;border-radius:22px;padding:20px}
   .planHero h3{font-size:26px}
   .usageCard{padding:16px}
@@ -440,7 +481,7 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .recommendationActions{justify-content:stretch;margin-top:16px}
   .recommendationActions button{width:100%}
   .planBlock{border-radius:20px;padding:18px}
-  .planGrid,.rescueGrid,.refPromoGrid,.transparencyGrid{grid-template-columns:1fr}
+  .planGrid,.rescueGrid,.refPromoGrid,.transparencyGrid,.serviceGrid{grid-template-columns:1fr}
   .planOption{min-height:auto}
   .refCode{display:grid}
   .testGrid{grid-template-columns:1fr}
@@ -453,10 +494,19 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
     <div class="mobileBrand"><div class="ravLogo">RAV</div><div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div></div>
     <div class="mobileAvatar">RA</div>
   </header>
+  <div class="mobileModuleBar" aria-label="Módulos">
+    <button id="mobileModule-support" type="button" onclick="showTab('summary')">Atención al cliente · Activo</button>
+    <button id="mobileModule-appointments" class="locked" type="button" onclick="showTab('appointments')">Agendamiento de citas · No activo</button>
+  </div>
   <aside class="sidebar">
     <div class="brand">
       <div class="ravLogo">RAV</div>
       <div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div>
+    </div>
+    <div class="moduleSwitcher" aria-label="Módulos del panel">
+      <div class="moduleTitle">Módulos</div>
+      <button class="moduleBtn" id="module-support" type="button" onclick="showTab('summary')"><strong>Atención al cliente</strong><span class="moduleStatus">Activo</span></button>
+      <button class="moduleBtn locked" id="module-appointments" type="button" onclick="showTab('appointments')"><strong>Agendamiento de citas</strong><span class="moduleStatus off">No activo</span></button>
     </div>
     <nav class="nav" aria-label="Secciones">
       <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
@@ -506,6 +556,47 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
         </div>
       </section>
 
+      <section class="view" id="panel-appointments">
+        <div class="planView">
+          <section class="moduleHero">
+            <div>
+              <span class="moduleBadge">Módulo no activo</span>
+              <h3>Agendamiento de citas</h3>
+              <p>Este módulo tendrá su propio resumen, agenda, recordatorios y métricas cuando el bot de citas esté contratado y funcionando. No mezclamos estas métricas con Atención al cliente.</p>
+              <div class="planMeta"><span class="planPill">Servicio independiente</span><span class="planPill">Activación desde Mi plan</span></div>
+            </div>
+            <aside class="moduleHeroCard">
+              <strong>Qué pasará al activarlo</strong>
+              <p>El panel mostrará solo datos del bot de citas: solicitudes, citas agendadas, confirmaciones, recordatorios, cancelaciones y no-shows.</p>
+              <button class="primaryBtn" type="button" onclick="showTab('plan')" style="margin-top:16px">Ver en Mi plan</button>
+            </aside>
+          </section>
+
+          <div class="appointmentGrid">
+            <article class="card appointmentMetric"><span>Citas solicitadas</span><strong>—</strong><p>Clientes que pidieron reservar una cita.</p></article>
+            <article class="card appointmentMetric"><span>Citas agendadas</span><strong>—</strong><p>Reservas confirmadas por el bot.</p></article>
+            <article class="card appointmentMetric"><span>Recordatorios enviados</span><strong>—</strong><p>Mensajes automáticos para evitar ausencias.</p></article>
+            <article class="card appointmentMetric"><span>No-shows reducidos</span><strong>—</strong><p>Impacto esperado cuando haya historial.</p></article>
+          </div>
+
+          <div class="moduleInfoGrid">
+            <section class="planBlock">
+              <h3>Qué medirá este módulo</h3>
+              <p>Métricas pensadas para negocios que dependen de agenda, reservas y asistencia.</p>
+              <ul class="moduleList">
+                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Citas solicitadas, agendadas y confirmadas</li>
+                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Reagendamientos y cancelaciones</li>
+                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Recordatorios enviados por WhatsApp</li>
+                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Tasa de asistencia y no-shows</li>
+              </ul>
+            </section>
+            <section class="planBlock recommendation">
+              <div class="recommendationText"><div class="recommendationIcon">${PANEL_ICONS.sparkles}</div><div><h3>Te recomiendo mantenerlo separado</h3><p>Atención al cliente prueba cuánto responde y resuelve tu bot. Agendamiento prueba cuántas citas logra llenar y confirmar. Son dos valores distintos.</p></div></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
       <section class="view" id="panel-plan">
         <div class="planView">
           <section class="planHero">
@@ -525,6 +616,15 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
           <section class="planBlock recommendation">
             <div class="recommendationText"><div class="recommendationIcon">${PANEL_ICONS.sparkles}</div><div><h3>Te recomiendo mirar esto</h3><p id="planRecommendation">Tu plan actual sigue siendo el adecuado para este ritmo de consumo.</p></div></div>
             <div class="recommendationActions"><button class="primaryBtn" type="button" onclick="scrollToPlan('duo')">Ver plan recomendado</button><button class="ghostBtn" type="button">Mantener plan actual</button></div>
+          </section>
+
+          <section class="planBlock">
+            <h3>Módulos del panel</h3>
+            <p>Cada bot tiene sus propias métricas y se activa cuando el servicio está funcionando.</p>
+            <div class="serviceGrid">
+              <article class="serviceCard active"><span class="serviceState">Activo</span><h4>Atención al cliente</h4><p>Incluye Resumen, Conversaciones e Intervención humana. Sus métricas no incluyen citas.</p><button class="ghostBtn" type="button" onclick="showTab('summary')">Ver módulo</button></article>
+              <article class="serviceCard"><span class="serviceState off">No activo</span><h4>Agendamiento de citas</h4><p>Se activará como módulo independiente cuando el bot de citas esté contratado y funcionando.</p><button class="ghostBtn" type="button" onclick="showTab('appointments')">Ver estructura</button></article>
+            </div>
           </section>
 
           <section class="planBlock">
@@ -586,7 +686,7 @@ function text(id,value){var el=document.getElementById(id);if(el)el.textContent=
 function api(url,opts){opts=opts||{};opts.headers=Object.assign({accept:"application/json"},opts.headers||{});if(opts.body&&!opts.headers["content-type"])opts.headers["content-type"]="application/json";return fetch(url,opts).then(function(response){return response.json().catch(function(){return {};}).then(function(body){if(response.status===401){if(PANEL_LOGIN_PATH)location.href=PANEL_LOGIN_PATH;throw new Error("Sesión vencida");}if(!response.ok){var error=new Error(body.message||body.error||("HTTP "+response.status));error.body=body;throw error;}return body;});});}
 function when(ts){if(!ts)return "";var d=new Date(ts);if(isNaN(d.getTime()))return "";return d.toLocaleString("es-CO",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});}
 function setBusy(id,busy,busyText,normalText){var b=document.getElementById(id);if(!b)return;b.disabled=!!busy;b.textContent=busy?busyText:normalText;}
-function showTab(name){if(name==="tests"&&!SERVER_CAPABILITIES.run_tests)name="plan";state.tab=name;document.body.classList.remove("chat-open");["summary","conversations","human","plan","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});var summary=document.getElementById("panel-summary"),inbox=document.getElementById("panel-inbox"),plan=document.getElementById("panel-plan"),tests=document.getElementById("panel-tests"),toolbar=document.querySelector(".toolbar");if(summary)summary.classList.toggle("active",name==="summary");if(inbox)inbox.classList.toggle("active",name==="conversations"||name==="human");if(plan)plan.classList.toggle("active",name==="plan");if(tests)tests.classList.toggle("active",name==="tests");if(toolbar)toolbar.style.display=name==="plan"?"none":"flex";text("pageTitle",name==="summary"?"Resumen":(name==="human"?"Intervención humana":(name==="tests"?"Pruebas":(name==="plan"?"Mi plan":"Conversaciones"))));text("pageSubtitle",name==="summary"?"Resultados del bot en WhatsApp · Últimos 7 días":(name==="human"?"Clientes que necesitan una mano del equipo.":(name==="tests"?"Herramientas seguras para validar el bot.":(name==="plan"?"Plan y consumo":"Bandeja de clientes con contexto y sugerencias."))));try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}if(name==="human"&&state.filter==="all")state.filter="pending";if(name==="conversations"&&state.filter==="pending")state.filter="all";renderInbox();renderPlan();window.scrollTo(0,0);}
+function showTab(name){if(name==="tests"&&!SERVER_CAPABILITIES.run_tests)name="plan";state.tab=name;document.body.classList.remove("chat-open");var supportModule=name==="summary"||name==="conversations"||name==="human",appointmentsModule=name==="appointments";["summary","conversations","human","appointments","plan","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});["module-support","mobileModule-support"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",supportModule);});["module-appointments","mobileModule-appointments"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",appointmentsModule);});var summary=document.getElementById("panel-summary"),inbox=document.getElementById("panel-inbox"),appointments=document.getElementById("panel-appointments"),plan=document.getElementById("panel-plan"),tests=document.getElementById("panel-tests"),toolbar=document.querySelector(".toolbar");if(summary)summary.classList.toggle("active",name==="summary");if(inbox)inbox.classList.toggle("active",name==="conversations"||name==="human");if(appointments)appointments.classList.toggle("active",name==="appointments");if(plan)plan.classList.toggle("active",name==="plan");if(tests)tests.classList.toggle("active",name==="tests");if(toolbar)toolbar.style.display=(name==="plan"||name==="appointments")?"none":"flex";text("pageTitle",name==="summary"?"Resumen":(name==="human"?"Intervención humana":(name==="tests"?"Pruebas":(name==="plan"?"Mi plan":(name==="appointments"?"Agendamiento de citas":"Conversaciones")))));text("pageSubtitle",name==="summary"?"Resultados del bot de atención en WhatsApp · Últimos 7 días":(name==="human"?"Clientes que necesitan una mano del equipo.":(name==="tests"?"Herramientas seguras para validar el bot.":(name==="plan"?"Plan, módulos y consumo":(name==="appointments"?"Módulo independiente · Se activa cuando esté funcionando":"Bandeja de clientes con contexto y sugerencias.")))));try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}if(name==="human"&&state.filter==="all")state.filter="pending";if(name==="conversations"&&state.filter==="pending")state.filter="all";renderInbox();renderPlan();window.scrollTo(0,0);}
 function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH).then(function(data){state.data=data;state.conversations=data.conversations||[];SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;if(!state.selected&&state.conversations.length)state.selected=state.conversations[0].phone;if(state.selected&&!findConversation(state.selected))state.selected=state.conversations.length?state.conversations[0].phone:null;renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
 function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;}).catch(function(){});}
 function renderPlan(){var p=PLAN_DATA,included=Math.max(1,Number(p.chatsIncluidos)||1),used=Math.max(0,Number(p.chatsConsumidos)||0),available=Math.max(0,included-used),pct=Math.min(100,Math.round(used/included*100)),status=pct>=100?"limit":(pct>=80?"warn":"normal"),fill=document.getElementById("usageFill");text("planName",p.nombre);text("planMonthly",p.mensualidad);text("planRenewal",p.renovacion);text("usagePct",pct+"%");text("chatsConsumed",used);text("chatsIncluded",included);text("chatsAvailable",available);text("usageState",status==="limit"?"Límite alcanzado":(status==="warn"?"Atención":"Vas al día"));text("usageMessage",status==="limit"?"Alcanzaste el 100% de tus chats. Suma un paquete de rescate para seguir atendiendo.":(status==="warn"?"Has utilizado el "+pct+"% de tus chats disponibles.":"Vas al día con tu consumo de chats."));if(fill){fill.className="usageFill"+(status==="warn"?" warn":(status==="limit"?" limit":""));fill.style.width=pct+"%";}text("planRecommendation",p.rescatesFrecuentes?"Estás cerca del límite. Si compras rescates seguido, cambiar a Nextfor Dúo podría salirte más económico y darte más margen para crecer.":"Tu consumo adicional es ocasional. Tu plan actual sigue siendo el adecuado.");text("refCode",p.referidos.codigo);text("refHint",(p.referidos.count||0)+" referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.");}

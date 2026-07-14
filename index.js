@@ -2964,7 +2964,7 @@ loadHealth();
 app.get("/admin/panel", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
     renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
@@ -2972,7 +2972,7 @@ app.get("/admin/panel", (req, res) => {
     setDashboardSessionCookie(req, res, auth);
   }
   const capabilities = customerPanelCapabilities(auth.role);
-  let initialTab = ["summary", "conversations", "human", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -2986,7 +2986,7 @@ app.get("/admin/panel", (req, res) => {
 
 app.get("/admin/panel-demo", (req, res) => {
   const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer", method: "demo" };
-  const initialTab = ["summary", "conversations", "human", "plan"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities: customerPanelCapabilities("viewer"),

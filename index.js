@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v62-instagram";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v63-instagram-panel";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -206,6 +206,22 @@ function normalizeCustomerNote(note) {
   return String(note || "").replace(/\s+\n/g, "\n").trim().slice(0, 1200);
 }
 
+function normalizeConversationUserId(value) {
+  const raw = String(value || "").trim();
+  const instagram = /^ig:/i.test(raw);
+  const externalId = raw.replace(/^(ig|wa):/i, "").replace(/\D/g, "");
+  if (!externalId) return "";
+  return instagram ? "ig:" + externalId : externalId;
+}
+
+function conversationChannel(value) {
+  return /^ig:/i.test(String(value || "")) ? "instagram" : "whatsapp";
+}
+
+function conversationExternalId(value) {
+  return normalizeConversationUserId(value).replace(/^ig:/, "");
+}
+
 function parseCustomerMetaTurn(turn) {
   if (!isCustomerMetaTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[Meta\]\s*/, "");
@@ -226,7 +242,7 @@ function customerMetaFromTurns(turns) {
   (turns || []).slice().sort(function (a, b) {
     return new Date(a.ts || 0) - new Date(b.ts || 0);
   }).forEach(function (turn) {
-    const userId = String(turn.userId || "").replace(/\D/g, "");
+    const userId = normalizeConversationUserId(turn.userId);
     if (!userId) return;
     const parsed = parseCustomerMetaTurn(turn);
     if (parsed) meta[userId] = parsed;
@@ -261,14 +277,14 @@ function recordCustomerMeta(userId, meta) {
 function inferHandoffStates(turns, activeUsers) {
   const states = {};
   (activeUsers || []).forEach(function (id) {
-    const userId = String(id || "").replace(/\D/g, "");
+    const userId = normalizeConversationUserId(id);
     if (userId) states[userId] = { active: true, source: "memory", last_change_ts: null };
   });
 
   (turns || []).slice().sort(function (a, b) {
     return new Date(a.ts || 0) - new Date(b.ts || 0);
   }).forEach(function (turn) {
-    const userId = String(turn.userId || "").replace(/\D/g, "");
+    const userId = normalizeConversationUserId(turn.userId);
     if (!userId) return;
     const tools = Array.isArray(turn.tools) ? turn.tools : [];
     if (tools.includes("admin_release")) {
@@ -2244,6 +2260,14 @@ function customerPanelWhatsappSetup() {
   };
 }
 
+function customerPanelInstagramSetup() {
+  const ready = !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID);
+  return {
+    status: ready ? "ready" : "pending",
+    label: ready ? "Instagram conectado" : "Configuracion de Instagram pendiente"
+  };
+}
+
 function customerPanelControlEvent(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   if (tools.includes("admin_release")) return "released";
@@ -2267,27 +2291,82 @@ function customerPanelSalesSignal(turn) {
     (evalData && evalData.intencion_compra === true);
 }
 
+function emptyCustomerPanelChannelStats() {
+  return { inbound_messages: 0, zero_result_searches: 0, zero_result_counts: {}, messages_by_day: {}, ratings: [] };
+}
+
+function summarizeCustomerPanelChannel(conversations, stats) {
+  const channelConversations = conversations || [];
+  const channelStats = stats || emptyCustomerPanelChannelStats();
+  const activeHandoffs = channelConversations.filter(function (item) { return item.mode === "human"; }).length;
+  const pendingReplies = channelConversations.filter(function (item) { return item.needs_reply; }).length;
+  const salesAssisted = channelConversations.filter(function (item) { return item.business_signals.sales_assisted; }).length;
+  const handoffsEver = channelConversations.filter(function (item) { return item.business_signals.handoff_ever; }).length;
+  const evaluatedConversations = channelConversations.filter(function (item) { return item.business_signals.evaluated; }).length;
+  const resolvedByBot = channelConversations.filter(function (item) { return item.business_signals.resolved_by_bot; }).length;
+  const partialResolutions = channelConversations.filter(function (item) { return item.business_signals.partial_resolution; }).length;
+  const resolvedRate = evaluatedConversations ? Math.round(resolvedByBot / evaluatedConversations * 100) : null;
+  const ratings = channelStats.ratings || [];
+  const avgRating = ratings.length
+    ? Math.round(ratings.reduce(function (sum, value) { return sum + value; }, 0) / ratings.length * 10) / 10
+    : null;
+  const gapTerms = Object.keys(channelStats.zero_result_counts || {}).map(function (query) {
+    return { query, count: channelStats.zero_result_counts[query] };
+  }).sort(function (a, b) { return b.count - a.count; }).slice(0, 8);
+  const activity = Object.keys(channelStats.messages_by_day || {}).sort().slice(-14).map(function (day) {
+    return { day, messages: channelStats.messages_by_day[day] };
+  });
+  return {
+    clients_attended: channelConversations.length,
+    messages: channelStats.inbound_messages || 0,
+    active_handoffs: activeHandoffs,
+    handoffs_to_human: handoffsEver,
+    pending_human_replies: pendingReplies,
+    zero_result_searches: channelStats.zero_result_searches || 0,
+    opportunities_detected: channelStats.zero_result_searches || 0,
+    sales_assisted: {
+      count: salesAssisted,
+      label: salesAssisted === 1 ? "venta o intento de compra" : "ventas o intentos de compra",
+      confidence: "intent_or_checkout_signal"
+    },
+    solutions_provided: {
+      count: resolvedByBot,
+      partial: partialResolutions,
+      evaluated: evaluatedConversations,
+      rate: resolvedRate
+    },
+    rating: { average: avgRating, count: ratings.length },
+    messages_by_day: activity,
+    search_gaps: gapTerms,
+    conversation_modes: {
+      human: activeHandoffs,
+      bot: Math.max(channelConversations.length - activeHandoffs, 0),
+      pending: pendingReplies
+    }
+  };
+}
+
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
   const operationalTurns = (rawTurns || []).filter(function (turn) { return !isCustomerMetaTurn(turn); });
   const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
   const allTurns = operationalTurns.slice(0, turnLimit);
   const groups = {};
-  const zeroResultCounts = {};
-  const messagesByDay = {};
-  const ratings = [];
-  let inboundMessages = 0;
-  let zeroResultSearches = 0;
+  const channelStats = { whatsapp: emptyCustomerPanelChannelStats(), instagram: emptyCustomerPanelChannelStats() };
   let minTs = null;
   let maxTs = null;
 
   allTurns.slice().sort(function (a, b) {
     return new Date(a.ts || 0) - new Date(b.ts || 0);
   }).forEach(function (turn) {
-    const userId = String(turn.userId || "").replace(/\D/g, "");
+    const userId = normalizeConversationUserId(turn.userId);
     if (!userId) return;
+    const channel = conversationChannel(userId);
+    const stats = channelStats[channel];
     if (!groups[userId]) {
       groups[userId] = {
-        phone: userId,
+        id: userId,
+        external_id: conversationExternalId(userId),
+        channel,
         messages: [],
         last_inbound_ms: 0,
         last_human_reply_ms: 0,
@@ -2315,12 +2394,12 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
 
     const customerText = String(turn.userMessage || "").trim();
     if (customerText) {
-      inboundMessages++;
+      stats.inbound_messages++;
       group.messages.push({ ts, author: "customer", text: customerText });
       group.last_inbound_ms = Math.max(group.last_inbound_ms, tsMs);
       group.last_text = customerText;
       const day = String(ts || "").slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) messagesByDay[day] = (messagesByDay[day] || 0) + 1;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) stats.messages_by_day[day] = (stats.messages_by_day[day] || 0) + 1;
     }
 
     const controlEvent = customerPanelControlEvent(turn);
@@ -2340,9 +2419,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     if (turn.handoff || tools.includes("request_human_handoff") || tools.includes("human_handoff_active") || tools.includes("admin_takeover") || tools.includes("admin_send_message")) {
       group.handoff_ever = true;
     }
-    if (customerPanelSalesSignal(turn)) {
-      group.sales_signal = true;
-    }
+    if (customerPanelSalesSignal(turn)) group.sales_signal = true;
     const evalData = turn.eval && !turn.eval.error ? turn.eval : null;
     if (evalData) {
       group.evaluated = true;
@@ -2353,10 +2430,10 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     (Array.isArray(turn.zeroResultQueries) ? turn.zeroResultQueries : []).forEach(function (query) {
       const clean = String(query || "").trim().toLowerCase();
       if (!clean) return;
-      zeroResultSearches++;
-      zeroResultCounts[clean] = (zeroResultCounts[clean] || 0) + 1;
+      stats.zero_result_searches++;
+      stats.zero_result_counts[clean] = (stats.zero_result_counts[clean] || 0) + 1;
     });
-    if (turn.rating != null && Number.isFinite(Number(turn.rating))) ratings.push(Number(turn.rating));
+    if (turn.rating != null && Number.isFinite(Number(turn.rating))) stats.ratings.push(Number(turn.rating));
   });
 
   const conversations = Object.keys(groups).map(function (userId) {
@@ -2365,8 +2442,14 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const active = !!(states[userId] && states[userId].active);
     const tags = normalizeCustomerTags(meta.tags);
     const salesSignal = group.sales_signal || tags.includes("venta");
+    const suffix = group.external_id.slice(-6);
     return {
-      phone: userId,
+      id: userId,
+      phone: group.external_id,
+      channel: group.channel,
+      channel_label: group.channel === "instagram" ? "Instagram" : "WhatsApp",
+      display_name: group.channel === "instagram" ? "Instagram · …" + suffix : "+" + group.external_id,
+      copy_value: group.channel === "instagram" ? group.external_id : "+" + group.external_id,
       last_ts: group.last_ts,
       last_text: group.last_text,
       mode: active ? "human" : "bot",
@@ -2387,23 +2470,14 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     return new Date(b.last_ts || 0) - new Date(a.last_ts || 0);
   });
 
-  const activeHandoffs = conversations.filter(function (item) { return item.mode === "human"; }).length;
-  const pendingReplies = conversations.filter(function (item) { return item.needs_reply; }).length;
-  const salesAssisted = conversations.filter(function (item) { return item.business_signals.sales_assisted; }).length;
-  const handoffsEver = conversations.filter(function (item) { return item.business_signals.handoff_ever; }).length;
-  const evaluatedConversations = conversations.filter(function (item) { return item.business_signals.evaluated; }).length;
-  const resolvedByBot = conversations.filter(function (item) { return item.business_signals.resolved_by_bot; }).length;
-  const partialResolutions = conversations.filter(function (item) { return item.business_signals.partial_resolution; }).length;
-  const resolvedRate = evaluatedConversations ? Math.round(resolvedByBot / evaluatedConversations * 100) : null;
-  const avgRating = ratings.length
-    ? Math.round(ratings.reduce(function (sum, value) { return sum + value; }, 0) / ratings.length * 10) / 10
-    : null;
-  const gapTerms = Object.keys(zeroResultCounts).map(function (query) {
-    return { query, count: zeroResultCounts[query] };
-  }).sort(function (a, b) { return b.count - a.count; }).slice(0, 8);
-  const activity = Object.keys(messagesByDay).sort().slice(-14).map(function (day) {
-    return { day, messages: messagesByDay[day] };
-  });
+  const whatsappConversations = conversations.filter(function (item) { return item.channel === "whatsapp"; });
+  const instagramConversations = conversations.filter(function (item) { return item.channel === "instagram"; });
+  const summaries = {
+    whatsapp: summarizeCustomerPanelChannel(whatsappConversations, channelStats.whatsapp),
+    instagram: summarizeCustomerPanelChannel(instagramConversations, channelStats.instagram)
+  };
+  const whatsappSetup = customerPanelWhatsappSetup();
+  const instagramSetup = customerPanelInstagramSetup();
   const capabilities = customerPanelCapabilities(auth.role);
 
   return {
@@ -2412,7 +2486,12 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     business: {
       id: CUSTOMER_PANEL_BUSINESS.id,
       name: CUSTOMER_PANEL_BUSINESS.name,
-      whatsapp_setup: customerPanelWhatsappSetup()
+      whatsapp_setup: whatsappSetup,
+      instagram_setup: instagramSetup,
+      channels: {
+        whatsapp: Object.assign({ conversations_count: whatsappConversations.length }, whatsappSetup),
+        instagram: Object.assign({ conversations_count: instagramConversations.length }, instagramSetup)
+      }
     },
     user: {
       username: auth.username,
@@ -2428,34 +2507,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       from: minTs ? new Date(minTs).toISOString() : null,
       to: maxTs ? new Date(maxTs).toISOString() : null
     },
-    summary: {
-      clients_attended: conversations.length,
-      messages: inboundMessages,
-      active_handoffs: activeHandoffs,
-      handoffs_to_human: handoffsEver,
-      pending_human_replies: pendingReplies,
-      zero_result_searches: zeroResultSearches,
-      opportunities_detected: zeroResultSearches,
-      sales_assisted: {
-        count: salesAssisted,
-        label: salesAssisted === 1 ? "venta o intento de compra" : "ventas o intentos de compra",
-        confidence: "intent_or_checkout_signal"
-      },
-      solutions_provided: {
-        count: resolvedByBot,
-        partial: partialResolutions,
-        evaluated: evaluatedConversations,
-        rate: resolvedRate
-      },
-      rating: { average: avgRating, count: ratings.length },
-      messages_by_day: activity,
-      search_gaps: gapTerms,
-      conversation_modes: {
-        human: activeHandoffs,
-        bot: Math.max(conversations.length - activeHandoffs, 0),
-        pending: pendingReplies
-      }
-    },
+    summary: summaries.whatsapp,
+    summaries,
     tags: CUSTOMER_META_TAGS,
     conversations
   };
@@ -2534,6 +2587,112 @@ function buildCustomerPanelDemoSnapshot() {
       business_signals: { sales_assisted: false, handoff_ever: false, resolved_by_bot: false, partial_resolution: true, evaluated: true }
     }
   ];
+  conversations.forEach(function (item) {
+    item.id = item.phone;
+    item.channel = "whatsapp";
+    item.channel_label = "WhatsApp";
+    item.display_name = "+" + item.phone;
+    item.copy_value = "+" + item.phone;
+  });
+  conversations.push(
+    {
+      id: "ig:17841470000112233",
+      phone: "17841470000112233",
+      channel: "instagram",
+      channel_label: "Instagram",
+      display_name: "Instagram · …112233",
+      copy_value: "17841470000112233",
+      last_ts: iso(12),
+      last_text: "¿Me muestras opciones para un regalo de 5 años?",
+      mode: "human",
+      needs_reply: true,
+      tags: ["venta", "revisar"],
+      note: "Llegó por Instagram y busca regalo para hoy.",
+      meta_updated_at: iso(10),
+      messages: [
+        { ts: iso(25), author: "customer", text: "Hola, vi sus juguetes en Instagram." },
+        { ts: iso(24), author: "bot", text: "🤖 ¡Hola! Te ayudo a encontrar el regalo ideal." },
+        { ts: iso(12), author: "customer", text: "¿Me muestras opciones para un regalo de 5 años?" }
+      ],
+      business_signals: { sales_assisted: true, handoff_ever: true, resolved_by_bot: false, partial_resolution: true, evaluated: true }
+    },
+    {
+      id: "ig:17841470000445566",
+      phone: "17841470000445566",
+      channel: "instagram",
+      channel_label: "Instagram",
+      display_name: "Instagram · …445566",
+      copy_value: "17841470000445566",
+      last_ts: iso(36),
+      last_text: "Perfecto, gracias por la recomendación.",
+      mode: "bot",
+      needs_reply: false,
+      tags: ["venta"],
+      note: "",
+      meta_updated_at: null,
+      messages: [
+        { ts: iso(42), author: "customer", text: "¿Tienen carros a control remoto?" },
+        { ts: iso(40), author: "bot", text: "🤖 Sí. Encontré tres opciones disponibles para ti." },
+        { ts: iso(36), author: "customer", text: "Perfecto, gracias por la recomendación." }
+      ],
+      business_signals: { sales_assisted: true, handoff_ever: false, resolved_by_bot: true, partial_resolution: false, evaluated: true }
+    }
+  );
+  const whatsappSummary = {
+    clients_attended: 312,
+    messages: 1248,
+    active_handoffs: 2,
+    handoffs_to_human: 18,
+    pending_human_replies: 2,
+    zero_result_searches: 14,
+    opportunities_detected: 14,
+    sales_assisted: { count: 47, label: "ventas o intentos de compra", confidence: "demo" },
+    solutions_provided: { count: 268, partial: 31, evaluated: 312, rate: 86 },
+    rating: { average: 4.8, count: 214 },
+    messages_by_day: [
+      { day: "2026-07-07", messages: 34 },
+      { day: "2026-07-08", messages: 43 },
+      { day: "2026-07-09", messages: 58 },
+      { day: "2026-07-10", messages: 37 },
+      { day: "2026-07-11", messages: 74 },
+      { day: "2026-07-12", messages: 88 },
+      { day: "2026-07-13", messages: 61 }
+    ],
+    search_gaps: [
+      { query: "Lego Technic Ferrari Daytona SP3", count: 5 },
+      { query: "Barbie astronauta edición especial", count: 4 },
+      { query: "Hot Wheels Ultimate Garage", count: 3 },
+      { query: "Nerf Elite 2.0 Commander", count: 2 }
+    ],
+    conversation_modes: { human: 2, bot: 2, pending: 2 }
+  };
+  const instagramSummary = {
+    clients_attended: 126,
+    messages: 487,
+    active_handoffs: 1,
+    handoffs_to_human: 9,
+    pending_human_replies: 1,
+    zero_result_searches: 7,
+    opportunities_detected: 7,
+    sales_assisted: { count: 23, label: "ventas o intentos de compra", confidence: "demo" },
+    solutions_provided: { count: 103, partial: 14, evaluated: 126, rate: 82 },
+    rating: { average: 4.7, count: 71 },
+    messages_by_day: [
+      { day: "2026-07-07", messages: 12 },
+      { day: "2026-07-08", messages: 19 },
+      { day: "2026-07-09", messages: 17 },
+      { day: "2026-07-10", messages: 25 },
+      { day: "2026-07-11", messages: 31 },
+      { day: "2026-07-12", messages: 38 },
+      { day: "2026-07-13", messages: 29 }
+    ],
+    search_gaps: [
+      { query: "regalo para niña de 5 años", count: 3 },
+      { query: "carro control remoto rosado", count: 2 },
+      { query: "Lego flores", count: 2 }
+    ],
+    conversation_modes: { human: 1, bot: 1, pending: 1 }
+  };
   return {
     ok: true,
     demo: true,
@@ -2541,7 +2700,12 @@ function buildCustomerPanelDemoSnapshot() {
     business: {
       id: CUSTOMER_PANEL_BUSINESS.id,
       name: CUSTOMER_PANEL_BUSINESS.name,
-      whatsapp_setup: { status: "ready", label: "WhatsApp listo" }
+      whatsapp_setup: { status: "ready", label: "WhatsApp conectado" },
+      instagram_setup: { status: "ready", label: "Instagram conectado" },
+      channels: {
+        whatsapp: { status: "ready", label: "WhatsApp conectado", conversations_count: 4 },
+        instagram: { status: "ready", label: "Instagram conectado", conversations_count: 2 }
+      }
     },
     user: {
       username: auth.username,
@@ -2557,34 +2721,8 @@ function buildCustomerPanelDemoSnapshot() {
       from: iso(10080),
       to: iso(0)
     },
-    summary: {
-      clients_attended: 312,
-      messages: 1248,
-      active_handoffs: 2,
-      handoffs_to_human: 18,
-      pending_human_replies: 2,
-      zero_result_searches: 14,
-      opportunities_detected: 14,
-      sales_assisted: { count: 47, label: "ventas o intentos de compra", confidence: "demo" },
-      solutions_provided: { count: 268, partial: 31, evaluated: 312, rate: 86 },
-      rating: { average: 4.8, count: 214 },
-      messages_by_day: [
-        { day: "2026-07-07", messages: 34 },
-        { day: "2026-07-08", messages: 43 },
-        { day: "2026-07-09", messages: 58 },
-        { day: "2026-07-10", messages: 37 },
-        { day: "2026-07-11", messages: 74 },
-        { day: "2026-07-12", messages: 88 },
-        { day: "2026-07-13", messages: 61 }
-      ],
-      search_gaps: [
-        { query: "Lego Technic Ferrari Daytona SP3", count: 5 },
-        { query: "Barbie astronauta edición especial", count: 4 },
-        { query: "Hot Wheels Ultimate Garage", count: 3 },
-        { query: "Nerf Elite 2.0 Commander", count: 2 }
-      ],
-      conversation_modes: { human: 2, bot: 2, pending: 2 }
-    },
+    summary: whatsappSummary,
+    summaries: { whatsapp: whatsappSummary, instagram: instagramSummary },
     tags: CUSTOMER_META_TAGS,
     conversations
   };
@@ -2664,7 +2802,7 @@ function releaseAdminConversation(req, res) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const userId = String(req.params.userId || "").replace(/\D/g, "");
+  const userId = normalizeConversationUserId(req.params.userId);
   if (!userId) {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
@@ -2684,7 +2822,7 @@ app.post("/admin/takeover/:userId", (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const userId = String(req.params.userId || "").replace(/\D/g, "");
+  const userId = normalizeConversationUserId(req.params.userId);
   if (!userId) {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
@@ -2699,7 +2837,7 @@ app.post("/admin/send-message", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const userId = String(req.body && req.body.userId || "").replace(/\D/g, "");
+  const userId = normalizeConversationUserId(req.body && req.body.userId);
   const text = String(req.body && req.body.text || "").trim();
   if (!userId || !text) {
     res.status(400).json({ ok: false, error: "missing_user_or_text" });
@@ -2739,7 +2877,7 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const userId = String(req.params.userId || "").replace(/\D/g, "");
+  const userId = normalizeConversationUserId(req.params.userId);
   if (!userId) {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
@@ -2756,7 +2894,7 @@ app.get("/admin/panel/data", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 200, 500));
+  const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 500, 500));
   let source = "memory";
   let turns = conversationLogs.slice().reverse();
   if (SUPABASE_ENABLED) {
@@ -3046,7 +3184,8 @@ app.get("/admin/panel", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
     const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
+    const requestedChannel = req.query.channel === "instagram" ? "instagram" : "whatsapp";
+    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab + "&channel=" + requestedChannel);
     return;
   }
   if (auth.method === "key") {
@@ -3061,6 +3200,7 @@ app.get("/admin/panel", (req, res) => {
     auth,
     capabilities,
     initialTab,
+    initialChannel: req.query.channel === "instagram" ? "instagram" : "whatsapp",
     botVersion: BOT_VERSION
   });
 });
@@ -3072,6 +3212,7 @@ app.get("/admin/panel-demo", (req, res) => {
     auth,
     capabilities: customerPanelCapabilities("viewer"),
     initialTab,
+    initialChannel: req.query.channel === "instagram" ? "instagram" : "whatsapp",
     dataPath: "/admin/panel/demo-data",
     healthPath: null,
     loginPath: null,
@@ -3082,6 +3223,7 @@ app.get("/admin/panel-demo", (req, res) => {
 app.get("/admin/customer-panel", (req, res) => {
   const params = new URLSearchParams();
   if (req.query.tab) params.set("tab", String(req.query.tab));
+  if (req.query.channel === "instagram" || req.query.channel === "whatsapp") params.set("channel", String(req.query.channel));
   if (req.query.key) params.set("key", String(req.query.key));
   res.redirect("/admin/panel" + (params.toString() ? "?" + params.toString() : ""));
 });

@@ -70,6 +70,9 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
 | `GET /admin/dashboard?key=XXXX` | Panel operativo con tabs para métricas e intervención humana |
+| `GET /admin/panel?channel=whatsapp\|instagram&tab=summary` | Panel de control del cliente con KPIs, conversaciones e intervención separados por canal |
+| `GET /admin/panel-demo?channel=whatsapp\|instagram&tab=summary` | Demo pública de solo lectura con datos sanitizados |
+| `GET /admin/panel/data` | Datos protegidos del panel, con `summaries.whatsapp`, `summaries.instagram` y conversaciones identificadas por canal |
 | `GET /admin/inbox?key=XXXX` | Acceso directo opcional a la bandeja operativa |
 | `GET /admin/customer-meta?key=XXXX` | Etiquetas y notas internas por cliente para el panel |
 | `POST /admin/customer-meta/:userId` | Guarda etiquetas/notas internas del cliente seleccionado |
@@ -92,6 +95,10 @@ en el panel para evitar mezclarlas con números de WhatsApp.
 Para desarrollo, agrega la cuenta profesional y las cuentas que harán pruebas como roles
 de la app. Para atender cuentas externas, solicita acceso avanzado a
 `instagram_business_manage_messages` mediante Meta App Review.
+
+El Panel de Control muestra Instagram como un módulo independiente dentro de Atención al
+cliente. Sus KPIs, conversaciones, alertas de intervención, notas y tags se calculan sin
+mezclarlos con WhatsApp. El panel nunca expone tokens ni IDs internos de configuración.
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
 

@@ -101,6 +101,9 @@ de la app. Para atender cuentas externas, solicita acceso avanzado a
 El Panel de Control muestra Instagram como un módulo independiente dentro de Atención al
 cliente. Sus KPIs, conversaciones, alertas de intervención, notas y tags se calculan sin
 mezclarlos con WhatsApp. El panel nunca expone tokens ni IDs internos de configuración.
+Cuando un usuario escribe por Instagram, el bot consulta y guarda su `@username` con la
+API oficial de perfiles. El panel muestra ese usuario y permite buscarlo; si Meta no lo
+entrega, conserva como respaldo el identificador abreviado de la conversación.
 
 ### Primer cliente: RAV Toys
 
@@ -298,6 +301,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v59 | Roles `super_admin`/Admin y endpoint del modelo de acceso |
 | v60 | Panel Super admin v1 separado, protegido y enlazado por rol |
 | v64 | RAV Toys como cliente #1 y creación segura de su acceso por invitación |
+| v65 | `@username` real de los clientes de Instagram en conversaciones y búsqueda |
 
 ---
 

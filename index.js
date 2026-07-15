@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v64-rav-customer";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v65-instagram-usernames";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -80,6 +80,9 @@ const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.en
   .filter(Boolean);
 const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "573013507371").split(",").map(s => s.trim()).filter(Boolean);
 const CUSTOMER_META_TOOL = "admin_customer_meta";
+const INSTAGRAM_PROFILE_TOOL = "instagram_customer_profile_v1";
+const INSTAGRAM_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
+const INSTAGRAM_PROFILE_RETRY_MS = 15 * 60 * 1000;
 const DASHBOARD_CUSTOMER_USER_TOOL = "dashboard_customer_user_v1";
 const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:rav-toys:primary-admin";
 const CUSTOMER_META_TAGS = [
@@ -126,6 +129,7 @@ const botStats = {
 // Guarda en memoria las últimas 100 vueltas (turno = mensaje del cliente + respuesta del bot).
 // Se expone en /admin/conversations. Persistencia permanente (Google Sheets) se suma después.
 const conversationLogs = [];
+const instagramProfileCache = new Map();
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let turnTools = [];        // tools usadas en el turno actual
 let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
@@ -215,8 +219,13 @@ function isDashboardCustomerUserTurn(turn) {
   return tools.includes(DASHBOARD_CUSTOMER_USER_TOOL);
 }
 
+function isInstagramProfileTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(INSTAGRAM_PROFILE_TOOL);
+}
+
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isInstagramProfileTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -275,6 +284,97 @@ function customerMetaFromTurns(turns) {
     if (parsed) meta[userId] = parsed;
   });
   return meta;
+}
+
+function normalizeInstagramUsername(username) {
+  return String(username || "").trim().replace(/^@+/, "").slice(0, 64);
+}
+
+function parseInstagramProfileTurn(turn) {
+  if (!isInstagramProfileTurn(turn)) return null;
+  const userId = normalizeConversationUserId(turn.userId);
+  if (conversationChannel(userId) !== "instagram") return null;
+  const raw = String(turn.botReply || "").replace(/^\[InstagramProfile\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    const username = normalizeInstagramUsername(parsed.username);
+    if (!username) return null;
+    return { user_id: userId, username, updated_at: turn.ts || null };
+  } catch (_) {
+    return null;
+  }
+}
+
+function instagramProfilesFromTurns(turns) {
+  const profiles = {};
+  (turns || []).slice().sort(function (a, b) {
+    return new Date(a.ts || 0) - new Date(b.ts || 0);
+  }).forEach(function (turn) {
+    const profile = parseInstagramProfileTurn(turn);
+    if (profile) profiles[profile.user_id] = profile;
+  });
+  return profiles;
+}
+
+function recordInstagramProfile(userId, username) {
+  const cleanUserId = normalizeConversationUserId(userId);
+  const cleanUsername = normalizeInstagramUsername(username);
+  if (conversationChannel(cleanUserId) !== "instagram" || !cleanUsername) return null;
+  const rec = {
+    ts: new Date().toISOString(),
+    userId: cleanUserId,
+    userMessage: "",
+    botReply: "[InstagramProfile] " + JSON.stringify({ username: cleanUsername }),
+    tools: [INSTAGRAM_PROFILE_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: INSTAGRAM_PROFILE_TOOL }
+  };
+  instagramProfileCache.set(cleanUserId, { username: cleanUsername, fetched_at: Date.now() });
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  supabaseInsert(rec);
+  return parseInstagramProfileTurn(rec);
+}
+
+async function refreshInstagramProfile(userId) {
+  const cleanUserId = normalizeConversationUserId(userId);
+  if (conversationChannel(cleanUserId) !== "instagram" || !IG_ACCESS_TOKEN) return null;
+  const cached = instagramProfileCache.get(cleanUserId);
+  const cacheTtl = cached && cached.username ? INSTAGRAM_PROFILE_TTL_MS : INSTAGRAM_PROFILE_RETRY_MS;
+  if (cached && Date.now() - cached.fetched_at < cacheTtl) return cached.username ? cached : null;
+  instagramProfileCache.set(cleanUserId, { username: "", fetched_at: Date.now() });
+  try {
+    const instagramScopedId = conversationExternalId(cleanUserId);
+    const response = await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramScopedId)}`, {
+      params: { fields: "id,username" },
+      headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+      timeout: 8000
+    });
+    const username = normalizeInstagramUsername(response.data && response.data.username);
+    if (!username) return null;
+    return recordInstagramProfile(cleanUserId, username);
+  } catch (error) {
+    log("warn", "instagram_profile_lookup_failed", {
+      user_suffix: conversationExternalId(cleanUserId).slice(-6),
+      error: String(error.response?.data?.error?.message || error.message || "profile_lookup_failed").slice(0, 160)
+    });
+    return null;
+  }
+}
+
+function queueInstagramProfileRefreshes(turns) {
+  const storedProfiles = instagramProfilesFromTurns(turns);
+  const userIds = [];
+  (turns || []).forEach(function (turn) {
+    const userId = normalizeConversationUserId(turn.userId);
+    if (conversationChannel(userId) !== "instagram" || storedProfiles[userId] || userIds.includes(userId)) return;
+    userIds.push(userId);
+  });
+  userIds.slice(0, 10).forEach(function (userId) { refreshInstagramProfile(userId); });
 }
 
 function recordCustomerMeta(userId, meta) {
@@ -2104,6 +2204,7 @@ app.post("/instagram/webhook", async (req, res) => {
       for (const event of entry.messaging || []) {
         if (!event.sender?.id || event.message?.is_echo) continue;
         const userId = `ig:${event.sender.id}`;
+        refreshInstagramProfile(userId);
         if (event.message?.text) {
           console.log(`Instagram from ${event.sender.id}: ${event.message.text}`);
           await handleConversation(userId, event.message.text);
@@ -2485,6 +2586,10 @@ function summarizeCustomerPanelChannel(conversations, stats) {
 }
 
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
+  const instagramProfiles = instagramProfilesFromTurns(rawTurns);
+  instagramProfileCache.forEach(function (profile, userId) {
+    if (profile && profile.username) instagramProfiles[userId] = { user_id: userId, username: profile.username, updated_at: profile.fetched_at || null };
+  });
   const operationalTurns = (rawTurns || []).filter(function (turn) { return !isInternalAdminTurn(turn); });
   const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
   const allTurns = operationalTurns.slice(0, turnLimit);
@@ -2581,13 +2686,16 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const tags = normalizeCustomerTags(meta.tags);
     const salesSignal = group.sales_signal || tags.includes("venta");
     const suffix = group.external_id.slice(-6);
+    const instagramProfile = group.channel === "instagram" ? instagramProfiles[userId] : null;
+    const instagramUsername = instagramProfile && normalizeInstagramUsername(instagramProfile.username);
     return {
       id: userId,
       phone: group.external_id,
       channel: group.channel,
       channel_label: group.channel === "instagram" ? "Instagram" : "WhatsApp",
-      display_name: group.channel === "instagram" ? "Instagram · …" + suffix : "+" + group.external_id,
-      copy_value: group.channel === "instagram" ? group.external_id : "+" + group.external_id,
+      instagram_username: instagramUsername || null,
+      display_name: group.channel === "instagram" ? (instagramUsername ? "@" + instagramUsername : "Instagram · …" + suffix) : "+" + group.external_id,
+      copy_value: group.channel === "instagram" ? (instagramUsername ? "@" + instagramUsername : group.external_id) : "+" + group.external_id,
       last_ts: group.last_ts,
       last_text: group.last_text,
       mode: active ? "human" : "bot",
@@ -2740,8 +2848,9 @@ function buildCustomerPanelDemoSnapshot() {
       phone: "17841470000112233",
       channel: "instagram",
       channel_label: "Instagram",
-      display_name: "Instagram · …112233",
-      copy_value: "17841470000112233",
+      instagram_username: "maria.gomez",
+      display_name: "@maria.gomez",
+      copy_value: "@maria.gomez",
       last_ts: iso(12),
       last_text: "¿Me muestras opciones para un regalo de 5 años?",
       mode: "human",
@@ -2761,8 +2870,9 @@ function buildCustomerPanelDemoSnapshot() {
       phone: "17841470000445566",
       channel: "instagram",
       channel_label: "Instagram",
-      display_name: "Instagram · …445566",
-      copy_value: "17841470000445566",
+      instagram_username: "juli.recomienda",
+      display_name: "@juli.recomienda",
+      copy_value: "@juli.recomienda",
       last_ts: iso(36),
       last_text: "Perfecto, gracias por la recomendación.",
       mode: "bot",
@@ -3165,6 +3275,7 @@ app.get("/admin/panel/data", async (req, res) => {
   });
   const auth = dashboardAuth(req);
   const metaByCustomer = customerMetaFromTurns(turns);
+  queueInstagramProfileRefreshes(turns);
   res.json(buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit));
 });
 

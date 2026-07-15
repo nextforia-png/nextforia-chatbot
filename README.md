@@ -1,4 +1,4 @@
-# RAV Toys WhatsApp Bot
+# RAV Toys WhatsApp + Instagram Bot
 
 Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
 
@@ -35,6 +35,10 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `WA_TOKEN` | Token permanente de Meta WhatsApp |
 | `PHONE_NUMBER_ID` | ID del número WhatsApp registrado en Meta |
 | `VERIFY_TOKEN` | Token de verificación del webhook (default: `rav_toys_webhook_2026`) |
+| `IG_ACCESS_TOKEN` | Token del Instagram Professional account autorizado en Meta |
+| `IG_USER_ID` | ID del Instagram Professional account que enviará respuestas |
+| `IG_VERIFY_TOKEN` | Token para verificar `/instagram/webhook`; usa `VERIFY_TOKEN` si se omite |
+| `META_GRAPH_VERSION` | Versión de Graph API para Instagram (default: `v23.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
 | `SHOPIFY_STORE_DOMAIN` | Dominio Shopify (default: `ravtoys.myshopify.com`) |
 | `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) con permisos para leer pedidos y fulfillments |
@@ -75,6 +79,17 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
 | `GET /admin/test-search?q=XXXX&key=YYYY` | Prueba la búsqueda de productos sin afectar a clientes reales |
 | `GET /admin/release/:userId` | Libera un handoff manual de Eliana (vuelve el bot a atender) y marca para pedir rating |
+
+### Webhook de Instagram
+
+Configura en Meta el callback `https://TU-DOMINIO/instagram/webhook` con el valor de
+`IG_VERIFY_TOKEN` y suscribe el campo de mensajes. El endpoint acepta eventos de texto y
+archivos del objeto `instagram`; las conversaciones quedan identificadas como `ig:<IGSID>`
+en el panel para evitar mezclarlas con números de WhatsApp.
+
+Para desarrollo, agrega la cuenta profesional y las cuentas que harán pruebas como roles
+de la app. Para atender cuentas externas, solicita acceso avanzado a
+`instagram_business_manage_messages` mediante Meta App Review.
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
 

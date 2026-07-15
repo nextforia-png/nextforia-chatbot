@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v61";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v62-instagram";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -64,6 +64,10 @@ const SUPABASE_TABLE = "conversation_logs";
 const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de conversaciones
 const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
+const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
+const IG_USER_ID = process.env.IG_USER_ID || "";
+const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "ravtoys.myshopify.com";
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
@@ -1259,6 +1263,16 @@ async function lookupOrderStatus(input, options = {}) {
 }
 
 
+function parseChannelRecipient(to) {
+  const value = String(to || "");
+  if (value.startsWith("ig:")) return { channel: "instagram", id: value.slice(3) };
+  return { channel: "whatsapp", id: value.startsWith("wa:") ? value.slice(3) : value };
+}
+
+function channelLabel(to) {
+  return parseChannelRecipient(to).channel === "instagram" ? "Instagram" : "WhatsApp";
+}
+
 async function sendText(to, text) {
   // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
   // (A) EXCUSAS TÉCNICAS — INCONDICIONAL: este bot JAMÁS debe decirle al cliente que tiene
@@ -1280,10 +1294,21 @@ async function sendText(to, text) {
       }
     }
   }
+  const recipient = parseChannelRecipient(to);
   try {
+    if (recipient.channel === "instagram") {
+      if (!IG_ACCESS_TOKEN || !IG_USER_ID) throw new Error("Instagram messaging is not configured");
+      await axios.post(
+        `https://graph.instagram.com/${META_GRAPH_VERSION}/${IG_USER_ID}/messages`,
+        { recipient: { id: recipient.id }, message: { text: String(text || "") } },
+        { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+      );
+      console.log(`Instagram text sent to ${recipient.id}`);
+      return true;
+    }
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      { messaging_product: "whatsapp", to, type: "text", text: { body: text, preview_url: true } },
+      { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: text, preview_url: true } },
       { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
     );
     console.log(`Text sent to ${to}`);
@@ -1362,10 +1387,21 @@ async function sendTemplate(to, templateName, params) {
 }
 
 async function sendImage(to, imageUrl, caption) {
+  const recipient = parseChannelRecipient(to);
   try {
+    if (recipient.channel === "instagram") {
+      if (!IG_ACCESS_TOKEN || !IG_USER_ID) throw new Error("Instagram messaging is not configured");
+      await axios.post(
+        `https://graph.instagram.com/${META_GRAPH_VERSION}/${IG_USER_ID}/messages`,
+        { recipient: { id: recipient.id }, message: { attachment: { type: "image", payload: { url: imageUrl } } } },
+        { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+      );
+      if (caption) await sendText(to, caption);
+      return true;
+    }
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      { messaging_product: "whatsapp", to, type: "image", image: { link: imageUrl, caption } },
+      { messaging_product: "whatsapp", to: recipient.id, type: "image", image: { link: imageUrl, caption } },
       { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
     );
     return true;
@@ -1376,6 +1412,10 @@ async function sendImage(to, imageUrl, caption) {
 }
 
 async function sendLocation(to, lat, lng, name, address) {
+  if (parseChannelRecipient(to).channel === "instagram") {
+    await sendText(to, `${name}\n${address}\nhttps://www.google.com/maps?q=${lat},${lng}`);
+    return;
+  }
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
@@ -1710,6 +1750,8 @@ async function executeNotifyTeam(userId) {
   const currency = state.products[0].currency || "COP";
   const formattedTotal = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
   const productsList = state.products.map((p, i) => `  ${i+1}. ${p.title} — ${p.price}\n     ${p.product_url}`).join("\n");
+  const customerChannel = channelLabel(userId);
+  const customerContact = parseChannelRecipient(userId).id;
   const summary = [
     "🚨 *NUEVA VENTA CERRADA* 🎉",
     "",
@@ -1723,7 +1765,7 @@ async function executeNotifyTeam(userId) {
     "Cédula: " + d.cedula,
     "Dirección: " + d.direccion,
     "Teléfono: " + d.telefono,
-    "WhatsApp: +" + userId,
+    `${customerChannel}: ${customerChannel === "WhatsApp" ? "+" : "IGSID "}${customerContact}`,
     "",
     "💳 Método de pago: " + d.metodo_pago,
     "",
@@ -1738,7 +1780,8 @@ async function executeHumanHandoff(userId, input) {
   humanHandoff.add(userId);
   const reason = input.reason || "solicitud_cliente";
   const state = checkouts.get(userId);
-  let notif = `🚨 *Handoff a humano*\nCliente: +${userId}\nMotivo: ${reason}\n\n`;
+  const handoffRecipient = parseChannelRecipient(userId);
+  let notif = `🚨 *Handoff a humano*\nCanal: ${channelLabel(userId)}\nCliente: ${handoffRecipient.channel === "whatsapp" ? "+" : "IGSID "}${handoffRecipient.id}\nMotivo: ${reason}\n\n`;
   if (state?.products && state.products.length > 0 && reason !== "venta_cerrada") {
     if (state.products.length === 1) {
       notif += `(Producto en checkout: ${state.products[0].title} @ ${state.products[0].price})\n\n`;
@@ -1748,7 +1791,7 @@ async function executeHumanHandoff(userId, input) {
       notif += `(En checkout: ${state.products.length} productos · Total: ${total.toLocaleString("es-CO")} ${currency})\n\n`;
     }
   }
-  notif += "Toma el control en WhatsApp Business.";
+  notif += `Toma el control en ${channelLabel(userId)}.`;
   await notifyTeam(notif, userId);
   await sendText(userId, "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏");
   console.log(`Handoff activated for ${userId}, reason: ${reason}`);
@@ -1995,6 +2038,42 @@ app.post("/webhook", async (req, res) => {
     }
   } catch (err) {
     console.error("Error processing message:", err);
+  }
+});
+
+// Instagram API with Instagram Login webhook. Instagram sender IDs are namespaced
+// internally so conversation state and outbound replies stay on the right channel.
+app.get("/instagram/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === IG_VERIFY_TOKEN) return res.status(200).send(challenge);
+  return res.sendStatus(403);
+});
+
+app.post("/instagram/webhook", async (req, res) => {
+  res.sendStatus(200);
+  try {
+    if (req.body?.object !== "instagram") return;
+    for (const entry of req.body?.entry || []) {
+      for (const event of entry.messaging || []) {
+        if (!event.sender?.id || event.message?.is_echo) continue;
+        const userId = `ig:${event.sender.id}`;
+        if (event.message?.text) {
+          console.log(`Instagram from ${event.sender.id}: ${event.message.text}`);
+          await handleConversation(userId, event.message.text);
+        } else if (event.message?.attachments?.length) {
+          console.log(`Instagram from ${event.sender.id}: [attachment]`);
+          if (await humanControlActiveFor(userId)) {
+            recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments });
+          } else {
+            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.");
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error processing Instagram message:", err.response?.data || err.message);
   }
 });
 
@@ -3442,6 +3521,8 @@ async function buildAdminHealthResult() {
       anthropic_key_present: !!ANTHROPIC_API_KEY,
       shopify_token_present: !!SHOPIFY_ADMIN_TOKEN,
       wa_token_present: !!WA_TOKEN,
+      instagram_token_present: !!IG_ACCESS_TOKEN,
+      instagram_user_id: IG_USER_ID || null,
       phone_number_id: PHONE_NUMBER_ID,
       shopify_domain: SHOPIFY_STORE_DOMAIN,
       shopify_admin_api_version: SHOPIFY_ADMIN_API_VERSION,
@@ -3473,6 +3554,20 @@ async function buildAdminHealthResult() {
     result.checks.meta_whatsapp = r.status === 200 ? "ok" : `status_${r.status}`;
   } catch (e) {
     result.checks.meta_whatsapp = `error: ${e.response?.data?.error?.message || e.message}`;
+  }
+  if (IG_ACCESS_TOKEN && IG_USER_ID) {
+    try {
+      const r = await axios.get(`https://graph.instagram.com/${META_GRAPH_VERSION}/${IG_USER_ID}`, {
+        params: { fields: "id,username" },
+        headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+        timeout: 5000
+      });
+      result.checks.meta_instagram = r.status === 200 ? "ok" : `status_${r.status}`;
+    } catch (e) {
+      result.checks.meta_instagram = `error: ${e.response?.data?.error?.message || e.message}`;
+    }
+  } else {
+    result.checks.meta_instagram = "not_configured";
   }
   result.checks.shopify_admin_api = SHOPIFY_ADMIN_TOKEN ? "key_present_not_tested" : "missing_key";
   result.checks.anthropic_api = ANTHROPIC_API_KEY ? "key_present_not_tested_to_save_credits" : "missing_key";

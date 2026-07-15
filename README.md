@@ -64,6 +64,8 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `POST /admin/login` | Crea sesión del dashboard por usuario/clave o clave maestra |
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
+| `POST /admin/customer-invite` | Super admin: genera una invitación de 72 horas para crear el primer acceso de RAV Toys |
+| `GET/POST /admin/setup/rav-toys` | Formulario y creación segura del usuario administrador del cliente |
 | `GET /admin/access-model?key=XXXX` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/super-admin?key=XXXX` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify/Meta/Supabase y readiness de infraestructura |
@@ -99,6 +101,14 @@ de la app. Para atender cuentas externas, solicita acceso avanzado a
 El Panel de Control muestra Instagram como un módulo independiente dentro de Atención al
 cliente. Sus KPIs, conversaciones, alertas de intervención, notas y tags se calculan sin
 mezclarlos con WhatsApp. El panel nunca expone tokens ni IDs internos de configuración.
+
+### Primer cliente: RAV Toys
+
+RAV Toys es el cliente #1 y usa el tenant actual `rav-toys`. El super admin genera una
+invitación desde `/admin/super-admin` con **Crear acceso RAV**. El cliente abre el enlace,
+elige su usuario y contraseña, y entra con rol `admin`. La invitación vence en 72 horas y
+deja de funcionar cuando la cuenta queda creada. La contraseña nunca se guarda en texto
+plano: se almacena como un hash `scrypt` con salt dentro del registro interno persistente.
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
 
@@ -287,6 +297,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v32.1 | `BOT_VERSION` constante centralizada |
 | v59 | Roles `super_admin`/Admin y endpoint del modelo de acceso |
 | v60 | Panel Super admin v1 separado, protegido y enlazado por rol |
+| v64 | RAV Toys como cliente #1 y creación segura de su acceso por invitación |
 
 ---
 

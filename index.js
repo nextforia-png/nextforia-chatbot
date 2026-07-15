@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v63-instagram-panel";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v64-rav-customer";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -48,7 +48,7 @@ const DASHBOARD_ACCESS_MODEL = {
     { role: "viewer", level: 1, scope: "tenant", owner: "Cliente", purpose: "Consulta metricas y conversaciones sin intervenir." }
   ],
   migration_steps: [
-    "Mantener RAV Toys como tenant default.",
+    "Mantener RAV Toys como cliente #1 y tenant inicial.",
     "Crear usuarios super_admin para NexforIA y admin/agent/viewer por cliente.",
     "Mantener separado el dashboard Admin del panel Super admin.",
     "Agregar tenant_id a logs, usuarios y configuracion.",
@@ -80,6 +80,8 @@ const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.en
   .filter(Boolean);
 const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "573013507371").split(",").map(s => s.trim()).filter(Boolean);
 const CUSTOMER_META_TOOL = "admin_customer_meta";
+const DASHBOARD_CUSTOMER_USER_TOOL = "dashboard_customer_user_v1";
+const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:rav-toys:primary-admin";
 const CUSTOMER_META_TAGS = [
   { id: "venta", label: "Venta" },
   { id: "garantia", label: "Garantia" },
@@ -89,7 +91,9 @@ const CUSTOMER_META_TAGS = [
 ];
 const CUSTOMER_PANEL_BUSINESS = {
   id: "rav-toys",
-  name: "RAV Toys"
+  name: "RAV Toys",
+  customer_number: 1,
+  status: "active"
 };
 // ─────────────────────────────────────────────────────────────────────────────────
 
@@ -122,6 +126,7 @@ const botStats = {
 // Guarda en memoria las últimas 100 vueltas (turno = mensaje del cliente + respuesta del bot).
 // Se expone en /admin/conversations. Persistencia permanente (Google Sheets) se suma después.
 const conversationLogs = [];
+let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let turnTools = [];        // tools usadas en el turno actual
 let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
 let turnHandoff = false;   // si el turno derivó a humano (Eliana)
@@ -140,6 +145,19 @@ async function supabaseInsert(rec) {
     if (rec.eval !== undefined) payload.eval = rec.eval;
     await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, payload, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 8000 });
   } catch (e) { console.error("supabaseInsert error:", e.response ? JSON.stringify(e.response.data).slice(0,200) : e.message); }
+}
+async function supabaseInsertStrict(rec) {
+  if (!SUPABASE_ENABLED) throw new Error("supabase_not_configured");
+  const payload = {
+    ts: rec.ts, user_id: rec.userId, user_message: rec.userMessage, bot_reply: rec.botReply,
+    tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
+    rating: rec.rating, num_tools: rec.numTools, status: rec.status
+  };
+  if (rec.eval !== undefined) payload.eval = rec.eval;
+  await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, payload, {
+    headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS),
+    timeout: 8000
+  });
 }
 async function supabaseFetchRecent(limit) {
   if (!SUPABASE_ENABLED) return null;
@@ -190,6 +208,15 @@ function normalizeTurnRow(r) {
 function isCustomerMetaTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(CUSTOMER_META_TOOL);
+}
+
+function isDashboardCustomerUserTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(DASHBOARD_CUSTOMER_USER_TOOL);
+}
+
+function isInternalAdminTurn(turn) {
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -2210,10 +2237,121 @@ function clearDashboardSessionCookie(req, res) {
   res.setHeader("Set-Cookie", dashboardCookieOptions(req, 0));
 }
 
-function dashboardUserFromCredentials(username, password) {
+function normalizeDashboardUsername(username) {
+  return String(username || "").trim().toLowerCase();
+}
+
+function parseDashboardCustomerUserTurn(turn) {
+  if (!isDashboardCustomerUserTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[DashboardUser\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id) return null;
+    if (!parsed.username || !parsed.password_hash || !parsed.salt) return null;
+    return {
+      username: normalizeDashboardUsername(parsed.username),
+      name: String(parsed.name || "Administrador RAV Toys").slice(0, 100),
+      role: cleanDashboardRole(parsed.role || "admin"),
+      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      password_hash: String(parsed.password_hash),
+      salt: String(parsed.salt),
+      created_at: parsed.created_at || turn.ts || null
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadDashboardCustomerUser(force, requirePersistentRead) {
+  const now = Date.now();
+  if (!force && dashboardCustomerUserCache.loaded_at && now - dashboardCustomerUserCache.loaded_at < 30000) {
+    return dashboardCustomerUserCache.user;
+  }
+  let turns = conversationLogs.slice().reverse();
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(DASHBOARD_CUSTOMER_USER_RECORD_ID, 5);
+    if (rows) turns = rows.map(normalizeTurnRow);
+    else if (requirePersistentRead) throw new Error("customer_user_store_unavailable");
+  }
+  const user = turns.map(parseDashboardCustomerUserTurn).find(Boolean) || null;
+  dashboardCustomerUserCache = { loaded_at: now, user };
+  return user;
+}
+
+function hashDashboardPassword(password, salt) {
+  return crypto.scryptSync(String(password || ""), salt, 64).toString("base64url");
+}
+
+async function persistDashboardCustomerUser(input) {
+  const salt = crypto.randomBytes(16);
+  const createdAt = new Date().toISOString();
+  const stored = {
+    version: 1,
+    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    username: normalizeDashboardUsername(input.username),
+    name: String(input.name || "Administrador RAV Toys").slice(0, 100),
+    role: "admin",
+    salt: salt.toString("base64url"),
+    password_hash: hashDashboardPassword(input.password, salt),
+    created_at: createdAt
+  };
+  const rec = {
+    ts: createdAt,
+    userId: DASHBOARD_CUSTOMER_USER_RECORD_ID,
+    userMessage: "",
+    botReply: "[DashboardUser] " + JSON.stringify(stored),
+    tools: [DASHBOARD_CUSTOMER_USER_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: DASHBOARD_CUSTOMER_USER_TOOL }
+  };
+  await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  const user = parseDashboardCustomerUserTurn(rec);
+  dashboardCustomerUserCache = { loaded_at: Date.now(), user };
+  return user;
+}
+
+async function dashboardUserFromCredentials(username, password) {
   const cleanUser = String(username || "").trim();
   const cleanPass = String(password || "");
-  return DASHBOARD_USERS.find(user => user.username === cleanUser && safeEqualText(user.password, cleanPass)) || null;
+  const environmentUser = DASHBOARD_USERS.find(user => user.username === cleanUser && safeEqualText(user.password, cleanPass));
+  if (environmentUser) return environmentUser;
+  const customerUser = await loadDashboardCustomerUser(false);
+  if (!customerUser || customerUser.username !== normalizeDashboardUsername(cleanUser)) return null;
+  let candidate = "";
+  try {
+    candidate = hashDashboardPassword(cleanPass, Buffer.from(customerUser.salt, "base64url"));
+  } catch (_) {
+    return null;
+  }
+  return safeEqualText(candidate, customerUser.password_hash) ? customerUser : null;
+}
+
+function createDashboardCustomerInvite() {
+  const payload = Buffer.from(JSON.stringify({
+    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    role: "admin",
+    exp: Date.now() + 72 * 60 * 60 * 1000,
+    nonce: crypto.randomBytes(18).toString("base64url")
+  })).toString("base64url");
+  return payload + "." + signDashboardPayload("customer-invite." + payload);
+}
+
+function readDashboardCustomerInvite(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 2 || !safeEqualText(parts[1], signDashboardPayload("customer-invite." + parts[0]))) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+    if (payload.tenant_id !== CUSTOMER_PANEL_BUSINESS.id || payload.role !== "admin" || !payload.exp || payload.exp < Date.now()) return null;
+    return payload;
+  } catch (_) {
+    return null;
+  }
 }
 
 function dashboardAuth(req) {
@@ -2347,7 +2485,7 @@ function summarizeCustomerPanelChannel(conversations, stats) {
 }
 
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
-  const operationalTurns = (rawTurns || []).filter(function (turn) { return !isCustomerMetaTurn(turn); });
+  const operationalTurns = (rawTurns || []).filter(function (turn) { return !isInternalAdminTurn(turn); });
   const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
   const allTurns = operationalTurns.slice(0, turnLimit);
   const groups = {};
@@ -2486,6 +2624,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     business: {
       id: CUSTOMER_PANEL_BUSINESS.id,
       name: CUSTOMER_PANEL_BUSINESS.name,
+      customer_number: CUSTOMER_PANEL_BUSINESS.customer_number,
+      status: CUSTOMER_PANEL_BUSINESS.status,
       whatsapp_setup: whatsappSetup,
       instagram_setup: instagramSetup,
       channels: {
@@ -2700,6 +2840,8 @@ function buildCustomerPanelDemoSnapshot() {
     business: {
       id: CUSTOMER_PANEL_BUSINESS.id,
       name: CUSTOMER_PANEL_BUSINESS.name,
+      customer_number: CUSTOMER_PANEL_BUSINESS.customer_number,
+      status: CUSTOMER_PANEL_BUSINESS.status,
       whatsapp_setup: { status: "ready", label: "WhatsApp conectado" },
       instagram_setup: { status: "ready", label: "Instagram conectado" },
       channels: {
@@ -2728,7 +2870,7 @@ function buildCustomerPanelDemoSnapshot() {
   };
 }
 
-app.post("/admin/login", (req, res) => {
+app.post("/admin/login", async (req, res) => {
   const username = String(req.body && req.body.username || "").trim();
   const password = String(req.body && req.body.password || "");
   const key = String(req.body && req.body.key || "").trim();
@@ -2740,7 +2882,7 @@ app.post("/admin/login", (req, res) => {
     return;
   }
 
-  const user = dashboardUserFromCredentials(username, password);
+  const user = await dashboardUserFromCredentials(username, password);
   if (!user) {
     res.status(401).json({ ok: false, error: "invalid_credentials" });
     return;
@@ -2754,19 +2896,133 @@ app.post("/admin/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/admin/session", (req, res) => {
+app.get("/admin/session", async (req, res) => {
   const auth = dashboardAuth(req);
+  const customerUser = await loadDashboardCustomerUser(false);
   if (!auth.ok) {
-    res.status(401).json({ ok: false, error: "unauthorized", users_enabled: DASHBOARD_USERS.length > 0 });
+    res.status(401).json({ ok: false, error: "unauthorized", users_enabled: DASHBOARD_USERS.length > 0 || !!customerUser });
     return;
   }
   res.json({
     ok: true,
     bot_version: BOT_VERSION,
-    users_enabled: DASHBOARD_USERS.length > 0,
+    users_enabled: DASHBOARD_USERS.length > 0 || !!customerUser,
+    customer_user_configured: !!customerUser,
     access_model_version: DASHBOARD_ACCESS_MODEL.version,
     user: { username: auth.username, name: auth.name, role: auth.role, method: auth.method }
   });
+});
+
+app.post("/admin/customer-invite", async (req, res) => {
+  if (!adminAuthOk(req, "super_admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!SUPABASE_ENABLED) {
+    res.status(503).json({ ok: false, error: "persistent_user_store_unavailable" });
+    return;
+  }
+  let existing;
+  try {
+    existing = await loadDashboardCustomerUser(true, true);
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "persistent_user_store_unavailable" });
+    return;
+  }
+  if (existing) {
+    res.status(409).json({ ok: false, error: "customer_admin_already_configured", username: existing.username });
+    return;
+  }
+  const invite = createDashboardCustomerInvite();
+  const inviteData = readDashboardCustomerInvite(invite);
+  const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
+  const setupUrl = protocol + "://" + req.get("host") + "/admin/setup/" + CUSTOMER_PANEL_BUSINESS.id + "?invite=" + encodeURIComponent(invite);
+  res.json({
+    ok: true,
+    tenant: { id: CUSTOMER_PANEL_BUSINESS.id, name: CUSTOMER_PANEL_BUSINESS.name, customer_number: CUSTOMER_PANEL_BUSINESS.customer_number },
+    setup_url: setupUrl,
+    expires_at: new Date(inviteData.exp).toISOString(),
+    note: "Comparte este enlace solo con el administrador de RAV Toys. Deja de servir cuando se crea la cuenta."
+  });
+});
+
+app.get("/admin/setup/:tenantId", async (req, res) => {
+  const tenantId = String(req.params.tenantId || "");
+  const invite = String(req.query.invite || "");
+  const invitation = readDashboardCustomerInvite(invite);
+  if (tenantId !== CUSTOMER_PANEL_BUSINESS.id || !invitation) {
+    renderCustomerPasswordSetup(res, { valid: false, reason: "El enlace no es válido o ya venció." });
+    return;
+  }
+  let existing;
+  try {
+    existing = await loadDashboardCustomerUser(true, true);
+  } catch (_) {
+    renderCustomerPasswordSetup(res, { valid: false, status: 503, reason: "No pudimos validar el acceso en este momento. Intenta de nuevo en unos minutos." });
+    return;
+  }
+  if (existing) {
+    renderCustomerPasswordSetup(res, { valid: false, configured: true, reason: "La cuenta administradora de RAV Toys ya fue creada." });
+    return;
+  }
+  renderCustomerPasswordSetup(res, { valid: true, invite });
+});
+
+app.post("/admin/setup/:tenantId", async (req, res) => {
+  const tenantId = String(req.params.tenantId || "");
+  const invite = String(req.body && req.body.invite || "");
+  const username = normalizeDashboardUsername(req.body && req.body.username);
+  const name = String(req.body && req.body.name || "Administrador RAV Toys").trim();
+  const password = String(req.body && req.body.password || "");
+  const passwordConfirmation = String(req.body && req.body.password_confirmation || "");
+  if (tenantId !== CUSTOMER_PANEL_BUSINESS.id || !readDashboardCustomerInvite(invite)) {
+    res.status(403).json({ ok: false, error: "invalid_or_expired_invite", message: "El enlace no es válido o ya venció." });
+    return;
+  }
+  if (!SUPABASE_ENABLED) {
+    res.status(503).json({ ok: false, error: "persistent_user_store_unavailable", message: "El almacenamiento seguro no está disponible." });
+    return;
+  }
+  let existing;
+  try {
+    existing = await loadDashboardCustomerUser(true, true);
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "persistent_user_store_unavailable", message: "No pudimos validar la cuenta. Intenta de nuevo en un momento." });
+    return;
+  }
+  if (existing) {
+    res.status(409).json({ ok: false, error: "customer_admin_already_configured", message: "La cuenta administradora ya fue creada." });
+    return;
+  }
+  if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username) || username === "clave-maestra") {
+    res.status(400).json({ ok: false, error: "invalid_username", message: "El usuario debe tener entre 3 y 40 caracteres: letras, números, punto, guion o guion bajo." });
+    return;
+  }
+  if (DASHBOARD_USERS.some(function (user) { return normalizeDashboardUsername(user.username) === username; })) {
+    res.status(409).json({ ok: false, error: "username_unavailable", message: "Ese nombre de usuario no está disponible." });
+    return;
+  }
+  if (password.length < 10 || password.length > 128 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(password) || !/\d/.test(password)) {
+    res.status(400).json({ ok: false, error: "weak_password", message: "Usa al menos 10 caracteres, incluyendo una letra y un número." });
+    return;
+  }
+  if (password !== passwordConfirmation) {
+    res.status(400).json({ ok: false, error: "password_mismatch", message: "Las contraseñas no coinciden." });
+    return;
+  }
+  try {
+    const user = await persistDashboardCustomerUser({ username, name, password });
+    setDashboardSessionCookie(req, res, user);
+    res.status(201).json({
+      ok: true,
+      tenant: { id: CUSTOMER_PANEL_BUSINESS.id, name: CUSTOMER_PANEL_BUSINESS.name },
+      user: { username: user.username, name: user.name, role: user.role },
+      redirect: "/admin/panel?channel=whatsapp&tab=summary"
+    });
+  } catch (error) {
+    log("error", "dashboard_customer_user_create_failed", { error: String(error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "customer_user_create_failed", message: "No pudimos guardar la cuenta. Intenta de nuevo en un momento." });
+  }
 });
 
 app.get("/admin/access-model", (req, res) => {
@@ -2954,7 +3210,7 @@ app.get("/admin/commercial-readiness", (req, res) => {
       stages_total: stages.length,
       ready_stages: readyCount,
       waiting_meta_stages: waitingCount,
-      next_best_work: "Agregar tenant_id default, configuracion, usuarios, salud e integraciones por tenant."
+      next_best_work: "Propagar tenant_id, configuracion, usuarios, salud e integraciones aisladas antes del cliente #2."
     },
     current_blocker: {
       kind: "external_meta_review",
@@ -3039,9 +3295,47 @@ const PORT = process.env.PORT || 3000;
 // ─── ADMIN ENDPOINTS (added in v31 — observability + safety net) ────
 // Health check: verifica que dependencias externas respondan, sin gastar
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
+function renderCustomerPasswordSetup(res, options) {
+  const valid = !!(options && options.valid);
+  const invite = JSON.stringify(options && options.invite || "");
+  const reason = escapeAdminHtml(options && options.reason || "Este enlace no está disponible.");
+  const content = valid ? `
+    <div class="eyebrow">CLIENTE #1 · RAV TOYS</div>
+    <h1>Crea tu acceso al Panel de Control</h1>
+    <p>Elige el usuario y la contraseña que usarás para consultar WhatsApp, Instagram y las conversaciones de tu equipo.</p>
+    <form id="setupForm">
+      <label for="name">Nombre del administrador</label>
+      <input id="name" autocomplete="name" maxlength="100" placeholder="Ej. Santiago Velásquez" required>
+      <label for="username">Usuario</label>
+      <input id="username" autocomplete="username" maxlength="40" placeholder="Ej. admin.rav" required>
+      <label for="password">Contraseña</label>
+      <div class="passwordField"><input id="password" type="password" autocomplete="new-password" maxlength="128" required><button class="show" type="button" onclick="togglePasswords()">Mostrar</button></div>
+      <div class="rules" id="rules"><span id="ruleLength">○ 10 caracteres</span><span id="ruleLetter">○ Una letra</span><span id="ruleNumber">○ Un número</span></div>
+      <label for="passwordConfirmation">Confirma la contraseña</label>
+      <input id="passwordConfirmation" type="password" autocomplete="new-password" maxlength="128" required>
+      <button class="primary" id="submitBtn" type="submit">Crear acceso</button>
+      <div class="error" id="error" role="alert"></div>
+    </form>
+    <div class="safe"><strong>Acceso seguro</strong><span>La contraseña se protege con un hash seguro antes de guardarse. NexforIA mantiene un acceso técnico separado.</span></div>` : `
+    <div class="eyebrow">RAV TOYS · PANEL DE CONTROL</div>
+    <h1>Este enlace no está disponible</h1>
+    <p>${reason}</p>
+    <a class="primary link" href="/admin/panel">Ir al inicio de sesión</a>`;
+  res.status(valid ? 200 : Number(options && options.status) || 403).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Crear acceso · RAV Toys</title><style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#F4F7FB;color:#071832;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:24px}.shell{width:min(500px,100%)}.brand{display:flex;align-items:center;gap:12px;margin:0 0 18px 4px}.logo{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;color:#fff;font-size:18px;font-weight:900;background:linear-gradient(145deg,#25BFFF,#12A8F4);box-shadow:0 12px 24px rgba(18,168,244,.22)}.brand strong{font-size:18px}.brand span{display:block;color:#78869F;font-size:12px;margin-top:2px}.card{background:#fff;border:1px solid #DCE5F1;border-radius:24px;padding:30px;box-shadow:0 18px 45px rgba(8,22,52,.09)}.eyebrow{color:#0788C7;font-size:11px;font-weight:900;letter-spacing:.14em;margin-bottom:12px}h1{font-size:28px;line-height:1.08;letter-spacing:-.04em;margin:0}p{font-size:15px;line-height:1.55;color:#66738D;margin:12px 0 24px}label{display:block;color:#33425E;font-size:12px;font-weight:800;margin:14px 0 6px}input{width:100%;height:46px;border:1px solid #CBD5E1;border-radius:12px;padding:0 13px;font-size:14px;color:#071832;background:#fff}input:focus{outline:3px solid rgba(18,168,244,.15);border-color:#12A8F4}.passwordField{position:relative}.passwordField input{padding-right:76px}.show{position:absolute;right:7px;top:7px;height:32px;border:0;background:#F1F5F9;color:#52617B;border-radius:8px;padding:0 10px;font-size:11px;font-weight:800}.rules{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.rules span{font-size:11px;color:#8A96A8;background:#F5F7FA;border-radius:999px;padding:5px 8px}.rules span.ok{color:#087E50;background:#E7F8F0}.primary{width:100%;min-height:48px;border:0;border-radius:12px;background:linear-gradient(135deg,#25BFFF,#12A8F4);color:#fff;font-size:15px;font-weight:900;margin-top:20px;cursor:pointer}.primary:disabled{opacity:.55;cursor:wait}.link{display:grid;place-items:center;text-decoration:none}.error{color:#B94723;font-size:12px;min-height:18px;margin-top:10px;text-align:center}.safe{margin-top:20px;border-top:1px solid #E2E8F0;padding-top:18px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px}.safe:before{content:"✓";grid-row:1/3;width:28px;height:28px;border-radius:9px;background:#E7F8F0;color:#087E50;display:grid;place-items:center;font-weight:900}.safe strong{font-size:12px}.safe span{font-size:11px;color:#78869F;line-height:1.45}@media(max-width:540px){body{padding:14px}.card{padding:22px;border-radius:20px}h1{font-size:25px}}
+  </style></head><body><main class="shell"><div class="brand"><div class="logo">RAV</div><div><strong>RAV Toys</strong><span>Panel de Control · Nextfor IA</span></div></div><section class="card">${content}</section></main>${valid ? `<script>
+var invite=${invite};var form=document.getElementById("setupForm"),password=document.getElementById("password"),confirmation=document.getElementById("passwordConfirmation");
+function setRule(id,ok){var el=document.getElementById(id);if(el){el.classList.toggle("ok",ok);el.textContent=(ok?"✓":"○")+el.textContent.slice(1);}}
+function updateRules(){var value=password.value||"";setRule("ruleLength",value.length>=10);setRule("ruleLetter",/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(value));setRule("ruleNumber",/\\d/.test(value));}
+function togglePasswords(){var next=password.type==="password"?"text":"password";password.type=next;confirmation.type=next;document.querySelector(".show").textContent=next==="text"?"Ocultar":"Mostrar";}
+password.addEventListener("input",updateRules);form.addEventListener("submit",function(event){event.preventDefault();var button=document.getElementById("submitBtn"),error=document.getElementById("error");error.textContent="";button.disabled=true;button.textContent="Creando acceso...";fetch(location.pathname,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({invite:invite,name:document.getElementById("name").value.trim(),username:document.getElementById("username").value.trim(),password:password.value,password_confirmation:confirmation.value})}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.message||body.error||"No se pudo crear el acceso");return body;});}).then(function(body){location.href=body.redirect||"/admin/panel";}).catch(function(err){error.textContent=err.message;button.disabled=false;button.textContent="Crear acceso";});});
+  </script>` : ""}</body></html>`);
+}
+
 function renderAdminLogin(res, targetPath) {
   const target = JSON.stringify(targetPath || "/admin/dashboard");
-  const usersEnabled = DASHBOARD_USERS.length > 0;
+  const usersEnabled = true;
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -3055,13 +3349,13 @@ button{width:100%;border:1px solid #0F766E;background:#0F766E;color:#fff;border-
 </style></head><body>
 <form class="box" onsubmit="go(event)">
   <h1>Panel RAV Toys</h1>
-  <p>${usersEnabled ? "Ingresa con tu usuario del equipo para ver métricas, conversaciones e intervención humana." : "Ingresa la clave del dashboard para ver métricas, conversaciones e intervención humana."}</p>
+  <p>Ingresa con el usuario y la contraseña de RAV Toys para ver métricas, conversaciones e intervención humana.</p>
   ${usersEnabled ? '<label for="username">Usuario</label><input id="username" type="text" autocomplete="username" autofocus>' : ''}
   <label for="password">${usersEnabled ? "Clave" : "Clave del dashboard"}</label>
   <input id="password" type="password" autocomplete="current-password" ${usersEnabled ? "" : "autofocus"}>
   <button type="submit">Entrar</button>
   <div class="err" id="err"></div>
-  <div class="hint">${usersEnabled ? "Los accesos quedan separados por rol del equipo." : "Si la clave es correcta, el panel se abrirá automáticamente."}</div>
+  <div class="hint">Tu acceso pertenece a RAV Toys y queda separado del acceso técnico de NexforIA.</div>
 </form>
 <script>
 var target=${target};
@@ -3076,7 +3370,7 @@ function showError(msg){document.getElementById("err").textContent=msg||"";}
 function go(e){
   e.preventDefault();showError("");
   var usernameEl=document.getElementById("username"),username=usernameEl?usernameEl.value.trim():"";
-  var password=document.getElementById("password").value.trim();
+  var password=document.getElementById("password").value;
   if(!password)return;
   if(usersEnabled&&username){
     fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:username,password:password})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"No autorizado");return j;});}).then(function(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}location.href=destination("");}).catch(function(){showError("Usuario o clave incorrectos.");});
@@ -3135,9 +3429,9 @@ app.get("/admin/super-admin", (req, res) => {
   }).join("");
   const tenantFields = (COMMERCIAL_READINESS.requiredTenantFields || []).map(field => `<code>${escapeAdminHtml(field)}</code>`).join("");
   const nextTenantSteps = [
-    { label: "tenant_id default", detail: "Agregar rav-toys a logs y configuracion nueva." },
+    { label: "tenant_id en logs", detail: "Propagar rav-toys a cada log y configuracion nueva antes del cliente #2." },
+    { label: "dedicated user store", detail: "Mover el acceso inicial de RAV a una tabla de usuarios aislada por tenant." },
     { label: "tenant config", detail: "Crear una fuente de configuracion aislada por comercio." },
-    { label: "users per tenant", detail: "Asociar admin, agent y viewer al tenant correspondiente." },
     { label: "health per tenant", detail: "Reportar integraciones y alertas por cliente." },
     { label: "WhatsApp/Shopify config per tenant", detail: "Resolver credenciales e identificadores sin exponer sus valores." }
   ];
@@ -3148,21 +3442,21 @@ app.get("/admin/super-admin", (req, res) => {
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Super admin · NexforIA</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:22px;line-height:1.5}.wrap{max-width:1120px;margin:0 auto}.headcard{background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:15px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px}.logo{width:42px;height:42px;border-radius:10px;background:#E1F5EE;color:#0F6E56;display:grid;place-items:center;font-size:12px;font-weight:750}.brand h1{font-size:17px;font-weight:650}.brand p{font-size:12px;color:#9AA0A6}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.btn{font:inherit;font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #CFE3E3;background:#fff;padding:7px 12px;border-radius:8px;text-decoration:none}.btn:hover{background:#F0FAF7}.roleBadge{font-size:11px;color:#475569;background:#F4F5F7;border:1px solid #E5E8EC;padding:7px 10px;border-radius:8px}.callout{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;background:#FFF8EA;border:1px solid #F3D19C;border-radius:12px;padding:14px 16px;margin-bottom:14px}.callout strong{font-size:13px;color:#7C4A08}.callout p{font-size:12px;color:#9A6216;margin-top:3px}.status{display:inline-flex;align-items:center;white-space:nowrap;font-size:10px;border-radius:999px;padding:3px 8px;font-weight:650}.status.ready{background:#E1F5EE;color:#0F6E56}.status.draft{background:#F4F5F7;color:#64748B}.status.waiting{background:#FAEEDA;color:#9A6216}.status.error{background:#FAECE7;color:#B94723}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.kpi,.card{background:#fff;border:1px solid #E5E8EC;border-radius:12px}.kpi{padding:14px 16px}.kpi .label{font-size:11px;color:#6B7280}.kpi .value{font-size:23px;font-weight:650;margin-top:6px}.kpi .sub{font-size:10px;color:#9AA0A6;margin-top:2px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}.card{padding:17px 18px}.card.wide{grid-column:1/-1}.cardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:13px}.cardHead h2{font-size:14px}.cardHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.healthList,.readinessList{display:grid;gap:8px}.healthRow,.readinessRow{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #EEF1F4;padding-top:8px;font-size:12px}.healthRow:first-child,.readinessRow:first-child{border-top:0;padding-top:0}.healthRow span:first-child{color:#64748B}.checkValue{font-size:11px;font-weight:650}.checkValue.ok{color:#0F6E56}.checkValue.warn{color:#9A6216}.checkValue.err{color:#B94723}.roleGrid,.panelGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.roleCard,.panelCard{border:1px solid #E5E8EC;border-radius:9px;padding:11px;background:#FBFCFD}.row{display:flex;align-items:center;justify-content:space-between;gap:8px}.roleCard .row span,.panelCard .row span{font-size:10px;color:#9AA0A6}.roleCard strong{display:block;font-size:11px;margin-top:8px}.roleCard p,.panelCard p{font-size:11px;color:#6B7280;margin-top:4px}.panelCard h3{font-size:13px}.roleList,.fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#0F6E56;background:#EDF8F4;border:1px solid #D5EDE4;padding:3px 6px;border-radius:6px}.readinessRow div{display:grid}.readinessRow strong{font-size:12px}.readinessRow div span{font-size:10px;color:#9AA0A6}.summaryLine{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}.summaryLine span{font-size:10px;color:#64748B;background:#F4F5F7;border-radius:999px;padding:3px 8px}.fieldsNote{font-size:10px;color:#9AA0A6;margin-top:10px}.tenantTable{width:100%;border-collapse:collapse;font-size:11px}.tenantTable th{text-align:left;color:#9AA0A6;font-weight:500;padding:0 8px 8px}.tenantTable td{border-top:1px solid #EEF1F4;padding:10px 8px}.tenantName{font-weight:650}.steps{list-style:none;display:grid;gap:0}.steps li{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;border-top:1px solid #EEF1F4;padding:10px 0}.steps li:first-child{border-top:0;padding-top:0}.stepIndex{width:24px;height:24px;border-radius:7px;background:#F4F5F7;color:#64748B;display:grid;place-items:center;font-size:10px;font-weight:700}.steps strong{font-size:12px}.steps p{font-size:10px;color:#9AA0A6;margin-top:2px}.footer{font-size:10px;color:#9AA0A6;text-align:center;padding:2px 0 8px}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:22px;line-height:1.5}.wrap{max-width:1120px;margin:0 auto}.headcard{background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:15px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px}.logo{width:42px;height:42px;border-radius:10px;background:#E1F5EE;color:#0F6E56;display:grid;place-items:center;font-size:12px;font-weight:750}.brand h1{font-size:17px;font-weight:650}.brand p{font-size:12px;color:#9AA0A6}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.btn{font:inherit;font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #CFE3E3;background:#fff;padding:7px 12px;border-radius:8px;text-decoration:none}.btn:hover{background:#F0FAF7}.inviteStatus{font-size:10px;color:#64748B;max-width:210px}.roleBadge{font-size:11px;color:#475569;background:#F4F5F7;border:1px solid #E5E8EC;padding:7px 10px;border-radius:8px}.callout{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;background:#FFF8EA;border:1px solid #F3D19C;border-radius:12px;padding:14px 16px;margin-bottom:14px}.callout strong{font-size:13px;color:#7C4A08}.callout p{font-size:12px;color:#9A6216;margin-top:3px}.status{display:inline-flex;align-items:center;white-space:nowrap;font-size:10px;border-radius:999px;padding:3px 8px;font-weight:650}.status.ready{background:#E1F5EE;color:#0F6E56}.status.draft{background:#F4F5F7;color:#64748B}.status.waiting{background:#FAEEDA;color:#9A6216}.status.error{background:#FAECE7;color:#B94723}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.kpi,.card{background:#fff;border:1px solid #E5E8EC;border-radius:12px}.kpi{padding:14px 16px}.kpi .label{font-size:11px;color:#6B7280}.kpi .value{font-size:23px;font-weight:650;margin-top:6px}.kpi .sub{font-size:10px;color:#9AA0A6;margin-top:2px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}.card{padding:17px 18px}.card.wide{grid-column:1/-1}.cardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:13px}.cardHead h2{font-size:14px}.cardHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.healthList,.readinessList{display:grid;gap:8px}.healthRow,.readinessRow{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #EEF1F4;padding-top:8px;font-size:12px}.healthRow:first-child,.readinessRow:first-child{border-top:0;padding-top:0}.healthRow span:first-child{color:#64748B}.checkValue{font-size:11px;font-weight:650}.checkValue.ok{color:#0F6E56}.checkValue.warn{color:#9A6216}.checkValue.err{color:#B94723}.roleGrid,.panelGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.roleCard,.panelCard{border:1px solid #E5E8EC;border-radius:9px;padding:11px;background:#FBFCFD}.row{display:flex;align-items:center;justify-content:space-between;gap:8px}.roleCard .row span,.panelCard .row span{font-size:10px;color:#9AA0A6}.roleCard strong{display:block;font-size:11px;margin-top:8px}.roleCard p,.panelCard p{font-size:11px;color:#6B7280;margin-top:4px}.panelCard h3{font-size:13px}.roleList,.fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#0F6E56;background:#EDF8F4;border:1px solid #D5EDE4;padding:3px 6px;border-radius:6px}.readinessRow div{display:grid}.readinessRow strong{font-size:12px}.readinessRow div span{font-size:10px;color:#9AA0A6}.summaryLine{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}.summaryLine span{font-size:10px;color:#64748B;background:#F4F5F7;border-radius:999px;padding:3px 8px}.fieldsNote{font-size:10px;color:#9AA0A6;margin-top:10px}.tenantTable{width:100%;border-collapse:collapse;font-size:11px}.tenantTable th{text-align:left;color:#9AA0A6;font-weight:500;padding:0 8px 8px}.tenantTable td{border-top:1px solid #EEF1F4;padding:10px 8px}.tenantName{font-weight:650}.steps{list-style:none;display:grid;gap:0}.steps li{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;border-top:1px solid #EEF1F4;padding:10px 0}.steps li:first-child{border-top:0;padding-top:0}.stepIndex{width:24px;height:24px;border-radius:7px;background:#F4F5F7;color:#64748B;display:grid;place-items:center;font-size:10px;font-weight:700}.steps strong{font-size:12px}.steps p{font-size:10px;color:#9AA0A6;margin-top:2px}.footer{font-size:10px;color:#9AA0A6;text-align:center;padding:2px 0 8px}
 @media(max-width:840px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}.card.wide{grid-column:auto}}@media(max-width:560px){body{padding:12px}.kpis,.roleGrid,.panelGrid{grid-template-columns:1fr}.steps li{grid-template-columns:auto 1fr}.steps li>.status{grid-column:2;justify-self:start}.callout{display:block}.callout>.status{margin-top:8px}}
 </style></head><body><div class="wrap">
-<header class="headcard"><div class="brand"><div class="logo">NX</div><div><h1>NexforIA · Super admin</h1><p>Operaciones de plataforma · RAV Bot ${escapeAdminHtml(BOT_VERSION)}</p></div></div><div class="actions"><span class="roleBadge">${escapeAdminHtml(auth.name || auth.username)} · Super admin</span><a class="btn" href="${clientDashboardHref}">Admin RAV</a><button class="btn" type="button" onclick="loadHealth()">Actualizar salud</button><button class="btn" type="button" onclick="logoutSuperAdmin()">Salir</button></div></header>
+<header class="headcard"><div class="brand"><div class="logo">NX</div><div><h1>NexforIA · Super admin</h1><p>Operaciones de plataforma · RAV Bot ${escapeAdminHtml(BOT_VERSION)}</p></div></div><div class="actions"><span class="roleBadge">${escapeAdminHtml(auth.name || auth.username)} · Super admin</span><a class="btn" href="${clientDashboardHref}">Admin RAV</a><button class="btn" id="customerInviteBtn" type="button" onclick="createCustomerInvite()">Crear acceso RAV</button><span class="inviteStatus" id="customerInviteStatus"></span><button class="btn" type="button" onclick="loadHealth()">Actualizar salud</button><button class="btn" type="button" onclick="logoutSuperAdmin()">Salir</button></div></header>
 
 <section class="callout"><div><strong>Bloqueador actual: Meta App Review pendiente</strong><p>La infraestructura puede estar operativa, pero la aprobacion de permisos de WhatsApp sigue siendo requisito externo antes de escalar a clientes reales.</p></div><span class="status waiting">Esperando Meta</span></section>
 
-<section class="kpis" aria-label="Resumen de plataforma"><article class="kpi"><div class="label">Version del bot</div><div class="value">${escapeAdminHtml(BOT_VERSION)}</div><div class="sub">Produccion NexforIA Bots</div></article><article class="kpi"><div class="label">Infraestructura</div><div class="value" id="infraValue">Verificando</div><div class="sub" id="infraSub">Consultando /admin/health</div></article><article class="kpi"><div class="label">Readiness comercial</div><div class="value">${readyCount}/${stages.length}</div><div class="sub">etapas listas · version ${escapeAdminHtml(COMMERCIAL_READINESS.version)}</div></article><article class="kpi"><div class="label">Tenants</div><div class="value">1</div><div class="sub">RAV Toys · tenant default</div></article></section>
+<section class="kpis" aria-label="Resumen de plataforma"><article class="kpi"><div class="label">Version del bot</div><div class="value">${escapeAdminHtml(BOT_VERSION)}</div><div class="sub">Produccion NexforIA Bots</div></article><article class="kpi"><div class="label">Infraestructura</div><div class="value" id="infraValue">Verificando</div><div class="sub" id="infraSub">Consultando /admin/health</div></article><article class="kpi"><div class="label">Readiness comercial</div><div class="value">${readyCount}/${stages.length}</div><div class="sub">etapas listas · version ${escapeAdminHtml(COMMERCIAL_READINESS.version)}</div></article><article class="kpi"><div class="label">Clientes</div><div class="value">1</div><div class="sub">RAV Toys · cliente #1</div></article></section>
 
 <div class="layout">
   <section class="card"><div class="cardHead"><div><h2>Salud de infraestructura</h2><p>Estados normalizados; no se muestran tokens ni identificadores.</p></div><span class="status draft" id="healthBadge">Verificando</span></div><div class="healthList"><div class="healthRow"><span>Uptime</span><span class="checkValue" id="healthUptime">-</span></div><div class="healthRow"><span>Shopify storefront</span><span class="checkValue" id="healthShopify">-</span></div><div class="healthRow"><span>Meta WhatsApp API</span><span class="checkValue" id="healthMeta">-</span></div><div class="healthRow"><span>Supabase</span><span class="checkValue" id="healthSupabase">-</span></div><div class="healthRow"><span>Anthropic</span><span class="checkValue" id="healthAnthropic">-</span></div></div></section>
   <section class="card"><div class="cardHead"><div><h2>Readiness comercial</h2><p>Resumen directo de COMMERCIAL_READINESS.</p></div><span class="status waiting">${waitingCount} esperando Meta</span></div><div class="summaryLine"><span>${readyCount} lista</span><span>${draftCount} pendientes</span><span>${stages.length} etapas totales</span></div><div class="readinessList">${readinessRows}</div></section>
   <section class="card wide"><div class="cardHead"><div><h2>Modelo de acceso actual</h2><p>Super admin opera la plataforma; los demas roles permanecen en el alcance del comercio.</p></div><span class="status ready">Modelo ${escapeAdminHtml(DASHBOARD_ACCESS_MODEL.version)}</span></div><div class="roleGrid">${roleCards}</div></section>
   <section class="card wide"><div class="cardHead"><div><h2>Division de paneles</h2><p>La vista operativa del cliente se mantiene sin cambios.</p></div></div><div class="panelGrid">${panelCards}</div></section>
-  <section class="card"><div class="cardHead"><div><h2>Tenant placeholder</h2><p>Referencia visual; aun no existe routing multi-tenant.</p></div><span class="status draft">Single tenant</span></div><table class="tenantTable"><thead><tr><th>Tenant</th><th>ID</th><th>Estado</th></tr></thead><tbody><tr><td class="tenantName">RAV Toys</td><td><code>rav-toys</code></td><td>Default actual</td></tr></tbody></table></section>
+  <section class="card"><div class="cardHead"><div><h2>Primer cliente</h2><p>RAV Toys inaugura el modelo de Panel de Control por comercio.</p></div><span class="status ready">Cliente activo</span></div><table class="tenantTable"><thead><tr><th>Cliente</th><th>ID</th><th>Estado</th></tr></thead><tbody><tr><td class="tenantName">RAV Toys</td><td><code>rav-toys</code></td><td>Cliente #1</td></tr></tbody></table></section>
   <section class="card"><div class="cardHead"><div><h2>Campos requeridos para onboarding</h2><p>Esquema futuro por cliente.</p></div><span class="status draft">${(COMMERCIAL_READINESS.requiredTenantFields || []).length} campos</span></div><div class="fields">${tenantFields}</div><p class="fieldsNote">Solo se muestran nombres de campos. Los valores sensibles deben vivir en configuracion segura por tenant.</p></section>
   <section class="card wide"><div class="cardHead"><div><h2>Siguientes pasos multi-cliente</h2><p>Checklist tecnico para la proxima fase, sin activar routing multi-tenant todavia.</p></div></div><ol class="steps">${nextSteps}</ol></section>
 </div>
@@ -3173,6 +3467,7 @@ function checkKind(value){value=String(value||"");if(value==="ok"||value.indexOf
 function checkLabel(value){var kind=checkKind(value);if(kind==="ok")return value==="ok"?"OK":"Configurado";if(kind==="warn")return "No configurado";return "Revisar";}
 function paintCheck(id,value){var el=document.getElementById(id);if(!el)return;el.textContent=checkLabel(value);el.className="checkValue "+checkKind(value);}
 function uptimeLabel(seconds){seconds=Math.max(0,Number(seconds)||0);var days=Math.floor(seconds/86400),hours=Math.floor((seconds%86400)/3600),minutes=Math.floor((seconds%3600)/60);return (days?days+"d ":"")+hours+"h "+minutes+"m";}
+function createCustomerInvite(){var button=document.getElementById("customerInviteBtn"),status=document.getElementById("customerInviteStatus");button.disabled=true;status.textContent="Generando enlace...";fetch("/admin/customer-invite",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"No se pudo generar");return body;});}).then(function(body){if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(body.setup_url).then(function(){status.textContent="Enlace copiado · vence en 72 h";});}status.textContent=body.setup_url;}).catch(function(error){status.textContent=error.message==="customer_admin_already_configured"?"La cuenta RAV ya está configurada.":"No se pudo generar el enlace.";}).finally(function(){button.disabled=false;});}
 function loadHealth(){setSuperText("infraValue","Verificando");setSuperText("infraSub","Consultando /admin/health");fetch("/admin/health",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error("HTTP "+r.status);return j;});}).then(function(h){var ready=!!(h.production_readiness&&h.production_readiness.infrastructure_ready),blockers=(h.production_readiness&&h.production_readiness.blockers)||[],badge=document.getElementById("healthBadge");setSuperText("infraValue",ready?"Operativa":"Revisar");setSuperText("infraSub",ready?"Servicios base disponibles":blockers.length+" bloqueo"+(blockers.length===1?"":"s")+" tecnico"+(blockers.length===1?"":"s"));if(badge){badge.textContent=ready?"Infra OK":"Requiere revision";badge.className="status "+(ready?"ready":"error");}setSuperText("healthUptime",uptimeLabel(h.bot&&h.bot.uptime_seconds));paintCheck("healthShopify",h.checks&&h.checks.shopify_storefront);paintCheck("healthMeta",h.checks&&h.checks.meta_whatsapp);paintCheck("healthSupabase",h.checks&&h.checks.supabase_conversation_logs);paintCheck("healthAnthropic",h.checks&&h.checks.anthropic_api);}).catch(function(){var badge=document.getElementById("healthBadge");setSuperText("infraValue","No disponible");setSuperText("infraSub","No se pudo consultar salud");if(badge){badge.textContent="Sin respuesta";badge.className="status error";}["healthShopify","healthMeta","healthSupabase","healthAnthropic"].forEach(function(id){var el=document.getElementById(id);if(el){el.textContent="Sin respuesta";el.className="checkValue err";}});});}
 function logoutSuperAdmin(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 try{var cleanUrl=new URL(location.href);if(cleanUrl.searchParams.has("key")){cleanUrl.searchParams.delete("key");history.replaceState(null,"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);}}catch(e){}
@@ -4075,8 +4370,8 @@ app.get("/admin/evaluate", async (req, res) => {
     }
   }
   let done = [];
-  if (SUPABASE_ENABLED) { const all = await supabaseFetchRecent(100); done = (all || []).filter(r => r.eval && !r.eval.error).map(r => r.eval); }
-  else { done = conversationLogs.filter(t => t.eval && !t.eval.error).map(t => t.eval); }
+  if (SUPABASE_ENABLED) { const all = await supabaseFetchRecent(100); done = (all || []).filter(r => r.eval && !r.eval.error && !r.eval.skip).map(r => r.eval); }
+  else { done = conversationLogs.filter(t => t.eval && !t.eval.error && !t.eval.skip).map(t => t.eval); }
   const resByCat = { si: 0, parcial: 0, no: 0 };
   let tonoSum = 0, tonoN = 0, intentN = 0;
   for (const ev of done) {
@@ -4114,7 +4409,7 @@ app.get("/admin/conversations", async (req, res) => {
     }
   }
   if (!turns) turns = conversationLogs.slice(-limit).reverse();
-  turns = turns.filter(t => !isCustomerMetaTurn(t));
+  turns = turns.filter(t => !isInternalAdminTurn(t));
   const withRating = turns.filter(t => t.rating != null);
   const avgRating = withRating.length
     ? Math.round(withRating.reduce((s, t) => s + (Number(t.rating) || 0), 0) / withRating.length * 10) / 10

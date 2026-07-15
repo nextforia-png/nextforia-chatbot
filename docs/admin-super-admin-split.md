@@ -82,8 +82,8 @@ Formato JSON:
 
 1. **Base de roles:** listo en `v59`.
 2. **Vista Super admin:** lista en `v60` con readiness, salud global normalizada y preparacion tecnica.
-3. **Tenant default:** crear `tenant_id = rav-toys` en logs/configuracion nueva.
-4. **Usuarios por tenant:** mover `DASHBOARD_USERS` a una tabla o configuracion por cliente.
+3. **Tenant default:** RAV Toys ya opera como cliente #1 con `tenant_id = rav-toys` en el Panel de Control.
+4. **Usuario inicial del tenant:** RAV Toys crea su administrador mediante invitación firmada y contraseña persistente con hash. Antes del segundo cliente, mover este registro interno a una tabla dedicada por tenant.
 5. **Aislamiento por tenant:** limitar datos, usuarios y configuracion del panel Admin al comercio autenticado.
 6. **Multi-cliente real:** resolver tenant por `phone_number_id` entrante y aislar datos/configuracion.
 

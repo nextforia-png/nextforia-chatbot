@@ -37,6 +37,8 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `VERIFY_TOKEN` | Token de verificación del webhook (default: `rav_toys_webhook_2026`) |
 | `IG_ACCESS_TOKEN` | Token del Instagram Professional account autorizado en Meta |
 | `IG_USER_ID` | ID del Instagram Professional account que enviará respuestas |
+| `IG_SEND_ID` | ID usado en `/messages`; usa `IG_USER_ID` por defecto. Con Facebook Login, usa el ID de la página vinculada |
+| `IG_GRAPH_BASE_URL` | Host de Graph API. Usa `https://graph.instagram.com` por defecto o `https://graph.facebook.com` con Facebook Login |
 | `IG_VERIFY_TOKEN` | Token para verificar `/instagram/webhook`; usa `VERIFY_TOKEN` si se omite |
 | `META_GRAPH_VERSION` | Versión de Graph API para Instagram (default: `v23.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |

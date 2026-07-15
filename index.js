@@ -66,6 +66,8 @@ const WA_TOKEN = process.env.WA_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
 const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
 const IG_USER_ID = process.env.IG_USER_ID || "";
+const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
+const IG_GRAPH_BASE_URL = (process.env.IG_GRAPH_BASE_URL || "https://graph.instagram.com").replace(/\/$/, "");
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -1297,9 +1299,9 @@ async function sendText(to, text) {
   const recipient = parseChannelRecipient(to);
   try {
     if (recipient.channel === "instagram") {
-      if (!IG_ACCESS_TOKEN || !IG_USER_ID) throw new Error("Instagram messaging is not configured");
+      if (!IG_ACCESS_TOKEN || !IG_SEND_ID) throw new Error("Instagram messaging is not configured");
       await axios.post(
-        `https://graph.instagram.com/${META_GRAPH_VERSION}/${IG_USER_ID}/messages`,
+        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_SEND_ID}/messages`,
         { recipient: { id: recipient.id }, message: { text: String(text || "") } },
         { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
@@ -1390,9 +1392,9 @@ async function sendImage(to, imageUrl, caption) {
   const recipient = parseChannelRecipient(to);
   try {
     if (recipient.channel === "instagram") {
-      if (!IG_ACCESS_TOKEN || !IG_USER_ID) throw new Error("Instagram messaging is not configured");
+      if (!IG_ACCESS_TOKEN || !IG_SEND_ID) throw new Error("Instagram messaging is not configured");
       await axios.post(
-        `https://graph.instagram.com/${META_GRAPH_VERSION}/${IG_USER_ID}/messages`,
+        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_SEND_ID}/messages`,
         { recipient: { id: recipient.id }, message: { attachment: { type: "image", payload: { url: imageUrl } } } },
         { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
@@ -3523,6 +3525,8 @@ async function buildAdminHealthResult() {
       wa_token_present: !!WA_TOKEN,
       instagram_token_present: !!IG_ACCESS_TOKEN,
       instagram_user_id: IG_USER_ID || null,
+      instagram_send_id: IG_SEND_ID || null,
+      instagram_graph_base_url: IG_GRAPH_BASE_URL,
       phone_number_id: PHONE_NUMBER_ID,
       shopify_domain: SHOPIFY_STORE_DOMAIN,
       shopify_admin_api_version: SHOPIFY_ADMIN_API_VERSION,
@@ -3557,7 +3561,7 @@ async function buildAdminHealthResult() {
   }
   if (IG_ACCESS_TOKEN && IG_USER_ID) {
     try {
-      const r = await axios.get(`https://graph.instagram.com/${META_GRAPH_VERSION}/${IG_USER_ID}`, {
+      const r = await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_USER_ID}`, {
         params: { fields: "id,username" },
         headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
         timeout: 5000

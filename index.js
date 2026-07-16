@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v68-unified-support-channels";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v69-nextfor-panel-access";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2244,6 +2244,7 @@ function parseDashboardUsers(raw) {
       : Object.keys(parsed || {}).map(username => Object.assign({ username }, parsed[username]));
     return list.map(user => ({
       username: String(user.username || user.user || "").trim(),
+      email: String(user.email || "").trim().toLowerCase(),
       password: String(user.password || user.pass || "").trim(),
       name: String(user.name || user.username || user.user || "").trim(),
       role: cleanDashboardRole(user.role)
@@ -2255,7 +2256,8 @@ function parseDashboardUsers(raw) {
         username: String(parts[0] || "").trim(),
         password: String(parts[1] || "").trim(),
         role: cleanDashboardRole(parts[2] || "agent"),
-        name: String(parts[3] || parts[0] || "").trim()
+        name: String(parts[3] || parts[0] || "").trim(),
+        email: String(parts[4] || "").trim().toLowerCase()
       };
     }).filter(user => user.username && user.password);
   }
@@ -2423,11 +2425,15 @@ async function persistDashboardCustomerUser(input) {
 
 async function dashboardUserFromCredentials(username, password) {
   const cleanUser = String(username || "").trim();
+  const normalizedUser = normalizeDashboardUsername(cleanUser);
   const cleanPass = String(password || "");
-  const environmentUser = DASHBOARD_USERS.find(user => user.username === cleanUser && safeEqualText(user.password, cleanPass));
+  const environmentUser = DASHBOARD_USERS.find(user => (
+    normalizeDashboardUsername(user.username) === normalizedUser ||
+    (user.email && user.email === normalizedUser)
+  ) && safeEqualText(user.password, cleanPass));
   if (environmentUser) return environmentUser;
   const customerUser = await loadDashboardCustomerUser(false);
-  if (!customerUser || customerUser.username !== normalizeDashboardUsername(cleanUser)) return null;
+  if (!customerUser || customerUser.username !== normalizedUser) return null;
   let candidate = "";
   try {
     candidate = hashDashboardPassword(cleanPass, Buffer.from(customerUser.salt, "base64url"));
@@ -3549,45 +3555,60 @@ function renderAdminLogin(res, targetPath) {
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ingresar al panel RAV</title>
+<title>Ingresar al panel · Nextfor IA</title>
 <style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:20px}
-.box{width:min(420px,100%);background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:22px;box-shadow:0 12px 28px rgba(31,42,68,.08)}
-h1{font-size:18px;margin:0 0 6px}p{font-size:13px;color:#6B7280;margin:0 0 18px;line-height:1.5}
-label{display:block;font-size:12px;color:#475569;margin-bottom:6px}input{width:100%;border:1px solid #CBD5E1;border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px}
-button{width:100%;border:1px solid #0F766E;background:#0F766E;color:#fff;border-radius:8px;padding:10px 12px;font-size:14px;cursor:pointer}.hint{font-size:11px;color:#94A3B8;margin-top:12px;text-align:center}.err{font-size:12px;color:#B94723;margin-top:10px;min-height:18px}
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+:root{--navy-950:#060F22;--navy-900:#0A1836;--navy-800:#0E2148;--navy-700:#122A5C;--cyan-300:#57C2F3;--cyan-500:#00A0F0;--cyan-600:#0587CC;--cyan-700:#0A6BA1;--slate-50:#F6F8FB;--slate-100:#EDF1F7;--slate-200:#DFE6F0;--slate-300:#C6D1E0;--slate-400:#94A3BC;--slate-500:#647289;--slate-700:#313C50;--green:#14A971;--display:"Sora","Avenir Next",sans-serif;--body:"Plus Jakarta Sans","Avenir Next",sans-serif}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(145deg,#EDF2F8,#F8FAFD);color:var(--navy-900);font-family:var(--body);padding:34px}.loginShell{width:min(1080px,100%);min-height:650px;background:#fff;border:1px solid var(--slate-200);border-radius:26px;overflow:hidden;box-shadow:0 40px 90px -30px rgba(6,15,34,.35);display:grid;grid-template-columns:430px minmax(0,1fr)}
+.brandPanel{position:relative;overflow:hidden;background:linear-gradient(160deg,var(--navy-800),var(--navy-950));padding:44px 40px;color:#fff;display:flex;flex-direction:column;justify-content:space-between}.brandPanel:before{content:"";position:absolute;top:-150px;right:-120px;width:390px;height:390px;background:radial-gradient(circle,rgba(0,160,240,.4),transparent 68%)}.brand,.brandCopy,.brandLive{position:relative}.brand{display:flex;align-items:center;gap:12px}.brandMark{width:54px;height:40px;object-fit:contain}.brandName{font-family:var(--display);font-size:17px;font-weight:700}.brandSub{font-size:12px;color:rgba(255,255,255,.6);margin-top:2px}.eyebrow{font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--cyan-300);margin-bottom:14px}.brandCopy h1{font-family:var(--display);font-size:31px;line-height:1.14;letter-spacing:-.03em;margin:0 0 16px}.brandCopy h1 span{color:var(--cyan-300)}.brandCopy>p{font-size:14px;line-height:1.65;color:rgba(255,255,255,.72);margin:0}.benefits{display:grid;gap:12px;margin-top:26px}.benefit{display:flex;align-items:center;gap:12px;padding:13px 15px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:14px}.benefitIcon{width:34px;height:34px;display:grid;place-items:center;border-radius:10px;background:rgba(0,160,240,.18);color:var(--cyan-300)}.benefitIcon svg{width:17px;height:17px}.benefit:last-child .benefitIcon{background:rgba(20,169,113,.2);color:#4ADE9E}.benefit strong{display:block;font-family:var(--display);font-size:18px}.benefit span{font-size:12px;color:rgba(255,255,255,.6)}.brandLive{display:flex;align-items:center;gap:9px;font-size:12px;color:rgba(255,255,255,.65)}.liveDot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(20,169,113,.25)}
+.formPanel{padding:52px;display:grid;place-items:center}.formInner{width:min(100%,500px)}.formEyebrow{font-size:12px;font-weight:800;letter-spacing:.14em;color:var(--cyan-600);text-transform:uppercase;margin-bottom:12px}.formInner h2{font-family:var(--display);font-size:32px;line-height:1.12;letter-spacing:-.035em;margin:0 0 14px}.lead{font-size:15px;line-height:1.6;color:var(--slate-700);margin:0 0 30px}.field{margin-top:22px}.labelRow{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:9px}label{font-size:14px;font-weight:700}.inputWrap{position:relative}.input{width:100%;height:52px;border:1.5px solid var(--slate-300);border-radius:12px;padding:0 16px;font:500 15px var(--body);color:var(--navy-900);background:#fff;outline:none;transition:.18s}.input::placeholder{color:var(--slate-400)}.input:focus{border-color:var(--cyan-500);box-shadow:0 0 0 4px rgba(0,160,240,.14)}.input.password{padding-right:105px}.textBtn{border:0;background:none;padding:0;color:var(--cyan-600);font:700 13px var(--body);cursor:pointer}.textBtn:hover{color:var(--cyan-700)}.showBtn{position:absolute;top:50%;right:8px;transform:translateY(-50%);border:0;border-radius:9px;background:var(--slate-100);color:var(--slate-500);padding:9px 16px;font:700 13px var(--body);cursor:pointer}.primary{width:100%;min-height:56px;border:0;border-radius:14px;background:linear-gradient(135deg,#26ADEE,var(--cyan-500) 55%,var(--cyan-600));color:#fff;font:800 16px var(--display);margin-top:24px;box-shadow:0 10px 24px -10px rgba(0,160,240,.6);cursor:pointer;transition:.18s}.primary:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 14px 30px -8px rgba(0,160,240,.5)}.primary:disabled{opacity:.48;cursor:not-allowed;box-shadow:none}.accountPrompt{text-align:center;font-size:13.5px;color:var(--slate-500);margin-top:22px}.err{min-height:20px;color:#B94723;font-size:12.5px;text-align:center;margin-top:10px}.backBtn{display:inline-flex;align-items:center;gap:7px;margin-bottom:20px}.successIcon{width:52px;height:52px;border-radius:15px;background:#E7F7F0;color:#0B7A50;display:grid;place-items:center;font-size:24px;margin-bottom:16px}.infoBox{background:var(--slate-50);border:1px solid var(--slate-200);border-radius:15px;padding:16px;color:var(--slate-700);font-size:13px;line-height:1.55;margin-top:20px}.mobileTrust{display:none}.view[hidden]{display:none}
+@media(max-width:780px){body{padding:0;background:var(--slate-50);display:block}.loginShell{width:100%;min-height:100vh;border:0;border-radius:0;box-shadow:none;display:flex;flex-direction:column}.brandPanel{margin:14px 14px 0;padding:20px;border-radius:22px;min-height:auto;display:block}.brand{margin-bottom:17px}.brandMark{width:47px;height:34px}.brandCopy .eyebrow{font-size:9px;margin-bottom:7px}.brandCopy h1{font-size:21px;margin-bottom:0}.brandCopy h1 span,.brandCopy>p,.brandLive{display:none}.benefits{display:flex;gap:9px;margin-top:15px}.benefit{flex:1;padding:10px 12px;min-width:0}.benefitIcon{display:none}.benefit strong{font-size:14px}.benefit span{font-size:10.5px}.formPanel{padding:26px 24px 20px;display:block;flex:1}.formInner{max-width:none}.formEyebrow{display:none}.formInner h2{font-size:25px;margin-bottom:8px}.lead{font-size:13.5px;margin-bottom:22px}.field{margin-top:18px}label{font-size:13.5px}.input{height:50px;font-size:14px}.primary{min-height:52px;margin-top:20px}.accountPrompt{font-size:13px;margin-top:18px}.mobileTrust{display:block;padding:8px 24px 22px;text-align:center;font-size:11.5px;line-height:1.5;color:var(--slate-400)}}
 </style></head><body>
-<form class="box" onsubmit="go(event)">
-  <h1>Panel RAV Toys</h1>
-  <p>Ingresa con el usuario y la contraseña de RAV Toys para ver métricas, conversaciones e intervención humana.</p>
-  ${usersEnabled ? '<label for="username">Usuario</label><input id="username" type="text" autocomplete="username" autofocus>' : ''}
-  <label for="password">${usersEnabled ? "Clave" : "Clave del dashboard"}</label>
-  <input id="password" type="password" autocomplete="current-password" ${usersEnabled ? "" : "autofocus"}>
-  <button type="submit">Entrar</button>
-  <div class="err" id="err"></div>
-  <div class="hint">Tu acceso pertenece a RAV Toys y queda separado del acceso técnico de NexforIA.</div>
-</form>
+<main class="loginShell">
+  <section class="brandPanel" aria-label="Nextfor IA">
+    <div class="brand"><img class="brandMark" src="/admin/assets/nexfor-mark-light.png" alt=""><div><div class="brandName">Nextfor IA</div><div class="brandSub">Panel de Control</div></div></div>
+    <div class="brandCopy"><div class="eyebrow">MIENTRAS NO ESTÁS, LA IA VENDE</div><h1>Bienvenido de vuelta. <span>Esto es lo que pasó por ti.</span></h1><p>Entra y mira cuánto atendió, calificó y agendó tu asistente desde la última vez.</p><div class="benefits"><div class="benefit"><div class="benefitIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg></div><div><strong>Responde</strong><span>cada mensaje al instante</span></div></div><div class="benefit"><div class="benefitIcon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg></div><div><strong>Vende</strong><span>cierra oportunidades por ti</span></div></div></div></div>
+    <div class="brandLive"><span class="liveDot"></span>Tu asistente sigue activo ahora mismo</div>
+  </section>
+  <section class="formPanel"><div class="formInner">
+    <form class="view" id="loginView" onsubmit="go(event)">
+      <div class="formEyebrow">Panel de Control</div><h2>Ingresa a tu panel</h2><p class="lead">Usa el usuario o correo y la clave de tu negocio para ver tus métricas y conversaciones.</p>
+      <div class="field"><div class="labelRow"><label for="username">Usuario o correo</label></div><input class="input" id="username" type="text" autocomplete="username" autocapitalize="off" placeholder="usuario o correo@tunegocio.com" autofocus oninput="updateLoginReady()"></div>
+      <div class="field"><div class="labelRow"><label for="password">Clave</label><button class="textBtn" type="button" onclick="showRecover()">¿Olvidaste tu clave?</button></div><div class="inputWrap"><input class="input password" id="password" type="password" autocomplete="current-password" placeholder="Tu clave" oninput="updateLoginReady()"><button class="showBtn" id="showPassword" type="button" onclick="togglePassword()">Mostrar</button></div></div>
+      <button class="primary" id="loginButton" type="submit" disabled>Entrar al panel</button><div class="err" id="err" role="alert"></div>
+      <div class="accountPrompt">¿Aún no tienes cuenta? <button class="textBtn" type="button" onclick="showCreate()">Crear una cuenta nueva</button></div>
+    </form>
+    <section class="view" id="recoverView" hidden><button class="textBtn backBtn" type="button" onclick="showLogin()">← Volver a ingresar</button><div id="recoverForm"><h2>Recupera tu clave</h2><p class="lead">Escribe tu correo y te mostraremos cómo recuperar el acceso de tu negocio.</p><div class="field"><div class="labelRow"><label for="recoverEmail">Correo electrónico</label></div><input class="input" id="recoverEmail" type="email" autocomplete="email" placeholder="hola@tunegocio.com" oninput="updateRecoverReady()"></div><button class="primary" id="recoverButton" type="button" onclick="requestRecovery()" disabled>Continuar</button></div><div id="recoverSent" hidden><div class="successIcon">✓</div><h2>Recupera tu acceso</h2><p class="lead">Si <strong id="recoverAddress"></strong> está asociado a una cuenta, solicita a tu contacto de Nextfor IA un enlace privado para restablecer la clave. Tu asistente seguirá activo mientras tanto.</p><button class="primary" type="button" onclick="showLogin()">Volver a ingresar</button></div></section>
+    <section class="view" id="createView" hidden><button class="textBtn backBtn" type="button" onclick="showLogin()">← Volver a ingresar</button><h2>Activa tu cuenta</h2><p class="lead">Cada negocio recibe un enlace privado de Nextfor IA para crear su administrador y conectar el panel correcto.</p><div class="infoBox"><strong>¿Ya recibiste una invitación?</strong><br>Abre ese enlace para crear tu acceso. Si todavía no la tienes, solicítala a tu contacto de Nextfor IA durante la activación.</div></section>
+  </div></section>
+  <div class="mobileTrust">Tu acceso pertenece a tu negocio y queda separado del acceso técnico de Nextfor IA.</div>
+</main>
 <script>
 var target=${target};
 var usersEnabled=${JSON.stringify(usersEnabled)};
-var stored="";try{stored=localStorage.getItem("rav_dashboard_key")||"";}catch(e){}
 function baseDestination(){var url=target;if(url==="/admin/dashboard"){url="/admin/dashboard?tab=human";}return url;}
 function destination(key){var url=baseDestination();if(!key)return url;var sep=url.indexOf("?")>=0?"&":"?";return url+sep+"key="+encodeURIComponent(key);}
-var hasKey=false;try{hasKey=new URL(location.href).searchParams.has("key");}catch(e){}
-if(!usersEnabled&&!hasKey&&stored){location.href=destination(stored);}
-if(!usersEnabled&&stored){document.getElementById("password").value=stored;}
 function showError(msg){document.getElementById("err").textContent=msg||"";}
+function updateLoginReady(){var user=document.getElementById("username").value.trim(),password=document.getElementById("password").value;document.getElementById("loginButton").disabled=!password||(!user&&password.length<6);}
+function togglePassword(){var input=document.getElementById("password"),show=input.type==="password";input.type=show?"text":"password";document.getElementById("showPassword").textContent=show?"Ocultar":"Mostrar";input.focus();}
+function setView(id){["loginView","recoverView","createView"].forEach(function(view){document.getElementById(view).hidden=view!==id;});showError("");}
+function showLogin(){setView("loginView");document.getElementById("recoverForm").hidden=false;document.getElementById("recoverSent").hidden=true;}
+function showRecover(){var user=document.getElementById("username").value.trim();if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user))document.getElementById("recoverEmail").value=user;setView("recoverView");updateRecoverReady();}
+function showCreate(){setView("createView");}
+function updateRecoverReady(){var email=document.getElementById("recoverEmail").value.trim();document.getElementById("recoverButton").disabled=!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);}
+function requestRecovery(){var email=document.getElementById("recoverEmail").value.trim();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return;document.getElementById("recoverAddress").textContent=email;document.getElementById("recoverForm").hidden=true;document.getElementById("recoverSent").hidden=false;}
 function go(e){
   e.preventDefault();showError("");
   var usernameEl=document.getElementById("username"),username=usernameEl?usernameEl.value.trim():"";
   var password=document.getElementById("password").value;
   if(!password)return;
-  if(usersEnabled&&username){
-    fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:username,password:password})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"No autorizado");return j;});}).then(function(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}location.href=destination("");}).catch(function(){showError("Usuario o clave incorrectos.");});
+  var button=document.getElementById("loginButton");button.disabled=true;button.textContent="Entrando…";
+  if(usersEnabled&&username&&username!=="clave-maestra"){
+    fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:username,password:password})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"No autorizado");return j;});}).then(function(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}location.href=destination("");}).catch(function(){showError("Usuario o clave incorrectos.");button.textContent="Entrar al panel";updateLoginReady();});
     return;
   }
   try{localStorage.setItem("rav_dashboard_key",password);}catch(err){}
-  fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:password})}).finally(function(){location.href=destination(password);});
+  fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:password})}).then(function(r){if(!r.ok)throw new Error("No autorizado");location.href=destination(password);}).catch(function(){showError("Usuario o clave incorrectos.");button.textContent="Entrar al panel";updateLoginReady();});
 }
 </script></body></html>`);
 }

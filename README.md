@@ -49,7 +49,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en Whats
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DASHBOARD_KEY` | Clave para endpoints admin protegidos |
-| `DASHBOARD_USERS` | Usuarios del panel: `nexforia:clave:super_admin,admin:clave:admin,eliana:clave:agent,visor:clave:viewer` o JSON equivalente |
+| `DASHBOARD_USERS` | Usuarios del panel en CSV o JSON; el JSON puede incluir `email` como identificador alternativo de acceso |
 | `DASHBOARD_SESSION_SECRET` | Secreto para firmar cookies del panel; si falta usa `DASHBOARD_KEY` |
 | `DASHBOARD_SESSION_TTL_HOURS` | Duración de sesión del panel (default: `12`) |
 | `NOTIFICATION_PHONES` | Números a notificar (CSV sin +): `573013507371,573046653449` |
@@ -60,7 +60,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en Whats
 
 | Endpoint | Para qué |
 |---|---|
-| `GET /admin` | Entrada corta al panel operativo con pantalla de clave |
+| `GET /admin` | Entrada genérica Nextfor IA para RAV Toys y futuros clientes |
 | `POST /admin/login` | Crea sesión del dashboard por usuario/clave o clave maestra |
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
@@ -118,6 +118,8 @@ invitación desde `/admin/super-admin` con **Crear acceso RAV**. El cliente abre
 elige su usuario y contraseña, y entra con rol `admin`. La invitación vence en 72 horas y
 deja de funcionar cuando la cuenta queda creada. La contraseña nunca se guarda en texto
 plano: se almacena como un hash `scrypt` con salt dentro del registro interno persistente.
+La pantalla de ingreso es genérica de Nextfor IA: el nombre del comercio solo aparece
+después de autenticar, de modo que el mismo acceso pueda servir a más clientes en el futuro.
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
 
@@ -313,6 +315,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v66 | Estados operativos y resolución separada entre IA y equipo humano |
 | v67 | Conversaciones guiadas en tres estados, respuesta sugerida y ficha de inteligencia |
 | v68 | Atención al cliente unificada con WhatsApp e Instagram diferenciados por conversación |
+| v69 | Acceso genérico Nextfor IA para RAV Toys y futuros clientes, optimizado para escritorio y móvil |
 
 ---
 

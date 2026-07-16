@@ -5,13 +5,14 @@ const path = require("path");
 const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
+const renderCustomerPasswordSetup = require("./customer-access");
 
 const app = express();
 app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v70-omnichannel-conversations";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v71-customer-onboarding";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3511,7 +3512,7 @@ const PORT = process.env.PORT || 3000;
 // ─── ADMIN ENDPOINTS (added in v31 — observability + safety net) ────
 // Health check: verifica que dependencias externas respondan, sin gastar
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
-function renderCustomerPasswordSetup(res, options) {
+function renderLegacyCustomerPasswordSetup(res, options) {
   const valid = !!(options && options.valid);
   const invite = JSON.stringify(options && options.invite || "");
   const reason = escapeAdminHtml(options && options.reason || "Este enlace no está disponible.");

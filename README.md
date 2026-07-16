@@ -99,15 +99,15 @@ de la app. Para atender cuentas externas, solicita acceso avanzado a
 `instagram_business_manage_messages` mediante Meta App Review.
 
 El Panel de Control muestra Instagram como un módulo independiente dentro de Atención al
-cliente. Sus KPIs, conversaciones, alertas de intervención, notas y tags se calculan sin
+cliente. Sus KPIs, conversaciones, casos que necesitan al equipo y notas se calculan sin
 mezclarlos con WhatsApp. El panel nunca expone tokens ni IDs internos de configuración.
 Cuando un usuario escribe por Instagram, el bot consulta y guarda su `@username` con la
 API oficial de perfiles. El panel muestra ese usuario y permite buscarlo; si Meta no lo
 entrega, conserva como respaldo el identificador abreviado de la conversación.
 
-Los estados del inbox traducen la operación a cuatro resultados: **IA atendiendo**,
-**Necesita tu atención**, **Tu equipo atendiendo** y **Resuelta**, indicando si la solución
-fue de la IA o del equipo. La evolución de personalización está definida en
+La bandeja traduce la operación a tres estados visibles: **Necesita de ti**, **La IA está
+atendiendo** y **Resuelta por la IA**. Cuando el dueño hace falta, la IA deja una respuesta
+editable lista para **Confirmar y enviar**. La evolución de personalización está definida en
 [`docs/customer-memory-roadmap.md`](docs/customer-memory-roadmap.md).
 
 ### Primer cliente: RAV Toys
@@ -138,24 +138,26 @@ plano: se almacena como un hash `scrypt` con salt dentro del registro interno pe
 
 Los scripts usan por defecto producción (`https://rav-whatsapp-bot.onrender.com`) y leen secretos desde variables de entorno. No pegues llaves en el código.
 
-### Intervención humana
+### Conversaciones guiadas
 
-Antes de migrar un número real a WhatsApp Cloud API, usa la sección de intervención humana dentro del dashboard:
+Antes de migrar un número real a WhatsApp Cloud API, valida la bandeja de Conversaciones dentro del dashboard:
 
 ```text
 https://rav-whatsapp-bot.onrender.com/admin
 ```
 
-Desde ahí el equipo puede tomar control de un chat, responder por WhatsApp usando la Cloud API y devolver la conversación al bot. El estado de control humano se registra en Supabase y el panel lo reconstruye desde el historial para sobrevivir reinicios de Render.
+La intervención humana vive dentro de la conversación, sin una sección separada. El estado
+operativo se registra en Supabase y el panel lo reconstruye desde el historial para
+sobrevivir reinicios de Render.
 
 Flujo operativo recomendado:
 
-1. Abre `/admin` y entra a la tab **Intervención humana**.
-2. Usa **Te necesitan** para priorizar chats escalados y **Con tu equipo** para ver los que ya tienen agente.
-3. Usa etiquetas y notas internas para marcar venta, garantía, pago pendiente, envío o revisión.
-4. Si el chat está en **IA atendiendo**, usa **Tomar control** antes de intervenir o escribe directamente desde el compositor; al enviar, la IA queda pausada para ese cliente.
-5. Usa **Marcar como resuelta** cuando el equipo cerró el caso. Usa **Devolver a la IA** si todavía no está resuelto y la automatización debe continuar.
-6. Revisa el indicador **Infra OK**; si aparece en rojo, abre `/admin/health` antes de seguir pruebas.
+1. Abre `/admin` y entra a **Conversaciones**.
+2. Usa **Necesitan de ti** para ver únicamente los casos que dependen del equipo.
+3. Revisa la intención y los chips de solo lectura en **Lo que la IA entendió**.
+4. Ajusta, si hace falta, la respuesta preparada y usa **Confirmar y enviar**.
+5. Si el caso ya se cerró por otro medio, usa **Ya está resuelta**.
+6. Guarda una nota interna solo cuando el equipo necesite contexto adicional.
 
 Variables útiles:
 
@@ -308,6 +310,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v64 | RAV Toys como cliente #1 y creación segura de su acceso por invitación |
 | v65 | `@username` real de los clientes de Instagram en conversaciones y búsqueda |
 | v66 | Estados operativos y resolución separada entre IA y equipo humano |
+| v67 | Conversaciones guiadas en tres estados, respuesta sugerida y ficha de inteligencia |
 
 ---
 

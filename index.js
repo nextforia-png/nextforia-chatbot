@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v66-conversation-statuses";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v67-guided-conversations";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2899,11 +2899,12 @@ function buildCustomerPanelDemoSnapshot() {
       business_signals: { sales_assisted: false, handoff_ever: false, resolved_by_bot: false, partial_resolution: true, evaluated: true }
     }
   ];
-  conversations.forEach(function (item) {
+  const demoWhatsappNames = ["María Gómez", "Carolina Díaz", "Julián Torres", "Andrés Ruiz"];
+  conversations.forEach(function (item, index) {
     item.id = item.phone;
     item.channel = "whatsapp";
     item.channel_label = "WhatsApp";
-    item.display_name = "+" + item.phone;
+    item.display_name = demoWhatsappNames[index] || "+" + item.phone;
     item.copy_value = "+" + item.phone;
   });
   conversations.push(

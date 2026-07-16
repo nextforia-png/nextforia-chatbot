@@ -102,6 +102,10 @@ El Panel de Control muestra un solo módulo de **Atención al cliente**. Sus KPI
 conversaciones y casos que necesitan al equipo combinan WhatsApp e Instagram; cada chat
 conserva una identificación visual clara de su canal. El panel nunca expone tokens ni IDs
 internos de configuración.
+La bandeja está preparada para crecer a Messenger y correo: el canal aparece como un
+distintivo sobre el avatar y la cabecera comunica que todo llega a una sola bandeja. La UI
+mantiene únicamente tres estados: **Necesita de ti**, **La IA está atendiendo** y
+**Resuelta por la IA**.
 Cuando un usuario escribe por Instagram, el bot consulta y guarda su `@username` con la
 API oficial de perfiles. El panel muestra ese usuario y permite buscarlo; si Meta no lo
 entrega, conserva como respaldo el identificador abreviado de la conversación.
@@ -316,6 +320,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v67 | Conversaciones guiadas en tres estados, respuesta sugerida y ficha de inteligencia |
 | v68 | Atención al cliente unificada con WhatsApp e Instagram diferenciados por conversación |
 | v69 | Acceso genérico Nextfor IA para RAV Toys y futuros clientes, optimizado para escritorio y móvil |
+| v70 | Conversaciones multicanal con distintivos en avatares, bandeja única y ficha de inteligencia |
 
 ---
 

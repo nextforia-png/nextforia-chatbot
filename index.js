@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v67-guided-conversations";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v68-unified-support-channels";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3210,7 +3210,7 @@ app.post("/admin/setup/:tenantId", async (req, res) => {
       ok: true,
       tenant: { id: CUSTOMER_PANEL_BUSINESS.id, name: CUSTOMER_PANEL_BUSINESS.name },
       user: { username: user.username, name: user.name, role: user.role },
-      redirect: "/admin/panel?channel=whatsapp&tab=summary"
+      redirect: "/admin/panel?tab=summary"
     });
   } catch (error) {
     log("error", "dashboard_customer_user_create_failed", { error: String(error.message || "").slice(0, 160) });
@@ -3689,8 +3689,7 @@ app.get("/admin/panel", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
     const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-    const requestedChannel = req.query.channel === "instagram" ? "instagram" : "whatsapp";
-    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab + "&channel=" + requestedChannel);
+    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
   if (auth.method === "key") {
@@ -3705,7 +3704,6 @@ app.get("/admin/panel", (req, res) => {
     auth,
     capabilities,
     initialTab,
-    initialChannel: req.query.channel === "instagram" ? "instagram" : "whatsapp",
     botVersion: BOT_VERSION
   });
 });
@@ -3717,7 +3715,6 @@ app.get("/admin/panel-demo", (req, res) => {
     auth,
     capabilities: customerPanelCapabilities("viewer"),
     initialTab,
-    initialChannel: req.query.channel === "instagram" ? "instagram" : "whatsapp",
     dataPath: "/admin/panel/demo-data",
     healthPath: null,
     loginPath: null,
@@ -3728,7 +3725,6 @@ app.get("/admin/panel-demo", (req, res) => {
 app.get("/admin/customer-panel", (req, res) => {
   const params = new URLSearchParams();
   if (req.query.tab) params.set("tab", String(req.query.tab));
-  if (req.query.channel === "instagram" || req.query.channel === "whatsapp") params.set("channel", String(req.query.channel));
   if (req.query.key) params.set("key", String(req.query.key));
   res.redirect("/admin/panel" + (params.toString() ? "?" + params.toString() : ""));
 });

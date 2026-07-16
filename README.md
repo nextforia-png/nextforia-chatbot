@@ -1,6 +1,6 @@
 # RAV Toys WhatsApp + Instagram Bot
 
-Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
+Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en WhatsApp e Instagram. Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
 
 ---
 
@@ -72,8 +72,8 @@ Bot de WhatsApp para RAV Toys (Medellín, Colombia). Atiende clientes 24/7 con b
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
 | `GET /admin/dashboard?key=XXXX` | Panel operativo con tabs para métricas e intervención humana |
-| `GET /admin/panel?channel=whatsapp\|instagram&tab=summary` | Panel de control del cliente con KPIs, conversaciones e intervención separados por canal |
-| `GET /admin/panel-demo?channel=whatsapp\|instagram&tab=summary` | Demo pública de solo lectura con datos sanitizados |
+| `GET /admin/panel?tab=summary` | Panel de control del cliente con KPIs y conversaciones unificados para WhatsApp e Instagram |
+| `GET /admin/panel-demo?tab=summary` | Demo pública de solo lectura con datos sanitizados de ambos canales |
 | `GET /admin/panel/data` | Datos protegidos del panel, con `summaries.whatsapp`, `summaries.instagram` y conversaciones identificadas por canal |
 | `GET /admin/inbox?key=XXXX` | Acceso directo opcional a la bandeja operativa |
 | `GET /admin/customer-meta?key=XXXX` | Etiquetas y notas internas por cliente para el panel |
@@ -98,9 +98,10 @@ Para desarrollo, agrega la cuenta profesional y las cuentas que harán pruebas c
 de la app. Para atender cuentas externas, solicita acceso avanzado a
 `instagram_business_manage_messages` mediante Meta App Review.
 
-El Panel de Control muestra Instagram como un módulo independiente dentro de Atención al
-cliente. Sus KPIs, conversaciones, casos que necesitan al equipo y notas se calculan sin
-mezclarlos con WhatsApp. El panel nunca expone tokens ni IDs internos de configuración.
+El Panel de Control muestra un solo módulo de **Atención al cliente**. Sus KPIs,
+conversaciones y casos que necesitan al equipo combinan WhatsApp e Instagram; cada chat
+conserva una identificación visual clara de su canal. El panel nunca expone tokens ni IDs
+internos de configuración.
 Cuando un usuario escribe por Instagram, el bot consulta y guarda su `@username` con la
 API oficial de perfiles. El panel muestra ese usuario y permite buscarlo; si Meta no lo
 entrega, conserva como respaldo el identificador abreviado de la conversación.
@@ -311,6 +312,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v65 | `@username` real de los clientes de Instagram en conversaciones y búsqueda |
 | v66 | Estados operativos y resolución separada entre IA y equipo humano |
 | v67 | Conversaciones guiadas en tres estados, respuesta sugerida y ficha de inteligencia |
+| v68 | Atención al cliente unificada con WhatsApp e Instagram diferenciados por conversación |
 
 ---
 

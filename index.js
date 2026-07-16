@@ -11,7 +11,7 @@ app.use(express.json());
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v65-instagram-usernames";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v66-conversation-statuses";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -414,8 +414,8 @@ function inferHandoffStates(turns, activeUsers) {
     const userId = normalizeConversationUserId(turn.userId);
     if (!userId) return;
     const tools = Array.isArray(turn.tools) ? turn.tools : [];
-    if (tools.includes("admin_release")) {
-      states[userId] = { active: false, source: "admin_release", last_change_ts: turn.ts || null };
+    if (tools.includes("admin_release") || tools.includes("admin_resolve")) {
+      states[userId] = { active: false, source: tools.includes("admin_resolve") ? "admin_resolve" : "admin_release", last_change_ts: turn.ts || null };
       return;
     }
     if (
@@ -425,7 +425,11 @@ function inferHandoffStates(turns, activeUsers) {
       tools.includes("human_handoff_active") ||
       turn.handoff
     ) {
-      states[userId] = { active: true, source: tools[0] || "handoff", last_change_ts: turn.ts || null };
+      const source = tools.includes("admin_takeover") ? "admin_takeover"
+        : tools.includes("admin_send_message") ? "admin_send_message"
+          : tools.includes("request_human_handoff") ? "request_human_handoff"
+            : tools.includes("human_handoff_active") ? "human_handoff_active" : "handoff";
+      states[userId] = { active: true, source, last_change_ts: turn.ts || null };
     }
   });
 
@@ -468,7 +472,7 @@ function recordTurn(userId, userMessage, botReply, status) {
 
 function recordAdminEvent(userId, tool, message, status, handoffOverride) {
   try {
-    const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : tool !== "admin_release";
+    const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : !["admin_release", "admin_resolve"].includes(tool);
     const rec = {
       ts: new Date().toISOString(),
       userId,
@@ -514,7 +518,7 @@ async function humanControlActiveFor(userId) {
   if (!rows || !rows.length) return false;
   for (const row of rows) {
     const tools = row.tools || [];
-    if (tools.includes("admin_release")) return false;
+    if (tools.includes("admin_release") || tools.includes("admin_resolve")) return false;
     if (tools.includes("admin_takeover") || tools.includes("admin_send_message") || tools.includes("request_human_handoff") || row.handoff) {
       humanHandoff.add(userId);
       return true;
@@ -2509,6 +2513,7 @@ function customerPanelInstagramSetup() {
 
 function customerPanelControlEvent(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (tools.includes("admin_resolve")) return "resolved_by_team";
   if (tools.includes("admin_release")) return "released";
   if (tools.includes("admin_takeover")) return "taken_over";
   return null;
@@ -2530,6 +2535,12 @@ function customerPanelSalesSignal(turn) {
     (evalData && evalData.intencion_compra === true);
 }
 
+function customerClosureSignal(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (!value || value.length > 120 || /\b(pero|aunque|todav[ií]a|a[uú]n|necesito|falta|no me)\b/i.test(value)) return false;
+  return /\b(gracias|listo|perfecto|me sirve|eso era|qued[oó] claro|resuelto|solucionado|paso mañana|voy por [eé]l)\b/i.test(value);
+}
+
 function emptyCustomerPanelChannelStats() {
   return { inbound_messages: 0, zero_result_searches: 0, zero_result_counts: {}, messages_by_day: {}, ratings: [] };
 }
@@ -2537,14 +2548,16 @@ function emptyCustomerPanelChannelStats() {
 function summarizeCustomerPanelChannel(conversations, stats) {
   const channelConversations = conversations || [];
   const channelStats = stats || emptyCustomerPanelChannelStats();
-  const activeHandoffs = channelConversations.filter(function (item) { return item.mode === "human"; }).length;
+  const activeHandoffs = channelConversations.filter(function (item) { return item.conversation_status === "needs_attention" || item.conversation_status === "team_active"; }).length;
   const pendingReplies = channelConversations.filter(function (item) { return item.needs_reply; }).length;
   const salesAssisted = channelConversations.filter(function (item) { return item.business_signals.sales_assisted; }).length;
   const handoffsEver = channelConversations.filter(function (item) { return item.business_signals.handoff_ever; }).length;
   const evaluatedConversations = channelConversations.filter(function (item) { return item.business_signals.evaluated; }).length;
   const resolvedByBot = channelConversations.filter(function (item) { return item.business_signals.resolved_by_bot; }).length;
+  const resolvedByHuman = channelConversations.filter(function (item) { return item.business_signals.resolved_by_human; }).length;
   const partialResolutions = channelConversations.filter(function (item) { return item.business_signals.partial_resolution; }).length;
-  const resolvedRate = evaluatedConversations ? Math.round(resolvedByBot / evaluatedConversations * 100) : null;
+  const totalResolved = resolvedByBot + resolvedByHuman;
+  const resolvedRate = totalResolved ? Math.round(resolvedByBot / totalResolved * 100) : null;
   const ratings = channelStats.ratings || [];
   const avgRating = ratings.length
     ? Math.round(ratings.reduce(function (sum, value) { return sum + value; }, 0) / ratings.length * 10) / 10
@@ -2570,6 +2583,8 @@ function summarizeCustomerPanelChannel(conversations, stats) {
     },
     solutions_provided: {
       count: resolvedByBot,
+      by_human: resolvedByHuman,
+      total: totalResolved,
       partial: partialResolutions,
       evaluated: evaluatedConversations,
       rate: resolvedRate
@@ -2581,6 +2596,14 @@ function summarizeCustomerPanelChannel(conversations, stats) {
       human: activeHandoffs,
       bot: Math.max(channelConversations.length - activeHandoffs, 0),
       pending: pendingReplies
+    },
+    conversation_statuses: {
+      ai_active: channelConversations.filter(function (item) { return item.conversation_status === "ai_active"; }).length,
+      needs_attention: channelConversations.filter(function (item) { return item.conversation_status === "needs_attention"; }).length,
+      team_active: channelConversations.filter(function (item) { return item.conversation_status === "team_active"; }).length,
+      resolved: channelConversations.filter(function (item) { return item.conversation_status === "resolved"; }).length,
+      resolved_by_ai: resolvedByBot,
+      resolved_by_team: resolvedByHuman
     }
   };
 }
@@ -2618,7 +2641,9 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
         last_text: "",
         sales_signal: false,
         handoff_ever: false,
-        resolved_by_bot: false,
+        resolved_by: null,
+        resolved_at_ms: 0,
+        current_handoff: false,
         partial_resolution: false,
         evaluated: false
       };
@@ -2637,6 +2662,10 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
 
     const customerText = String(turn.userMessage || "").trim();
     if (customerText) {
+      if (group.resolved_at_ms && tsMs > group.resolved_at_ms) {
+        group.resolved_by = null;
+        group.resolved_at_ms = 0;
+      }
       stats.inbound_messages++;
       group.messages.push({ ts, author: "customer", text: customerText });
       group.last_inbound_ms = Math.max(group.last_inbound_ms, tsMs);
@@ -2648,7 +2677,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const controlEvent = customerPanelControlEvent(turn);
     const replyText = String(turn.botReply || "").replace(/^\[Humano\]\s*/, "").trim();
     if (controlEvent) {
-      const eventText = controlEvent === "released" ? "Conversacion devuelta al bot." : "Control humano activado.";
+      const eventText = controlEvent === "released" ? "Conversación devuelta a la IA."
+        : controlEvent === "resolved_by_team" ? "Conversación resuelta por el equipo." : "Control humano activado.";
       group.messages.push({ ts, author: "system", text: eventText, event: controlEvent });
       group.last_text = eventText;
     } else if (replyText) {
@@ -2659,6 +2689,19 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     }
 
     const tools = Array.isArray(turn.tools) ? turn.tools : [];
+    if (tools.includes("admin_resolve")) {
+      group.current_handoff = false;
+      group.resolved_by = "human";
+      group.resolved_at_ms = tsMs || group.last_ts_ms;
+    } else if (tools.includes("admin_release")) {
+      group.current_handoff = false;
+      group.resolved_by = null;
+      group.resolved_at_ms = 0;
+    } else if (turn.handoff || tools.includes("request_human_handoff") || tools.includes("human_handoff_active") || tools.includes("admin_takeover") || tools.includes("admin_send_message")) {
+      group.current_handoff = true;
+      group.resolved_by = null;
+      group.resolved_at_ms = 0;
+    }
     if (turn.handoff || tools.includes("request_human_handoff") || tools.includes("human_handoff_active") || tools.includes("admin_takeover") || tools.includes("admin_send_message")) {
       group.handoff_ever = true;
     }
@@ -2666,8 +2709,15 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const evalData = turn.eval && !turn.eval.error ? turn.eval : null;
     if (evalData) {
       group.evaluated = true;
-      if (evalData.resuelto === "si" && !group.handoff_ever) group.resolved_by_bot = true;
+      if (evalData.resuelto === "si" && !group.current_handoff) {
+        group.resolved_by = "bot";
+        group.resolved_at_ms = tsMs || group.last_ts_ms;
+      }
       if (evalData.resuelto === "parcial") group.partial_resolution = true;
+    }
+    if (customerText && turn.status === "ok" && customerClosureSignal(customerText) && !group.current_handoff) {
+      group.resolved_by = "bot";
+      group.resolved_at_ms = tsMs || group.last_ts_ms;
     }
 
     (Array.isArray(turn.zeroResultQueries) ? turn.zeroResultQueries : []).forEach(function (query) {
@@ -2688,6 +2738,15 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const suffix = group.external_id.slice(-6);
     const instagramProfile = group.channel === "instagram" ? instagramProfiles[userId] : null;
     const instagramUsername = instagramProfile && normalizeInstagramUsername(instagramProfile.username);
+    const handoffState = states[userId] || { active: false, source: "bot" };
+    const teamActive = handoffState.active && ["admin_takeover", "admin_send_message"].includes(handoffState.source);
+    const conversationStatus = group.resolved_by ? "resolved" : handoffState.active ? (teamActive ? "team_active" : "needs_attention") : "ai_active";
+    const statusLabels = {
+      ai_active: "✦ IA atendiendo",
+      needs_attention: "🙋 Necesita tu atención",
+      team_active: "👤 Tu equipo atendiendo",
+      resolved: "✓ Resuelta"
+    };
     return {
       id: userId,
       phone: group.external_id,
@@ -2698,8 +2757,12 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       copy_value: group.channel === "instagram" ? (instagramUsername ? "@" + instagramUsername : group.external_id) : "+" + group.external_id,
       last_ts: group.last_ts,
       last_text: group.last_text,
+      conversation_status: conversationStatus,
+      status_label: statusLabels[conversationStatus],
+      resolution_source: conversationStatus === "resolved" ? group.resolved_by : null,
+      resolution_label: conversationStatus === "resolved" ? (group.resolved_by === "human" ? "Resuelta por tu equipo" : "Resuelta por la IA · sin intervención humana") : null,
       mode: active ? "human" : "bot",
-      needs_reply: active && group.last_inbound_ms > group.last_human_reply_ms,
+      needs_reply: conversationStatus !== "resolved" && active && group.last_inbound_ms > group.last_human_reply_ms,
       tags,
       note: normalizeCustomerNote(meta.note),
       meta_updated_at: meta.updated_at || null,
@@ -2707,7 +2770,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       business_signals: {
         sales_assisted: salesSignal,
         handoff_ever: group.handoff_ever,
-        resolved_by_bot: group.resolved_by_bot,
+        resolved_by_bot: group.resolved_by === "bot",
+        resolved_by_human: group.resolved_by === "human",
         partial_resolution: group.partial_resolution,
         evaluated: group.evaluated
       }
@@ -2888,6 +2952,22 @@ function buildCustomerPanelDemoSnapshot() {
       business_signals: { sales_assisted: true, handoff_ever: false, resolved_by_bot: true, partial_resolution: false, evaluated: true }
     }
   );
+  const demoStatusValues = ["needs_attention", "team_active", "resolved", "ai_active", "needs_attention", "resolved"];
+  const demoStatusLabels = {
+    ai_active: "✦ IA atendiendo",
+    needs_attention: "🙋 Necesita tu atención",
+    team_active: "👤 Tu equipo atendiendo",
+    resolved: "✓ Resuelta"
+  };
+  conversations.forEach(function (item, index) {
+    const status = demoStatusValues[index] || "ai_active";
+    item.conversation_status = status;
+    item.status_label = demoStatusLabels[status];
+    item.resolution_source = status === "resolved" ? "bot" : null;
+    item.resolution_label = status === "resolved" ? "Resuelta por la IA · sin intervención humana" : null;
+    item.business_signals.resolved_by_bot = status === "resolved";
+    item.business_signals.resolved_by_human = false;
+  });
   const whatsappSummary = {
     clients_attended: 312,
     messages: 1248,
@@ -2897,7 +2977,7 @@ function buildCustomerPanelDemoSnapshot() {
     zero_result_searches: 14,
     opportunities_detected: 14,
     sales_assisted: { count: 47, label: "ventas o intentos de compra", confidence: "demo" },
-    solutions_provided: { count: 268, partial: 31, evaluated: 312, rate: 86 },
+    solutions_provided: { count: 268, by_human: 44, total: 312, partial: 31, evaluated: 312, rate: 86 },
     rating: { average: 4.8, count: 214 },
     messages_by_day: [
       { day: "2026-07-07", messages: 34 },
@@ -2914,7 +2994,8 @@ function buildCustomerPanelDemoSnapshot() {
       { query: "Hot Wheels Ultimate Garage", count: 3 },
       { query: "Nerf Elite 2.0 Commander", count: 2 }
     ],
-    conversation_modes: { human: 2, bot: 2, pending: 2 }
+    conversation_modes: { human: 2, bot: 2, pending: 2 },
+    conversation_statuses: { ai_active: 1, needs_attention: 1, team_active: 1, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
   };
   const instagramSummary = {
     clients_attended: 126,
@@ -2925,7 +3006,7 @@ function buildCustomerPanelDemoSnapshot() {
     zero_result_searches: 7,
     opportunities_detected: 7,
     sales_assisted: { count: 23, label: "ventas o intentos de compra", confidence: "demo" },
-    solutions_provided: { count: 103, partial: 14, evaluated: 126, rate: 82 },
+    solutions_provided: { count: 103, by_human: 23, total: 126, partial: 14, evaluated: 126, rate: 82 },
     rating: { average: 4.7, count: 71 },
     messages_by_day: [
       { day: "2026-07-07", messages: 12 },
@@ -2941,7 +3022,8 @@ function buildCustomerPanelDemoSnapshot() {
       { query: "carro control remoto rosado", count: 2 },
       { query: "Lego flores", count: 2 }
     ],
-    conversation_modes: { human: 1, bot: 1, pending: 1 }
+    conversation_modes: { human: 1, bot: 1, pending: 1 },
+    conversation_statuses: { ai_active: 0, needs_attention: 1, team_active: 0, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
   };
   return {
     ok: true,
@@ -3182,6 +3264,22 @@ function releaseAdminConversation(req, res) {
 
 app.get("/admin/release/:userId", releaseAdminConversation);
 app.post("/admin/release/:userId", releaseAdminConversation);
+
+app.post("/admin/resolve/:userId", (req, res) => {
+  if (!adminAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = normalizeConversationUserId(req.params.userId);
+  if (!userId) {
+    res.status(400).json({ ok: false, error: "missing_user_id" });
+    return;
+  }
+  const wasActive = humanHandoff.delete(userId);
+  pendingRatings.add(userId);
+  recordAdminEvent(userId, "admin_resolve", "[Humano] Conversación marcada como resuelta por el equipo.", "ok", false);
+  res.json({ ok: true, userId, wasInHandoff: wasActive, conversation_status: "resolved", resolution_source: "human" });
+});
 
 app.post("/admin/takeover/:userId", (req, res) => {
   if (!adminAuthOk(req, "agent")) {
@@ -3772,7 +3870,7 @@ function opsTagLabel(id){var t=(opsAllowedTags||[]).find(function(x){return x.id
 function opsMetaFor(id){return (opsCustomerMeta&&opsCustomerMeta[id])||{tags:[],note:""};}
 function opsThreadInfoFromMessages(ms){
 var lastText="",lastTs="",lastInbound=0,lastHumanReply=0,lastBot=0,lastTools=[];
-(ms||[]).forEach(function(t){var ts=Date.parse(t.ts||"")||0;if(ts){lastTs=t.ts;}var tools=t.tools||[];if(t.userMessage){lastInbound=ts||lastInbound;lastText=t.userMessage;}if(t.botReply){var clean=String(t.botReply||"").replace("[Humano]","").trim();if(tools.indexOf("admin_send_message")>=0){lastHumanReply=ts||lastHumanReply;}else if(tools.indexOf("admin_takeover")<0&&tools.indexOf("admin_release")<0){lastBot=ts||lastBot;}lastText=clean||lastText;}if(tools.length){lastTools=tools;}});
+(ms||[]).forEach(function(t){var ts=Date.parse(t.ts||"")||0;if(ts){lastTs=t.ts;}var tools=t.tools||[];if(t.userMessage){lastInbound=ts||lastInbound;lastText=t.userMessage;}if(t.botReply){var clean=String(t.botReply||"").replace("[Humano]","").trim();if(tools.indexOf("admin_send_message")>=0){lastHumanReply=ts||lastHumanReply;}else if(tools.indexOf("admin_takeover")<0&&tools.indexOf("admin_release")<0&&tools.indexOf("admin_resolve")<0){lastBot=ts||lastBot;}lastText=clean||lastText;}if(tools.length){lastTools=tools;}});
 return {lastText:lastText,lastTs:lastTs,lastInbound:lastInbound,lastHumanReply:lastHumanReply,lastBot:lastBot,lastTools:lastTools};
 }
 function opsThreadInfo(id){var ms=opsGroups[id]||[],info=opsThreadInfoFromMessages(ms),active=!!opsHandoffs[id];info.active=active;info.needsReply=active&&info.lastInbound>Math.max(info.lastHumanReply,0);return info;}
@@ -3781,7 +3879,7 @@ function setOpsFilter(mode){opsFilterMode=mode||"all";["All","Pending","Human","
 function buildOpsFromTurns(){
 opsHandoffs={};((opsStats||{}).active_handoff_users||[]).forEach(function(id){opsHandoffs[id]=true;});
 opsGroups={};opsOrder=[];
-opsTurns.slice().reverse().forEach(function(t){if(t.tools&&t.tools.indexOf("admin_customer_meta")>=0)return;var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&t.tools.indexOf("admin_release")>=0)opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0||t.tools.indexOf("human_handoff_active")>=0||t.tools.indexOf("request_human_handoff")>=0))opsHandoffs[id]=true;});
+opsTurns.slice().reverse().forEach(function(t){if(t.tools&&t.tools.indexOf("admin_customer_meta")>=0)return;var id=String(t.userId||"?");if(!opsGroups[id]){opsGroups[id]=[];opsOrder.push(id);}opsGroups[id].push(t);if(t.handoff)opsHandoffs[id]=true;if(t.tools&&(t.tools.indexOf("admin_release")>=0||t.tools.indexOf("admin_resolve")>=0))opsHandoffs[id]=false;if(t.tools&&(t.tools.indexOf("admin_takeover")>=0||t.tools.indexOf("admin_send_message")>=0||t.tools.indexOf("human_handoff_active")>=0||t.tools.indexOf("request_human_handoff")>=0))opsHandoffs[id]=true;});
 opsOrder.sort(function(a,b){return new Date((opsGroups[b][opsGroups[b].length-1]||{}).ts||0)-new Date((opsGroups[a][opsGroups[a].length-1]||{}).ts||0);});
 if(!opsSelected&&opsOrder.length)opsSelected=opsOrder[0];if(opsSelected&&!opsGroups[opsSelected])opsSelected=opsOrder[0]||null;
 renderOpsThreads();renderOpsChat();
@@ -3995,7 +4093,7 @@ function loadData(){
       if(!groups[id]){ groups[id]=[]; order.push(id); }
       groups[id].push(t);
       if(t.handoff) activeHandoffs[id]=true;
-      if(t.tools && t.tools.indexOf("admin_release")>=0) activeHandoffs[id]=false;
+      if(t.tools && (t.tools.indexOf("admin_release")>=0 || t.tools.indexOf("admin_resolve")>=0)) activeHandoffs[id]=false;
       if(t.tools && (t.tools.indexOf("admin_takeover")>=0 || t.tools.indexOf("admin_send_message")>=0)) activeHandoffs[id]=true;
     });
     order.sort(function(a,b){ return new Date((groups[b][groups[b].length-1]||{}).ts||0) - new Date((groups[a][groups[a].length-1]||{}).ts||0); });

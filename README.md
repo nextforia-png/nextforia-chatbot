@@ -105,6 +105,11 @@ Cuando un usuario escribe por Instagram, el bot consulta y guarda su `@username`
 API oficial de perfiles. El panel muestra ese usuario y permite buscarlo; si Meta no lo
 entrega, conserva como respaldo el identificador abreviado de la conversación.
 
+Los estados del inbox traducen la operación a cuatro resultados: **IA atendiendo**,
+**Necesita tu atención**, **Tu equipo atendiendo** y **Resuelta**, indicando si la solución
+fue de la IA o del equipo. La evolución de personalización está definida en
+[`docs/customer-memory-roadmap.md`](docs/customer-memory-roadmap.md).
+
 ### Primer cliente: RAV Toys
 
 RAV Toys es el cliente #1 y usa el tenant actual `rav-toys`. El super admin genera una
@@ -146,10 +151,10 @@ Desde ahí el equipo puede tomar control de un chat, responder por WhatsApp usan
 Flujo operativo recomendado:
 
 1. Abre `/admin` y entra a la tab **Intervención humana**.
-2. Usa el filtro **Pendientes** para ver chats en humano con mensajes del cliente sin respuesta humana posterior.
+2. Usa **Te necesitan** para priorizar chats escalados y **Con tu equipo** para ver los que ya tienen agente.
 3. Usa etiquetas y notas internas para marcar venta, garantía, pago pendiente, envío o revisión.
-4. Si el chat está en **Bot**, usa **Tomar control** antes de intervenir o escribe directamente desde el compositor; al enviar, el bot queda pausado para ese cliente.
-5. Cuando termines, usa **Devolver al bot** para reactivar automatización y pedir calificación al cliente.
+4. Si el chat está en **IA atendiendo**, usa **Tomar control** antes de intervenir o escribe directamente desde el compositor; al enviar, la IA queda pausada para ese cliente.
+5. Usa **Marcar como resuelta** cuando el equipo cerró el caso. Usa **Devolver a la IA** si todavía no está resuelto y la automatización debe continuar.
 6. Revisa el indicador **Infra OK**; si aparece en rojo, abre `/admin/health` antes de seguir pruebas.
 
 Variables útiles:
@@ -302,6 +307,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v60 | Panel Super admin v1 separado, protegido y enlazado por rol |
 | v64 | RAV Toys como cliente #1 y creación segura de su acceso por invitación |
 | v65 | `@username` real de los clientes de Instagram en conversaciones y búsqueda |
+| v66 | Estados operativos y resolución separada entre IA y equipo humano |
 
 ---
 

@@ -54,5 +54,14 @@ assert.deepStrictEqual(validateProductionConfig({
   publicBaseUrl: "https://app.example.com",
   allowUnsignedWebhooks: false
 }), []);
+assert.deepStrictEqual(validateProductionConfig({
+  nodeEnv: "production",
+  verifyToken: "legacy-token",
+  dashboardKey: "d".repeat(32),
+  dashboardSessionSecret: "s".repeat(32),
+  metaAppSecret: "",
+  publicBaseUrl: "https://app.example.com",
+  allowUnsignedWebhooks: false
+}), []);
 
 console.log("security tests passed");

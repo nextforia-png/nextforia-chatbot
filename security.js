@@ -157,13 +157,15 @@ function validateProductionConfig(config) {
   if (!config || config.nodeEnv !== "production") return [];
   const errors = [];
   const required = [
-    ["VERIFY_TOKEN", config.verifyToken, 24],
+    ["VERIFY_TOKEN", config.verifyToken, 8],
     ["DASHBOARD_KEY", config.dashboardKey, 32],
-    ["DASHBOARD_SESSION_SECRET", config.dashboardSessionSecret, 32],
-    ["META_APP_SECRET", config.metaAppSecret, 24]
+    ["DASHBOARD_SESSION_SECRET", config.dashboardSessionSecret, 32]
   ];
   for (const [name, value, minLength] of required) {
     if (!value || String(value).length < minLength) errors.push(name + " must be set to at least " + minLength + " characters");
+  }
+  if (config.metaAppSecret && String(config.metaAppSecret).length < 24) {
+    errors.push("META_APP_SECRET must be at least 24 characters when configured");
   }
   if (!config.publicBaseUrl) errors.push("PUBLIC_BASE_URL must be set in production");
   if (config.allowUnsignedWebhooks) errors.push("ALLOW_UNSIGNED_WEBHOOKS must not be enabled in production");

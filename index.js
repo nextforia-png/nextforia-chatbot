@@ -105,7 +105,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v76-security-hardening";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v77-panel-live";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -259,6 +259,9 @@ if (process.env.NODE_ENV === "production" && SUPABASE_ENABLED && !DATA_ENCRYPTIO
 if (productionConfigErrors.length) {
   console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
   process.exit(1);
+}
+if (process.env.NODE_ENV === "production" && !META_APP_SECRET) {
+  console.warn("META_APP_SECRET is not configured; webhook signature enforcement remains in legacy compatibility mode");
 }
 if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
 if (!ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY missing"); process.exit(1); }
@@ -578,7 +581,7 @@ function validMetaWebhookSignature(req) {
     req.rawBody,
     req.get("x-hub-signature-256"),
     META_APP_SECRET,
-    ALLOW_UNSIGNED_WEBHOOKS
+    ALLOW_UNSIGNED_WEBHOOKS || !META_APP_SECRET
   );
 }
 

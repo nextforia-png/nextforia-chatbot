@@ -1,17 +1,22 @@
 {
     "name": "rav-whatsapp-bot",
     "version": "1.0.0",
+    "packageManager": "pnpm@11.9.0",
     "description": "RAV Toys WhatsApp Bot",
     "main": "index.js",
     "scripts": {
           "start": "node index.js",
-          "test": "node customer-intelligence.test.js && node bot-setup.test.js",
+          "test": "node security.test.js && node security.e2e.test.js && node commerce.test.js && node customer-intelligence.test.js && node bot-setup.test.js && node retargeting.test.js && node retargeting.e2e.test.js",
+          "security:scan": "node security-audit.js",
+          "security:audit": "node security-audit.js && pnpm audit --prod --audit-level high && pnpm test",
+          "test:retargeting": "node retargeting.test.js && node retargeting.e2e.test.js",
+          "retargeting:worker": "node retargeting-worker.js",
           "smoke": "node smoke-test.js",
           "monitor": "node monitor.js",
           "verify-deploy": "node verify-deploy.js"
     },
     "dependencies": {
-          "express": "^4.18.2",
-          "axios": "^1.6.0"
+          "express": "4.22.2",
+          "axios": "1.18.1"
     }
 }

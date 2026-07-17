@@ -72,7 +72,7 @@ Objetivo: que un comercio nuevo pueda pasar de interes comercial a bot operativo
     { "username": "asesora", "role": "agent" },
     { "username": "visor", "role": "viewer" }
   ],
-  "notification_phones": ["573013507371"]
+  "notification_phones": ["57XXXXXXXXXX"]
 }
 ```
 

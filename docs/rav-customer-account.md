@@ -7,7 +7,7 @@ RAV Toys es el cliente número 1 del Panel de Control y conserva el identificado
 
 1. Un usuario `super_admin` abre `/admin/super-admin`.
 2. Selecciona **Crear acceso RAV**.
-3. El panel genera y copia una invitación firmada con vigencia de 72 horas.
+3. El panel genera y copia una invitación firmada con vigencia de 24 horas.
 4. El administrador de RAV Toys abre la invitación y elige nombre, usuario y contraseña.
 5. El sistema crea el usuario con rol `admin`, inicia su sesión y abre `/admin/panel`.
 

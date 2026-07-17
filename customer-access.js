@@ -6,9 +6,13 @@ function escapeHtml(value) {
   });
 }
 
+function safeJson(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+}
+
 function renderCustomerPasswordSetup(res, options) {
   const valid = !!(options && options.valid);
-  const invite = JSON.stringify(options && options.invite || "");
+  const invite = safeJson(options && options.invite || "");
   const reason = escapeHtml(options && options.reason || "Este enlace no está disponible.");
   const status = valid ? 200 : Number(options && options.status) || 403;
   const formContent = valid ? `
@@ -27,11 +31,11 @@ function renderCustomerPasswordSetup(res, options) {
       <div class="field">
         <label for="password">Contraseña</label>
         <div class="passwordWrap">
-          <input id="password" name="password" type="password" autocomplete="new-password" maxlength="128" placeholder="Mínimo 10 caracteres" required>
+          <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" placeholder="Mínimo 12 caracteres" required>
           <button class="showButton" id="showButton" type="button">Mostrar</button>
         </div>
         <div class="requirements" aria-label="Requisitos de contraseña">
-          <span id="ruleLength"><i aria-hidden="true"></i>10 caracteres</span>
+          <span id="ruleLength"><i aria-hidden="true"></i>12 caracteres</span>
           <span id="ruleLetter"><i aria-hidden="true"></i>Una letra</span>
           <span id="ruleNumber"><i aria-hidden="true"></i>Un número</span>
         </div>
@@ -95,7 +99,7 @@ function renderCustomerPasswordSetup(res, options) {
     var invite=${invite};
     var form=document.getElementById("setupForm"),nameInput=document.getElementById("name"),usernameInput=document.getElementById("username"),passwordInput=document.getElementById("password"),confirmationInput=document.getElementById("passwordConfirmation"),submitButton=document.getElementById("submitButton"),matchMessage=document.getElementById("matchMessage"),error=document.getElementById("error"),showButton=document.getElementById("showButton");
     function setRule(id,met){var rule=document.getElementById(id);if(rule)rule.classList.toggle("met",met);}
-    function formState(){var value=passwordInput.value||"",length=value.length>=10,letter=/[A-Za-z]/.test(value),number=/[0-9]/.test(value),hasConfirmation=confirmationInput.value.length>0,match=hasConfirmation&&value===confirmationInput.value;setRule("ruleLength",length);setRule("ruleLetter",letter);setRule("ruleNumber",number);matchMessage.textContent=hasConfirmation?(match?"Las contraseñas coinciden":"Las contraseñas no coinciden todavía"):"";matchMessage.className="matchMessage"+(hasConfirmation?(match?" ok":" bad"):"");var ready=!!nameInput.value.trim()&&!!usernameInput.value.trim()&&length&&letter&&number&&match;submitButton.disabled=!ready;return ready;}
+    function formState(){var value=passwordInput.value||"",length=value.length>=12,letter=/[A-Za-z]/.test(value),number=/[0-9]/.test(value),hasConfirmation=confirmationInput.value.length>0,match=hasConfirmation&&value===confirmationInput.value;setRule("ruleLength",length);setRule("ruleLetter",letter);setRule("ruleNumber",number);matchMessage.textContent=hasConfirmation?(match?"Las contraseñas coinciden":"Las contraseñas no coinciden todavía"):"";matchMessage.className="matchMessage"+(hasConfirmation?(match?" ok":" bad"):"");var ready=!!nameInput.value.trim()&&!!usernameInput.value.trim()&&length&&letter&&number&&match;submitButton.disabled=!ready;return ready;}
     [nameInput,usernameInput,passwordInput,confirmationInput].forEach(function(input){input.addEventListener("input",formState);});
     showButton.addEventListener("click",function(){var show=passwordInput.type==="password";passwordInput.type=show?"text":"password";confirmationInput.type=show?"text":"password";showButton.textContent=show?"Ocultar":"Mostrar";passwordInput.focus();});
     form.addEventListener("submit",function(event){event.preventDefault();if(!formState())return;error.textContent="";submitButton.disabled=true;submitButton.textContent="Creando acceso…";fetch(location.pathname,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({invite:invite,name:nameInput.value.trim(),username:usernameInput.value.trim(),password:passwordInput.value,password_confirmation:confirmationInput.value})}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.message||body.error||"No se pudo crear el acceso");return body;});}).then(function(body){submitButton.textContent="Acceso creado ✓";setTimeout(function(){location.href=body.redirect||"/admin/panel";},350);}).catch(function(err){error.textContent=err.message;submitButton.textContent="Crear acceso";formState();});});

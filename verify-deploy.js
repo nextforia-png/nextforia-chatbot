@@ -43,6 +43,7 @@ async function main() {
     try {
       lastHealth = await requestJson({
         url: `${cfg.baseUrl}/admin/health`,
+        key: cfg.dashboardKey,
         timeoutMs: cfg.timeoutMs,
         retries: 0,
       });

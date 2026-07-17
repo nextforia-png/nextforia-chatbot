@@ -328,13 +328,15 @@ Notas: usar despues de una compra, garantia o handoff finalizado.
 Ya existe un registro local en `whatsapp-templates.js` y endpoints admin para probar payloads:
 
 ```bash
-curl "https://rav-whatsapp-bot.onrender.com/admin/templates?key=TU_DASHBOARD_KEY"
+curl "https://rav-whatsapp-bot.onrender.com/admin/templates" \
+  -H "X-Dashboard-Key: TU_DASHBOARD_KEY"
 ```
 
 Dry run, no envia WhatsApp:
 
 ```bash
-curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test?key=TU_DASHBOARD_KEY" \
+curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test" \
+  -H "X-Dashboard-Key: TU_DASHBOARD_KEY" \
   -H "content-type: application/json" \
   -d '{
     "templateName": "order_confirmation_rav",
@@ -350,7 +352,8 @@ curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test?key=TU_D
 Envio real solo despues de que Meta apruebe la plantilla:
 
 ```bash
-curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test?key=TU_DASHBOARD_KEY" \
+curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test" \
+  -H "X-Dashboard-Key: TU_DASHBOARD_KEY" \
   -H "content-type: application/json" \
   -d '{
     "send": true,

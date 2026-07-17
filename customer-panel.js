@@ -27,8 +27,9 @@ module.exports = function renderCustomerPanel(res, options) {
   const dataPath = options.dataPath || "/admin/panel/data?limit=500";
   const healthPath = options.healthPath === null ? "" : (options.healthPath || "/admin/panel/health");
   const setupPath = options.setupPath || "/admin/bot-setup";
+  const retargetingPath = options.retargetingPath || "/admin/retargeting";
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
-  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "tests"].includes(options.initialTab)
+  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(options.initialTab)
     ? options.initialTab
     : "summary";
   const initialTab = requestedTab === "human" ? "conversations" : requestedTab;
@@ -676,6 +677,59 @@ body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;
 .setupActions .primaryBtn,.setupActions .ghostBtn{min-height:44px;padding:0 18px}
 .setupNotice{border-radius:14px;background:var(--cyan-050);border:1px solid #BEE6FB;padding:13px 15px;color:#075985;font-size:12px;line-height:1.5}
 .setupNotice strong{font-weight:950}
+.retargetingPolicy{grid-column:1/-1;border-top:1px solid var(--line);padding-top:18px;margin-top:2px}
+.retargetingPolicy h5{font-size:13px;font-weight:950;color:var(--navy-800);margin-bottom:10px}
+.policyGuardrails{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px}
+.policyGuardrails li{display:flex;align-items:flex-start;gap:8px;color:var(--slate-700);font-size:11.5px;line-height:1.45}
+.policyGuardrails li:before{content:"✓";width:18px;height:18px;border-radius:6px;background:var(--green-100);color:#087E50;display:grid;place-items:center;flex:0 0 auto;font-size:10px;font-weight:950}
+.retargetingView{display:grid;gap:18px}
+.rtgHero{border-radius:24px;padding:28px;background:radial-gradient(circle at 82% 10%,rgba(37,191,255,.30),transparent 34%),linear-gradient(145deg,var(--navy-950),var(--navy-700));color:#fff;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:stretch;box-shadow:var(--shadow)}
+.rtgHero h3{font-family:var(--font-display);font-size:30px;line-height:1.13;letter-spacing:-.04em;margin-top:12px}
+.rtgHero p{color:#C6D4E8;max-width:720px;margin-top:10px;font-size:15px;line-height:1.6}
+.rtgSafeBadge,.rtgStatusChip{display:inline-flex;align-items:center;width:max-content;border-radius:999px;padding:7px 11px;font-size:11px;font-weight:950}
+.rtgSafeBadge{background:rgba(20,169,113,.17);border:1px solid rgba(157,240,200,.22);color:#9DF0C8}
+.rtgSafeBadge:before{content:"";width:7px;height:7px;border-radius:50%;background:#45D997;margin-right:7px;box-shadow:0 0 0 4px rgba(69,217,151,.12)}
+.rtgHeroActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+.rtgHeroActions .ghostBtn{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.20);color:#fff}
+.rtgSafetyCard{border:1px solid rgba(255,255,255,.15);border-radius:20px;background:rgba(255,255,255,.08);padding:20px;display:grid;align-content:start;gap:12px}
+.rtgSafetyCard h4{font-size:15px;font-weight:950}
+.rtgSafetyRow{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:flex-start;color:#D7E4F6;font-size:12px;font-weight:750}
+.rtgSafetyRow i{width:22px;height:22px;border-radius:8px;background:rgba(20,169,113,.18);color:#9DF0C8;display:grid;place-items:center;font-style:normal;font-weight:950}
+.rtgSafetyRow.block i{background:rgba(245,165,36,.16);color:#FFD28A}
+.rtgMetrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+.rtgMetric{background:#fff;border:1px solid var(--line);border-radius:18px;padding:18px;box-shadow:var(--shadow-soft)}
+.rtgMetric span{display:block;color:var(--slate-500);font-size:12px;font-weight:850}
+.rtgMetric strong{display:block;margin-top:8px;font-size:32px;line-height:1;font-weight:950;letter-spacing:-.05em}
+.rtgMainGrid{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(290px,.75fr);gap:18px;align-items:start}
+.rtgPanel{background:#fff;border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);overflow:hidden}
+.rtgPanelHead{padding:20px 22px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.rtgPanelHead h4{font-size:19px;font-weight:950;letter-spacing:-.03em}
+.rtgPanelHead p{color:var(--slate-500);font-size:12px;font-weight:700;margin-top:4px}
+.rtgQueue{display:grid}
+.rtgJob{padding:18px 22px;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px}
+.rtgJob:first-child{border-top:0}
+.rtgJobTop{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.rtgJobTop strong{font-size:14px;font-weight:950}
+.rtgJob p{color:var(--slate-500);font-size:12px;line-height:1.5;margin-top:7px}
+.rtgJobPreview{border-left:3px solid #BDEBFF;padding-left:10px;color:var(--slate-700)!important}
+.rtgJobActions{display:flex;gap:7px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
+.rtgJobActions button{min-height:34px;padding:0 10px}
+.rtgStatusChip.pending_approval,.rtgStatusChip.simulation_pending{background:var(--amber-100);color:#98640E}
+.rtgStatusChip.approved{background:#EFEAFF;color:#5941A9}
+.rtgStatusChip.simulated{background:var(--cyan-100);color:#057BB6}
+.rtgStatusChip.cancelled{background:var(--slate-100);color:var(--slate-700)}
+.rtgStatusChip.blocked{background:#FFE8E8;color:#B22E2E}
+.rtgStatusChip.sent{background:var(--green-100);color:#087E50}
+.rtgSide{display:grid;gap:18px}
+.rtgPolicyList,.rtgBlockerList,.rtgHistory{display:grid}
+.rtgPolicyRow,.rtgBlocker,.rtgHistoryRow{padding:13px 18px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:flex-start;font-size:12px}
+.rtgPolicyRow:first-child,.rtgBlocker:first-child,.rtgHistoryRow:first-child{border-top:0}
+.rtgPolicyRow span,.rtgHistoryRow span{color:var(--slate-500);font-weight:700}
+.rtgPolicyRow strong,.rtgBlocker strong{font-weight:950;text-align:right}
+.rtgBlocker{align-items:center}.rtgBlocker strong{color:#B22E2E}.rtgBlocker span{color:var(--slate-700);font-weight:800}
+.rtgHistoryRow{display:grid;grid-template-columns:1fr auto}.rtgHistoryRow small{grid-column:1/-1;color:var(--slate-500)}
+.rtgEmpty{padding:30px 22px;text-align:center;color:var(--slate-500);font-size:13px;font-weight:700}
+.rtgPaused{background:#FFF7E8;border-color:#F4D69E}.rtgPaused .rtgPanelHead{border-color:#F4D69E}
 
 @media(max-width:1450px) and (min-width:1181px){
   body.conversations-view .inboxShell{grid-template-columns:320px minmax(380px,1fr) 270px}
@@ -702,7 +756,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   body.conversations-view.chat-open .chatColumn{display:flex;height:100%}
 }
 @media(max-width:760px){
-  .setupHero{grid-template-columns:1fr;padding:22px}.setupCompletion{width:102px;height:102px}.setupGrid,.industryQuestions{grid-template-columns:1fr}.setupGrid .wide{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px}.setupActions{display:grid;grid-template-columns:1fr 1fr;bottom:76px}.setupActions p{grid-column:1/-1}.setupActions button{width:100%}
+  .setupHero{grid-template-columns:1fr;padding:22px}.setupCompletion{width:102px;height:102px}.setupGrid,.industryQuestions{grid-template-columns:1fr}.setupGrid .wide{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px}.setupActions{display:grid;grid-template-columns:1fr 1fr;bottom:76px}.setupActions p{grid-column:1/-1}.setupActions button{width:100%}.retargetingPolicy{grid-column:auto}.policyGuardrails{grid-template-columns:1fr}.rtgHero,.rtgMainGrid{grid-template-columns:1fr}.rtgHero{padding:22px}.rtgSafetyCard{padding:16px}.rtgMetrics{grid-template-columns:1fr 1fr}.rtgJob{grid-template-columns:1fr}.rtgJobActions{justify-content:flex-start}
   body.conversations-view .content{padding:0}
   body.conversations-view .mobileModuleBar{padding-bottom:10px;border-bottom:1px solid var(--line)}
   body.conversations-view .inboxShell{height:auto;min-height:calc(100vh - 174px);display:block}
@@ -741,6 +795,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   <div class="mobileModuleBar" aria-label="Módulos">
     <button id="mobileModule-support" type="button" onclick="showChannel('all')">Atención al cliente · Activo</button>
     <button id="mobileModule-setup" type="button" onclick="showTab('setup')">Configuración de tu NexforIA</button>
+    <button id="mobileModule-retargeting" type="button" onclick="showTab('retargeting')">Seguimientos · Simulación segura</button>
     <button id="mobileModule-appointments" class="locked" type="button" onclick="showTab('appointments')">Agendamiento de citas · No activo</button>
   </div>
   <aside class="sidebar">
@@ -752,6 +807,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
       <div class="moduleTitle">Módulos</div>
       <button class="moduleBtn" id="module-support" type="button" onclick="showChannel('all')"><strong>Atención al cliente</strong><span class="moduleStatus" id="moduleStatus-support">Activo</span><span>WhatsApp + Instagram</span></button>
       <button class="moduleBtn" id="module-setup" type="button" onclick="showTab('setup')"><strong>Configuración de tu NexforIA</strong><span class="moduleStatus" id="moduleStatus-setup">Por completar</span><span>Personalidad, conocimiento y reglas</span></button>
+      <button class="moduleBtn" id="module-retargeting" type="button" onclick="showTab('retargeting')"><strong>Seguimientos comerciales</strong><span class="moduleStatus off" id="moduleStatus-retargeting">Simulación segura</span><span>Cola, aprobaciones y bloqueos</span></button>
       <button class="moduleBtn locked" id="module-appointments" type="button" onclick="showTab('appointments')"><strong>Agendamiento de citas</strong><span class="moduleStatus off">No activo</span></button>
     </div>
     <nav class="nav" aria-label="Secciones">
@@ -759,6 +815,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
       <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
       ${planNav}
       <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
+      <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
     <div class="whatsappCard">
       <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">Bot de atención conectado</span></strong>
@@ -1013,9 +1070,72 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
                 <label class="setupField"><span>¿Qué recomendación tienes para NexforIA?</span><textarea data-setup="outcomes.recommendations" placeholder="Qué te gustaría que mejoráramos, construyéramos o entendiéramos mejor."></textarea></label>
               </div>
             </section>
+
+            <section class="setupStep" id="retargeting-policy">
+              <div class="setupStepHead"><span class="setupStepNumber">8</span><div><h4>Retargeting y seguimiento comercial</h4><p>Define cuándo retomar oportunidades y cuánta insistencia permites.</p></div></div>
+              <div class="setupNotice"><strong>Estado seguro:</strong> estas reglas se guardan con tu configuración. El modo automático seguirá bloqueado hasta conectar el programador y validar las plantillas de WhatsApp.</div>
+              <div class="setupGrid" style="margin-top:18px">
+                <label class="setupField"><span>Modo de operación</span><select data-setup="retargeting.mode"><option value="disabled">Apagado</option><option value="simulation">Simulación, sin enviar</option><option value="manual">Aprobación manual</option><option value="automatic" disabled>Automático, requiere conexión técnica</option></select><small>Simulación registra qué habría ocurrido sin contactar clientes.</small></label>
+                <label class="setupField"><span>Seguimiento de alta intención</span><input type="number" min="1" max="23" step="1" data-setup="retargeting.high_intent_delay_hours"><small>Horas después de la última interacción. Recomendado: 3.</small></label>
+                <label class="setupField"><span>Carrito pendiente</span><input type="number" min="24" max="168" step="1" data-setup="retargeting.abandoned_cart_delay_hours"><small>Horas antes del recordatorio con plantilla aprobada. Recomendado: 24.</small></label>
+                <label class="setupField"><span>Seguimiento postcompra</span><input type="number" min="1" max="30" step="1" data-setup="retargeting.post_purchase_delay_days"><small>Días después de una compra confirmada. Recomendado: 3.</small></label>
+                <label class="setupField"><span>Límite comercial semanal</span><input type="number" min="1" max="2" step="1" data-setup="retargeting.max_marketing_messages_7d"><small>Máximo por cliente en siete días. Límite obligatorio: 2.</small></label>
+                <label class="setupField"><span>Zona horaria</span><input data-setup="retargeting.timezone" value="America/Bogota" disabled><small>La primera versión operará con la hora de Colombia.</small></label>
+                <label class="setupField"><span>Enviar desde</span><input type="time" data-setup="retargeting.send_window_start"></label>
+                <label class="setupField"><span>Enviar hasta</span><input type="time" data-setup="retargeting.send_window_end"></label>
+                <div class="retargetingPolicy">
+                  <h5>Protecciones obligatorias</h5>
+                  <ul class="policyGuardrails"><li>Consentimiento verificable para mensajes comerciales.</li><li>Cancelación inmediata cuando el cliente responde.</li><li>Cancelación al confirmar compra o pago.</li><li>Pausa cuando un agente toma la conversación.</li><li>STOP y solicitudes equivalentes bloquean futuros envíos.</li><li>Plantilla aprobada obligatoria fuera de 24 horas.</li></ul>
+                </div>
+              </div>
+            </section>
           </form>
 
           <div class="setupActions"><p id="setupMessage">Completa la información a tu ritmo.</p><button class="ghostBtn" id="saveSetupBtn" type="button" onclick="saveBotSetup()">Guardar avance</button><button class="primaryBtn" id="publishSetupBtn" type="button" onclick="publishBotSetup()">Activar en el bot</button></div>
+        </div>
+      </section>
+
+      <section class="view" id="panel-retargeting">
+        <div class="retargetingView">
+          <section class="rtgHero">
+            <div>
+              <span class="rtgSafeBadge" id="rtgModeBadge">Simulación segura</span>
+              <h3>Retoma oportunidades sin perder el control</h3>
+              <p>Nextfor IA organiza cada seguimiento, valida consentimiento y aplica tus límites antes de ponerlo en cola. Por ahora, todo se simula o requiere aprobación: ningún mensaje comercial sale desde este módulo.</p>
+              <div class="rtgHeroActions"><button class="ghostBtn" type="button" onclick="showTab('setup')">Editar reglas</button><button class="ghostBtn" id="rtgRefreshBtn" type="button" onclick="loadRetargeting(true)">Actualizar cola</button></div>
+            </div>
+            <aside class="rtgSafetyCard">
+              <h4>Protecciones activas</h4>
+              <div class="rtgSafetyRow"><i>✓</i><span>Consentimiento verificable y máximo 2 mensajes comerciales por 7 días.</span></div>
+              <div class="rtgSafetyRow"><i>✓</i><span>Horario 09:00–19:00, hora de Colombia.</span></div>
+              <div class="rtgSafetyRow"><i>✓</i><span>Respuesta, compra, handoff o STOP cancelan la cola.</span></div>
+              <div class="rtgSafetyRow block"><i>!</i><span>Envío real y modo automático bloqueados hasta validación E2E y autorización operativa.</span></div>
+            </aside>
+          </section>
+
+          <section class="rtgMetrics" aria-label="Estado de seguimientos">
+            <article class="rtgMetric"><span>Por revisar</span><strong id="rtgPending">0</strong></article>
+            <article class="rtgMetric"><span>Aprobados</span><strong id="rtgApproved">0</strong></article>
+            <article class="rtgMetric"><span>Simulados</span><strong id="rtgSimulated">0</strong></article>
+            <article class="rtgMetric"><span>Cancelados</span><strong id="rtgCancelled">0</strong></article>
+            <article class="rtgMetric"><span>Bloqueados</span><strong id="rtgBlocked">0</strong></article>
+          </section>
+
+          <div class="rtgMainGrid">
+            <section class="rtgPanel" id="rtgQueuePanel">
+              <header class="rtgPanelHead"><div><h4>Cola de seguimientos</h4><p>Decisiones por cliente, canal y evento. Aprobar nunca envía: solo deja la decisión lista para la simulación.</p></div><span class="rtgStatusChip simulation_pending" id="rtgQueueState">Cargando</span></header>
+              <div class="rtgQueue" id="rtgQueue"><div class="rtgEmpty">Cargando la cola segura…</div></div>
+            </section>
+            <aside class="rtgSide">
+              <section class="rtgPanel" id="rtgPausePanel">
+                <header class="rtgPanelHead"><div><h4>Control global</h4><p>Pausa todo el tenant inmediatamente.</p></div><button class="ghostBtn" id="rtgPauseBtn" type="button" onclick="toggleRetargetingPause()" disabled>Pausar</button></header>
+                <div class="rtgPolicyList" id="rtgPolicyList"></div>
+              </section>
+              <section class="rtgPanel"><header class="rtgPanelHead"><div><h4>Bloqueos</h4><p>Qué impide programar o aprobar.</p></div></header><div class="rtgBlockerList" id="rtgBlockers"><div class="rtgEmpty">Sin bloqueos registrados.</div></div></section>
+              <section class="rtgPanel"><header class="rtgPanelHead"><div><h4>Historial de auditoría</h4><p>Creaciones, aprobaciones y cancelaciones.</p></div></header><div class="rtgHistory" id="rtgHistory"><div class="rtgEmpty">Aún no hay movimientos.</div></div></section>
+            </aside>
+          </div>
+          <p class="statusLine" id="rtgMessage" aria-live="polite">Módulo en estado seguro.</p>
         </div>
       </section>
 
@@ -1035,9 +1155,9 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   </nav>
 </div>
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)};
 var PLAN_DATA={nombre:"Bot Atención al cliente",estado:"Activo",mensualidad:"$299.900/mes",renovacion:"Renueva el 1 de agosto",chatsIncluidos:500,chatsConsumidos:410,rescatesFrecuentes:true,referidos:{codigo:"RAVTOYS",count:0,mesesGanados:0}};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,retargeting:null,retargetingLoading:false};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
@@ -1057,25 +1177,28 @@ function showTab(name){
   state.tab=name;
   document.body.classList.remove("chat-open");
   document.body.classList.toggle("conversations-view",name==="conversations");
-  var supportModule=name==="summary"||name==="conversations",setupModule=name==="setup",appointmentsModule=name==="appointments";
-  ["summary","conversations","appointments","plan","setup","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});
+  var supportModule=name==="summary"||name==="conversations",setupModule=name==="setup",retargetingModule=name==="retargeting",appointmentsModule=name==="appointments";
+  ["summary","conversations","appointments","plan","setup","retargeting","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});
   ["module-support","mobileModule-support"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",supportModule);});
   ["module-setup","mobileModule-setup"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",setupModule);});
+  ["module-retargeting","mobileModule-retargeting"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",retargetingModule);});
   ["module-appointments","mobileModule-appointments"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",appointmentsModule);});
-  var summary=document.getElementById("panel-summary"),inbox=document.getElementById("panel-inbox"),appointments=document.getElementById("panel-appointments"),plan=document.getElementById("panel-plan"),setup=document.getElementById("panel-setup"),tests=document.getElementById("panel-tests"),toolbar=document.querySelector(".toolbar");
+  var summary=document.getElementById("panel-summary"),inbox=document.getElementById("panel-inbox"),appointments=document.getElementById("panel-appointments"),plan=document.getElementById("panel-plan"),setup=document.getElementById("panel-setup"),retargeting=document.getElementById("panel-retargeting"),tests=document.getElementById("panel-tests"),toolbar=document.querySelector(".toolbar");
   if(summary)summary.classList.toggle("active",name==="summary");
   if(inbox)inbox.classList.toggle("active",name==="conversations");
   if(appointments)appointments.classList.toggle("active",name==="appointments");
   if(plan)plan.classList.toggle("active",name==="plan");
   if(setup)setup.classList.toggle("active",name==="setup");
+  if(retargeting)retargeting.classList.toggle("active",name==="retargeting");
   if(tests)tests.classList.toggle("active",name==="tests");
-  if(toolbar)toolbar.style.display=(name==="plan"||name==="appointments"||name==="setup")?"none":"flex";
-  var pageTitle=name==="summary"?"Resumen":name==="tests"?"Pruebas":name==="plan"?"Mi plan":name==="setup"?"Configuración de tu NexforIA":name==="appointments"?"Agendamiento de citas":"Conversaciones";
-  var pageSubtitle=name==="summary"?"Resultados del bot de atención · Últimos 7 días":name==="tests"?"Herramientas seguras para validar el bot.":name==="plan"?"Plan, módulos y consumo":name==="setup"?"Tu negocio, tu voz y tus reglas en un solo lugar":name==="appointments"?"Módulo independiente · Se activa cuando esté funcionando":"La IA atiende y te deja solo lo que necesita de ti.";
+  if(toolbar)toolbar.style.display=(name==="plan"||name==="appointments"||name==="setup"||name==="retargeting")?"none":"flex";
+  var pageTitle=name==="summary"?"Resumen":name==="tests"?"Pruebas":name==="plan"?"Mi plan":name==="setup"?"Configuración de tu NexforIA":name==="retargeting"?"Seguimientos comerciales":name==="appointments"?"Agendamiento de citas":"Conversaciones";
+  var pageSubtitle=name==="summary"?"Resultados del bot de atención · Últimos 7 días":name==="tests"?"Herramientas seguras para validar el bot.":name==="plan"?"Plan, módulos y consumo":name==="setup"?"Tu negocio, tu voz y tus reglas en un solo lugar":name==="retargeting"?"Cola segura, aprobaciones, cancelaciones y auditoría":name==="appointments"?"Módulo independiente · Se activa cuando esté funcionando":"La IA atiende y te deja solo lo que necesita de ti.";
   text("pageTitle",pageTitle);
   text("pageSubtitle",pageSubtitle);
+  if(window.innerWidth<=760){var activeMobileModule=document.getElementById("mobileModule-"+name);if(activeMobileModule)activeMobileModule.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});}
   try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("channel");url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}
-  if(name==="setup")loadBotSetup();renderInbox();renderPlan();window.scrollTo(0,0);
+  if(name==="setup")loadBotSetup();if(name==="retargeting")loadRetargeting(false);renderInbox();renderPlan();window.scrollTo(0,0);
 }
 function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH).then(function(data){state.data=data;state.allConversations=data.conversations||[];applyChannelData();SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderChannelState();renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
 function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;}).catch(function(){});}
@@ -1162,6 +1285,16 @@ function confirmAndSend(){var item=findConversation(state.selected),input=docume
 function renderProductResults(result){var box=document.getElementById("searchTestResult");if(!box)return;var products=result.products||[];box.innerHTML=products.length?products.map(function(p){return '<div class="resultItem"><a href="'+attr(p.product_url)+'" target="_blank" rel="noreferrer">'+esc(p.title)+'</a><span>'+esc(p.price||"")+'</span></div>';}).join(""):'La búsqueda no devolvió productos.';}
 function runProductTest(event){event.preventDefault();var q=document.getElementById("testQuery").value.trim();if(!q)return;setBusy("searchTestBtn",true,"Buscando...","Probar búsqueda");text("searchTestResult","Consultando catálogo...");api("/admin/panel/test-search?q="+encodeURIComponent(q)).then(renderProductResults).catch(function(error){text("searchTestResult","No se pudo completar: "+error.message);}).finally(function(){setBusy("searchTestBtn",false,"Buscando...","Probar búsqueda");});}
 function runOrderTest(event){event.preventDefault();var payload={order_number:document.getElementById("orderNumber").value.trim(),customer_name:document.getElementById("customerName").value.trim(),phone_or_email:document.getElementById("phoneOrEmail").value.trim()};setBusy("orderTestBtn",true,"Consultando...","Consultar estado");text("orderTestResult","Validando pedido...");api("/admin/panel/order-status-test",{method:"POST",body:JSON.stringify(payload)}).then(function(result){text("orderTestResult",result.message||"Consulta completada.");}).catch(function(error){text("orderTestResult",(error.body&&error.body.message)||("No se pudo completar: "+error.message));}).finally(function(){setBusy("orderTestBtn",false,"Consultando...","Consultar estado");});}
+var RTG_STATUS_LABELS={simulation_pending:"Lista para simular",pending_approval:"Requiere aprobación",approved:"Aprobada · envío bloqueado",simulated:"Simulada",cancelled:"Cancelada",blocked:"Bloqueada",sent:"Enviada"};
+var RTG_EVENT_LABELS={high_intent:"Alta intención",abandoned_cart:"Carrito pendiente",post_purchase:"Postcompra",back_in_stock:"Volvió a inventario",recommendation:"Recomendación"};
+var RTG_REASON_LABELS={tenant_paused:"Tenant pausado",verified_consent_required:"Falta consentimiento verificable",consent_proof_missing:"Falta evidencia del consentimiento",consent_revoked:"Consentimiento revocado",consent_expired:"Consentimiento vencido",consent_category_mismatch:"Consentimiento no cubre esta categoría",approved_template_missing:"Falta plantilla aprobada",template_not_approved_or_active:"Plantilla no aprobada o inactiva",template_quality_blocked:"Calidad de plantilla bloqueada",marketing_frequency_limit_7d:"Alcanzó el máximo de 2 mensajes en 7 días",customer_replied:"El cliente respondió",purchase_confirmed:"Compra confirmada",handoff:"Conversación en manos del equipo",stop:"El cliente pidió no recibir más mensajes",real_sends_disabled:"Envío real bloqueado",simulation_only_no_message_sent:"Simulación completada; no se envió ningún mensaje",automatic_mode_not_enabled:"Modo automático bloqueado",channel_not_supported_for_commercial_scheduler:"Canal aún no habilitado para seguimiento comercial",channel_tenant_mismatch:"El canal no pertenece a este tenant"};
+function rtgReason(value){value=String(value||"");if(value.indexOf("template_degraded:")===0)return "Plantilla degradada o pausada";if(value.indexOf("customer_event_")===0)return rtgReason(value.replace("customer_event_",""));return RTG_REASON_LABELS[value]||value.replace(/_/g," ")||"—";}
+function rtgStatus(value){return RTG_STATUS_LABELS[value]||value||"—";}
+function renderRetargeting(){var data=state.retargeting;if(!data||!data.snapshot)return;var snap=data.snapshot,counts=snap.counts||{},policy=data.policy||{},canManage=!!data.can_manage,jobs=snap.jobs||[];text("rtgPending",counts.pending||0);text("rtgApproved",counts.approved||0);text("rtgSimulated",counts.simulated||0);text("rtgCancelled",counts.cancelled||0);text("rtgBlocked",counts.blocked||0);text("navRtgCount",counts.pending||"");text("moduleStatus-retargeting",snap.paused?"Pausado":(policy.mode==="manual"?"Aprobación manual":policy.mode==="simulation"?"Simulación segura":policy.mode==="disabled"?"Apagado":"Automático bloqueado"));text("mobileModule-retargeting","Seguimientos · "+(snap.paused?"Pausado":policy.mode==="manual"?"Manual":policy.mode==="simulation"?"Simulación":"Apagado"));text("rtgModeBadge",snap.paused?"Tenant pausado":policy.mode==="manual"?"Aprobación manual":policy.mode==="simulation"?"Simulación segura":policy.mode==="disabled"?"Módulo apagado":"Automático bloqueado");text("rtgQueueState",snap.paused?"Pausado":jobs.length?jobs.length+" decisiones":"Cola vacía");var pause=document.getElementById("rtgPauseBtn"),pausePanel=document.getElementById("rtgPausePanel");if(pause){pause.disabled=!canManage;pause.textContent=snap.paused?"Reanudar":"Pausar";}if(pausePanel)pausePanel.classList.toggle("rtgPaused",!!snap.paused);var queue=document.getElementById("rtgQueue");if(queue)queue.innerHTML=jobs.length?jobs.slice(0,60).map(function(job){var open=["simulation_pending","pending_approval","approved"].includes(job.status),approve=canManage&&job.status==="pending_approval"?'<button class="primaryBtn" type="button" data-id="'+attr(job.id)+'" onclick="approveRetargetingJob(this.dataset.id)">Aprobar decisión</button>':"",cancel=canManage&&open?'<button class="ghostBtn" type="button" data-id="'+attr(job.id)+'" onclick="cancelRetargetingJob(this.dataset.id)">Cancelar</button>':"",reason=job.reason?'<p><strong>Motivo:</strong> '+esc(rtgReason(job.reason))+'</p>':"";return '<article class="rtgJob"><div><div class="rtgJobTop"><strong>'+esc(job.context&&job.context.preferred_name||job.customer_id)+'</strong><span class="rtgStatusChip '+attr(job.status)+'">'+esc(rtgStatus(job.status))+'</span></div><p>'+esc(RTG_EVENT_LABELS[job.event_type]||job.event_type)+' · '+esc(job.channel)+' · programado '+esc(when(job.scheduled_for))+'</p><p class="rtgJobPreview">'+esc(job.preview||"Vista previa no disponible")+'</p>'+reason+'</div><div class="rtgJobActions">'+approve+cancel+'</div></article>';}).join(""):'<div class="rtgEmpty">No hay seguimientos en cola. Cuando el bot detecte una oportunidad, aquí verás la decisión y sus protecciones.</div>';var policies=[["Modo",policy.mode==="manual"?"Aprobación manual":policy.mode==="simulation"?"Simulación":policy.mode==="disabled"?"Apagado":"Automático bloqueado"],["Horario",(policy.send_window_start||"09:00")+"–"+(policy.send_window_end||"19:00")],["Zona horaria",snap.timezone||"America/Bogota"],["Límite",(snap.hard_max_marketing_messages_7d||2)+" mensajes / 7 días"],["Envío real",snap.real_sends_enabled?"Habilitado":"Bloqueado"]],policyBox=document.getElementById("rtgPolicyList");if(policyBox)policyBox.innerHTML=policies.map(function(row){return '<div class="rtgPolicyRow"><span>'+esc(row[0])+'</span><strong>'+esc(row[1])+'</strong></div>';}).join("");var blockers=document.getElementById("rtgBlockers"),blockerRows=snap.blockers||[];if(blockers)blockers.innerHTML=blockerRows.length?blockerRows.slice(0,8).map(function(item){return '<div class="rtgBlocker"><span>'+esc(rtgReason(item.reason))+'</span><strong>'+esc(item.count)+'</strong></div>';}).join(""):'<div class="rtgEmpty">Sin bloqueos registrados.</div>';var history=document.getElementById("rtgHistory"),events=snap.history||[];if(history)history.innerHTML=events.length?events.slice(0,20).map(function(event){var labels={job_created:"Seguimiento creado",job_transition:"Estado actualizado",customer_signal:"Señal del cliente",consent_recorded:"Consentimiento registrado",consent_revoked:"Consentimiento revocado",tenant_paused:"Tenant pausado",tenant_resumed:"Tenant reanudado",template_status:"Plantilla verificada"},detail=event.payload&&event.payload.signal||event.payload&&event.payload.patch&&event.payload.patch.transition_reason||"";return '<div class="rtgHistoryRow"><strong>'+esc(labels[event.type]||event.type)+'</strong><span>'+esc(when(event.created_at))+'</span><small>'+esc(event.actor||"system")+(detail?" · "+esc(rtgReason(detail)):"")+'</small></div>';}).join(""):'<div class="rtgEmpty">Aún no hay movimientos.</div>';}
+function loadRetargeting(manual){if(state.retargetingLoading)return;state.retargetingLoading=true;if(manual)text("rtgMessage","Actualizando cola…");api(PANEL_RETARGETING_PATH).then(function(data){state.retargeting=data;renderRetargeting();text("rtgMessage","✓ Cola actualizada. Ningún mensaje real fue enviado.");}).catch(function(error){text("rtgMessage","No se pudo cargar el módulo: "+error.message);}).finally(function(){state.retargetingLoading=false;});}
+function approveRetargetingJob(id){if(!state.retargeting||!state.retargeting.can_manage)return;text("rtgMessage","Validando aprobación…");api("/admin/retargeting/jobs/"+encodeURIComponent(id)+"/approve",{method:"POST",body:"{}"}).then(function(){text("rtgMessage","✓ Decisión aprobada. El envío real continúa bloqueado.");state.retargeting=null;loadRetargeting(false);}).catch(function(error){text("rtgMessage","No se pudo aprobar: "+error.message);});}
+function cancelRetargetingJob(id){if(!state.retargeting||!state.retargeting.can_manage)return;if(!window.confirm("¿Cancelar este seguimiento? No se enviará ningún mensaje."))return;text("rtgMessage","Cancelando seguimiento…");api("/admin/retargeting/jobs/"+encodeURIComponent(id)+"/cancel",{method:"POST",body:JSON.stringify({reason:"manual_cancel_from_customer_panel"})}).then(function(){state.retargeting=null;loadRetargeting(false);}).catch(function(error){text("rtgMessage","No se pudo cancelar: "+error.message);});}
+function toggleRetargetingPause(){if(!state.retargeting||!state.retargeting.can_manage)return;var paused=!!state.retargeting.snapshot.paused,route=paused?"/admin/retargeting/resume":"/admin/retargeting/pause";text("rtgMessage",paused?"Reanudando tenant…":"Pausando tenant…");api(route,{method:"POST",body:paused?"{}":JSON.stringify({reason:"manual_pause_from_customer_panel"})}).then(function(){state.retargeting=null;loadRetargeting(false);}).catch(function(error){text("rtgMessage","No se pudo cambiar la pausa: "+error.message);});}
 function setupPathGet(source,path){return String(path||"").split(".").reduce(function(value,key){return value&&value[key]!=null?value[key]:undefined;},source);}
 function setupPathSet(target,path,value){var parts=String(path||"").split("."),cursor=target;parts.forEach(function(key,index){if(index===parts.length-1)cursor[key]=value;else{if(!cursor[key]||typeof cursor[key]!=="object")cursor[key]={};cursor=cursor[key];}});}
 function cloneSetup(value){return JSON.parse(JSON.stringify(value||{}));}

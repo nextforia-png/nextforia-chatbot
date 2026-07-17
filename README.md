@@ -1,5 +1,7 @@
 # RAV Toys WhatsApp + Instagram + Messenger Bot
 
+Security requirements, key rotation, automated checks, and incident response are documented in [`SECURITY.md`](SECURITY.md).
+
 Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para WhatsApp, Instagram y Facebook Messenger. Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
 
 ---
@@ -36,7 +38,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 |---|---|
 | `WA_TOKEN` | Token permanente de Meta WhatsApp |
 | `PHONE_NUMBER_ID` | ID del número WhatsApp registrado en Meta |
-| `VERIFY_TOKEN` | Token de verificación del webhook (default: `rav_toys_webhook_2026`) |
+| `VERIFY_TOKEN` | Token aleatorio de verificación del webhook (requerido en producción, mínimo 24 caracteres) |
 | `IG_ACCESS_TOKEN` | Token del Instagram Professional account autorizado en Meta |
 | `IG_USER_ID` | ID del Instagram Professional account que enviará respuestas |
 | `IG_SEND_ID` | ID usado en `/messages`; usa `IG_USER_ID` por defecto. Con Facebook Login, usa el ID de la página vinculada |
@@ -45,7 +47,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `MESSENGER_PAGE_ACCESS_TOKEN` | Page Access Token de la Página de Facebook conectada a Messenger |
 | `MESSENGER_PAGE_ID` | ID de la Página de Facebook que enviará las respuestas |
 | `MESSENGER_VERIFY_TOKEN` | Token para verificar `/messenger/webhook`; usa `VERIFY_TOKEN` si se omite |
-| `MESSENGER_APP_SECRET` | App Secret de Meta para validar la firma `X-Hub-Signature-256` de cada evento |
+| `META_APP_SECRET` | App Secret de Meta para validar la firma `X-Hub-Signature-256` de WhatsApp, Instagram y Messenger |
+| `MESSENGER_APP_SECRET` | Alias heredado de `META_APP_SECRET` |
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
 | `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
@@ -57,17 +60,19 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `AI_HIGH_INTENT_HISTORY_MESSAGES` | Historial usado en intención alta (default: `18`) |
 | `CUSTOMER_MEMORY_CACHE_TTL_MS` | Duración del caché local de memoria antes de releer Supabase (default: `300000`) |
 | `CONVERSATION_SESSION_TIMEOUT_MS` | Inactividad necesaria para iniciar una sesión nueva y permitir un saludo personalizado (default: `21600000`, 6 horas) |
-| `SHOPIFY_STORE_DOMAIN` | Dominio Shopify (default: `ravtoys.myshopify.com`) |
+| `SHOPIFY_STORE_DOMAIN` | Dominio Shopify; requerido si se configura `SHOPIFY_ADMIN_TOKEN` |
+| `SHOPIFY_STOREFRONT_DOMAIN` | Dominio público HTTPS usado para búsquedas y enlaces de producto; usa `SHOPIFY_STORE_DOMAIN` si se omite |
 | `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) con permisos para leer pedidos y fulfillments |
 | `SHOPIFY_ADMIN_API_VERSION` | Versión Admin API para pedidos (default: `2026-04`) |
 | `SHOPIFY_ORDER_PREFIXES` | Prefijos de pedidos separados por coma para validar entradas cortas como `1154` contra `RAV-1154` |
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
-| `DASHBOARD_KEY` | Clave para endpoints admin protegidos |
+| `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
+| `DASHBOARD_KEY` | Clave maestra aleatoria (mínimo 32 caracteres); los clientes automatizados la envían solo en `X-Dashboard-Key` |
 | `DASHBOARD_USERS` | Usuarios del panel en CSV o JSON; el JSON puede incluir `email` como identificador alternativo de acceso |
-| `DASHBOARD_SESSION_SECRET` | Secreto para firmar cookies del panel; si falta usa `DASHBOARD_KEY` |
-| `DASHBOARD_SESSION_TTL_HOURS` | Duración de sesión del panel (default: `12`) |
-| `NOTIFICATION_PHONES` | Números a notificar (CSV sin +): `573013507371,573046653449` |
+| `DASHBOARD_SESSION_SECRET` | Secreto independiente para firmar cookies del panel (mínimo 32 caracteres) |
+| `DASHBOARD_SESSION_TTL_HOURS` | Duración de sesión del panel (default: `8`, máximo: `24`) |
+| `NOTIFICATION_PHONES` | Números autorizados a notificar (CSV sin `+`); no tiene destinatario por defecto |
 
 ---
 
@@ -79,28 +84,28 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `POST /admin/login` | Crea sesión del dashboard por usuario/clave o clave maestra |
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
-| `POST /admin/customer-invite` | Super admin: genera una invitación de 72 horas para crear el primer acceso de RAV Toys |
+| `POST /admin/customer-invite` | Super admin: genera una invitación firmada de 24 horas para crear el primer acceso |
 | `GET/POST /admin/setup/rav-toys` | Formulario y creación segura del usuario administrador del cliente |
-| `GET /admin/access-model?key=XXXX` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
-| `GET /admin/super-admin?key=XXXX` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
-| `GET /admin/health` | Estado del bot: versión, uptime, conexión a Shopify/Meta/Supabase y readiness de infraestructura |
-| `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
-| `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
-| `GET /admin/dashboard?key=XXXX` | Panel operativo con tabs para métricas e intervención humana |
+| `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
+| `GET /admin/super-admin` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
+| `GET /admin/health` | Estado mínimo público; con sesión o `X-Dashboard-Key` incluye Shopify/Meta/Supabase y readiness |
+| `GET /admin/stats` | Snapshot protegido del estado: handoffs activos, ratings pendientes, carritos en curso |
+| `GET /admin/conversations?limit=N` | Conversaciones recientes protegidas desde Supabase si está disponible |
+| `GET /admin/dashboard` | Panel operativo con tabs para métricas e intervención humana |
 | `GET /admin/panel?tab=summary` | Panel de control del cliente con KPIs y conversaciones unificados para WhatsApp, Instagram y Messenger |
 | `GET /admin/panel-demo?tab=summary` | Demo pública de solo lectura con datos sanitizados de los canales conectados |
 | `GET /admin/panel/data` | Datos protegidos del panel, con resúmenes por canal y conversaciones identificadas como WhatsApp, Instagram o Messenger |
-| `GET /admin/inbox?key=XXXX` | Acceso directo opcional a la bandeja operativa |
-| `GET /admin/customer-meta?key=XXXX` | Etiquetas y notas internas por cliente para el panel |
+| `GET /admin/inbox` | Acceso directo opcional a la bandeja operativa |
+| `GET /admin/customer-meta` | Etiquetas y notas internas por cliente para el panel |
 | `POST /admin/customer-meta/:userId` | Guarda etiquetas/notas internas del cliente seleccionado |
-| `GET /admin/templates?key=XXXX` | Lista plantillas WhatsApp configuradas localmente |
-| `GET /admin/commercial-readiness?key=XXXX` | Checklist comercial/multi-cliente para preparar onboarding de futuros clientes |
+| `GET /admin/templates` | Lista protegida de plantillas WhatsApp configuradas localmente |
+| `GET /admin/commercial-readiness` | Checklist comercial/multi-cliente protegido |
 | `POST /admin/template-test` | Genera payload de plantilla o envia con `send: true` si ya fue aprobada |
-| `GET /admin/smoke-check?q=XXXX` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
+| `POST /admin/smoke-check` | Simula búsqueda, selección, checkout y total sin enviar WhatsApps |
 | `POST /admin/order-status-test` | Prueba consulta de pedido Shopify con `order_number`, `customer_name`, `phone_or_email` opcional |
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
-| `GET /admin/test-search?q=XXXX&key=YYYY` | Prueba la búsqueda de productos sin afectar a clientes reales |
-| `GET /admin/release/:userId` | Libera un handoff manual de Eliana (vuelve el bot a atender) y marca para pedir rating |
+| `GET /admin/test-search?q=XXXX` | Prueba protegida de búsqueda sin afectar a clientes reales |
+| `POST /admin/release/:userId` | Libera un handoff manual (vuelve el bot a atender) y marca para pedir rating |
 
 ### Webhook de Instagram
 
@@ -156,7 +161,7 @@ cédula, dirección, teléfono de checkout ni método de pago.
 
 RAV Toys es el cliente #1 y usa el tenant actual `rav-toys`. El super admin genera una
 invitación desde `/admin/super-admin` con **Crear acceso RAV**. El cliente abre el enlace,
-elige su usuario y contraseña, y entra con rol `admin`. La invitación vence en 72 horas y
+elige su usuario y contraseña, y entra con rol `admin`. La invitación vence en 24 horas y
 deja de funcionar cuando la cuenta queda creada. La contraseña nunca se guarda en texto
 plano: se almacena como un hash `scrypt` con salt dentro del registro interno persistente.
 La pantalla de ingreso es genérica de Nextfor IA: el nombre del comercio solo aparece
@@ -173,6 +178,9 @@ después de autenticar, de modo que el mismo acceso pueda servir a más clientes
 - Onboarding comercial para futuros clientes: [`docs/commercial-onboarding.md`](docs/commercial-onboarding.md)
 - Roadmap multi-cliente: [`docs/multi-tenant-roadmap.md`](docs/multi-tenant-roadmap.md)
 - División Admin/Super admin: [`docs/admin-super-admin-split.md`](docs/admin-super-admin-split.md)
+- Política de retargeting: [`docs/retargeting-policy.md`](docs/retargeting-policy.md)
+- Operación segura del worker: [`docs/retargeting-operations.md`](docs/retargeting-operations.md)
+- Prompt para NextforIA Configuration: [`docs/nextforia-retargeting-configuration-prompt.md`](docs/nextforia-retargeting-configuration-prompt.md)
 - Informe ejecutivo para socios: [`docs/informe-socios-rav-whatsapp-bot.md`](docs/informe-socios-rav-whatsapp-bot.md)
 - Backlog priorizado: [`TODO.md`](TODO.md)
 

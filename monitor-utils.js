@@ -31,7 +31,15 @@ function configFromEnv(args = {}) {
 }
 
 function cleanBaseUrl(value) {
-  return String(value || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const raw = String(value || DEFAULT_BASE_URL).trim();
+  let url;
+  try { url = new URL(raw); }
+  catch (_) { throw new Error("BOT_BASE_URL must be a valid URL"); }
+  const localHttp = url.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(url.hostname);
+  if ((url.protocol !== "https:" && !localHttp) || url.username || url.password || url.search || url.hash) {
+    throw new Error("BOT_BASE_URL must be HTTPS (HTTP is allowed only for localhost) and contain no credentials or query string");
+  }
+  return url.origin + url.pathname.replace(/\/+$/, "");
 }
 
 function numberFrom(value, fallback) {
@@ -45,12 +53,6 @@ function sleep(ms) {
 
 function adminHeaders(key) {
   return key ? { "x-dashboard-key": key } : {};
-}
-
-function withKey(url, key) {
-  if (!key) return url;
-  const glue = url.includes("?") ? "&" : "?";
-  return `${url}${glue}key=${encodeURIComponent(key)}`;
 }
 
 async function requestJson({ method = "get", url, key = "", data, timeoutMs = 70000, retries = 0, retryDelayMs = 60000 }) {
@@ -86,7 +88,7 @@ async function requestConversations({ baseUrl, key = "", limit = 100, timeoutMs 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       lastData = await requestJson({
-        url: withKey(`${baseUrl}/admin/conversations?limit=${encodeURIComponent(limit)}`, key),
+        url: `${baseUrl}/admin/conversations?limit=${encodeURIComponent(limit)}`,
         key,
         timeoutMs,
         retries: 0,
@@ -145,5 +147,4 @@ module.exports = {
   assertCheck,
   printJson,
   sleep,
-  withKey,
 };

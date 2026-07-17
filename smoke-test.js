@@ -7,7 +7,6 @@ const {
   summarizeFailures,
   assertCheck,
   printJson,
-  withKey,
 } = require("./monitor-utils");
 
 async function main() {
@@ -25,6 +24,7 @@ async function main() {
 
   const health = await requestJson({
     url: `${cfg.baseUrl}/admin/health`,
+    key: cfg.dashboardKey,
     timeoutMs: cfg.timeoutMs,
     retries: cfg.coldStartRetries,
     retryDelayMs: cfg.coldStartDelayMs,
@@ -45,8 +45,10 @@ async function main() {
 
   if (cfg.dashboardKey) {
     const smoke = await requestJson({
-      url: withKey(`${cfg.baseUrl}/admin/smoke-check?q=${encodeURIComponent(query)}`, cfg.dashboardKey),
+      method: "post",
+      url: `${cfg.baseUrl}/admin/smoke-check`,
       key: cfg.dashboardKey,
+      data: { q: query },
       timeoutMs: cfg.timeoutMs,
       retries: cfg.coldStartRetries,
       retryDelayMs: cfg.coldStartDelayMs,

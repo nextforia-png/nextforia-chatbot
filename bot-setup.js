@@ -110,6 +110,21 @@ const DEFAULT_ANSWERS = {
     handoff_contact: "",
     answer_length: "breve"
   },
+  retargeting: {
+    mode: "disabled",
+    high_intent_delay_hours: 3,
+    abandoned_cart_delay_hours: 24,
+    post_purchase_delay_days: 3,
+    max_marketing_messages_7d: 2,
+    send_window_start: "09:00",
+    send_window_end: "19:00",
+    timezone: "America/Bogota",
+    require_marketing_opt_in: true,
+    stop_on_reply: true,
+    stop_on_purchase: true,
+    stop_on_handoff: true,
+    stop_on_opt_out: true
+  },
   outcomes: {
     primary_goal: "",
     success_metrics: "",
@@ -128,6 +143,24 @@ function cleanChoice(value, allowed, fallback) {
   return allowed.includes(clean) ? clean : fallback;
 }
 
+function cleanInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+function cleanTime(value, fallback) {
+  const clean = cleanText(value, 5);
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(clean) ? clean : fallback;
+}
+
+function guardedRetargetingTime(value, fallback, minimum, maximum) {
+  const clean = cleanTime(value, fallback);
+  const toMinutes = function (time) { const parts = time.split(":"); return Number(parts[0]) * 60 + Number(parts[1]); };
+  const bounded = Math.max(toMinutes(minimum), Math.min(toMinutes(maximum), toMinutes(clean)));
+  return String(Math.floor(bounded / 60)).padStart(2, "0") + ":" + String(bounded % 60).padStart(2, "0");
+}
+
 function normalizeAnswers(input) {
   input = input && typeof input === "object" ? input : {};
   const business = input.business || {};
@@ -136,6 +169,7 @@ function normalizeAnswers(input) {
   const voice = input.voice || {};
   const channels = input.channels || {};
   const automation = input.automation || {};
+  const retargeting = input.retargeting || {};
   const outcomes = input.outcomes || {};
   const industry = Object.prototype.hasOwnProperty.call(INDUSTRY_PROFILES, business.industry) ? business.industry : "other";
   const industryAnswers = {};
@@ -186,6 +220,21 @@ function normalizeAnswers(input) {
       handoff_cases: cleanText(automation.handoff_cases, 4000),
       handoff_contact: cleanText(automation.handoff_contact, 1000),
       answer_length: cleanChoice(automation.answer_length, ["muy_breve", "breve", "detallada"], "breve")
+    },
+    retargeting: {
+      mode: cleanChoice(retargeting.mode, ["disabled", "simulation", "manual", "automatic"], "disabled"),
+      high_intent_delay_hours: cleanInteger(retargeting.high_intent_delay_hours, 3, 1, 23),
+      abandoned_cart_delay_hours: cleanInteger(retargeting.abandoned_cart_delay_hours, 24, 24, 168),
+      post_purchase_delay_days: cleanInteger(retargeting.post_purchase_delay_days, 3, 1, 30),
+      max_marketing_messages_7d: cleanInteger(retargeting.max_marketing_messages_7d, 2, 1, 2),
+      send_window_start: guardedRetargetingTime(retargeting.send_window_start, "09:00", "09:00", "18:59"),
+      send_window_end: guardedRetargetingTime(retargeting.send_window_end, "19:00", "09:01", "19:00"),
+      timezone: "America/Bogota",
+      require_marketing_opt_in: true,
+      stop_on_reply: true,
+      stop_on_purchase: true,
+      stop_on_handoff: true,
+      stop_on_opt_out: true
     },
     outcomes: {
       primary_goal: cleanText(outcomes.primary_goal, 2000),
@@ -300,6 +349,7 @@ function buildDerivedConfig(answers) {
     industry: answers.business.industry,
     industry_label: profile.label,
     enabled_channels: enabledChannels,
+    retargeting: answers.retargeting,
     completion: calculateCompletion(answers),
     system_prompt: lines.join("\n")
   };

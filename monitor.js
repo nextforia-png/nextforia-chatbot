@@ -91,6 +91,7 @@ async function runOnce(cfg, thresholds) {
 
   const health = await requestJson({
     url: `${cfg.baseUrl}/admin/health`,
+    key: cfg.dashboardKey,
     timeoutMs: cfg.timeoutMs,
     retries: cfg.coldStartRetries,
     retryDelayMs: cfg.coldStartDelayMs,

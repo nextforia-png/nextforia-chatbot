@@ -26,6 +26,15 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v60`.
 
 ## Alta prioridad
 
+- [ ] Programador de retargeting multi-tenant.
+  - [x] Política operativa, consentimiento, límites y cancelaciones definidos.
+  - [x] Contrato `answers.retargeting` agregado a la configuración persistente del Customer Panel.
+  - [x] Modos seguro, simulación y aprobación manual visibles en Configuración.
+  - [x] Prompt de handoff para NextforIA Configuration preparado.
+  - [ ] Implementar cola idempotente, worker/cron y auditoría por `tenant_id`.
+  - [ ] Mostrar cola, enviados, cancelados y bloqueados en Customer Panel.
+  - [ ] Validar plantillas actuales en Meta y ejecutar pruebas end-to-end antes de habilitar automático.
+
 - [ ] Validar y desplegar memoria comercial adaptativa.
   - [x] Presupuesto de IA en niveles `standard`, `engaged` y `high`.
   - [x] Memoria persistente de nombre, etapa, intereses y pedidos verificados.

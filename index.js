@@ -2,6 +2,18 @@ const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
 const path = require("path");
+const {
+  createRateLimiter,
+  decryptStoredText,
+  encryptStoredText,
+  isSameOriginRequest,
+  parseEncryptionKey,
+  safeEqualText,
+  safeInlineJson,
+  securityHeaders,
+  validMetaSignature,
+  validateProductionConfig
+} = require("./security");
 const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
@@ -19,6 +31,13 @@ const {
   memoryFingerprint,
   normalizeMemory
 } = require("./customer-intelligence");
+const {
+  RetargetingEngine,
+  REAL_SENDS_ENABLED: RETARGETING_REAL_SENDS_ENABLED,
+  AUTOMATIC_MODE_ENABLED: RETARGETING_AUTOMATIC_MODE_ENABLED,
+  isStopMessage
+} = require("./retargeting");
+const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
 
 function boundedEnvInt(name, fallback, min, max) {
   const parsed = Number(process.env[name]);
@@ -26,8 +45,59 @@ function boundedEnvInt(name, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.round(parsed)));
 }
 
+function configuredPublicHostname(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw.includes("://") ? raw : "https://" + raw);
+    const hostname = url.hostname.toLowerCase();
+    if (url.username || url.password || url.port || url.protocol !== "https:") return "";
+    if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(hostname)) return "";
+    if (hostname === "localhost" || hostname.endsWith(".local")) return "";
+    return hostname;
+  } catch (_) {
+    return "";
+  }
+}
+
+function safeExternalHttpsUrl(value, allowedHostnames) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return "";
+    const hostname = url.hostname.toLowerCase();
+    if (!configuredPublicHostname(hostname)) return "";
+    if (Array.isArray(allowedHostnames) && allowedHostnames.length) {
+      const allowed = allowedHostnames.some(function (entry) {
+        entry = String(entry || "").toLowerCase();
+        return hostname === entry || (entry.startsWith(".") && hostname.endsWith(entry));
+      });
+      if (!allowed) return "";
+    }
+    return url.href;
+  } catch (_) {
+    return "";
+  }
+}
+
+function configuredHttpsOrigin(value, fallback, allowedHostnames) {
+  const candidate = String(value || fallback || "").trim();
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash) return "";
+    const hostname = url.hostname.toLowerCase();
+    if (Array.isArray(allowedHostnames) && !allowedHostnames.includes(hostname)) return "";
+    return url.origin;
+  } catch (_) {
+    return "";
+  }
+}
+
 const app = express();
+app.disable("x-powered-by");
+if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
+app.use(securityHeaders);
 app.use(express.json({
+  limit: process.env.JSON_BODY_LIMIT || "128kb",
   verify: function (req, res, buffer) {
     req.rawBody = buffer;
   }
@@ -35,9 +105,9 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v74-summary-sales-kpis";  // bump cada release; usado por endpoints /admin/*
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
-const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
+const BOT_VERSION = "v76-security-hardening";  // bump cada release; usado por endpoints /admin/*
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
+const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
 const DASHBOARD_ROLES = { viewer: 1, agent: 2, admin: 3, super_admin: 4 };
 const DASHBOARD_ROLE_LABELS = {
@@ -80,25 +150,34 @@ const DASHBOARD_ACCESS_MODEL = {
   ]
 };
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
-const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || DASHBOARD_KEY;
-const DASHBOARD_SESSION_TTL_HOURS = Math.max(1, Number(process.env.DASHBOARD_SESSION_TTL_HOURS || 12));
-const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
+const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
+const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL);
+const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
+const SUPABASE_URL = normalizedSupabaseUrl && (
+  new URL(normalizedSupabaseUrl).hostname.endsWith(".supabase.co") || process.env.ALLOW_SELF_HOSTED_SUPABASE === "1"
+) ? normalizedSupabaseUrl : "";
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const SUPABASE_TABLE = "conversation_logs";
 const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de conversaciones
+const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
+const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
 const WA_TOKEN = process.env.WA_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "999846293222612";
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
 const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
 const IG_USER_ID = process.env.IG_USER_ID || "";
 const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
-const IG_GRAPH_BASE_URL = (process.env.IG_GRAPH_BASE_URL || "https://graph.instagram.com").replace(/\/$/, "");
+const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
 const MESSENGER_PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN || process.env.FB_PAGE_ACCESS_TOKEN || "";
 const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_ID || "";
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
-const MESSENGER_APP_SECRET = process.env.MESSENGER_APP_SECRET || process.env.META_APP_SECRET || "";
-const MESSENGER_GRAPH_BASE_URL = (process.env.MESSENGER_GRAPH_BASE_URL || "https://graph.facebook.com").replace(/\/$/, "");
+const META_APP_SECRET = process.env.META_APP_SECRET || process.env.MESSENGER_APP_SECRET || "";
+const MESSENGER_APP_SECRET = META_APP_SECRET;
+const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
+const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const ADAPTIVE_TOKEN_LIMITS = {
   standard: {
@@ -122,14 +201,17 @@ const MAX_CONVERSATION_HISTORY = Math.max(
 const CUSTOMER_MEMORY_TOOL = "customer_memory_v1";
 const CUSTOMER_MEMORY_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_MEMORY_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 24 * 60 * 60 * 1000);
 const CONVERSATION_SESSION_TIMEOUT_MS = boundedEnvInt("CONVERSATION_SESSION_TIMEOUT_MS", 6 * 60 * 60 * 1000, 15 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
-const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "ravtoys.myshopify.com";
+const MAX_INBOUND_TEXT_LENGTH = boundedEnvInt("MAX_INBOUND_TEXT_LENGTH", 4000, 256, 12000);
+const SHOPIFY_STORE_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STORE_DOMAIN);
+const SHOPIFY_STOREFRONT_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STOREFRONT_DOMAIN) || SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
+const DEFAULT_TENANT_ID = process.env.DEFAULT_TENANT_ID || "rav-toys";
 const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.env.SHOPIFY_ORDER_PREFIX || "RAV")
   .split(",")
   .map(s => s.trim().replace(/[^A-Za-z0-9-]/g, "").replace(/-+$/g, ""))
   .filter(Boolean);
-const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "573013507371").split(",").map(s => s.trim()).filter(Boolean);
+const NOTIFICATION_PHONES = (process.env.NOTIFICATION_PHONES || "").split(",").map(s => s.trim()).filter(Boolean);
 const CUSTOMER_META_TOOL = "admin_customer_meta";
 const INSTAGRAM_PROFILE_TOOL = "instagram_customer_profile_v1";
 const INSTAGRAM_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -139,6 +221,10 @@ const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:rav-toys:primary-admin
 const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
 const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:rav-toys:draft";
 const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:rav-toys:published";
+const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
+const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
+const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
+const RETARGETING_APPROVED_TEMPLATES = new Set((process.env.RETARGETING_APPROVED_TEMPLATES || "").split(",").map(function (value) { return value.trim(); }).filter(Boolean));
 const CUSTOMER_META_TAGS = [
   { id: "venta", label: "Venta" },
   { id: "garantia", label: "Garantia" },
@@ -154,8 +240,49 @@ const CUSTOMER_PANEL_BUSINESS = {
 };
 // ─────────────────────────────────────────────────────────────────────────────────
 
+const productionConfigErrors = validateProductionConfig({
+  nodeEnv: process.env.NODE_ENV,
+  verifyToken: VERIFY_TOKEN,
+  dashboardKey: DASHBOARD_KEY,
+  dashboardSessionSecret: process.env.DASHBOARD_SESSION_SECRET || "",
+  metaAppSecret: META_APP_SECRET,
+  publicBaseUrl: PUBLIC_BASE_URL,
+  allowUnsignedWebhooks: ALLOW_UNSIGNED_WEBHOOKS
+});
+if (process.env.NODE_ENV === "production" && !PHONE_NUMBER_ID) productionConfigErrors.push("PHONE_NUMBER_ID must be set in production");
+if (process.env.NODE_ENV === "production" && SHOPIFY_ADMIN_TOKEN && !SHOPIFY_STORE_DOMAIN) productionConfigErrors.push("SHOPIFY_STORE_DOMAIN must be set when SHOPIFY_ADMIN_TOKEN is configured");
+if (process.env.NODE_ENV === "production" && SHOPIFY_STORE_DOMAIN && !SHOPIFY_STORE_DOMAIN.endsWith(".myshopify.com")) productionConfigErrors.push("SHOPIFY_STORE_DOMAIN must be the shop's .myshopify.com hostname");
+if (process.env.NODE_ENV === "production" && RAW_SUPABASE_URL && !SUPABASE_URL) productionConfigErrors.push("SUPABASE_URL must be a valid supabase.co HTTPS origin (or explicitly allow a self-hosted origin)");
+if (process.env.NODE_ENV === "production" && (!IG_GRAPH_BASE_URL || !MESSENGER_GRAPH_BASE_URL)) productionConfigErrors.push("Meta Graph API base URLs are invalid");
+if (process.env.NODE_ENV === "production" && RAW_DATA_ENCRYPTION_KEY && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY must be a base64url-encoded 32-byte key");
+if (process.env.NODE_ENV === "production" && SUPABASE_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when Supabase persistence is enabled");
+if (productionConfigErrors.length) {
+  console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
+  process.exit(1);
+}
 if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
 if (!ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY missing"); process.exit(1); }
+
+const adminRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 600 });
+const loginRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  keyGenerator: function (req) {
+    const username = String(req.body && (req.body.username || (req.body.key ? "master-key" : "unknown")) || "unknown").trim().toLowerCase();
+    return String(req.ip || req.socket && req.socket.remoteAddress || "unknown") + ":" + username;
+  }
+});
+app.use("/admin", adminRateLimiter);
+app.use("/admin", function protectAdminStateChanges(req, res, next) {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const auth = dashboardAuth(req);
+  if (auth.ok && auth.method === "key") return next();
+  if (!isSameOriginRequest(req, PUBLIC_BASE_URL)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  next();
+});
 
 // ESTADO POR USUARIO
 const conversations = new Map();
@@ -187,9 +314,13 @@ const conversationLogs = [];
 const instagramProfileCache = new Map();
 const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
-const processedMessengerMessageIds = new Set();
+const processedMetaEventIds = new Set();
+const inboundMessageWindows = new Map();
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
+const retargetingMemoryEvents = new Map();
+const retargetingEventCache = new Map();
+const retargetingAppendLocks = new Map();
 let turnTools = [];        // tools usadas en el turno actual
 let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
 let turnHandoff = false;   // si el turno derivó a humano (Eliana)
@@ -201,7 +332,7 @@ async function supabaseInsert(rec) {
   if (!SUPABASE_ENABLED) return;
   try {
     const payload = {
-      ts: rec.ts, user_id: rec.userId, user_message: rec.userMessage, bot_reply: rec.botReply,
+      ts: rec.ts, user_id: rec.userId, user_message: encryptStoredText(rec.userMessage, DATA_ENCRYPTION_KEY), bot_reply: encryptStoredText(rec.botReply, DATA_ENCRYPTION_KEY),
       tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
       rating: rec.rating, num_tools: rec.numTools, status: rec.status
     };
@@ -212,7 +343,7 @@ async function supabaseInsert(rec) {
 async function supabaseInsertStrict(rec) {
   if (!SUPABASE_ENABLED) throw new Error("supabase_not_configured");
   const payload = {
-    ts: rec.ts, user_id: rec.userId, user_message: rec.userMessage, bot_reply: rec.botReply,
+    ts: rec.ts, user_id: rec.userId, user_message: encryptStoredText(rec.userMessage, DATA_ENCRYPTION_KEY), bot_reply: encryptStoredText(rec.botReply, DATA_ENCRYPTION_KEY),
     tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
     rating: rec.rating, num_tools: rec.numTools, status: rec.status
   };
@@ -270,11 +401,21 @@ async function supabaseUpdateEval(id, ev) {
 }
 
 function normalizeTurnRow(r) {
+  let userMessage = "";
+  let botReply = "";
+  try {
+    userMessage = decryptStoredText(r.user_message, DATA_ENCRYPTION_KEY);
+    botReply = decryptStoredText(r.bot_reply, DATA_ENCRYPTION_KEY);
+  } catch (error) {
+    log("error", "stored_data_decryption_failed", { error: error.message });
+    userMessage = "[encrypted data unavailable]";
+    botReply = "[encrypted data unavailable]";
+  }
   return {
     ts: r.ts,
     userId: r.user_id,
-    userMessage: r.user_message,
-    botReply: r.bot_reply,
+    userMessage,
+    botReply,
     tools: Array.isArray(r.tools) ? r.tools : [],
     zeroResultQueries: Array.isArray(r.zero_result_queries) ? r.zero_result_queries : [],
     handoff: !!r.handoff,
@@ -285,6 +426,75 @@ function normalizeTurnRow(r) {
     _id: r.id
   };
 }
+
+function retargetingRecordId(tenantId) {
+  return RETARGETING_EVENT_RECORD_PREFIX + String(tenantId || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+}
+
+function parseRetargetingEventTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(RETARGETING_EVENT_TOOL)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[RetargetingEvent\]\s*/, "");
+  try {
+    const event = JSON.parse(raw);
+    if (event.version !== 1 || !event.id || !event.tenant_id || !event.type) return null;
+    return event;
+  } catch (_) {
+    return null;
+  }
+}
+
+const retargetingStore = {
+  async list(tenantId) {
+    if (process.env.NODE_ENV === "production" && !SUPABASE_ENABLED) throw new Error("retargeting_persistent_store_required");
+    const cleanTenant = String(tenantId || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+    const cached = retargetingEventCache.get(cleanTenant);
+    if (cached && Date.now() - cached.loaded_at < 5000) return cached.events.slice();
+    let events = (retargetingMemoryEvents.get(cleanTenant) || []).slice();
+    if (SUPABASE_ENABLED) {
+      const rows = await supabaseFetchUserRecent(retargetingRecordId(cleanTenant), 2000);
+      if (rows) events = rows.map(normalizeTurnRow).map(parseRetargetingEventTurn).filter(Boolean).reverse();
+    }
+    retargetingEventCache.set(cleanTenant, { loaded_at: Date.now(), events: events.slice() });
+    return events;
+  },
+  async append(event) {
+    const tenantId = event.tenant_id;
+    const previous = retargetingAppendLocks.get(tenantId) || Promise.resolve();
+    const operation = previous.catch(function () {}).then(async () => {
+      const existing = await this.list(tenantId);
+      if (existing.some(function (row) { return row.id === event.id; })) return event;
+      const rec = {
+        ts: event.created_at,
+        userId: retargetingRecordId(tenantId),
+        userMessage: "",
+        botReply: "[RetargetingEvent] " + JSON.stringify(event),
+        tools: [RETARGETING_EVENT_TOOL],
+        zeroResultQueries: [],
+        handoff: false,
+        rating: null,
+        numTools: 1,
+        status: "ok",
+        eval: { skip: true, reason: RETARGETING_EVENT_TOOL }
+      };
+      if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+      const memory = retargetingMemoryEvents.get(tenantId) || [];
+      memory.push(event);
+      retargetingMemoryEvents.set(tenantId, memory.slice(-5000));
+      const next = existing.concat([event]);
+      retargetingEventCache.set(tenantId, { loaded_at: Date.now(), events: next });
+      return event;
+    });
+    retargetingAppendLocks.set(tenantId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (retargetingAppendLocks.get(tenantId) === operation) retargetingAppendLocks.delete(tenantId);
+    }
+  }
+};
+
+const retargetingEngine = new RetargetingEngine({ store: retargetingStore });
 
 function isCustomerMetaTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
@@ -301,6 +511,11 @@ function isBotSetupTurn(turn) {
   return tools.includes(BOT_SETUP_TOOL);
 }
 
+function isRetargetingEventTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(RETARGETING_EVENT_TOOL);
+}
+
 function isInstagramProfileTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(INSTAGRAM_PROFILE_TOOL);
@@ -312,7 +527,7 @@ function isCustomerMemoryTurn(turn) {
 }
 
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -351,23 +566,34 @@ function conversationExternalId(value) {
   return normalizeConversationUserId(value).replace(/^(ig|ms):/, "");
 }
 
-function validMessengerSignature(req) {
-  if (!MESSENGER_APP_SECRET) return true;
-  const supplied = String(req.get("x-hub-signature-256") || "");
-  if (!supplied.startsWith("sha256=") || !req.rawBody) return false;
-  const expected = "sha256=" + crypto.createHmac("sha256", MESSENGER_APP_SECRET).update(req.rawBody).digest("hex");
-  const suppliedBuffer = Buffer.from(supplied);
-  const expectedBuffer = Buffer.from(expected);
-  return suppliedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(suppliedBuffer, expectedBuffer);
+function maskedIdentifier(value) {
+  const normalized = normalizeConversationUserId(value);
+  const prefix = normalized.startsWith("ig:") ? "ig:" : normalized.startsWith("ms:") ? "ms:" : "wa:";
+  const external = normalized.replace(/^(ig|ms):/, "");
+  return external ? prefix + "***" + external.slice(-4) : prefix + "unknown";
+}
+
+function validMetaWebhookSignature(req) {
+  return validMetaSignature(
+    req.rawBody,
+    req.get("x-hub-signature-256"),
+    META_APP_SECRET,
+    ALLOW_UNSIGNED_WEBHOOKS
+  );
 }
 
 function acceptMessengerEvent(event) {
   const messageId = String(event?.message?.mid || event?.postback?.mid || "");
-  if (!messageId) return true;
-  if (processedMessengerMessageIds.has(messageId)) return false;
-  processedMessengerMessageIds.add(messageId);
-  if (processedMessengerMessageIds.size > 1000) {
-    processedMessengerMessageIds.delete(processedMessengerMessageIds.values().next().value);
+  return acceptMetaEventId(messageId);
+}
+
+function acceptMetaEventId(messageId) {
+  messageId = String(messageId || "");
+  if (!messageId) return false;
+  if (processedMetaEventIds.has(messageId)) return false;
+  processedMetaEventIds.add(messageId);
+  if (processedMetaEventIds.size > 1000) {
+    processedMetaEventIds.delete(processedMetaEventIds.values().next().value);
   }
   return true;
 }
@@ -1012,7 +1238,7 @@ NUNCA INVENTES: precios, productos, links, stock, políticas, ni datos del clien
 const TOOLS = [
   {
     name: "search_products",
-    description: "Busca productos reales en el catálogo Shopify de RAV Toys. Devuelve hasta 5 con título, precio, image_url, product_url, descripción y stock. Úsalo SIEMPRE que el cliente pida un producto.",
+    description: "Busca productos reales en el catálogo conectado del comercio. Devuelve hasta 5 con título, precio, image_url, product_url, descripción y stock. Úsalo SIEMPRE que el cliente pida un producto.",
     input_schema: {
       type: "object",
       properties: {
@@ -1057,7 +1283,7 @@ const TOOLS = [
   },
   {
     name: "lookup_order_status",
-    description: "Consulta en Shopify el estado real de un pedido y sus guías. Úsalo cuando el cliente pregunta por estado, guía, rastreo o seguimiento, y ya dio número de pedido y nombre completo. No revela datos si el nombre no coincide.",
+    description: "Consulta en la plataforma de comercio conectada el estado real de un pedido y sus guías. Úsalo cuando el cliente pregunta por estado, guía, rastreo o seguimiento, y ya dio número de pedido y nombre completo. No revela datos si el nombre no coincide.",
     input_schema: {
       type: "object",
       properties: {
@@ -1181,14 +1407,15 @@ const TOOLS = [
   }
 ];
 
-async function searchShopify(query, options = {}) {
+async function searchShopifyStorefront(query, options = {}) {
+  if (!SHOPIFY_STOREFRONT_DOMAIN) return { products: [], total: 0, query, error: "shopify_storefront_not_configured" };
   // CACHE (v32): si la misma query se buscó hace <5min, reusar resultado.
   // Ahorra llamadas a Shopify y mejora velocidad. Auto-limpia cada llamada.
   const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
   const now = Date.now();
   const cached = searchCache.get(query);
   if (cached && (now - cached.ts) < CACHE_TTL_MS) {
-    log("info", "search_cache_hit", { query, age_seconds: Math.round((now - cached.ts) / 1000), products: cached.result.products.length });
+    log("info", "search_cache_hit", { query_fingerprint: crypto.createHash("sha256").update(String(query || "")).digest("hex").slice(0, 12), age_seconds: Math.round((now - cached.ts) / 1000), products: cached.result.products.length });
     return cached.result;
   }
   // Limpiar entries viejas (>10 min) para no acumular memoria
@@ -1200,7 +1427,7 @@ async function searchShopify(query, options = {}) {
   // Ventaja: el bot ve exactamente lo mismo que el cliente en la web (filtros de stock,
   // visibilidad y disponibilidad ya aplicados por Shopify). Cero falsos negativos.
   const safeQuery = encodeURIComponent(query || "");
-  const url = `https://${SHOPIFY_STORE_DOMAIN.replace('.myshopify.com', '.com').replace('ravtoys.myshopify.com', 'ravtoys.com')}/search?q=${safeQuery}&view=json&resources[limit]=20&type=product`;
+  const url = `https://${SHOPIFY_STOREFRONT_DOMAIN}/search?q=${safeQuery}&view=json&resources[limit]=20&type=product`;
   // Fallback: si el dominio personalizado no responde, intentar el .myshopify.com directo
   const fallbackUrl = `https://${SHOPIFY_STORE_DOMAIN}/search?q=${safeQuery}&view=json&resources[limit]=20&type=product`;
 
@@ -1232,13 +1459,21 @@ async function searchShopify(query, options = {}) {
     const urlPath = p.url || "";
     const handleMatch = urlPath.match(/\/products\/([^?#\/]+)/);
     const handle = handleMatch ? handleMatch[1] : "";
-    const fullUrl = urlPath.startsWith('http') ? urlPath : `https://ravtoys.com${urlPath}`;
+    const fullUrl = safeExternalHttpsUrl(
+      new URL(urlPath || "/", `https://${SHOPIFY_STOREFRONT_DOMAIN}`).href,
+      [SHOPIFY_STOREFRONT_DOMAIN]
+    );
+    const imageUrl = p.thumbnail ? safeExternalHttpsUrl(
+      new URL(p.thumbnail || "/", `https://${SHOPIFY_STOREFRONT_DOMAIN}`).href,
+      [SHOPIFY_STOREFRONT_DOMAIN, "cdn.shopify.com", ".shopifycdn.net"]
+    ) : "";
+    if (!fullUrl) return null;
 
     return {
       title: p.title || "",
       handle,
       product_url: fullUrl,
-      image_url: p.thumbnail || "",
+      image_url: imageUrl,
       price: p.price || "",
       price_amount: parseInt(String(p.price || "").replace(/[^0-9]/g, ""), 10) || 0,
       currency: "COP",
@@ -1246,9 +1481,9 @@ async function searchShopify(query, options = {}) {
       available: true,  // El storefront solo devuelve productos disponibles para venta
       stock: 999        // Placeholder: storefront ya filtró agotados
     };
-  });
+  }).filter(Boolean);
 
-  console.log(`[searchShopify] query="${query}" returned ${products.length} products (storefront says ${total})`);
+  console.log(`[searchShopify] query processed (${String(query || "").length} chars), returned ${products.length} products (storefront says ${total})`);
   const result = { products, total, query };
   if (!options.suppressSideEffects) searchCache.set(query, { result, ts: Date.now() });
   // ALERTA INTERNA (v33.2): si la búsqueda no encontró nada, avisar al equipo.
@@ -1261,7 +1496,7 @@ async function searchShopify(query, options = {}) {
       const THIRTY_MIN = 30 * 60 * 1000;
       if (now - last > THIRTY_MIN) {
         zeroResultAlerts.set(key, now);
-        log("info", "zero_results_alert", { query });
+        log("info", "zero_results_alert", { query_fingerprint: crypto.createHash("sha256").update(String(query || "")).digest("hex").slice(0, 12) });
         notifyTeam(`🔍 Un cliente buscó "${query}" y no encontramos productos. Puede que falte ese producto en el catálogo o que se llame distinto. Vale la pena revisar si conviene agregarlo o si hay un sinónimo.`, null).catch(e => console.error("zero-results alert failed:", e.message));
       }
     } catch (alertErr) {
@@ -1457,7 +1692,7 @@ function collectTrackingInfo(order) {
       tracking.push({
         company: item.company || "",
         number: item.number || "",
-        url: item.url || "",
+        url: safeExternalHttpsUrl(item.url),
         fulfillment_status: fulfillment.displayStatus || fulfillment.status || "",
         estimated_delivery_at: fulfillment.estimatedDeliveryAt || null
       });
@@ -1496,7 +1731,7 @@ function buildOrderStatusNextAction(order, tracking) {
   return `Dile al cliente: "Encontré tu pedido ${order.name}: está ${status}. Por ahora no veo número de guía cargado en Shopify."`;
 }
 
-async function lookupOrderStatus(input, options = {}) {
+async function lookupShopifyOrderStatus(input, options = {}) {
   const orderNumber = String(input.order_number || "").trim();
   const customerName = String(input.customer_name || "").trim();
   const phoneOrEmail = String(input.phone_or_email || "").trim();
@@ -1600,6 +1835,19 @@ async function lookupOrderStatus(input, options = {}) {
   }
 }
 
+const commerceRegistry = new CommerceRegistry();
+commerceRegistry.register(DEFAULT_TENANT_ID, createShopifyAdapter({
+  searchProducts: searchShopifyStorefront,
+  lookupOrderStatus: lookupShopifyOrderStatus
+}));
+
+function searchShopify(query, options) {
+  return commerceRegistry.searchProducts(DEFAULT_TENANT_ID, query, options);
+}
+
+function lookupOrderStatus(input, options) {
+  return commerceRegistry.lookupOrderStatus(DEFAULT_TENANT_ID, input, options);
+}
 
 function parseChannelRecipient(to) {
   const value = String(to || "");
@@ -1647,28 +1895,28 @@ async function sendText(to, text) {
       if (!IG_ACCESS_TOKEN || !IG_SEND_ID) throw new Error("Instagram messaging is not configured");
       await axios.post(
         `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_SEND_ID}/messages`,
-        { recipient: { id: recipient.id }, message: { text: String(text || "") } },
+        { recipient: { id: recipient.id }, message: { text: String(text || "").slice(0, 2000) } },
         { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      console.log(`Instagram text sent to ${recipient.id}`);
+      console.log(`Instagram text sent to ${maskedIdentifier(to)}`);
       return true;
     }
     if (recipient.channel === "messenger") {
       if (!MESSENGER_PAGE_ACCESS_TOKEN || !MESSENGER_PAGE_ID) throw new Error("Messenger messaging is not configured");
       await axios.post(
         `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}/messages`,
-        { recipient: { id: recipient.id }, messaging_type: "RESPONSE", message: { text: String(text || "") } },
+        { recipient: { id: recipient.id }, messaging_type: "RESPONSE", message: { text: String(text || "").slice(0, 2000) } },
         { headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      console.log(`Messenger text sent to ${recipient.id}`);
+      console.log(`Messenger text sent to ${maskedIdentifier(to)}`);
       return true;
     }
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: text, preview_url: true } },
+      { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
       { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
     );
-    console.log(`Text sent to ${to}`);
+    console.log(`Text sent to ${maskedIdentifier(to)}`);
     return true;
   } catch (err) {
     console.error(`${channelLabel(to)} text error:`, err.response?.data?.error || err.message);
@@ -1686,7 +1934,7 @@ function resolveTemplateParams(def, input) {
   const variables = def.bodyVariables || [];
   if (Array.isArray(input)) {
     return variables.map(function (variable, index) {
-      return String(input[index] != null ? input[index] : variable.sample || "");
+      return String(input[index] != null ? input[index] : variable.sample || "").slice(0, 1024);
     });
   }
   const params = input && typeof input === "object" ? input : {};
@@ -1694,7 +1942,7 @@ function resolveTemplateParams(def, input) {
     const numberedKey = String(index + 1);
     const moustacheKey = "{{" + (index + 1) + "}}";
     const value = params[variable.key] ?? params[numberedKey] ?? params[moustacheKey] ?? variable.sample ?? "";
-    return String(value);
+    return String(value).slice(0, 1024);
   });
 }
 
@@ -1734,7 +1982,7 @@ async function sendTemplate(to, templateName, params) {
       payload,
       { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
-    console.log(`Template ${templateName} sent to ${to}`);
+    console.log(`Template ${templateName} sent to ${maskedIdentifier(to)}`);
     return { ok: true, meta: response.data };
   } catch (err) {
     const error = err.response?.data?.error || { message: err.message };
@@ -1812,14 +2060,14 @@ async function notifyTeam(text, excludePhone) {
   let sent = 0;
   for (const phone of NOTIFICATION_PHONES) {
     if (excludePhone && phone === excludePhone) {
-      console.log(`Skipped self-notification to ${phone} (is current customer)`);
+      console.log(`Skipped self-notification to ${maskedIdentifier(phone)} (is current customer)`);
       continue;
     }
     try {
       await sendText(phone, text);
       sent++;
     } catch (err) {
-      console.log(`[NOTIFY] Failed to send to ${phone}: ${err.message || err}. Continuing with rest.`);
+      console.log(`[NOTIFY] Failed to send to ${maskedIdentifier(phone)}: ${err.message || err}. Continuing with rest.`);
     }
   }
   console.log(`Notified team (${sent}/${NOTIFICATION_PHONES.length} numbers)`);
@@ -1838,11 +2086,14 @@ async function executeSearchProducts(userId, input) {
 }
 
 async function executeSendProductCard(to, input) {
-  const caption = `*${input.title}*\n${input.price}\n${input.product_url}`;
-  const ok = await sendImage(to, input.image_url, caption);
+  const products = lastSearchResults.get(to) || [];
+  const selected = products.find(function (product) { return product.product_url === String(input && input.product_url || ""); });
+  if (!selected) return { sent: false, error: "product_not_in_last_search" };
+  const caption = `*${selected.title}*\n${selected.price}\n${selected.product_url}`;
+  const ok = selected.image_url ? await sendImage(to, selected.image_url, caption) : await sendText(to, caption);
   if (!ok) await sendText(to, caption);
-  console.log(`Card sent: ${input.title} @ ${input.price}`);
-  return { sent: true, title: input.title };
+  console.log(`Validated product card sent to ${maskedIdentifier(to)}`);
+  return { sent: !!ok, title: selected.title };
 }
 
 async function executeSendStoreLocation(to) {
@@ -1874,13 +2125,21 @@ async function executeLookupOrderStatus(userId, input) {
     order_name: result.order_name || null,
     error: result.error || null
   });
+  if (result.matched) {
+    const purchaseEventId = "shopify-order:" + (result.order_name || input && input.order_number || "matched");
+    await recordRetargetingSignal(userId, "purchase_confirmed", purchaseEventId, "shopify");
+    await createRetargetingJobForCustomer(userId, "post_purchase", purchaseEventId + ":post-purchase", {
+      source_at: new Date().toISOString(),
+      last_customer_message_at: new Date().toISOString()
+    });
+  }
   return result;
 }
 
 async function executeSendRatingRequest(userId) {
   await sendText(userId, RATING_REQUEST);
   pendingRatings.add(userId);
-  console.log(`[Rating ${userId}] Request sent`);
+  console.log(`[Rating ${maskedIdentifier(userId)}] Request sent`);
   return { sent: true, next_action: "Espera la respuesta del cliente con un número 1-5. Cuando responda, llama save_rating con el rating y comment opcional." };
 }
 
@@ -1896,7 +2155,7 @@ async function executeSaveRating(userId, input) {
   ].join("\n");
   await notifyTeam(summary, userId);
   pendingRatings.delete(userId);
-  console.log(`[Rating ${userId}] Saved: ${input.rating}/5${input.comment ? ` - "${input.comment}"` : ""}`);
+  console.log(`[Rating ${maskedIdentifier(userId)}] Saved: ${input.rating}/5`);
   const lowRating = input.rating <= 3;
   return {
     saved: true,
@@ -1914,7 +2173,7 @@ async function executeSaveWarrantyField(userId, input) {
   state.warranty[input.field] = input.value;
   checkouts.set(userId, state);
   const missing = WARRANTY_FIELDS.filter(f => !state.warranty[f]);
-  console.log(`[Warranty ${userId}] Saved ${input.field}=${input.value}. Missing: ${missing.join(",") || "none"}`);
+  console.log(`[Warranty ${maskedIdentifier(userId)}] Saved field ${input.field}. Missing: ${missing.join(",") || "none"}`);
   return { saved: input.field, value: input.value, missing_fields: missing };
 }
 
@@ -1941,7 +2200,7 @@ async function executeNotifyWarrantyTeam(userId) {
     "Pendiente: validar condiciones de garantía y dar respuesta al cliente."
   ].join("\n");
   await notifyTeam(summary, userId);
-  console.log(`[Warranty ${userId}] Team notified, awaiting handoff`);
+  console.log(`[Warranty ${maskedIdentifier(userId)}] Team notified, awaiting handoff`);
   return { notified: true, next_action: "ACCION OBLIGATORIA INMEDIATA: 1) Dile al cliente algo como '¡Listo! Ya pasé tu caso a nuestra asesora Eliana 🌴 Te escribirá pronto para ayudarte 💛'. 2) Llama request_human_handoff(reason='garantia'). NO termines el turno sin estos dos pasos." };
 }
 
@@ -1973,7 +2232,7 @@ async function executeSelectProductForPurchase(userId, input) {
   state.products.push(chosen);
   checkouts.set(userId, state);
   const total = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
-  console.log(`[Checkout ${userId}] Added: ${chosen.title} @ ${chosen.price}. Cart now: ${state.products.length} items, total ${total}`);
+  console.log(`[Checkout ${maskedIdentifier(userId)}] Added product. Cart now: ${state.products.length} items, total ${total}`);
   return {
     added: true,
     title: chosen.title,
@@ -2033,7 +2292,7 @@ async function executeRemoveProductFromPurchase(userId, input) {
   const removed = state.products.splice(idx, 1)[0];
   checkouts.set(userId, state);
   const total = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
-  console.log(`[Checkout ${userId}] Removed: ${removed.title}. Cart now: ${state.products.length} items`);
+  console.log(`[Checkout ${maskedIdentifier(userId)}] Removed product. Cart now: ${state.products.length} items`);
   return {
     removed: true,
     title: removed.title,
@@ -2054,7 +2313,7 @@ async function executeSaveCheckoutField(userId, input) {
   state.data[input.field] = input.value;
   checkouts.set(userId, state);
   const missing = CHECKOUT_FIELDS.filter(f => !state.data[f]);
-  console.log(`[Checkout ${userId}] Saved ${input.field}=${input.value}. Missing: ${missing.join(",") || "none"}`);
+  console.log(`[Checkout ${maskedIdentifier(userId)}] Saved field ${input.field}. Missing: ${missing.join(",") || "none"}`);
   return {
     saved: input.field,
     value: input.value,
@@ -2095,7 +2354,7 @@ async function executeSendPaymentLink(userId, input) {
       msg = `Te paso los detalles de pago por aquí. Monto: ${amount}`;
   }
   await sendText(userId, msg);
-  console.log(`[Checkout ${userId}] Payment link sent: ${input.method} for ${amount}`);
+  console.log(`[Checkout ${maskedIdentifier(userId)}] Payment link sent: ${input.method} for ${amount}`);
   const automatedMethods = ["wompi", "transferencia"];
   const isAutomated = automatedMethods.includes(input.method);
   const next_action = isAutomated
@@ -2142,13 +2401,14 @@ async function executeNotifyTeam(userId) {
     "Pendiente: confirmar pago y despachar pedido."
   ].join("\n");
   await notifyTeam(summary, userId);
-  console.log(`[Checkout ${userId}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
+  console.log(`[Checkout ${maskedIdentifier(userId)}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
   return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length };
 }
 
 async function executeHumanHandoff(userId, input) {
   humanHandoff.add(userId);
   const reason = input.reason || "solicitud_cliente";
+  await recordRetargetingSignal(userId, "handoff", "handoff:" + Date.now(), "system");
   const state = checkouts.get(userId);
   let notif = `🚨 *Handoff a humano*\nCanal: ${channelLabel(userId)}\nCliente: ${channelContactLabel(userId)}\nMotivo: ${reason}\n\n`;
   if (state?.products && state.products.length > 0 && reason !== "venta_cerrada") {
@@ -2163,14 +2423,47 @@ async function executeHumanHandoff(userId, input) {
   notif += `Toma el control en ${channelLabel(userId)}.`;
   await notifyTeam(notif, userId);
   await sendText(userId, "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏");
-  console.log(`Handoff activated for ${userId}, reason: ${reason}`);
+  console.log(`Handoff activated for ${maskedIdentifier(userId)}, reason: ${String(reason || "").slice(0, 80)}`);
   return { handoff: true, bot_paused: true };
 }
 
 // ─── MAIN CONVERSATION LOOP ──────────────────────────────────────────────────
 
+function acceptInboundMessageRate(userId, now) {
+  now = now || Date.now();
+  const hourAgo = now - 60 * 60 * 1000;
+  const minuteAgo = now - 60 * 1000;
+  const timestamps = (inboundMessageWindows.get(userId) || []).filter(function (timestamp) { return timestamp > hourAgo; });
+  const lastMinute = timestamps.filter(function (timestamp) { return timestamp > minuteAgo; }).length;
+  if (timestamps.length >= 100 || lastMinute >= 20) {
+    inboundMessageWindows.set(userId, timestamps);
+    return false;
+  }
+  timestamps.push(now);
+  inboundMessageWindows.set(userId, timestamps);
+  if (inboundMessageWindows.size > 10000) {
+    for (const [key, values] of inboundMessageWindows) {
+      if (!values.length || values[values.length - 1] <= hourAgo) inboundMessageWindows.delete(key);
+      if (inboundMessageWindows.size <= 10000) break;
+    }
+  }
+  return true;
+}
 
-async function handleConversation(userId, userMessage) {
+async function handleConversation(userId, userMessage, conversationMeta) {
+  conversationMeta = conversationMeta || {};
+  userId = normalizeConversationUserId(userId);
+  userMessage = String(userMessage || "").trim();
+  if (!userId || !userMessage) return;
+  if (userMessage.length > MAX_INBOUND_TEXT_LENGTH) {
+    log("warn", "inbound_message_rejected", { user: maskedIdentifier(userId), reason: "too_long", length: userMessage.length });
+    await sendText(userId, "Tu mensaje es demasiado largo para procesarlo con seguridad. Envíalo en partes más cortas, por favor.");
+    return;
+  }
+  if (!acceptInboundMessageRate(userId)) {
+    log("warn", "inbound_message_rejected", { user: maskedIdentifier(userId), reason: "rate_limit" });
+    return;
+  }
   trackIncomingMessage(userId);
   const previousActivityAt = conversationLastActiveAt.get(userId) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
@@ -2178,7 +2471,7 @@ async function handleConversation(userId, userMessage) {
   turnZeroSearchActive = false;  // (v33.4) reset por turno
   turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
   if (await humanControlActiveFor(userId)) {
-    console.log(`[HANDOFF ACTIVE] Ignoring message from ${userId}`);
+    console.log(`[HANDOFF ACTIVE] Ignoring message from ${maskedIdentifier(userId)}`);
     turnHandoff = true;
     turnTools.push("human_handoff_active");
     recordTurn(userId, userMessage, "", "ok");
@@ -2208,7 +2501,7 @@ async function handleConversation(userId, userMessage) {
     ? activeBotSetup.published.derived.system_prompt
     : "";
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
-  console.log(`[AI budget ${userId}] tier=${adaptiveBudget.tier} max_tokens=${adaptiveBudget.maxTokens} history=${adaptiveBudget.historyMessages} reasons=${adaptiveBudget.reasons.join(",") || "none"}`);
+  console.log(`[AI budget ${maskedIdentifier(userId)}] tier=${adaptiveBudget.tier} max_tokens=${adaptiveBudget.maxTokens} history=${adaptiveBudget.historyMessages} reasons=${adaptiveBudget.reasons.join(",") || "none"}`);
 
   let searchedThisTurn = false;
   let lastSearchResultsThisTurn = null;
@@ -2257,11 +2550,11 @@ async function handleConversation(userId, userMessage) {
             switch (toolUse.name) {
               case "search_products":
                 if (searchedThisTurn) {
-                  console.log(`[Cap ${userId}] Blocking second search_products in same turn. Reusing previous results.`);
+                  console.log(`[Cap ${maskedIdentifier(userId)}] Blocking second search_products in same turn. Reusing previous results.`);
                   result = lastSearchResultsThisTurn || { products: [], note: "Ya buscaste este turno. Usa los resultados anteriores y respóndele al cliente, no busques otra vez." };
                 } else {
                   result = await executeSearchProducts(userId, toolUse.input);
-                  console.log(`Search "${toolUse.input.query}": ${result.products?.length || 0} found`);
+                  console.log(`Product search processed: ${result.products?.length || 0} found`);
                   searchedThisTurn = true;
                   lastSearchResultsThisTurn = result;
                   turnZeroSearchActive = (!result || !result.products || result.products.length === 0);  // (v33.4)
@@ -2301,6 +2594,13 @@ async function handleConversation(userId, userMessage) {
                 break;
               case "select_product_for_purchase":
                 result = await executeSelectProductForPurchase(userId, toolUse.input);
+                if (result && (result.added || result.already_in_cart)) {
+                  await createRetargetingJobForCustomer(userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
+                    source_at: conversationMeta.source_at || new Date().toISOString(),
+                    last_customer_message_at: conversationMeta.source_at || new Date().toISOString(),
+                    product_name: result.title
+                  });
+                }
                 break;
               case "view_current_purchase":
                 result = await executeViewCurrentPurchase(userId);
@@ -2363,7 +2663,15 @@ async function handleConversation(userId, userMessage) {
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
       if (reply) recordTurn(userId, userMessage, reply, "ok");
-      await sendText(userId, reply);
+      const replySent = await sendText(userId, reply);
+      if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
+        await createRetargetingJobForCustomer(userId, "high_intent", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":high-intent", {
+          source_at: conversationMeta.source_at || new Date().toISOString(),
+          last_customer_message_at: conversationMeta.source_at || new Date().toISOString(),
+          preferred_name: customerMemory && customerMemory.preferred_name,
+          product_name: customerMemory && customerMemory.interests && customerMemory.interests[0]
+        });
+      }
       return;
     } catch (err) {
       console.error("Claude error:", err.response?.data || err.message);
@@ -2401,7 +2709,7 @@ app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+  if (mode === "subscribe" && VERIFY_TOKEN && safeEqualText(token, VERIFY_TOKEN)) {
     res.status(200).send(challenge);
   } else {
     res.sendStatus(403);
@@ -2409,35 +2717,40 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
+  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
   res.sendStatus(200);
   try {
+    if (req.body?.object !== "whatsapp_business_account") return;
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const messages = value?.messages;
     if (!messages || messages.length === 0) return;
     const message = messages[0];
+    if (!acceptMetaEventId(message.id)) return;
     const from = message.from;
     const type = message.type;
+    const inboundText = type === "text" ? message.text && message.text.body || "" : "";
+    await recordRetargetingSignal(from, isStopMessage(inboundText) ? "stop" : "customer_replied", message.id || "wa:" + Date.now(), "customer");
 
     if (type === "text") {
       const text = message.text.body;
-      console.log(`From ${from}: ${text}`);
-      await handleConversation(from, text);
+      console.log(`Inbound ${maskedIdentifier(from)}: text (${String(text || "").length} chars)`);
+      await handleConversation(from, text, { source_event_id: message.id || "wa:" + Date.now(), source_at: new Date().toISOString() });
     } else if (type === "audio" || type === "voice") {
-      console.log(`From ${from}: [voice note]`);
+      console.log(`Inbound ${maskedIdentifier(from)}: voice note`);
       if (await humanControlActiveFor(from)) {
         recordHumanPausedInbound(from, message);
       } else {
         await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
       }
     } else if (type === "image" || type === "document") {
-      console.log(`From ${from}: [${type}] (possibly payment proof)`);
+      console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
       if (await humanControlActiveFor(from)) {
         recordHumanPausedInbound(from, message);
       }
     } else {
-      console.log(`From ${from}: [${type}]`);
+      console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
       if (await humanControlActiveFor(from)) {
         recordHumanPausedInbound(from, message);
       } else {
@@ -2455,24 +2768,26 @@ app.get("/instagram/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === IG_VERIFY_TOKEN) return res.status(200).send(challenge);
+  if (mode === "subscribe" && IG_VERIFY_TOKEN && safeEqualText(token, IG_VERIFY_TOKEN)) return res.status(200).send(challenge);
   return res.sendStatus(403);
 });
 
 app.post("/instagram/webhook", async (req, res) => {
+  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
   res.sendStatus(200);
   try {
     if (req.body?.object !== "instagram") return;
     for (const entry of req.body?.entry || []) {
       for (const event of entry.messaging || []) {
-        if (!event.sender?.id || event.message?.is_echo) continue;
+        if (!event.sender?.id || event.message?.is_echo || !acceptMetaEventId(event.message?.mid)) continue;
         const userId = `ig:${event.sender.id}`;
         refreshInstagramProfile(userId);
+        await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {
-          console.log(`Instagram from ${event.sender.id}: ${event.message.text}`);
-          await handleConversation(userId, event.message.text);
+          console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
+          await handleConversation(userId, event.message.text, { source_event_id: event.message.mid || "ig:" + Date.now(), source_at: new Date().toISOString() });
         } else if (event.message?.attachments?.length) {
-          console.log(`Instagram from ${event.sender.id}: [attachment]`);
+          console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
           if (await humanControlActiveFor(userId)) {
             recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments });
           } else {
@@ -2492,12 +2807,12 @@ app.get("/messenger/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === MESSENGER_VERIFY_TOKEN) return res.status(200).send(challenge);
+  if (mode === "subscribe" && MESSENGER_VERIFY_TOKEN && safeEqualText(token, MESSENGER_VERIFY_TOKEN)) return res.status(200).send(challenge);
   return res.sendStatus(403);
 });
 
 app.post("/messenger/webhook", async (req, res) => {
-  if (!validMessengerSignature(req)) return res.sendStatus(401);
+  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
   res.sendStatus(200);
   try {
     if (req.body?.object !== "page") return;
@@ -2505,17 +2820,18 @@ app.post("/messenger/webhook", async (req, res) => {
       for (const event of entry.messaging || []) {
         if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
         const userId = `ms:${event.sender.id}`;
+        await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ms:" + Date.now(), "customer");
         if (event.message?.text) {
-          console.log(`Messenger from ${event.sender.id}: ${event.message.text}`);
-          await handleConversation(userId, event.message.text);
+          console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
+          await handleConversation(userId, event.message.text, { source_event_id: event.message.mid || "ms:" + Date.now(), source_at: new Date().toISOString() });
         } else if (event.postback?.payload || event.postback?.title) {
           const postbackText = String(event.postback.title || event.postback.payload || "").trim();
           if (postbackText) {
-            console.log(`Messenger postback from ${event.sender.id}: ${postbackText}`);
-            await handleConversation(userId, postbackText);
+            console.log(`Inbound ${maskedIdentifier(userId)}: postback (${postbackText.length} chars)`);
+            await handleConversation(userId, postbackText, { source_event_id: event.postback && event.postback.mid || "ms-postback:" + Date.now(), source_at: new Date().toISOString() });
           }
         } else if (event.message?.attachments?.length) {
-          console.log(`Messenger from ${event.sender.id}: [attachment]`);
+          console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
           if (await humanControlActiveFor(userId)) {
             recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments });
           } else {
@@ -2563,13 +2879,6 @@ function parseDashboardUsers(raw) {
       };
     }).filter(user => user.username && user.password);
   }
-}
-
-function safeEqualText(a, b) {
-  const left = Buffer.from(String(a || ""));
-  const right = Buffer.from(String(b || ""));
-  if (left.length !== right.length) return false;
-  return crypto.timingSafeEqual(left, right);
 }
 
 function parseCookies(header) {
@@ -2631,8 +2940,9 @@ function dashboardCookieOptions(req, maxAgeSeconds) {
     maxAgeSeconds > 0 ? "" : "",
     "; Path=/admin",
     "; HttpOnly",
-    "; SameSite=Lax",
+    "; SameSite=Strict",
     secure ? "; Secure" : "",
+    "; Priority=High",
     "; Max-Age=" + Math.max(0, maxAgeSeconds)
   ].join("");
 }
@@ -2788,6 +3098,81 @@ async function persistBotSetup(answers, status, auth) {
   return record;
 }
 
+async function retargetingPolicyForTenant(tenantId) {
+  if (tenantId !== CUSTOMER_PANEL_BUSINESS.id) return { mode: "disabled" };
+  const setup = await loadBotSetup(false);
+  return setup.published && setup.published.answers && setup.published.answers.retargeting
+    ? setup.published.answers.retargeting
+    : { mode: "disabled" };
+}
+
+function approvedRetargetingTemplate(name) {
+  const cleanName = String(name || "").trim();
+  if (!cleanName) return null;
+  return {
+    name: cleanName,
+    language: "es_CO",
+    status: RETARGETING_APPROVED_TEMPLATES.has(cleanName) ? "approved" : "unknown",
+    active: RETARGETING_APPROVED_TEMPLATES.has(cleanName),
+    quality: RETARGETING_APPROVED_TEMPLATES.has(cleanName) ? "active" : "unverified"
+  };
+}
+
+async function recordRetargetingSignal(userId, signal, sourceEventId, actor) {
+  try {
+    const tenantId = CUSTOMER_PANEL_BUSINESS.id;
+    if (signal === "stop") {
+      await retargetingEngine.recordConsent({
+        tenant_id: tenantId,
+        customer_id: userId,
+        category: "marketing",
+        granted: false,
+        revoked_at: new Date().toISOString(),
+        actor: actor || "customer"
+      });
+    }
+    return await retargetingEngine.recordCustomerSignal({
+      tenant_id: tenantId,
+      customer_id: userId,
+      signal,
+      source_event_id: sourceEventId || "",
+      actor: actor || "system"
+    });
+  } catch (error) {
+    console.error("retargeting signal error:", error.message);
+    return { signal, cancelled: [], error: error.message };
+  }
+}
+
+async function createRetargetingJobForCustomer(userId, eventType, sourceEventId, context) {
+  try {
+    const tenantId = CUSTOMER_PANEL_BUSINESS.id;
+    const policy = await retargetingPolicyForTenant(tenantId);
+    const templateNames = {
+      abandoned_cart: "abandoned_cart_rav",
+      post_purchase: "post_sale_review_rav",
+      back_in_stock: "back_in_stock_rav",
+      recommendation: "product_recommendation_rav"
+    };
+    return await retargetingEngine.createJob({
+      tenant_id: tenantId,
+      customer_id: userId,
+      channel: userId.startsWith("ig:") ? "instagram" : userId.startsWith("ms:") ? "messenger" : "whatsapp",
+      channel_tenant_id: tenantId,
+      event_type: eventType,
+      source_event_id: sourceEventId,
+      source_at: context && context.source_at || new Date().toISOString(),
+      last_customer_message_at: context && context.last_customer_message_at || new Date().toISOString(),
+      template: approvedRetargetingTemplate(templateNames[eventType]),
+      context: context || {},
+      actor: "system"
+    }, policy);
+  } catch (error) {
+    console.error("retargeting job error:", error.message);
+    return { created: false, error: error.message };
+  }
+}
+
 async function dashboardUserFromCredentials(username, password) {
   const cleanUser = String(username || "").trim();
   const normalizedUser = normalizeDashboardUsername(cleanUser);
@@ -2812,7 +3197,7 @@ function createDashboardCustomerInvite() {
   const payload = Buffer.from(JSON.stringify({
     tenant_id: CUSTOMER_PANEL_BUSINESS.id,
     role: "admin",
-    exp: Date.now() + 72 * 60 * 60 * 1000,
+    exp: Date.now() + 24 * 60 * 60 * 1000,
     nonce: crypto.randomBytes(18).toString("base64url")
   })).toString("base64url");
   return payload + "." + signDashboardPayload("customer-invite." + payload);
@@ -2831,7 +3216,8 @@ function readDashboardCustomerInvite(token) {
 }
 
 function dashboardAuth(req) {
-  if (req.query.key === DASHBOARD_KEY || req.get("x-dashboard-key") === DASHBOARD_KEY) {
+  const suppliedKey = String(req.get("x-dashboard-key") || "");
+  if (DASHBOARD_KEY && suppliedKey && safeEqualText(suppliedKey, DASHBOARD_KEY)) {
     return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "super_admin", method: "key" };
   }
   return readDashboardSession(req) || { ok: false, role: "none" };
@@ -2860,6 +3246,7 @@ function customerPanelCapabilities(role) {
     run_evaluation: level >= DASHBOARD_ROLES.admin,
     view_operational_settings: level >= DASHBOARD_ROLES.admin,
     configure_bot: level >= DASHBOARD_ROLES.admin,
+    manage_retargeting: level >= DASHBOARD_ROLES.admin,
     platform_support: cleanDashboardRole(role) === "super_admin"
   };
 }
@@ -3473,7 +3860,7 @@ function buildCustomerPanelDemoSnapshot() {
   };
 }
 
-app.post("/admin/login", async (req, res) => {
+app.post("/admin/login", loginRateLimiter, async (req, res) => {
   const username = String(req.body && req.body.username || "").trim();
   const password = String(req.body && req.body.password || "");
   const key = String(req.body && req.body.key || "").trim();
@@ -3539,7 +3926,8 @@ app.post("/admin/customer-invite", async (req, res) => {
   const invite = createDashboardCustomerInvite();
   const inviteData = readDashboardCustomerInvite(invite);
   const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
-  const setupUrl = protocol + "://" + req.get("host") + "/admin/setup/" + CUSTOMER_PANEL_BUSINESS.id + "?invite=" + encodeURIComponent(invite);
+  const setupBaseUrl = PUBLIC_BASE_URL || protocol + "://" + req.get("host");
+  const setupUrl = setupBaseUrl + "/admin/setup/" + CUSTOMER_PANEL_BUSINESS.id + "?invite=" + encodeURIComponent(invite);
   res.json({
     ok: true,
     tenant: { id: CUSTOMER_PANEL_BUSINESS.id, name: CUSTOMER_PANEL_BUSINESS.name, customer_number: CUSTOMER_PANEL_BUSINESS.customer_number },
@@ -3605,8 +3993,8 @@ app.post("/admin/setup/:tenantId", async (req, res) => {
     res.status(409).json({ ok: false, error: "username_unavailable", message: "Ese nombre de usuario no está disponible." });
     return;
   }
-  if (password.length < 10 || password.length > 128 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(password) || !/\d/.test(password)) {
-    res.status(400).json({ ok: false, error: "weak_password", message: "Usa al menos 10 caracteres, incluyendo una letra y un número." });
+  if (password.length < 12 || password.length > 128 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(password) || !/\d/.test(password)) {
+    res.status(400).json({ ok: false, error: "weak_password", message: "Usa al menos 12 caracteres, incluyendo una letra y un número." });
     return;
   }
   if (password !== passwordConfirmation) {
@@ -3669,11 +4057,10 @@ function releaseAdminConversation(req, res) {
   const wasActive = humanHandoff.delete(userId);
   pendingRatings.add(userId);
   recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.");
-  console.log(`[ADMIN] Released ${userId} (was handoff: ${wasActive})`);
+  console.log(`[ADMIN] Released ${maskedIdentifier(userId)} (was handoff: ${wasActive})`);
   res.json({ ok: true, userId, wasInHandoff: wasActive });
 }
 
-app.get("/admin/release/:userId", releaseAdminConversation);
 app.post("/admin/release/:userId", releaseAdminConversation);
 
 app.post("/admin/resolve/:userId", (req, res) => {
@@ -3692,7 +4079,7 @@ app.post("/admin/resolve/:userId", (req, res) => {
   res.json({ ok: true, userId, wasInHandoff: wasActive, conversation_status: "resolved", resolution_source: "human" });
 });
 
-app.post("/admin/takeover/:userId", (req, res) => {
+app.post("/admin/takeover/:userId", async (req, res) => {
   if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
@@ -3703,6 +4090,7 @@ app.post("/admin/takeover/:userId", (req, res) => {
     return;
   }
   humanHandoff.add(userId);
+  await recordRetargetingSignal(userId, "handoff", "admin-takeover:" + Date.now(), dashboardAuth(req).name || "admin");
   recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.");
   res.json({ ok: true, userId, handoff: true });
 });
@@ -3723,6 +4111,7 @@ app.post("/admin/send-message", async (req, res) => {
     return;
   }
   humanHandoff.add(userId);
+  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), dashboardAuth(req).name || "admin");
   const sent = await sendText(userId, text);
   recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error");
   res.json({ ok: !!sent, userId, handoff: true, meta_sent: !!sent });
@@ -3823,6 +4212,14 @@ app.post("/admin/bot-setup/publish", async (req, res) => {
       status: "published",
       updated_by: auth.name || auth.username
     });
+    if (candidate.answers.retargeting && candidate.answers.retargeting.mode === "automatic" && !RETARGETING_AUTOMATIC_MODE_ENABLED) {
+      res.status(422).json({
+        ok: false,
+        error: "retargeting_automatic_not_enabled",
+        message: "El retargeting automático sigue bloqueado. Usa simulación o aprobación manual hasta completar la validación operativa."
+      });
+      return;
+    }
     if (candidate.completion < 55) {
       res.status(422).json({
         ok: false,
@@ -3838,6 +4235,191 @@ app.post("/admin/bot-setup/publish", async (req, res) => {
     console.error("bot setup publish error:", error.message);
     res.status(503).json({ ok: false, error: "setup_store_unavailable", message: "No pudimos activar la configuración. Intenta nuevamente." });
   }
+});
+
+function retargetingTenantForRequest(req) {
+  const auth = dashboardAuth(req);
+  const requested = String(req.query.tenant_id || req.body && req.body.tenant_id || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return auth.role === "super_admin" && requested ? requested : CUSTOMER_PANEL_BUSINESS.id;
+}
+
+app.get("/admin/retargeting", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenantId = retargetingTenantForRequest(req);
+    const snapshot = await retargetingEngine.snapshot(tenantId);
+    const policy = await retargetingPolicyForTenant(tenantId);
+    res.json({ ok: true, policy, persistent_store: SUPABASE_ENABLED ? "supabase" : "memory_test_only", can_manage: !!customerPanelCapabilities(dashboardAuth(req).role).manage_retargeting, snapshot });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "retargeting_store_unavailable", message: error.message });
+  }
+});
+
+app.post("/admin/retargeting/consent", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const consent = await retargetingEngine.recordConsent({
+      tenant_id: retargetingTenantForRequest(req),
+      customer_id: req.body && req.body.customer_id,
+      category: req.body && req.body.category,
+      granted: req.body && req.body.granted !== false,
+      proof_id: req.body && req.body.proof_id,
+      proof_type: req.body && req.body.proof_type,
+      granted_at: req.body && req.body.granted_at,
+      expires_at: req.body && req.body.expires_at,
+      revoked_at: req.body && req.body.revoked_at,
+      actor: auth.name || auth.username
+    });
+    res.json({ ok: true, consent });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: error.message, message: "El consentimiento debe tener cliente, categoría y evidencia verificable." });
+  }
+});
+
+app.post("/admin/retargeting/jobs", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = retargetingTenantForRequest(req);
+    const configuredPolicy = await retargetingPolicyForTenant(tenantId);
+    const policy = RETARGETING_TEST_MODE && req.body && req.body.policy_override ? req.body.policy_override : configuredPolicy;
+    const jobInput = Object.assign({}, req.body || {}, {
+      tenant_id: tenantId,
+      channel_tenant_id: tenantId,
+      actor: auth.name || auth.username
+    });
+    if (!RETARGETING_TEST_MODE) {
+      delete jobInput.consent;
+      const templateNames = { abandoned_cart: "abandoned_cart_rav", post_purchase: "post_sale_review_rav", back_in_stock: "back_in_stock_rav", recommendation: "product_recommendation_rav" };
+      jobInput.template = approvedRetargetingTemplate(templateNames[jobInput.event_type]);
+    }
+    const job = await retargetingEngine.createJob(jobInput, policy);
+    res.status(job.created ? 201 : 200).json({ ok: true, result: job });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: error.message, message: "No se pudo crear la decisión de retargeting." });
+  }
+});
+
+app.post("/admin/retargeting/jobs/:jobId/approve", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const job = await retargetingEngine.approveJob(retargetingTenantForRequest(req), req.params.jobId, auth.name || auth.username);
+    res.json({ ok: true, job, real_message_sent: false });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/retargeting/jobs/:jobId/cancel", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const job = await retargetingEngine.cancelJob(retargetingTenantForRequest(req), req.params.jobId, auth.name || auth.username, req.body && req.body.reason || "manual_cancel");
+    res.json({ ok: true, job });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/retargeting/pause", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const result = await retargetingEngine.pauseTenant(retargetingTenantForRequest(req), auth.name || auth.username, req.body && req.body.reason);
+  res.json({ ok: true, result });
+});
+
+app.post("/admin/retargeting/resume", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const result = await retargetingEngine.resumeTenant(retargetingTenantForRequest(req), auth.name || auth.username);
+  res.json({ ok: true, result });
+});
+
+app.post("/admin/retargeting/signals", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const result = await retargetingEngine.recordCustomerSignal({
+      tenant_id: retargetingTenantForRequest(req),
+      customer_id: req.body && req.body.customer_id,
+      signal: req.body && req.body.signal,
+      source_event_id: req.body && req.body.source_event_id,
+      actor: auth.name || auth.username
+    });
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/retargeting/templates/status", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const result = await retargetingEngine.recordTemplateStatus({
+      tenant_id: retargetingTenantForRequest(req),
+      name: req.body && req.body.name,
+      language: req.body && req.body.language,
+      status: req.body && req.body.status,
+      active: req.body && req.body.active === true,
+      quality: req.body && req.body.quality,
+      checked_at: req.body && req.body.checked_at,
+      actor: auth.name || auth.username
+    });
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/retargeting/worker", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const requested = Array.isArray(req.body && req.body.tenant_ids) ? req.body.tenant_ids : [];
+  const tenantIds = auth.role === "super_admin" && requested.length
+    ? requested.map(function (value) { return String(value || "").toLowerCase().replace(/[^a-z0-9_-]/g, ""); }).filter(Boolean).slice(0, 100)
+    : [retargetingTenantForRequest(req)];
+  const results = [];
+  for (const tenantId of Array.from(new Set(tenantIds))) results.push(await retargetingEngine.runWorker(tenantId));
+  res.json({
+    ok: true,
+    simulation_safe: true,
+    automatic_mode_enabled: RETARGETING_AUTOMATIC_MODE_ENABLED,
+    real_sends_enabled: RETARGETING_REAL_SENDS_ENABLED,
+    results
+  });
 });
 
 app.get("/admin/panel/data", async (req, res) => {
@@ -3882,6 +4464,27 @@ app.get("/admin/panel/demo-setup", (req, res) => {
     industries: INDUSTRY_PROFILES,
     current: demo,
     published: null
+  });
+});
+
+app.get("/admin/panel/demo-retargeting", (req, res) => {
+  res.json({
+    ok: true,
+    can_manage: false,
+    policy: defaultBotSetupAnswers().retargeting,
+    snapshot: {
+      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      paused: false,
+      automatic_mode_enabled: false,
+      real_sends_enabled: false,
+      timezone: "America/Bogota",
+      hard_window: { start: "09:00", end: "19:00" },
+      hard_max_marketing_messages_7d: 2,
+      counts: { pending: 0, approved: 0, simulated: 0, cancelled: 0, blocked: 0, sent: 0 },
+      jobs: [],
+      blockers: [],
+      history: []
+    }
   });
 });
 
@@ -3972,12 +4575,13 @@ app.post("/admin/template-test", async (req, res) => {
   }
 });
 
-app.get("/admin/reset-checkout/:userId", (req, res) => {
+app.post("/admin/reset-checkout/:userId", (req, res) => {
   if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const userId = req.params.userId;
+  const userId = normalizeConversationUserId(req.params.userId);
+  if (!userId) return res.status(400).json({ ok: false, error: "missing_user_id" });
   const had = checkouts.delete(userId);
   res.json({ ok: true, userId, hadCheckout: had });
 });
@@ -4010,7 +4614,7 @@ const PORT = process.env.PORT || 3000;
 // créditos de Anthropic. Útil antes de hacer pruebas o deploys.
 function renderLegacyCustomerPasswordSetup(res, options) {
   const valid = !!(options && options.valid);
-  const invite = JSON.stringify(options && options.invite || "");
+  const invite = safeInlineJson(options && options.invite || "");
   const reason = escapeAdminHtml(options && options.reason || "Este enlace no está disponible.");
   const content = valid ? `
     <div class="eyebrow">CLIENTE #1 · RAV TOYS</div>
@@ -4023,7 +4627,7 @@ function renderLegacyCustomerPasswordSetup(res, options) {
       <input id="username" autocomplete="username" maxlength="40" placeholder="Ej. admin.rav" required>
       <label for="password">Contraseña</label>
       <div class="passwordField"><input id="password" type="password" autocomplete="new-password" maxlength="128" required><button class="show" type="button" onclick="togglePasswords()">Mostrar</button></div>
-      <div class="rules" id="rules"><span id="ruleLength">○ 10 caracteres</span><span id="ruleLetter">○ Una letra</span><span id="ruleNumber">○ Un número</span></div>
+      <div class="rules" id="rules"><span id="ruleLength">○ 12 caracteres</span><span id="ruleLetter">○ Una letra</span><span id="ruleNumber">○ Un número</span></div>
       <label for="passwordConfirmation">Confirma la contraseña</label>
       <input id="passwordConfirmation" type="password" autocomplete="new-password" maxlength="128" required>
       <button class="primary" id="submitBtn" type="submit">Crear acceso</button>
@@ -4040,14 +4644,14 @@ function renderLegacyCustomerPasswordSetup(res, options) {
   </style></head><body><main class="shell"><div class="brand"><div class="logo">RAV</div><div><strong>RAV Toys</strong><span>Panel de Control · Nextfor IA</span></div></div><section class="card">${content}</section></main>${valid ? `<script>
 var invite=${invite};var form=document.getElementById("setupForm"),password=document.getElementById("password"),confirmation=document.getElementById("passwordConfirmation");
 function setRule(id,ok){var el=document.getElementById(id);if(el){el.classList.toggle("ok",ok);el.textContent=(ok?"✓":"○")+el.textContent.slice(1);}}
-function updateRules(){var value=password.value||"";setRule("ruleLength",value.length>=10);setRule("ruleLetter",/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(value));setRule("ruleNumber",/\\d/.test(value));}
+function updateRules(){var value=password.value||"";setRule("ruleLength",value.length>=12);setRule("ruleLetter",/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(value));setRule("ruleNumber",/\\d/.test(value));}
 function togglePasswords(){var next=password.type==="password"?"text":"password";password.type=next;confirmation.type=next;document.querySelector(".show").textContent=next==="text"?"Ocultar":"Mostrar";}
 password.addEventListener("input",updateRules);form.addEventListener("submit",function(event){event.preventDefault();var button=document.getElementById("submitBtn"),error=document.getElementById("error");error.textContent="";button.disabled=true;button.textContent="Creando acceso...";fetch(location.pathname,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({invite:invite,name:document.getElementById("name").value.trim(),username:document.getElementById("username").value.trim(),password:password.value,password_confirmation:confirmation.value})}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.message||body.error||"No se pudo crear el acceso");return body;});}).then(function(body){location.href=body.redirect||"/admin/panel";}).catch(function(err){error.textContent=err.message;button.disabled=false;button.textContent="Crear acceso";});});
   </script>` : ""}</body></html>`);
 }
 
 function renderAdminLogin(res, targetPath) {
-  const target = JSON.stringify(targetPath || "/admin/dashboard");
+  const target = safeInlineJson(targetPath || "/admin/dashboard");
   const usersEnabled = true;
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
@@ -4084,7 +4688,7 @@ function renderAdminLogin(res, targetPath) {
 var target=${target};
 var usersEnabled=${JSON.stringify(usersEnabled)};
 function baseDestination(){var url=target;if(url==="/admin/dashboard"){url="/admin/dashboard?tab=human";}return url;}
-function destination(key){var url=baseDestination();if(!key)return url;var sep=url.indexOf("?")>=0?"&":"?";return url+sep+"key="+encodeURIComponent(key);}
+function destination(){return baseDestination();}
 function showError(msg){document.getElementById("err").textContent=msg||"";}
 function updateLoginReady(){var user=document.getElementById("username").value.trim(),password=document.getElementById("password").value;document.getElementById("loginButton").disabled=!password||(!user&&password.length<6);}
 function togglePassword(){var input=document.getElementById("password"),show=input.type==="password";input.type=show?"text":"password";document.getElementById("showPassword").textContent=show?"Ocultar":"Mostrar";input.focus();}
@@ -4101,11 +4705,10 @@ function go(e){
   if(!password)return;
   var button=document.getElementById("loginButton");button.disabled=true;button.textContent="Entrando…";
   if(usersEnabled&&username&&username!=="clave-maestra"){
-    fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:username,password:password})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"No autorizado");return j;});}).then(function(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}location.href=destination("");}).catch(function(){showError("Usuario o clave incorrectos.");button.textContent="Entrar al panel";updateLoginReady();});
+    fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:username,password:password})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"No autorizado");return j;});}).then(function(){location.href=destination();}).catch(function(){showError("Usuario o clave incorrectos.");button.textContent="Entrar al panel";updateLoginReady();});
     return;
   }
-  try{localStorage.setItem("rav_dashboard_key",password);}catch(err){}
-  fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:password})}).then(function(r){if(!r.ok)throw new Error("No autorizado");location.href=destination(password);}).catch(function(){showError("Usuario o clave incorrectos.");button.textContent="Entrar al panel";updateLoginReady();});
+  fetch("/admin/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({key:password})}).then(function(r){if(!r.ok)throw new Error("No autorizado");location.href=destination();}).catch(function(){showError("Usuario o clave incorrectos.");button.textContent="Entrar al panel";updateLoginReady();});
 }
 </script></body></html>`);
 }
@@ -4195,7 +4798,7 @@ function checkKind(value){value=String(value||"");if(value==="ok"||value.indexOf
 function checkLabel(value){var kind=checkKind(value);if(kind==="ok")return value==="ok"?"OK":"Configurado";if(kind==="warn")return "No configurado";return "Revisar";}
 function paintCheck(id,value){var el=document.getElementById(id);if(!el)return;el.textContent=checkLabel(value);el.className="checkValue "+checkKind(value);}
 function uptimeLabel(seconds){seconds=Math.max(0,Number(seconds)||0);var days=Math.floor(seconds/86400),hours=Math.floor((seconds%86400)/3600),minutes=Math.floor((seconds%3600)/60);return (days?days+"d ":"")+hours+"h "+minutes+"m";}
-function createCustomerInvite(){var button=document.getElementById("customerInviteBtn"),status=document.getElementById("customerInviteStatus");button.disabled=true;status.textContent="Generando enlace...";fetch("/admin/customer-invite",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"No se pudo generar");return body;});}).then(function(body){if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(body.setup_url).then(function(){status.textContent="Enlace copiado · vence en 72 h";});}status.textContent=body.setup_url;}).catch(function(error){status.textContent=error.message==="customer_admin_already_configured"?"La cuenta RAV ya está configurada.":"No se pudo generar el enlace.";}).finally(function(){button.disabled=false;});}
+function createCustomerInvite(){var button=document.getElementById("customerInviteBtn"),status=document.getElementById("customerInviteStatus");button.disabled=true;status.textContent="Generando enlace...";fetch("/admin/customer-invite",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"No se pudo generar");return body;});}).then(function(body){if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(body.setup_url).then(function(){status.textContent="Enlace copiado · vence en 24 h";});}status.textContent=body.setup_url;}).catch(function(error){status.textContent=error.message==="customer_admin_already_configured"?"La cuenta RAV ya está configurada.":"No se pudo generar el enlace.";}).finally(function(){button.disabled=false;});}
 function loadHealth(){setSuperText("infraValue","Verificando");setSuperText("infraSub","Consultando /admin/health");fetch("/admin/health",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error("HTTP "+r.status);return j;});}).then(function(h){var ready=!!(h.production_readiness&&h.production_readiness.infrastructure_ready),blockers=(h.production_readiness&&h.production_readiness.blockers)||[],badge=document.getElementById("healthBadge");setSuperText("infraValue",ready?"Operativa":"Revisar");setSuperText("infraSub",ready?"Servicios base disponibles":blockers.length+" bloqueo"+(blockers.length===1?"":"s")+" tecnico"+(blockers.length===1?"":"s"));if(badge){badge.textContent=ready?"Infra OK":"Requiere revision";badge.className="status "+(ready?"ready":"error");}setSuperText("healthUptime",uptimeLabel(h.bot&&h.bot.uptime_seconds));paintCheck("healthShopify",h.checks&&h.checks.shopify_storefront);paintCheck("healthMeta",h.checks&&h.checks.meta_whatsapp);paintCheck("healthSupabase",h.checks&&h.checks.supabase_conversation_logs);paintCheck("healthAnthropic",h.checks&&h.checks.anthropic_api);}).catch(function(){var badge=document.getElementById("healthBadge");setSuperText("infraValue","No disponible");setSuperText("infraSub","No se pudo consultar salud");if(badge){badge.textContent="Sin respuesta";badge.className="status error";}["healthShopify","healthMeta","healthSupabase","healthAnthropic"].forEach(function(id){var el=document.getElementById(id);if(el){el.textContent="Sin respuesta";el.className="checkValue err";}});});}
 function logoutSuperAdmin(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 try{var cleanUrl=new URL(location.href);if(cleanUrl.searchParams.has("key")){cleanUrl.searchParams.delete("key");history.replaceState(null,"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);}}catch(e){}
@@ -4206,7 +4809,7 @@ loadHealth();
 app.get("/admin/panel", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
     renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
@@ -4214,7 +4817,7 @@ app.get("/admin/panel", (req, res) => {
     setDashboardSessionCookie(req, res, auth);
   }
   const capabilities = customerPanelCapabilities(auth.role);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -4228,13 +4831,14 @@ app.get("/admin/panel", (req, res) => {
 
 app.get("/admin/panel-demo", (req, res) => {
   const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer", method: "demo" };
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities: customerPanelCapabilities("viewer"),
     initialTab,
     dataPath: "/admin/panel/demo-data",
     setupPath: "/admin/panel/demo-setup",
+    retargetingPath: "/admin/panel/demo-retargeting",
     healthPath: null,
     loginPath: null,
     botVersion: BOT_VERSION
@@ -4244,7 +4848,6 @@ app.get("/admin/panel-demo", (req, res) => {
 app.get("/admin/customer-panel", (req, res) => {
   const params = new URLSearchParams();
   if (req.query.tab) params.set("tab", String(req.query.tab));
-  if (req.query.key) params.set("key", String(req.query.key));
   res.redirect("/admin/panel" + (params.toString() ? "?" + params.toString() : ""));
 });
 
@@ -4258,15 +4861,14 @@ app.get("/admin/dashboard", (req, res) => {
   if (auth.method === "key") {
     setDashboardSessionCookie(req, res, auth);
   }
-  const pageKey = JSON.stringify(req.query.key || "");
-  const rawKey = encodeURIComponent(String(req.query.key || ""));
-  const pageUser = JSON.stringify(auth.name || auth.username || "Panel");
-  const pageRole = JSON.stringify(auth.role || "admin");
+  const pageKey = safeInlineJson("");
+  const pageUser = safeInlineJson(auth.name || auth.username || "Panel");
+  const pageRole = safeInlineJson(auth.role || "admin");
   const initialTab = req.query.tab === "human" ? "human" : "summary";
   const summaryActive = initialTab === "summary" ? " active" : "";
   const humanActive = initialTab === "human" ? " active" : "";
-  const summaryHref = "/admin/dashboard?" + (rawKey ? "key=" + rawKey + "&" : "") + "tab=summary";
-  const humanHref = "/admin/dashboard?" + (rawKey ? "key=" + rawKey + "&" : "") + "tab=human";
+  const summaryHref = "/admin/dashboard?tab=summary";
+  const humanHref = "/admin/dashboard?tab=human";
   const superAdminHref = "/admin/super-admin";
   const superAdminButton = auth.role === "super_admin" ? `<a class="btn" href="${superAdminHref}">Super admin</a>` : "";
   res.setHeader("content-type", "text/html; charset=utf-8");
@@ -4377,7 +4979,7 @@ function ensureChartLib(){if(window.Chart)return Promise.resolve(true);if(chartL
 function drawChart(id,config){var c=document.getElementById(id);if(!c||!window.Chart)return;var old=Chart.getChart(c);if(old)old.destroy();new Chart(c,config);}
 function resizeCharts(){if(!window.Chart)return;["chDay","chOut","chGap"].forEach(function(id){var c=document.getElementById(id),ch=c&&Chart.getChart(c);if(ch)ch.resize();});}
 function renderCharts(dayConfig,outConfig,gapConfig){ensureChartLib().then(function(ok){if(!ok){var b=document.getElementById("dayBadge");if(b)b.textContent=(b.textContent||"sin datos")+" · gráfica pendiente";return;}drawChart("chDay",dayConfig);drawChart("chOut",outConfig);drawChart("chGap",gapConfig);});}
-function adminApi(url,opts){opts=opts||{};opts.headers=Object.assign({"content-type":"application/json","x-dashboard-key":DASHBOARD_KEY},opts.headers||{});return fetch(url+(url.indexOf("?")>=0?"&":"?")+"key="+encodeURIComponent(DASHBOARD_KEY),opts).then(function(r){return r.json().then(function(j){if(!r.ok){throw new Error(j.error||("HTTP "+r.status));}return j;});});}
+function adminApi(url,opts){opts=opts||{};opts.headers=Object.assign({"content-type":"application/json"},opts.headers||{});return fetch(url,opts).then(function(r){return r.json().then(function(j){if(!r.ok){throw new Error(j.error||("HTTP "+r.status));}return j;});});}
 function opsEsc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function opsAttr(s){return opsEsc(s).replace(/"/g,"&quot;");}
 function opsWhen(ts){try{return new Date(ts).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(e){return "";}}
@@ -4430,13 +5032,15 @@ function saveOpsMeta(){if(!opsSelected||!canOpsWrite())return;var note=(document
 function copyOpsPhone(){if(!opsSelected)return;var value="+"+opsSelected;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(value).then(function(){document.getElementById("opsStatus").textContent="Número copiado.";}).catch(function(){document.getElementById("opsStatus").textContent=value;});}else{document.getElementById("opsStatus").textContent=value;}}
 function updateOpsChar(){var el=document.getElementById("opsReply"),out=document.getElementById("opsChar");if(out)out.textContent=((el&&el.value)||"").length+"/1200";}
 function takeOpsControl(){if(!opsSelected||!canOpsWrite())return;adminApi("/admin/takeover/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent="Control humano activo.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
-function releaseOpsControl(){if(!opsSelected||!canOpsWrite())return;adminApi("/admin/release/"+encodeURIComponent(opsSelected)).then(function(){opsHandoffs[opsSelected]=false;document.getElementById("opsStatus").textContent="Conversación devuelta al bot.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
+function releaseOpsControl(){if(!opsSelected||!canOpsWrite())return;adminApi("/admin/release/"+encodeURIComponent(opsSelected),{method:"POST",body:"{}"}).then(function(){opsHandoffs[opsSelected]=false;document.getElementById("opsStatus").textContent="Conversación devuelta al bot.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;});}
 function sendOpsReply(){if(!opsSelected||!canOpsWrite()){document.getElementById("opsStatus").textContent="Usuario solo lectura.";return;}var text=(document.getElementById("opsReply").value||"").trim();if(!text){document.getElementById("opsStatus").textContent="Escribe un mensaje antes de enviar.";return;}document.getElementById("opsSendBtn").disabled=true;document.getElementById("opsStatus").textContent="Enviando...";adminApi("/admin/send-message",{method:"POST",body:JSON.stringify({userId:opsSelected,text:text})}).then(function(r){document.getElementById("opsReply").value="";updateOpsChar();opsHandoffs[opsSelected]=true;document.getElementById("opsStatus").textContent=r.ok?"Mensaje enviado.":"Meta no confirmó el envío.";go();}).catch(function(e){document.getElementById("opsStatus").textContent="Error: "+e.message;document.getElementById("opsSendBtn").disabled=false;});}
 document.addEventListener("keydown",function(e){var el=document.getElementById("opsReply");if(el&&document.activeElement===el&&(e.metaKey||e.ctrlKey)&&e.key==="Enter"){sendOpsReply();}});
 function pct(n,d){return d?Math.round(n/d*100)+"%":"-";}
-function initLogo(){var el=document.getElementById("logo");var url=null;try{url=localStorage.getItem("rav_logo");}catch(e){}if(url){el.innerHTML="<img src='"+url+"' alt='logo'><div class='pencil'>&#9998;</div>";}}
-function changeLogo(){var cur="";try{cur=localStorage.getItem("rav_logo")||"";}catch(e){}var url=prompt("Pega la URL de la imagen de tu logo (deja vacío para volver al texto RAV):",cur);if(url===null)return;try{if(url.trim()===""){localStorage.removeItem("rav_logo");document.getElementById("logo").innerHTML="RAV<div class='pencil'>&#9998;</div>";}else{localStorage.setItem("rav_logo",url.trim());initLogo();}}catch(e){}}
-function runEval(){if(!canAdmin())return;var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}adminApi("/admin/evaluate?limit=30").then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
+function safeLogoUrl(value){try{var url=new URL(String(value||""));return url.protocol==="https:"?url.href:"";}catch(e){return "";}}
+function drawLogo(value){var el=document.getElementById("logo"),url=safeLogoUrl(value);el.replaceChildren();if(url){var img=document.createElement("img");img.src=url;img.alt="logo";img.referrerPolicy="no-referrer";el.appendChild(img);}else{el.appendChild(document.createTextNode("RAV"));}var pencil=document.createElement("div");pencil.className="pencil";pencil.textContent="✎";el.appendChild(pencil);}
+function initLogo(){var url="";try{url=localStorage.getItem("rav_logo")||"";}catch(e){}drawLogo(url);}
+function changeLogo(){var cur="";try{cur=localStorage.getItem("rav_logo")||"";}catch(e){}var value=prompt("Pega una URL HTTPS de la imagen de tu logo (deja vacío para volver al texto RAV):",cur);if(value===null)return;var url=safeLogoUrl(value.trim());try{if(!value.trim()){localStorage.removeItem("rav_logo");drawLogo("");}else if(url){localStorage.setItem("rav_logo",url);drawLogo(url);}else{alert("Usa una URL HTTPS válida.");}}catch(e){drawLogo("");}}
+function runEval(){if(!canAdmin())return;var b=document.getElementById("evalBtn");if(b){b.textContent="Evaluando...";b.style.opacity="0.6";}adminApi("/admin/evaluate?limit=30",{method:"POST",body:"{}"}).then(function(){location.reload();}).catch(function(){if(b){b.textContent="Error, reintenta";b.style.opacity="1";}});}
 function refreshOpsHealth(){var el=document.getElementById("opsHealth");if(el&&!opsLastHealth){el.textContent="verificando...";el.className="badge opsHealth";}adminApi("/admin/health").then(function(h){opsLastHealth=h;var ready=h.production_readiness&&h.production_readiness.infrastructure_ready;var blockers=(h.production_readiness&&h.production_readiness.blockers)||[];if(!el)return;el.className="badge opsHealth "+(ready?"ok":(blockers.length?"err":"warn"));el.textContent=ready?"Infra OK":("Revisar: "+(blockers.slice(0,2).join(", ")||"salud"));}).catch(function(){if(el){el.className="badge opsHealth err";el.textContent="Salud no disponible";}});}
 function go(attempt){
 attempt=attempt||0;
@@ -4544,7 +5148,7 @@ app.get("/admin/inbox", (req, res) => {
     renderAdminLogin(res, "/admin/inbox");
     return;
   }
-  const pageKey = JSON.stringify(req.query.key || "");
+  const pageKey = safeInlineJson("");
   res.setHeader("content-type", "text/html; charset=utf-8");
   res.send(`
 <!doctype html>
@@ -4592,8 +5196,8 @@ var KEY = ${pageKey};
 var turns = [], stats = {}, groups = {}, order = [], activeHandoffs = {}, selected = null;
 function api(url, opts){
   opts = opts || {};
-  opts.headers = Object.assign({"content-type":"application/json","x-dashboard-key":KEY}, opts.headers || {});
-  return fetch(url + (url.indexOf("?")>=0 ? "&" : "?") + "key=" + encodeURIComponent(KEY), opts).then(function(r){ return r.json().then(function(j){ if(!r.ok){ throw new Error(j.error || ("HTTP " + r.status)); } return j; }); });
+  opts.headers = Object.assign({"content-type":"application/json"}, opts.headers || {});
+  return fetch(url, opts).then(function(r){ return r.json().then(function(j){ if(!r.ok){ throw new Error(j.error || ("HTTP " + r.status)); } return j; }); });
 }
 function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function when(ts){try{return new Date(ts).toLocaleString("es-CO",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});}catch(e){return "";}}
@@ -4657,7 +5261,7 @@ function takeControl(){
 }
 function releaseControl(){
   if(!selected) return;
-  api("/admin/release/" + encodeURIComponent(selected)).then(function(){ activeHandoffs[selected]=false; loadData(); }).catch(function(e){ document.getElementById("status").textContent="Error: "+e.message; });
+  api("/admin/release/" + encodeURIComponent(selected), {method:"POST", body:"{}"}).then(function(){ activeHandoffs[selected]=false; loadData(); }).catch(function(e){ document.getElementById("status").textContent="Error: "+e.message; });
 }
 function sendReply(){
   if(!selected) return;
@@ -4706,6 +5310,7 @@ async function buildAdminHealthResult() {
       conversations_in_memory: conversations.size,
       last_search_results_cached: lastSearchResults.size
     },
+    commerce: commerceRegistry.describe(DEFAULT_TENANT_ID),
     checks: {}
   };
   // Probar Shopify storefront search (gratis, no consume saldo)
@@ -4781,6 +5386,14 @@ async function buildAdminHealthResult() {
 }
 
 app.get("/admin/health", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.json({
+      ok: true,
+      bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
+      status: "running"
+    });
+    return;
+  }
   res.json(await buildAdminHealthResult());
 });
 
@@ -4839,12 +5452,12 @@ app.post("/admin/alert", async (req, res) => {
   res.json({ ok: true, kind, notified_count: notified.sent, notification_targets: notified.total });
 });
 
-app.get("/admin/smoke-check", async (req, res) => {
+app.post("/admin/smoke-check", async (req, res) => {
   if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const query = String(req.query.q || "juguete").slice(0, 80);
+  const query = String(req.body && req.body.q || req.query.q || "juguete").slice(0, 80);
   const smokeUserId = "__smoke_test__" + Date.now();
   try {
     const search = await searchShopify(query);
@@ -5088,7 +5701,7 @@ async function evaluateTurn(turn) {
 
 // Endpoint: evalúa bajo demanda los turnos que aún no tienen evaluación.
 // ?limit=N (default 10, máx 30) para controlar costo/tiempo por corrida.
-app.get("/admin/evaluate", async (req, res) => {
+app.post("/admin/evaluate", async (req, res) => {
   if (!adminAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
@@ -5099,7 +5712,8 @@ app.get("/admin/evaluate", async (req, res) => {
     const rows = await supabaseFetchPending(limit);
     if (rows) {
       for (const r of rows) {
-        const turn = { userMessage: r.user_message, botReply: r.bot_reply, tools: r.tools || [], zeroResultQueries: r.zero_result_queries || [], handoff: r.handoff, rating: r.rating };
+        const normalized = normalizeTurnRow(r);
+        const turn = { userMessage: normalized.userMessage, botReply: normalized.botReply, tools: normalized.tools, zeroResultQueries: normalized.zeroResultQueries, handoff: normalized.handoff, rating: normalized.rating };
         try { const ev = await evaluateTurn(turn); await supabaseUpdateEval(r.id, ev); evaluated++; }
         catch (e) { await supabaseUpdateEval(r.id, { error: true, message: (e.message || "eval failed").slice(0, 120) }); failed++; log("error", "eval_failed", { error: e.message }); }
       }
@@ -5244,7 +5858,7 @@ app.get("/admin/test-search", async (req, res) => {
     return;
   }
   try {
-    const result = await searchShopify(q);
+    const result = await searchShopify(q, { suppressSideEffects: true });
     res.json({
       query: q,
       total: result.total,
@@ -5266,5 +5880,5 @@ app.listen(PORT, () => {
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
-  console.log(`Notifications: ${NOTIFICATION_PHONES.join(", ")}`);
+  console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
 });

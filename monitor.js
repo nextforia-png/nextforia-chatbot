@@ -34,12 +34,19 @@ function lastText(value, maxLen = 120) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLen);
 }
 
+function monitorConversationId(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  const channelPrefix = raw.startsWith("ig:") ? "ig:" : raw.startsWith("ms:") ? "ms:" : "";
+  const externalId = raw.replace(/^(ig|ms|wa):/, "").replace(/\D/g, "");
+  return externalId ? channelPrefix + externalId : "";
+}
+
 function findPendingHandoffs(turns, activeUsers, nowMs = Date.now()) {
-  const activeSet = new Set((activeUsers || []).map(id => String(id || "").replace(/\D/g, "")).filter(Boolean));
+  const activeSet = new Set((activeUsers || []).map(monitorConversationId).filter(Boolean));
   const byUser = new Map();
 
   for (const turn of turns || []) {
-    const userId = String(turn.userId || "").replace(/\D/g, "");
+    const userId = monitorConversationId(turn.userId);
     if (!userId) continue;
     if (!byUser.has(userId)) byUser.set(userId, []);
     byUser.get(userId).push(turn);

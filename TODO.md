@@ -26,6 +26,15 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v60`.
 
 ## Alta prioridad
 
+- [ ] Validar y desplegar memoria comercial adaptativa.
+  - [x] Presupuesto de IA en niveles `standard`, `engaged` y `high`.
+  - [x] Memoria persistente de nombre, etapa, intereses y pedidos verificados.
+  - [x] Prioridad y contexto recurrente visibles en el Panel de Control.
+  - [x] Pruebas para impedir memoria casual y excluir datos sensibles de checkout.
+  - [ ] Desplegar `v72-adaptive-memory` y probar conversaciones reales de nivel normal, interesado y alta intención.
+  - [ ] Conectar webhook de pedidos pagados de Shopify para confirmar compras sin que el cliente consulte el pedido.
+  - [ ] Agregar controles para corregir u olvidar memoria antes de comercializar.
+
 - [ ] Alertas operativas de chats pendientes.
   - Avisar por WhatsApp si hay chats en filtro `Pendientes` por mas de X minutos.
   - Avisar si `Meta`, `Shopify`, `Supabase` o `Anthropic` fallan en `/admin/health`.

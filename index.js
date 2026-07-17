@@ -6,13 +6,36 @@ const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
 const renderCustomerPasswordSetup = require("./customer-access");
+const {
+  INDUSTRY_PROFILES,
+  copyDefaults: defaultBotSetupAnswers,
+  createSetupRecord
+} = require("./bot-setup");
+const {
+  adaptiveConversationBudget,
+  buildCustomerMemoryContext,
+  evolveCustomerMemory,
+  isMeaningfulMemory,
+  memoryFingerprint,
+  normalizeMemory
+} = require("./customer-intelligence");
+
+function boundedEnvInt(name, fallback, min, max) {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
 
 const app = express();
-app.use(express.json());
+app.use(express.json({
+  verify: function (req, res, buffer) {
+    req.rawBody = buffer;
+  }
+}));
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v72-spacious-conversations";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v73-bot-setup";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -71,7 +94,34 @@ const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = (process.env.IG_GRAPH_BASE_URL || "https://graph.instagram.com").replace(/\/$/, "");
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
+const MESSENGER_PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN || process.env.FB_PAGE_ACCESS_TOKEN || "";
+const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_ID || "";
+const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
+const MESSENGER_APP_SECRET = process.env.MESSENGER_APP_SECRET || process.env.META_APP_SECRET || "";
+const MESSENGER_GRAPH_BASE_URL = (process.env.MESSENGER_GRAPH_BASE_URL || "https://graph.facebook.com").replace(/\/$/, "");
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const ADAPTIVE_TOKEN_LIMITS = {
+  standard: {
+    maxTokens: boundedEnvInt("AI_STANDARD_MAX_TOKENS", 1000, 400, 2400),
+    historyMessages: boundedEnvInt("AI_STANDARD_HISTORY_MESSAGES", 8, 4, 24)
+  },
+  engaged: {
+    maxTokens: boundedEnvInt("AI_ENGAGED_MAX_TOKENS", 1400, 600, 3200),
+    historyMessages: boundedEnvInt("AI_ENGAGED_HISTORY_MESSAGES", 12, 6, 30)
+  },
+  high: {
+    maxTokens: boundedEnvInt("AI_HIGH_INTENT_MAX_TOKENS", 1800, 800, 4096),
+    historyMessages: boundedEnvInt("AI_HIGH_INTENT_HISTORY_MESSAGES", 18, 8, 40)
+  }
+};
+const MAX_CONVERSATION_HISTORY = Math.max(
+  ADAPTIVE_TOKEN_LIMITS.standard.historyMessages,
+  ADAPTIVE_TOKEN_LIMITS.engaged.historyMessages,
+  ADAPTIVE_TOKEN_LIMITS.high.historyMessages
+);
+const CUSTOMER_MEMORY_TOOL = "customer_memory_v1";
+const CUSTOMER_MEMORY_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_MEMORY_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 24 * 60 * 60 * 1000);
+const CONVERSATION_SESSION_TIMEOUT_MS = boundedEnvInt("CONVERSATION_SESSION_TIMEOUT_MS", 6 * 60 * 60 * 1000, 15 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const SHOPIFY_STORE_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN || "ravtoys.myshopify.com";
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
@@ -86,6 +136,9 @@ const INSTAGRAM_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const INSTAGRAM_PROFILE_RETRY_MS = 15 * 60 * 1000;
 const DASHBOARD_CUSTOMER_USER_TOOL = "dashboard_customer_user_v1";
 const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:rav-toys:primary-admin";
+const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
+const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:rav-toys:draft";
+const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:rav-toys:published";
 const CUSTOMER_META_TAGS = [
   { id: "venta", label: "Venta" },
   { id: "garantia", label: "Garantia" },
@@ -122,7 +175,8 @@ const botStats = {
   anthropic: {
     totalCalls: 0, failedCalls: 0, creditErrors: 0,
     inputTokens: 0, outputTokens: 0,
-    cacheCreationTokens: 0, cacheReadTokens: 0
+    cacheCreationTokens: 0, cacheReadTokens: 0,
+    budgetTiers: { standard: 0, engaged: 0, high: 0 }
   }
 };
 
@@ -131,7 +185,11 @@ const botStats = {
 // Se expone en /admin/conversations. Persistencia permanente (Google Sheets) se suma después.
 const conversationLogs = [];
 const instagramProfileCache = new Map();
+const customerMemoryCache = new Map();
+const conversationLastActiveAt = new Map();
+const processedMessengerMessageIds = new Set();
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
+let botSetupCache = { loaded_at: 0, draft: null, published: null };
 let turnTools = [];        // tools usadas en el turno actual
 let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
 let turnHandoff = false;   // si el turno derivó a humano (Eliana)
@@ -179,6 +237,24 @@ async function supabaseFetchUserRecent(userId, limit) {
     return r.data;
   } catch (e) { console.error("supabaseFetchUserRecent error:", e.message); return null; }
 }
+async function supabaseFetchUserToolRecent(userId, toolName, limit) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE;
+    const r = await axios.get(url, {
+      params: {
+        select: "*",
+        user_id: "eq." + userId,
+        tools: "cs." + JSON.stringify([toolName]),
+        order: "ts.desc",
+        limit: limit || 1
+      },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    return r.data;
+  } catch (e) { console.error("supabaseFetchUserToolRecent error:", e.message); return null; }
+}
 async function supabaseFetchPending(limit) {
   if (!SUPABASE_ENABLED) return null;
   try {
@@ -220,13 +296,23 @@ function isDashboardCustomerUserTurn(turn) {
   return tools.includes(DASHBOARD_CUSTOMER_USER_TOOL);
 }
 
+function isBotSetupTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(BOT_SETUP_TOOL);
+}
+
 function isInstagramProfileTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(INSTAGRAM_PROFILE_TOOL);
 }
 
+function isCustomerMemoryTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(CUSTOMER_MEMORY_TOOL);
+}
+
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isInstagramProfileTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -246,17 +332,44 @@ function normalizeCustomerNote(note) {
 function normalizeConversationUserId(value) {
   const raw = String(value || "").trim();
   const instagram = /^ig:/i.test(raw);
-  const externalId = raw.replace(/^(ig|wa):/i, "").replace(/\D/g, "");
+  const messenger = /^ms:/i.test(raw);
+  const externalId = raw.replace(/^(ig|ms|wa):/i, "").replace(/\D/g, "");
   if (!externalId) return "";
-  return instagram ? "ig:" + externalId : externalId;
+  if (instagram) return "ig:" + externalId;
+  if (messenger) return "ms:" + externalId;
+  return externalId;
 }
 
 function conversationChannel(value) {
-  return /^ig:/i.test(String(value || "")) ? "instagram" : "whatsapp";
+  const userId = String(value || "");
+  if (/^ig:/i.test(userId)) return "instagram";
+  if (/^ms:/i.test(userId)) return "messenger";
+  return "whatsapp";
 }
 
 function conversationExternalId(value) {
-  return normalizeConversationUserId(value).replace(/^ig:/, "");
+  return normalizeConversationUserId(value).replace(/^(ig|ms):/, "");
+}
+
+function validMessengerSignature(req) {
+  if (!MESSENGER_APP_SECRET) return true;
+  const supplied = String(req.get("x-hub-signature-256") || "");
+  if (!supplied.startsWith("sha256=") || !req.rawBody) return false;
+  const expected = "sha256=" + crypto.createHmac("sha256", MESSENGER_APP_SECRET).update(req.rawBody).digest("hex");
+  const suppliedBuffer = Buffer.from(supplied);
+  const expectedBuffer = Buffer.from(expected);
+  return suppliedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(suppliedBuffer, expectedBuffer);
+}
+
+function acceptMessengerEvent(event) {
+  const messageId = String(event?.message?.mid || event?.postback?.mid || "");
+  if (!messageId) return true;
+  if (processedMessengerMessageIds.has(messageId)) return false;
+  processedMessengerMessageIds.add(messageId);
+  if (processedMessengerMessageIds.size > 1000) {
+    processedMessengerMessageIds.delete(processedMessengerMessageIds.values().next().value);
+  }
+  return true;
 }
 
 function parseCustomerMetaTurn(turn) {
@@ -285,6 +398,81 @@ function customerMetaFromTurns(turns) {
     if (parsed) meta[userId] = parsed;
   });
   return meta;
+}
+
+function parseCustomerMemoryTurn(turn) {
+  if (!isCustomerMemoryTurn(turn)) return null;
+  const userId = normalizeConversationUserId(turn.userId);
+  if (!userId) return null;
+  const raw = String(turn.botReply || "").replace(/^\[CustomerMemory\]\s*/, "");
+  try {
+    const memory = normalizeMemory(JSON.parse(raw));
+    return isMeaningfulMemory(memory) ? { user_id: userId, memory } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function customerMemoriesFromTurns(turns) {
+  const memories = {};
+  (turns || []).slice().sort(function (a, b) {
+    return new Date(a.ts || 0) - new Date(b.ts || 0);
+  }).forEach(function (turn) {
+    const parsed = parseCustomerMemoryTurn(turn);
+    if (parsed) memories[parsed.user_id] = parsed.memory;
+  });
+  return memories;
+}
+
+function recordCustomerMemory(userId, memory) {
+  const cleanUserId = normalizeConversationUserId(userId);
+  const normalized = normalizeMemory(memory);
+  if (!cleanUserId || !isMeaningfulMemory(normalized)) return null;
+  const rec = {
+    ts: new Date().toISOString(),
+    userId: cleanUserId,
+    userMessage: "",
+    botReply: "[CustomerMemory] " + JSON.stringify(normalized),
+    tools: [CUSTOMER_MEMORY_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: CUSTOMER_MEMORY_TOOL }
+  };
+  customerMemoryCache.set(cleanUserId, { memory: normalized, loaded_at: Date.now() });
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  supabaseInsert(rec);
+  return normalized;
+}
+
+async function loadCustomerMemory(userId) {
+  const cleanUserId = normalizeConversationUserId(userId);
+  if (!cleanUserId) return null;
+  const cached = customerMemoryCache.get(cleanUserId);
+  if (cached && Date.now() - cached.loaded_at < CUSTOMER_MEMORY_CACHE_TTL_MS) return cached.memory;
+
+  let turns = conversationLogs.filter(function (turn) { return normalizeConversationUserId(turn.userId) === cleanUserId; });
+  if (SUPABASE_ENABLED) {
+    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1);
+    if (memoryRows && memoryRows.length) turns = memoryRows.map(normalizeTurnRow);
+    else {
+      const rows = await supabaseFetchUserRecent(cleanUserId, 60);
+      if (rows) turns = rows.map(normalizeTurnRow);
+    }
+  }
+  const memory = customerMemoriesFromTurns(turns)[cleanUserId] || null;
+  customerMemoryCache.set(cleanUserId, { memory, loaded_at: Date.now() });
+  return memory;
+}
+
+function evolveAndPersistCustomerMemory(userId, currentMemory, event) {
+  const evolved = evolveCustomerMemory(currentMemory, event);
+  if (!evolved.changed || !isMeaningfulMemory(evolved.memory)) return currentMemory || null;
+  if (memoryFingerprint(evolved.memory) === memoryFingerprint(currentMemory)) return currentMemory || null;
+  return recordCustomerMemory(userId, evolved.memory) || evolved.memory;
 }
 
 function normalizeInstagramUsername(username) {
@@ -1416,11 +1604,20 @@ async function lookupOrderStatus(input, options = {}) {
 function parseChannelRecipient(to) {
   const value = String(to || "");
   if (value.startsWith("ig:")) return { channel: "instagram", id: value.slice(3) };
+  if (value.startsWith("ms:")) return { channel: "messenger", id: value.slice(3) };
   return { channel: "whatsapp", id: value.startsWith("wa:") ? value.slice(3) : value };
 }
 
 function channelLabel(to) {
-  return parseChannelRecipient(to).channel === "instagram" ? "Instagram" : "WhatsApp";
+  const labels = { whatsapp: "WhatsApp", instagram: "Instagram", messenger: "Messenger" };
+  return labels[parseChannelRecipient(to).channel] || "WhatsApp";
+}
+
+function channelContactLabel(to) {
+  const recipient = parseChannelRecipient(to);
+  if (recipient.channel === "whatsapp") return "+" + recipient.id;
+  if (recipient.channel === "instagram") return "IGSID " + recipient.id;
+  return "PSID " + recipient.id;
 }
 
 async function sendText(to, text) {
@@ -1456,6 +1653,16 @@ async function sendText(to, text) {
       console.log(`Instagram text sent to ${recipient.id}`);
       return true;
     }
+    if (recipient.channel === "messenger") {
+      if (!MESSENGER_PAGE_ACCESS_TOKEN || !MESSENGER_PAGE_ID) throw new Error("Messenger messaging is not configured");
+      await axios.post(
+        `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}/messages`,
+        { recipient: { id: recipient.id }, messaging_type: "RESPONSE", message: { text: String(text || "") } },
+        { headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+      );
+      console.log(`Messenger text sent to ${recipient.id}`);
+      return true;
+    }
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: text, preview_url: true } },
@@ -1464,7 +1671,7 @@ async function sendText(to, text) {
     console.log(`Text sent to ${to}`);
     return true;
   } catch (err) {
-    console.error("WA text error:", err.response?.data?.error || err.message);
+    console.error(`${channelLabel(to)} text error:`, err.response?.data?.error || err.message);
     return false;
   }
 }
@@ -1549,6 +1756,20 @@ async function sendImage(to, imageUrl, caption) {
       if (caption) await sendText(to, caption);
       return true;
     }
+    if (recipient.channel === "messenger") {
+      if (!MESSENGER_PAGE_ACCESS_TOKEN || !MESSENGER_PAGE_ID) throw new Error("Messenger messaging is not configured");
+      await axios.post(
+        `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}/messages`,
+        {
+          recipient: { id: recipient.id },
+          messaging_type: "RESPONSE",
+          message: { attachment: { type: "image", payload: { url: imageUrl, is_reusable: true } } }
+        },
+        { headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+      );
+      if (caption) await sendText(to, caption);
+      return true;
+    }
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "image", image: { link: imageUrl, caption } },
@@ -1556,13 +1777,13 @@ async function sendImage(to, imageUrl, caption) {
     );
     return true;
   } catch (err) {
-    console.error("WA image error:", err.response?.data?.error || err.message);
+    console.error(`${channelLabel(to)} image error:`, err.response?.data?.error || err.message);
     return false;
   }
 }
 
 async function sendLocation(to, lat, lng, name, address) {
-  if (parseChannelRecipient(to).channel === "instagram") {
+  if (["instagram", "messenger"].includes(parseChannelRecipient(to).channel)) {
     await sendText(to, `${name}\n${address}\nhttps://www.google.com/maps?q=${lat},${lng}`);
     return;
   }
@@ -1901,7 +2122,6 @@ async function executeNotifyTeam(userId) {
   const formattedTotal = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
   const productsList = state.products.map((p, i) => `  ${i+1}. ${p.title} — ${p.price}\n     ${p.product_url}`).join("\n");
   const customerChannel = channelLabel(userId);
-  const customerContact = parseChannelRecipient(userId).id;
   const summary = [
     "🚨 *NUEVA VENTA CERRADA* 🎉",
     "",
@@ -1915,7 +2135,7 @@ async function executeNotifyTeam(userId) {
     "Cédula: " + d.cedula,
     "Dirección: " + d.direccion,
     "Teléfono: " + d.telefono,
-    `${customerChannel}: ${customerChannel === "WhatsApp" ? "+" : "IGSID "}${customerContact}`,
+    `${customerChannel}: ${channelContactLabel(userId)}`,
     "",
     "💳 Método de pago: " + d.metodo_pago,
     "",
@@ -1930,8 +2150,7 @@ async function executeHumanHandoff(userId, input) {
   humanHandoff.add(userId);
   const reason = input.reason || "solicitud_cliente";
   const state = checkouts.get(userId);
-  const handoffRecipient = parseChannelRecipient(userId);
-  let notif = `🚨 *Handoff a humano*\nCanal: ${channelLabel(userId)}\nCliente: ${handoffRecipient.channel === "whatsapp" ? "+" : "IGSID "}${handoffRecipient.id}\nMotivo: ${reason}\n\n`;
+  let notif = `🚨 *Handoff a humano*\nCanal: ${channelLabel(userId)}\nCliente: ${channelContactLabel(userId)}\nMotivo: ${reason}\n\n`;
   if (state?.products && state.products.length > 0 && reason !== "venta_cerrada") {
     if (state.products.length === 1) {
       notif += `(Producto en checkout: ${state.products[0].title} @ ${state.products[0].price})\n\n`;
@@ -1953,6 +2172,9 @@ async function executeHumanHandoff(userId, input) {
 
 async function handleConversation(userId, userMessage) {
   trackIncomingMessage(userId);
+  const previousActivityAt = conversationLastActiveAt.get(userId) || 0;
+  const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
+  conversationLastActiveAt.set(userId, Date.now());
   turnZeroSearchActive = false;  // (v33.4) reset por turno
   turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
   if (await humanControlActiveFor(userId)) {
@@ -1963,11 +2185,30 @@ async function handleConversation(userId, userMessage) {
     return;
   }
 
-  if (!conversations.has(userId)) conversations.set(userId, []);
+  if (!conversations.has(userId) || newSession) conversations.set(userId, []);
   const history = conversations.get(userId);
+  let customerMemory = await loadCustomerMemory(userId);
+  customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
+    userMessage,
+    checkout: checkouts.get(userId),
+    now: new Date().toISOString()
+  });
   history.push({ role: "user", content: userMessage });
 
-  let workingHistory = history.slice(-8);
+  let adaptiveBudget = adaptiveConversationBudget({
+    userMessage,
+    history,
+    memory: customerMemory,
+    checkout: checkouts.get(userId),
+    limits: ADAPTIVE_TOKEN_LIMITS
+  });
+  let memoryContext = buildCustomerMemoryContext(customerMemory, { newSession });
+  let activeBotSetup = await loadBotSetup(false);
+  let publishedSetupPrompt = activeBotSetup.published && activeBotSetup.published.derived
+    ? activeBotSetup.published.derived.system_prompt
+    : "";
+  let workingHistory = history.slice(-adaptiveBudget.historyMessages);
+  console.log(`[AI budget ${userId}] tier=${adaptiveBudget.tier} max_tokens=${adaptiveBudget.maxTokens} history=${adaptiveBudget.historyMessages} reasons=${adaptiveBudget.reasons.join(",") || "none"}`);
 
   let searchedThisTurn = false;
   let lastSearchResultsThisTurn = null;
@@ -1977,15 +2218,16 @@ async function handleConversation(userId, userMessage) {
         "https://api.anthropic.com/v1/messages",
         {
           model: "claude-sonnet-4-5-20250929",
-          max_tokens: 1000,
+          max_tokens: adaptiveBudget.maxTokens,
           system: [
         { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
-        ...(pendingRatings.has(userId) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : [])
-      ,
-        ...(cartContextFor(userId) ? [{ type: "text", text: cartContextFor(userId) }] : [])
+        ...(publishedSetupPrompt ? [{ type: "text", text: publishedSetupPrompt, cache_control: { type: "ephemeral" } }] : []),
+        ...(pendingRatings.has(userId) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
+        ...(cartContextFor(userId) ? [{ type: "text", text: cartContextFor(userId) }] : []),
+        ...(memoryContext ? [{ type: "text", text: memoryContext }] : [])
       ],
           tools: TOOLS.map((t, i) => i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t),
-          messages: workingHistory,
+          messages: workingHistory.slice(-adaptiveBudget.historyMessages),
         },
         {
           headers: {
@@ -1999,6 +2241,7 @@ async function handleConversation(userId, userMessage) {
 
       const stopReason = response.data.stop_reason;
       trackAnthropicUsage(response.data?.usage);
+      botStats.anthropic.budgetTiers[adaptiveBudget.tier] = (botStats.anthropic.budgetTiers[adaptiveBudget.tier] || 0) + 1;
       const content = response.data.content;
 
       if (stopReason === "tool_use") {
@@ -2085,6 +2328,13 @@ async function handleConversation(userId, userMessage) {
             console.error(`Tool ${toolUse.name} error:`, e.message);
             result = { error: e.message };
           }
+          customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
+            userMessage,
+            toolName: toolUse.name,
+            toolResult: result,
+            checkout: checkouts.get(userId),
+            now: new Date().toISOString()
+          });
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
@@ -2092,9 +2342,17 @@ async function handleConversation(userId, userMessage) {
           });
         }
         workingHistory.push({ role: "user", content: toolResults });
+        memoryContext = buildCustomerMemoryContext(customerMemory, { newSession: false });
+        adaptiveBudget = adaptiveConversationBudget({
+          userMessage,
+          history: workingHistory,
+          memory: customerMemory,
+          checkout: checkouts.get(userId),
+          limits: ADAPTIVE_TOKEN_LIMITS
+        });
 
         if (humanHandoff.has(userId)) {
-          conversations.set(userId, history.slice(-8));
+          conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
           return;
         }
         continue;
@@ -2103,7 +2361,7 @@ async function handleConversation(userId, userMessage) {
       const textBlock = content.find(c => c.type === "text");
       const reply = textBlock ? textBlock.text.trim() : "";
       history.push({ role: "assistant", content: reply || "(sin texto)" });
-      conversations.set(userId, history.slice(-8));
+      conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
       if (reply) recordTurn(userId, userMessage, reply, "ok");
       await sendText(userId, reply);
       return;
@@ -2225,6 +2483,49 @@ app.post("/instagram/webhook", async (req, res) => {
     }
   } catch (err) {
     console.error("Error processing Instagram message:", err.response?.data || err.message);
+  }
+});
+
+// Messenger Platform webhook. Page-scoped user IDs use an internal `ms:` prefix
+// so they never collide with WhatsApp phone numbers or Instagram-scoped IDs.
+app.get("/messenger/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === MESSENGER_VERIFY_TOKEN) return res.status(200).send(challenge);
+  return res.sendStatus(403);
+});
+
+app.post("/messenger/webhook", async (req, res) => {
+  if (!validMessengerSignature(req)) return res.sendStatus(401);
+  res.sendStatus(200);
+  try {
+    if (req.body?.object !== "page") return;
+    for (const entry of req.body?.entry || []) {
+      for (const event of entry.messaging || []) {
+        if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
+        const userId = `ms:${event.sender.id}`;
+        if (event.message?.text) {
+          console.log(`Messenger from ${event.sender.id}: ${event.message.text}`);
+          await handleConversation(userId, event.message.text);
+        } else if (event.postback?.payload || event.postback?.title) {
+          const postbackText = String(event.postback.title || event.postback.payload || "").trim();
+          if (postbackText) {
+            console.log(`Messenger postback from ${event.sender.id}: ${postbackText}`);
+            await handleConversation(userId, postbackText);
+          }
+        } else if (event.message?.attachments?.length) {
+          console.log(`Messenger from ${event.sender.id}: [attachment]`);
+          if (await humanControlActiveFor(userId)) {
+            recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments });
+          } else {
+            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.");
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error processing Messenger message:", err.response?.data || err.message);
   }
 });
 
@@ -2424,6 +2725,69 @@ async function persistDashboardCustomerUser(input) {
   return user;
 }
 
+function parseBotSetupTurn(turn) {
+  if (!isBotSetupTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[BotSetup\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id) return null;
+    if (!["draft", "published"].includes(parsed.status) || !parsed.answers || !parsed.derived) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadBotSetup(force) {
+  const now = Date.now();
+  if (!force && botSetupCache.loaded_at && now - botSetupCache.loaded_at < 30000) return botSetupCache;
+  let draft = botSetupCache.draft;
+  let published = botSetupCache.published;
+  if (SUPABASE_ENABLED) {
+    const rows = await Promise.all([
+      supabaseFetchUserRecent(BOT_SETUP_DRAFT_RECORD_ID, 1),
+      supabaseFetchUserRecent(BOT_SETUP_PUBLISHED_RECORD_ID, 1)
+    ]);
+    if (rows[0]) draft = rows[0].map(normalizeTurnRow).map(parseBotSetupTurn).find(Boolean) || null;
+    if (rows[1]) published = rows[1].map(normalizeTurnRow).map(parseBotSetupTurn).find(Boolean) || null;
+  } else {
+    const turns = conversationLogs.slice().reverse();
+    draft = turns.filter(function (turn) { return turn.userId === BOT_SETUP_DRAFT_RECORD_ID; }).map(parseBotSetupTurn).find(Boolean) || draft;
+    published = turns.filter(function (turn) { return turn.userId === BOT_SETUP_PUBLISHED_RECORD_ID; }).map(parseBotSetupTurn).find(Boolean) || published;
+  }
+  botSetupCache = { loaded_at: now, draft, published };
+  return botSetupCache;
+}
+
+async function persistBotSetup(answers, status, auth) {
+  const published = status === "published";
+  const record = createSetupRecord(answers, {
+    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    status: published ? "published" : "draft",
+    updated_by: auth && (auth.name || auth.username)
+  });
+  const rec = {
+    ts: record.updated_at,
+    userId: published ? BOT_SETUP_PUBLISHED_RECORD_ID : BOT_SETUP_DRAFT_RECORD_ID,
+    userMessage: "",
+    botReply: "[BotSetup] " + JSON.stringify(record),
+    tools: [BOT_SETUP_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: BOT_SETUP_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  if (published) botSetupCache.published = record;
+  else botSetupCache.draft = record;
+  botSetupCache.loaded_at = Date.now();
+  return record;
+}
+
 async function dashboardUserFromCredentials(username, password) {
   const cleanUser = String(username || "").trim();
   const normalizedUser = normalizeDashboardUsername(cleanUser);
@@ -2495,6 +2859,7 @@ function customerPanelCapabilities(role) {
     run_tests: level >= DASHBOARD_ROLES.admin,
     run_evaluation: level >= DASHBOARD_ROLES.admin,
     view_operational_settings: level >= DASHBOARD_ROLES.admin,
+    configure_bot: level >= DASHBOARD_ROLES.admin,
     platform_support: cleanDashboardRole(role) === "super_admin"
   };
 }
@@ -2515,6 +2880,14 @@ function customerPanelInstagramSetup() {
   return {
     status: ready ? "ready" : "pending",
     label: ready ? "Instagram conectado" : "Configuracion de Instagram pendiente"
+  };
+}
+
+function customerPanelMessengerSetup() {
+  const ready = !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID);
+  return {
+    status: ready ? "ready" : "pending",
+    label: ready ? "Messenger conectado" : "Configuracion de Messenger pendiente"
   };
 }
 
@@ -2617,6 +2990,10 @@ function summarizeCustomerPanelChannel(conversations, stats) {
 
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
   const instagramProfiles = instagramProfilesFromTurns(rawTurns);
+  const memoriesByCustomer = customerMemoriesFromTurns(rawTurns);
+  customerMemoryCache.forEach(function (entry, userId) {
+    if (entry && isMeaningfulMemory(entry.memory)) memoriesByCustomer[userId] = normalizeMemory(entry.memory);
+  });
   instagramProfileCache.forEach(function (profile, userId) {
     if (profile && profile.username) instagramProfiles[userId] = { user_id: userId, username: profile.username, updated_at: profile.fetched_at || null };
   });
@@ -2624,7 +3001,11 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
   const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
   const allTurns = operationalTurns.slice(0, turnLimit);
   const groups = {};
-  const channelStats = { whatsapp: emptyCustomerPanelChannelStats(), instagram: emptyCustomerPanelChannelStats() };
+  const channelStats = {
+    whatsapp: emptyCustomerPanelChannelStats(),
+    instagram: emptyCustomerPanelChannelStats(),
+    messenger: emptyCustomerPanelChannelStats()
+  };
   let minTs = null;
   let maxTs = null;
 
@@ -2634,7 +3015,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const userId = normalizeConversationUserId(turn.userId);
     if (!userId) return;
     const channel = conversationChannel(userId);
-    const stats = channelStats[channel];
+    const stats = channelStats[channel] || channelStats.whatsapp;
     if (!groups[userId]) {
       groups[userId] = {
         id: userId,
@@ -2739,6 +3120,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
   const conversations = Object.keys(groups).map(function (userId) {
     const group = groups[userId];
     const meta = metaByCustomer[userId] || { tags: [], note: "", updated_at: null };
+    const memory = normalizeMemory(memoriesByCustomer[userId]);
     const active = !!(states[userId] && states[userId].active);
     const tags = normalizeCustomerTags(meta.tags);
     const salesSignal = group.sales_signal || tags.includes("venta");
@@ -2754,14 +3136,23 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       team_active: "👤 Tu equipo atendiendo",
       resolved: "✓ Resuelta"
     };
+    const channelLabels = { whatsapp: "WhatsApp", instagram: "Instagram", messenger: "Messenger" };
+    const channelDisplayName = group.channel === "instagram"
+      ? (instagramUsername ? "@" + instagramUsername : "Instagram · …" + suffix)
+      : group.channel === "messenger" ? "Messenger · …" + suffix : "+" + group.external_id;
+    const displayName = memory.preferred_name || channelDisplayName;
+    const copyValue = group.channel === "instagram"
+      ? (instagramUsername ? "@" + instagramUsername : group.external_id)
+      : group.channel === "messenger" ? group.external_id : "+" + group.external_id;
     return {
       id: userId,
       phone: group.external_id,
       channel: group.channel,
-      channel_label: group.channel === "instagram" ? "Instagram" : "WhatsApp",
+      channel_label: channelLabels[group.channel] || "WhatsApp",
       instagram_username: instagramUsername || null,
-      display_name: group.channel === "instagram" ? (instagramUsername ? "@" + instagramUsername : "Instagram · …" + suffix) : "+" + group.external_id,
-      copy_value: group.channel === "instagram" ? (instagramUsername ? "@" + instagramUsername : group.external_id) : "+" + group.external_id,
+      messenger_username: null,
+      display_name: displayName,
+      copy_value: copyValue,
       last_ts: group.last_ts,
       last_text: group.last_text,
       conversation_status: conversationStatus,
@@ -2773,9 +3164,13 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       tags,
       note: normalizeCustomerNote(meta.note),
       meta_updated_at: meta.updated_at || null,
+      priority: memory.priority,
+      memory: isMeaningfulMemory(memory) ? memory : null,
       messages: group.messages,
       business_signals: {
         sales_assisted: salesSignal,
+        returning_customer: memory.confirmed_orders.length > 0,
+        purchase_stage: memory.purchase_stage,
         handoff_ever: group.handoff_ever,
         resolved_by_bot: group.resolved_by === "bot",
         resolved_by_human: group.resolved_by === "human",
@@ -2789,12 +3184,15 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
 
   const whatsappConversations = conversations.filter(function (item) { return item.channel === "whatsapp"; });
   const instagramConversations = conversations.filter(function (item) { return item.channel === "instagram"; });
+  const messengerConversations = conversations.filter(function (item) { return item.channel === "messenger"; });
   const summaries = {
     whatsapp: summarizeCustomerPanelChannel(whatsappConversations, channelStats.whatsapp),
-    instagram: summarizeCustomerPanelChannel(instagramConversations, channelStats.instagram)
+    instagram: summarizeCustomerPanelChannel(instagramConversations, channelStats.instagram),
+    messenger: summarizeCustomerPanelChannel(messengerConversations, channelStats.messenger)
   };
   const whatsappSetup = customerPanelWhatsappSetup();
   const instagramSetup = customerPanelInstagramSetup();
+  const messengerSetup = customerPanelMessengerSetup();
   const capabilities = customerPanelCapabilities(auth.role);
 
   return {
@@ -2807,9 +3205,11 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       status: CUSTOMER_PANEL_BUSINESS.status,
       whatsapp_setup: whatsappSetup,
       instagram_setup: instagramSetup,
+      messenger_setup: messengerSetup,
       channels: {
         whatsapp: Object.assign({ conversations_count: whatsappConversations.length }, whatsappSetup),
-        instagram: Object.assign({ conversations_count: instagramConversations.length }, instagramSetup)
+        instagram: Object.assign({ conversations_count: instagramConversations.length }, instagramSetup),
+        messenger: Object.assign({ conversations_count: messengerConversations.length }, messengerSetup)
       }
     },
     user: {
@@ -3033,6 +3433,7 @@ function buildCustomerPanelDemoSnapshot() {
     conversation_modes: { human: 1, bot: 1, pending: 1 },
     conversation_statuses: { ai_active: 0, needs_attention: 1, team_active: 0, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
   };
+  const messengerSummary = summarizeCustomerPanelChannel([], emptyCustomerPanelChannelStats());
   return {
     ok: true,
     demo: true,
@@ -3044,9 +3445,11 @@ function buildCustomerPanelDemoSnapshot() {
       status: CUSTOMER_PANEL_BUSINESS.status,
       whatsapp_setup: { status: "ready", label: "WhatsApp conectado" },
       instagram_setup: { status: "ready", label: "Instagram conectado" },
+      messenger_setup: { status: "ready", label: "Messenger conectado" },
       channels: {
         whatsapp: { status: "ready", label: "WhatsApp conectado", conversations_count: 4 },
-        instagram: { status: "ready", label: "Instagram conectado", conversations_count: 2 }
+        instagram: { status: "ready", label: "Instagram conectado", conversations_count: 2 },
+        messenger: { status: "ready", label: "Messenger conectado", conversations_count: 0 }
       }
     },
     user: {
@@ -3064,7 +3467,7 @@ function buildCustomerPanelDemoSnapshot() {
       to: iso(0)
     },
     summary: whatsappSummary,
-    summaries: { whatsapp: whatsappSummary, instagram: instagramSummary },
+    summaries: { whatsapp: whatsappSummary, instagram: instagramSummary, messenger: messengerSummary },
     tags: CUSTOMER_META_TAGS,
     conversations
   };
@@ -3361,6 +3764,82 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
   res.json({ ok: true, userId, meta });
 });
 
+app.get("/admin/bot-setup", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const setup = await loadBotSetup(false);
+  const defaults = createSetupRecord(defaultBotSetupAnswers(), {
+    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    status: "draft",
+    updated_by: ""
+  });
+  defaults.updated_at = null;
+  const current = setup.draft || setup.published || defaults;
+  res.json({
+    ok: true,
+    tenant: CUSTOMER_PANEL_BUSINESS,
+    can_edit: !!customerPanelCapabilities(auth.role).configure_bot,
+    industries: INDUSTRY_PROFILES,
+    current,
+    published: setup.published ? {
+      status: setup.published.status,
+      completion: setup.published.completion,
+      updated_at: setup.published.updated_at,
+      published_at: setup.published.published_at,
+      updated_by: setup.published.updated_by
+    } : null
+  });
+});
+
+app.put("/admin/bot-setup", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  try {
+    const record = await persistBotSetup(req.body && req.body.answers, "draft", auth);
+    res.json({ ok: true, setup: record });
+  } catch (error) {
+    console.error("bot setup draft error:", error.message);
+    res.status(503).json({ ok: false, error: "setup_store_unavailable", message: "No pudimos guardar la configuración. Intenta nuevamente." });
+  }
+});
+
+app.post("/admin/bot-setup/publish", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  try {
+    const existing = await loadBotSetup(false);
+    const answers = req.body && req.body.answers ? req.body.answers : existing.draft && existing.draft.answers;
+    const candidate = createSetupRecord(answers, {
+      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      status: "published",
+      updated_by: auth.name || auth.username
+    });
+    if (candidate.completion < 55) {
+      res.status(422).json({
+        ok: false,
+        error: "setup_incomplete",
+        completion: candidate.completion,
+        message: "Completa al menos la información esencial del negocio, servicio, tono y escalamiento antes de activar el bot."
+      });
+      return;
+    }
+    const record = await persistBotSetup(candidate.answers, "published", auth);
+    res.json({ ok: true, setup: record, active_for_new_messages: true });
+  } catch (error) {
+    console.error("bot setup publish error:", error.message);
+    res.status(503).json({ ok: false, error: "setup_store_unavailable", message: "No pudimos activar la configuración. Intenta nuevamente." });
+  }
+});
+
 app.get("/admin/panel/data", async (req, res) => {
   if (!adminAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -3387,6 +3866,23 @@ app.get("/admin/panel/data", async (req, res) => {
 
 app.get("/admin/panel/demo-data", (req, res) => {
   res.json(buildCustomerPanelDemoSnapshot());
+});
+
+app.get("/admin/panel/demo-setup", (req, res) => {
+  const demo = createSetupRecord(defaultBotSetupAnswers(), {
+    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    status: "draft",
+    updated_by: ""
+  });
+  demo.updated_at = null;
+  res.json({
+    ok: true,
+    tenant: CUSTOMER_PANEL_BUSINESS,
+    can_edit: false,
+    industries: INDUSTRY_PROFILES,
+    current: demo,
+    published: null
+  });
 });
 
 app.get("/admin/templates", (req, res) => {
@@ -3710,7 +4206,7 @@ loadHealth();
 app.get("/admin/panel", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
     renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
@@ -3718,7 +4214,7 @@ app.get("/admin/panel", (req, res) => {
     setDashboardSessionCookie(req, res, auth);
   }
   const capabilities = customerPanelCapabilities(auth.role);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -3732,12 +4228,13 @@ app.get("/admin/panel", (req, res) => {
 
 app.get("/admin/panel-demo", (req, res) => {
   const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer", method: "demo" };
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities: customerPanelCapabilities("viewer"),
     initialTab,
     dataPath: "/admin/panel/demo-data",
+    setupPath: "/admin/panel/demo-setup",
     healthPath: null,
     loginPath: null,
     botVersion: BOT_VERSION
@@ -4192,6 +4689,10 @@ async function buildAdminHealthResult() {
       instagram_user_id: IG_USER_ID || null,
       instagram_send_id: IG_SEND_ID || null,
       instagram_graph_base_url: IG_GRAPH_BASE_URL,
+      messenger_token_present: !!MESSENGER_PAGE_ACCESS_TOKEN,
+      messenger_page_id: MESSENGER_PAGE_ID || null,
+      messenger_app_secret_present: !!MESSENGER_APP_SECRET,
+      messenger_graph_base_url: MESSENGER_GRAPH_BASE_URL,
       phone_number_id: PHONE_NUMBER_ID,
       shopify_domain: SHOPIFY_STORE_DOMAIN,
       shopify_admin_api_version: SHOPIFY_ADMIN_API_VERSION,
@@ -4237,6 +4738,20 @@ async function buildAdminHealthResult() {
     }
   } else {
     result.checks.meta_instagram = "not_configured";
+  }
+  if (MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID) {
+    try {
+      const r = await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}`, {
+        params: { fields: "id,name" },
+        headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}` },
+        timeout: 5000
+      });
+      result.checks.meta_messenger = r.status === 200 ? "ok" : `status_${r.status}`;
+    } catch (e) {
+      result.checks.meta_messenger = `error: ${e.response?.data?.error?.message || e.message}`;
+    }
+  } else {
+    result.checks.meta_messenger = "not_configured";
   }
   result.checks.shopify_admin_api = SHOPIFY_ADMIN_TOKEN ? "key_present_not_tested" : "missing_key";
   result.checks.anthropic_api = ANTHROPIC_API_KEY ? "key_present_not_tested_to_save_credits" : "missing_key";
@@ -4699,6 +5214,7 @@ app.get("/admin/stats", async (req, res) => {
       cache_read_tokens: botStats.anthropic.cacheReadTokens,
       caching_active: cachingActive,
       cache_hit_ratio: cacheHitRatio,
+      adaptive_budget_calls: Object.assign({}, botStats.anthropic.budgetTiers),
       estimated_cost_usd: estimateCostUSD()
     },
     current_state: {

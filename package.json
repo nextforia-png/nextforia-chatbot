@@ -5,6 +5,7 @@
     "main": "index.js",
     "scripts": {
           "start": "node index.js",
+          "test": "node customer-intelligence.test.js && node bot-setup.test.js",
           "smoke": "node smoke-test.js",
           "monitor": "node monitor.js",
           "verify-deploy": "node verify-deploy.js"

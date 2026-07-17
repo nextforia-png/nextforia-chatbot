@@ -1,6 +1,6 @@
-# RAV Toys WhatsApp + Instagram Bot
+# RAV Toys WhatsApp + Instagram + Messenger Bot
 
-Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en WhatsApp e Instagram. Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
+Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para WhatsApp, Instagram y Facebook Messenger. Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
 
 ---
 
@@ -12,6 +12,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en Whats
 - 🛡️ **Garantías** — flujo guiado con factura, cédula, fecha, motivo + handoff a humano
 - 🚚 **Envíos** — info de transportadoras + same-day para Medellín con handoff opcional
 - 📦 **Estado de pedidos** — consulta Shopify Admin por número de pedido + nombre y devuelve guía/rastreo si coincide
+- **Presupuesto adaptativo de IA** — amplía respuesta e historial cuando detecta intención comercial fuerte, checkout activo o un cliente recurrente
+- **Memoria comercial persistente** — recuerda nombre preferido, productos de interés, etapa de compra y pedidos verificados sin guardar datos sensibles del checkout
 - ⭐ **Calificaciones** — pide rating 1-5 al cierre o post-handoff; rating bajo escala a humano
 - 🤝 **Handoff a humano** — Eliana (asesora comercial) recibe alertas en su WhatsApp
 - 🙈 **Manejo cálido de multimedia** — explica que aún no ve imágenes y guía al cliente a mandar links
@@ -24,7 +26,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en Whats
 - **Webhook:** Meta WhatsApp Business Cloud API
 - **IA:** Anthropic Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`)
 - **Catálogo:** Shopify storefront search JSON endpoint (`ravtoys.com/search?q=X&view=json`)
-- **Memoria:** Supabase para logs persistentes + Maps en memoria para carritos/estado activo
+- **Memoria:** Supabase para logs y memoria comercial persistente + Maps en memoria para carritos/estado activo
 
 ---
 
@@ -40,8 +42,21 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en Whats
 | `IG_SEND_ID` | ID usado en `/messages`; usa `IG_USER_ID` por defecto. Con Facebook Login, usa el ID de la página vinculada |
 | `IG_GRAPH_BASE_URL` | Host de Graph API. Usa `https://graph.instagram.com` por defecto o `https://graph.facebook.com` con Facebook Login |
 | `IG_VERIFY_TOKEN` | Token para verificar `/instagram/webhook`; usa `VERIFY_TOKEN` si se omite |
-| `META_GRAPH_VERSION` | Versión de Graph API para Instagram (default: `v23.0`) |
+| `MESSENGER_PAGE_ACCESS_TOKEN` | Page Access Token de la Página de Facebook conectada a Messenger |
+| `MESSENGER_PAGE_ID` | ID de la Página de Facebook que enviará las respuestas |
+| `MESSENGER_VERIFY_TOKEN` | Token para verificar `/messenger/webhook`; usa `VERIFY_TOKEN` si se omite |
+| `MESSENGER_APP_SECRET` | App Secret de Meta para validar la firma `X-Hub-Signature-256` de cada evento |
+| `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
+| `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
+| `AI_STANDARD_MAX_TOKENS` | Máximo de salida para conversaciones normales (default: `1000`) |
+| `AI_STANDARD_HISTORY_MESSAGES` | Historial usado en conversaciones normales (default: `8`) |
+| `AI_ENGAGED_MAX_TOKENS` | Máximo de salida para consultas comerciales (default: `1400`) |
+| `AI_ENGAGED_HISTORY_MESSAGES` | Historial usado en consultas comerciales (default: `12`) |
+| `AI_HIGH_INTENT_MAX_TOKENS` | Máximo de salida para intención alta, checkout o cliente recurrente (default: `1800`) |
+| `AI_HIGH_INTENT_HISTORY_MESSAGES` | Historial usado en intención alta (default: `18`) |
+| `CUSTOMER_MEMORY_CACHE_TTL_MS` | Duración del caché local de memoria antes de releer Supabase (default: `300000`) |
+| `CONVERSATION_SESSION_TIMEOUT_MS` | Inactividad necesaria para iniciar una sesión nueva y permitir un saludo personalizado (default: `21600000`, 6 horas) |
 | `SHOPIFY_STORE_DOMAIN` | Dominio Shopify (default: `ravtoys.myshopify.com`) |
 | `SHOPIFY_ADMIN_TOKEN` | Token Admin de Shopify (`shpat_...`) con permisos para leer pedidos y fulfillments |
 | `SHOPIFY_ADMIN_API_VERSION` | Versión Admin API para pedidos (default: `2026-04`) |
@@ -72,9 +87,9 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), activo en Whats
 | `GET /admin/stats?key=XXXX` | Snapshot del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N&key=XXXX` | Conversaciones recientes desde Supabase si está disponible |
 | `GET /admin/dashboard?key=XXXX` | Panel operativo con tabs para métricas e intervención humana |
-| `GET /admin/panel?tab=summary` | Panel de control del cliente con KPIs y conversaciones unificados para WhatsApp e Instagram |
-| `GET /admin/panel-demo?tab=summary` | Demo pública de solo lectura con datos sanitizados de ambos canales |
-| `GET /admin/panel/data` | Datos protegidos del panel, con `summaries.whatsapp`, `summaries.instagram` y conversaciones identificadas por canal |
+| `GET /admin/panel?tab=summary` | Panel de control del cliente con KPIs y conversaciones unificados para WhatsApp, Instagram y Messenger |
+| `GET /admin/panel-demo?tab=summary` | Demo pública de solo lectura con datos sanitizados de los canales conectados |
+| `GET /admin/panel/data` | Datos protegidos del panel, con resúmenes por canal y conversaciones identificadas como WhatsApp, Instagram o Messenger |
 | `GET /admin/inbox?key=XXXX` | Acceso directo opcional a la bandeja operativa |
 | `GET /admin/customer-meta?key=XXXX` | Etiquetas y notas internas por cliente para el panel |
 | `POST /admin/customer-meta/:userId` | Guarda etiquetas/notas internas del cliente seleccionado |
@@ -99,10 +114,10 @@ de la app. Para atender cuentas externas, solicita acceso avanzado a
 `instagram_business_manage_messages` mediante Meta App Review.
 
 El Panel de Control muestra un solo módulo de **Atención al cliente**. Sus KPIs,
-conversaciones y casos que necesitan al equipo combinan WhatsApp e Instagram; cada chat
+conversaciones y casos que necesitan al equipo combinan WhatsApp, Instagram y Messenger; cada chat
 conserva una identificación visual clara de su canal. El panel nunca expone tokens ni IDs
 internos de configuración.
-La bandeja está preparada para crecer a Messenger y correo: el canal aparece como un
+La bandeja está preparada para crecer a correo: el canal aparece como un
 distintivo sobre el avatar y la cabecera comunica que todo llega a una sola bandeja. La UI
 mantiene únicamente tres estados: **Necesita de ti**, **La IA está atendiendo** y
 **Resuelta por la IA**.
@@ -110,10 +125,32 @@ Cuando un usuario escribe por Instagram, el bot consulta y guarda su `@username`
 API oficial de perfiles. El panel muestra ese usuario y permite buscarlo; si Meta no lo
 entrega, conserva como respaldo el identificador abreviado de la conversación.
 
+### Webhook de Facebook Messenger
+
+1. En Meta for Developers, agrega Messenger a la misma app y conecta la Página de Facebook.
+2. Genera el Page Access Token y configura `MESSENGER_PAGE_ACCESS_TOKEN` y `MESSENGER_PAGE_ID` en Render.
+3. Registra `https://TU-DOMINIO/messenger/webhook` como callback y usa `MESSENGER_VERIFY_TOKEN` como token de verificación.
+4. Suscribe la Página, como mínimo, a los campos `messages` y `messaging_postbacks`.
+5. Configura también `MESSENGER_APP_SECRET` para rechazar eventos que no estén firmados por Meta.
+6. Prueba desde una cuenta con rol en la app. Para atender al público, solicita los permisos requeridos por Meta (`pages_messaging`, `pages_manage_metadata` y `pages_read_engagement`) y completa App Review cuando aplique.
+
+Los usuarios de Messenger quedan identificados internamente como `ms:<PSID>`. El prefijo
+evita mezclar sus conversaciones con números de WhatsApp o IDs de Instagram. Texto,
+imágenes, handoff humano, notas, métricas e historial usan la misma bandeja omnicanal.
+Las respuestas normales usan `messaging_type: RESPONSE` y deben respetar la ventana estándar
+de mensajería de 24 horas de Messenger; fuera de ella Meta exige una modalidad permitida.
+
 La bandeja traduce la operación a tres estados visibles: **Necesita de ti**, **La IA está
 atendiendo** y **Resuelta por la IA**. Cuando el dueño hace falta, la IA deja una respuesta
 editable lista para **Confirmar y enviar**. La evolución de personalización está definida en
 [`docs/customer-memory-roadmap.md`](docs/customer-memory-roadmap.md).
+
+La primera fase de memoria comercial está activa desde `v72`: una consulta general usa el
+presupuesto estándar, una consulta de precio o disponibilidad usa el nivel interesado y
+una intención explícita de compra, un checkout activo o un cliente recurrente usa el nivel
+alto. El panel muestra prioridad, intereses y condición recurrente cuando existen. La
+memoria solo se crea con una señal comercial fuerte o un hito de compra; no conserva
+cédula, dirección, teléfono de checkout ni método de pago.
 
 ### Primer cliente: RAV Toys
 
@@ -321,6 +358,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v68 | Atención al cliente unificada con WhatsApp e Instagram diferenciados por conversación |
 | v69 | Acceso genérico Nextfor IA para RAV Toys y futuros clientes, optimizado para escritorio y móvil |
 | v70 | Conversaciones multicanal con distintivos en avatares, bandeja única y ficha de inteligencia |
+| v71 | Facebook Messenger con webhook firmado, respuestas, métricas y handoff en la bandeja omnicanal |
 
 ---
 

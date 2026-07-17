@@ -8,7 +8,7 @@ const INDUSTRY_PROFILES = {
     ]
   },
   restaurants: {
-    label: "Restaurantes y alimentos",
+    label: "Restaurantes y comida",
     questions: [
       { id: "menu", label: "¿Dónde consulta el menú, precios y disponibilidad?", placeholder: "Menú, platos agotados, promociones…" },
       { id: "orders", label: "¿Cómo se reciben pedidos, reservas y domicilios?", placeholder: "Canales, zonas, horarios y tiempos…" },
@@ -24,7 +24,7 @@ const INDUSTRY_PROFILES = {
     ]
   },
   real_estate: {
-    label: "Inmobiliaria y propiedad raíz",
+    label: "Inmobiliaria",
     questions: [
       { id: "inventory", label: "¿Dónde consulta los inmuebles disponibles y sus datos?", placeholder: "Portal, CRM, asesor o inventario…" },
       { id: "qualification", label: "¿Qué debe preguntar para entender lo que busca cada cliente?", placeholder: "Zona, presupuesto, tipo de inmueble, compra o arriendo…" },
@@ -40,11 +40,19 @@ const INDUSTRY_PROFILES = {
     ]
   },
   education: {
-    label: "Educación y formación",
+    label: "Educación",
     questions: [
       { id: "programs", label: "¿Qué programas, cursos o niveles puede recomendar?", placeholder: "Oferta, público y modalidad…" },
       { id: "admissions", label: "¿Cómo funcionan inscripción, admisiones y pagos?", placeholder: "Fechas, requisitos y pasos…" },
       { id: "calendar", label: "¿Qué debe saber sobre horarios, calendario y certificaciones?", placeholder: "Jornadas, duración y condiciones…" }
+    ]
+  },
+  beauty: {
+    label: "Belleza y estética",
+    questions: [
+      { id: "appointments", label: "¿Cómo se agenda una cita o servicio?", placeholder: "Horarios, profesionales y duración…" },
+      { id: "care", label: "¿Qué debe aclarar sobre preparación y cuidados?", placeholder: "Antes y después del servicio…" },
+      { id: "pricing", label: "¿Qué debe explicar sobre precios, paquetes y promociones?", placeholder: "Tarifas, combos y condiciones…" }
     ]
   },
   hospitality: {
@@ -56,7 +64,7 @@ const INDUSTRY_PROFILES = {
     ]
   },
   other: {
-    label: "Otra industria",
+    label: "Otro",
     questions: [
       { id: "workflow", label: "¿Cuál es el proceso más importante que el bot debe entender?", placeholder: "Explícalo paso a paso…" },
       { id: "questions", label: "¿Qué tres preguntas hacen con mayor frecuencia tus clientes?", placeholder: "Pregunta y respuesta ideal…" },
@@ -73,7 +81,8 @@ const DEFAULT_ANSWERS = {
     description: "",
     audience: "",
     differentiators: "",
-    website: ""
+    website: "",
+    web_platform: ""
   },
   presence: {
     locations: "",
@@ -101,6 +110,10 @@ const DEFAULT_ANSWERS = {
     messenger: true,
     whatsapp: false,
     web: false,
+    whatsapp_number: "",
+    instagram_handle: "",
+    messenger_page: "",
+    tiktok_handle: "",
     notes: ""
   },
   automation: {
@@ -184,7 +197,8 @@ function normalizeAnswers(input) {
       description: cleanText(business.description, 3000),
       audience: cleanText(business.audience, 2000),
       differentiators: cleanText(business.differentiators, 2000),
-      website: cleanText(business.website, 500)
+      website: cleanText(business.website, 500),
+      web_platform: cleanChoice(business.web_platform, ["", "shopify", "woocommerce", "wix", "squarespace", "social_shop", "other", "none"], "")
     },
     presence: {
       locations: cleanText(presence.locations, 4000),
@@ -212,6 +226,10 @@ function normalizeAnswers(input) {
       messenger: !!channels.messenger,
       whatsapp: !!channels.whatsapp,
       web: !!channels.web,
+      whatsapp_number: cleanText(channels.whatsapp_number, 80),
+      instagram_handle: cleanText(channels.instagram_handle, 120),
+      messenger_page: cleanText(channels.messenger_page, 160),
+      tiktok_handle: cleanText(channels.tiktok_handle, 120),
       notes: cleanText(channels.notes, 2000)
     },
     automation: {
@@ -265,7 +283,7 @@ function calculateCompletion(answers) {
     answers.service.conditions,
     answers.voice.tone,
     answers.automation.can_answer,
-    answers.automation.handoff_cases,
+    answers.automation.must_not_answer,
     answers.outcomes.primary_goal,
     answers.outcomes.success_metrics,
     Object.values(answers.channels).some(function (value) { return value === true; }) ? "yes" : ""
@@ -300,7 +318,8 @@ function buildDerivedConfig(answers) {
     ["Descripción", answers.business.description],
     ["Cliente ideal", answers.business.audience],
     ["Diferenciadores", answers.business.differentiators],
-    ["Sitio web", answers.business.website]
+    ["Sitio web", answers.business.website],
+    ["Plataforma web", answers.business.web_platform]
   ]);
   addSection(lines, "SEDES Y COBERTURA", [
     ["Sedes o puntos", answers.presence.locations],
@@ -332,6 +351,10 @@ function buildDerivedConfig(answers) {
   ]);
   addSection(lines, "CANALES", [
     ["Canales activos", enabledChannels.join(", ")],
+    ["Número de WhatsApp", answers.channels.whatsapp_number],
+    ["Usuario de Instagram", answers.channels.instagram_handle],
+    ["Página de Facebook o Messenger", answers.channels.messenger_page],
+    ["Usuario de TikTok", answers.channels.tiktok_handle],
     ["Consideraciones por canal", answers.channels.notes]
   ]);
   addSection(lines, "OBJETIVOS", [

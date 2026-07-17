@@ -17,6 +17,7 @@ function completeAnswers() {
   answers.service.main_offering = "Juguetes y regalos.";
   answers.service.conditions = "Garantía por defectos de fábrica.";
   answers.automation.can_answer = "Productos, horarios y envíos.";
+  answers.automation.must_not_answer = "Descuentos especiales ni datos privados.";
   answers.automation.handoff_cases = "Reclamos, negociación o solicitud del cliente.";
   answers.outcomes.primary_goal = "Aumentar ventas atendidas desde redes.";
   answers.outcomes.success_metrics = "Ventas asistidas y tiempo de respuesta.";
@@ -28,14 +29,16 @@ assert(INDUSTRY_PROFILES.commerce.questions.length >= 3, "commerce must have ada
 assert(INDUSTRY_PROFILES.health.questions.some(question => question.id === "safety"), "health must include safety boundaries");
 
 const normalized = normalizeAnswers({
-  business: { industry: "unknown", name: "  Negocio  " },
+  business: { industry: "unknown", name: "  Negocio  ", web_platform: "shopify" },
   voice: { formality: "invalid", emojis: "frecuentes" },
-  channels: { instagram: true }
+  channels: { instagram: true, instagram_handle: " @negocio " }
 });
 assert.strictEqual(normalized.business.industry, "other");
 assert.strictEqual(normalized.business.name, "Negocio");
+assert.strictEqual(normalized.business.web_platform, "shopify");
 assert.strictEqual(normalized.voice.formality, "cercano");
 assert.strictEqual(normalized.channels.instagram, true);
+assert.strictEqual(normalized.channels.instagram_handle, "@negocio");
 assert.strictEqual(normalized.retargeting.mode, "disabled");
 assert.strictEqual(normalized.retargeting.require_marketing_opt_in, true);
 
@@ -63,6 +66,8 @@ assert.strictEqual(retargeting.require_marketing_opt_in, true);
 assert.strictEqual(retargeting.stop_on_opt_out, true);
 
 const answers = completeAnswers();
+answers.business.web_platform = "shopify";
+answers.channels.instagram_handle = "@ravtoys";
 const completion = calculateCompletion(normalizeAnswers(answers));
 assert(completion >= 80, "a useful setup should be ready to publish");
 
@@ -70,6 +75,8 @@ const derived = buildDerivedConfig(answers);
 assert(derived.system_prompt.includes("RAV Toys"));
 assert(derived.system_prompt.includes("fuente de verdad"));
 assert(derived.system_prompt.includes("Catálogo web oficial"));
+assert(derived.system_prompt.includes("shopify"));
+assert(derived.system_prompt.includes("@ravtoys"));
 assert.deepStrictEqual(derived.enabled_channels, ["instagram", "messenger"]);
 assert.strictEqual(derived.retargeting.mode, "disabled");
 

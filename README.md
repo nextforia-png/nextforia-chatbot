@@ -359,6 +359,9 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v69 | Acceso genérico Nextfor IA para RAV Toys y futuros clientes, optimizado para escritorio y móvil |
 | v70 | Conversaciones multicanal con distintivos en avatares, bandeja única y ficha de inteligencia |
 | v71 | Facebook Messenger con webhook firmado, respuestas, métricas y handoff en la bandeja omnicanal |
+| v72 | Bandeja de conversaciones más amplia y conversaciones cerrables |
+| v73 | Configuración guiada de NexforIA y memoria comercial del cliente |
+| v74 | Ventas asistidas y cierres por confirmar en el resumen del cliente |
 
 ---
 

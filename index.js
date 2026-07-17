@@ -35,7 +35,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v73-bot-setup";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v74-summary-sales-kpis";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "rav_toys_webhook_2026";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "ravtoys2026";  // clave del panel /admin/dashboard
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2958,7 +2958,7 @@ function summarizeCustomerPanelChannel(conversations, stats) {
     opportunities_detected: channelStats.zero_result_searches || 0,
     sales_assisted: {
       count: salesAssisted,
-      label: salesAssisted === 1 ? "venta o intento de compra" : "ventas o intentos de compra",
+      label: salesAssisted === 1 ? "venta asistida" : "ventas asistidas",
       confidence: "intent_or_checkout_signal"
     },
     solutions_provided: {
@@ -3384,7 +3384,7 @@ function buildCustomerPanelDemoSnapshot() {
     pending_human_replies: 2,
     zero_result_searches: 14,
     opportunities_detected: 14,
-    sales_assisted: { count: 47, label: "ventas o intentos de compra", confidence: "demo" },
+    sales_assisted: { count: 47, label: "ventas asistidas", confidence: "demo" },
     solutions_provided: { count: 268, by_human: 44, total: 312, partial: 31, evaluated: 312, rate: 86 },
     rating: { average: 4.8, count: 214 },
     messages_by_day: [
@@ -3413,7 +3413,7 @@ function buildCustomerPanelDemoSnapshot() {
     pending_human_replies: 1,
     zero_result_searches: 7,
     opportunities_detected: 7,
-    sales_assisted: { count: 23, label: "ventas o intentos de compra", confidence: "demo" },
+    sales_assisted: { count: 23, label: "ventas asistidas", confidence: "demo" },
     solutions_provided: { count: 103, by_human: 23, total: 126, partial: 14, evaluated: 126, rate: 82 },
     rating: { average: 4.7, count: 71 },
     messages_by_day: [

@@ -92,3 +92,7 @@ Formato JSON:
 ## Regla de seguridad
 
 Antes de vender a otro cliente, ninguna asesora o admin de un comercio debe poder ver conversaciones, tokens, metricas o configuracion de otro comercio.
+
+# Acceso y recuperación Super Admin
+
+El acceso de plataforma vive en `/admin/super-admin/login` y acepta correo o usuario de un registro `DASHBOARD_USERS` con rol `super_admin`. La opción “¿Olvidaste tu contraseña?” cambia al flujo de recuperación con la clave maestra `DASHBOARD_KEY`, almacenada únicamente como secreto de Render. Nunca se envían credenciales por correo ni se guardan en GitHub.

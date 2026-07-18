@@ -48,6 +48,7 @@ function waitForServer(child, port) {
       PORT: String(port),
       NODE_ENV: "test",
       DASHBOARD_KEY: dashboardKey,
+      DASHBOARD_USERS: JSON.stringify([{ username: "platform-owner", email: "owner@example.test", password: "test-platform-password", name: "Platform Owner", role: "super_admin" }]),
       DASHBOARD_SESSION_SECRET: "security-e2e-session-secret-value",
       META_APP_SECRET: appSecret,
       VERIFY_TOKEN: "security-e2e-verify-token",
@@ -88,6 +89,15 @@ function waitForServer(child, port) {
     const cookie = response.headers.get("set-cookie") || "";
     assert(cookie.includes("HttpOnly"));
     assert(cookie.includes("SameSite=Strict"));
+
+    response = await fetch(base + "/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ username: "owner@example.test", password: "test-platform-password" })
+    });
+    assert.strictEqual(response.status, 200, "super admin email login should succeed");
+    const emailLogin = await response.json();
+    assert.strictEqual(emailLogin.user.role, "super_admin");
 
     const webhookBody = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
     response = await fetch(base + "/webhook", {

@@ -96,6 +96,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `POST /admin/login` | Crea sesión del dashboard por usuario/clave o clave maestra |
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
+| `GET /admin/super-admin/login` | Entrada independiente de plataforma por correo/usuario; incluye recuperación mediante la clave maestra de Render |
 | `POST /admin/customer-invite` | Super admin: genera una invitación firmada de 24 horas para crear el primer acceso |
 | `GET/POST /admin/setup/rav-toys` | Formulario y creación segura del usuario administrador del cliente |
 | `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |

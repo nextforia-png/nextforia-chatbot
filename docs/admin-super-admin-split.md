@@ -59,6 +59,7 @@ El panel Super admin debe enfocarse en plataforma y soporte tecnico:
 - El dashboard operativo muestra el enlace **Super admin** solo para una sesion `super_admin` o la clave maestra.
 - Super Admin Panel v1 resume version, salud, modelo de acceso, readiness comercial, campos de onboarding, tenant default y proximos pasos sin mostrar valores sensibles.
 - En `v80`, el panel adopta el sistema visual NexforIA del handoff: sidebar de plataforma, vistas Resumen/Clientes/Leads/Incidencias/Facturación, detalle de RAV Toys y acceso al piloto DERCO. Las vistas sin fuente productiva muestran estados vacíos explícitos y no métricas simuladas.
+- Desde `v81`, `/admin/super-admin/login` es la entrada exclusiva de plataforma. Una sesión `admin`, `agent` o `viewer` se redirige allí, pero no se eleva: debe validar una cuenta `super_admin` o la clave maestra antes de reemplazar la sesión cliente.
 
 ## Configuracion de usuarios
 

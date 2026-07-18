@@ -19,6 +19,7 @@ const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
 const renderSuperAdminPanel = require("./super-admin-panel");
+const renderSuperAdminLogin = require("./super-admin-login");
 const renderAppointmentPanel = require("./appointment-panel");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderClientOnboarding = require("./client-onboarding-page");
@@ -133,7 +134,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v80-super-admin-handoff";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v81-super-admin-login";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5088,16 +5089,11 @@ function escapeAdminHtml(value) {
 app.get("/admin/super-admin", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
-    renderAdminLogin(res, "/admin/super-admin");
+    res.redirect("/admin/super-admin/login");
     return;
   }
   if (auth.role !== "super_admin") {
-    res.status(403).setHeader("content-type", "text/html; charset=utf-8");
-    res.send(`<!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Acceso restringido · NexforIA</title>
-<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:20px}.box{width:min(460px,100%);background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:24px;box-shadow:0 12px 28px rgba(31,42,68,.08)}h1{font-size:18px;margin:0 0 8px}p{font-size:13px;color:#6B7280;line-height:1.6;margin:0 0 18px}.badge{display:inline-flex;font-size:11px;color:#9A6216;background:#FAEEDA;padding:4px 10px;border-radius:999px;margin-bottom:14px}.btn{display:inline-flex;text-decoration:none;border:1px solid #cfe3e3;color:#0F6E56;border-radius:8px;padding:8px 12px;font-size:13px}</style></head>
-<body><main class="box"><span class="badge">Rol actual: ${escapeAdminHtml(DASHBOARD_ROLE_LABELS[auth.role] || auth.role)}</span><h1>Acceso restringido</h1><p>Este panel contiene operaciones de plataforma de NexforIA y requiere el rol <strong>super_admin</strong>. Tu acceso al panel operativo de RAV Toys sigue disponible.</p><a class="btn" href="/admin/dashboard">Volver al panel Admin</a></main></body></html>`);
+    res.redirect("/admin/super-admin/login?reason=role");
     return;
   }
   if (auth.method === "key") {
@@ -5111,6 +5107,18 @@ app.get("/admin/super-admin", (req, res) => {
     accessModel: DASHBOARD_ACCESS_MODEL,
     tenant: CUSTOMER_PANEL_BUSINESS,
     registeredClients: listRegisteredClients()
+  });
+});
+
+app.get("/admin/super-admin/login", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (auth.ok && auth.role === "super_admin") {
+    res.redirect("/admin/super-admin");
+    return;
+  }
+  renderSuperAdminLogin(res, {
+    currentRole: auth.ok ? auth.role : "none",
+    currentRoleLabel: auth.ok ? (DASHBOARD_ROLE_LABELS[auth.role] || auth.role) : ""
   });
 });
 

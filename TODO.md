@@ -72,6 +72,7 @@ Backlog operativo despues de dejar App Review enviada y produccion en `v60`.
   - Estado 2026-07-09: `v59` agrega rol `super_admin`, endpoint `/admin/access-model` y documento `docs/admin-super-admin-split.md`.
   - Estado 2026-07-11: `v60` agrega `/admin/super-admin`, acceso exclusivo por rol, enlace condicional y checklist de la siguiente fase multi-cliente.
   - Estado 2026-07-18: `v80` aplica el handoff visual NexforIA al Super Admin Panel, conecta salud/readiness/clientes registrados y deja Leads/Facturación como estados honestos hasta contar con fuentes de datos reales.
+  - Estado 2026-07-18: `v81` separa completamente la entrada Super Admin del login de clientes y permite cambiar una sesión cliente solo después de validar credenciales de plataforma.
   - Done: panel listo para mas de una persona operando.
 
 ## Media prioridad

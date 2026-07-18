@@ -25,3 +25,13 @@ Normalized product results keep the existing fields used by the bot: `title`,
 5. Pilot both connectors before adding VTEX.
 
 Credentials must never be returned by health endpoints or written to conversation logs.
+
+## Shopify app status
+
+The installable app lives in `apps/shopify/nexforia-commerce`. It is linked to the
+Shopify Developer Dashboard and includes OAuth, server-side session storage, uninstall
+handling, read-only catalog operations, and identity-validated order tracking.
+
+The remaining connection step is a signed pairing flow that associates the installed
+shop with a NexforIA `tenant_id` after secure credential storage is available in the
+platform backend.

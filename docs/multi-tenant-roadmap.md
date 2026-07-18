@@ -97,8 +97,9 @@ Agregar gradualmente:
 ## Fases tecnicas
 
 1. Fase A: simulacion multi-cliente
-   - Mantener RAV como tenant default.
-   - Agregar `tenant_id` a logs nuevos.
+   - [x] Mantener RAV como tenant default configurable por entorno.
+   - [x] Preparar `tenant_id`, `phone_number_id` y `channel` en logs nuevos con migracion compatible.
+   - [x] Rechazar mensajes de WhatsApp dirigidos a un `phone_number_id` distinto al configurado.
    - Crear endpoint admin de readiness/comercializacion.
    - Mantener `super_admin` como rol de plataforma y `admin` como rol del cliente.
    - Mantener variables actuales para no romper produccion.

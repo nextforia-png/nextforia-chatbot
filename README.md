@@ -36,6 +36,13 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 
 | Variable | Descripción |
 |---|---|
+| `DEFAULT_TENANT_ID` | Identificador interno del comercio; `rav-toys` se mantiene como valor inicial |
+| `TENANT_BRAND_NAME` | Nombre visible del comercio en el panel |
+| `TENANT_CUSTOMER_NUMBER` | Número interno consecutivo del cliente |
+| `TENANT_STATUS` | Estado operativo del tenant, por ejemplo `active` o `pilot` |
+| `TENANT_SERVICE_COUNTRY_CODE` | Código ISO de dos letras del país atendido; `CO` por defecto |
+| `TENANT_SERVICE_COUNTRY_NAME` | Nombre que el bot usa al confirmar ubicación; `Colombia` por defecto |
+| `TENANT_FOREIGN_NUMBER_CHECK_ENABLED` | Confirma el país atendido cuando un número extranjero aún no tiene respuesta; usa `0` para desactivar |
 | `WA_TOKEN` | Token permanente de Meta WhatsApp |
 | `PHONE_NUMBER_ID` | ID del número WhatsApp registrado en Meta |
 | `VERIFY_TOKEN` | Token aleatorio de verificación del webhook (requerido en producción, mínimo 24 caracteres) |
@@ -68,6 +75,11 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
+| `SUPABASE_TENANT_COLUMNS_ENABLED` | Activa escritura y filtrado por tenant después de aplicar la migración Phase A |
+| `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |
+| `ELEVENLABS_DERCO_AGENT_ID` | ID del agente de DERCO; lo vincula al tenant `grupo-derco` |
+| `ELEVENLABS_AGENT_TENANT_MAP` | Mapa JSON opcional `agent_id -> tenant_id` para más clientes |
+| `SUPABASE_APPOINTMENTS_ENABLED` | Activa persistencia de citas después de aplicar la migración correspondiente |
 | `DASHBOARD_KEY` | Clave maestra aleatoria (mínimo 32 caracteres); los clientes automatizados la envían solo en `X-Dashboard-Key` |
 | `DASHBOARD_USERS` | Usuarios del panel en CSV o JSON; el JSON puede incluir `email` como identificador alternativo de acceso |
 | `DASHBOARD_SESSION_SECRET` | Secreto independiente para firmar cookies del panel (mínimo 32 caracteres) |
@@ -94,6 +106,9 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `GET /admin/dashboard` | Panel operativo con tabs para métricas e intervención humana |
 | `GET /admin/panel?tab=summary` | Panel de control del cliente con KPIs y conversaciones unificados para WhatsApp, Instagram y Messenger |
 | `GET /admin/panel-demo?tab=summary` | Demo pública de solo lectura con datos sanitizados de los canales conectados |
+| `GET /admin/client-onboarding` | Formulario protegido para recopilar y revisar el alta inicial del comercio |
+| `GET/PUT /admin/client-onboarding/data` | Consulta o guarda el avance del onboarding por tenant |
+| `GET /admin/client-onboarding-demo` | Vista previa segura del recorrido de onboarding sin guardar datos reales |
 | `GET /admin/panel/data` | Datos protegidos del panel, con resúmenes por canal y conversaciones identificadas como WhatsApp, Instagram o Messenger |
 | `GET /admin/inbox` | Acceso directo opcional a la bandeja operativa |
 | `GET /admin/customer-meta` | Etiquetas y notas internas por cliente para el panel |
@@ -106,6 +121,9 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `POST /admin/alert` | Envía alerta interna protegida por `DASHBOARD_KEY` |
 | `GET /admin/test-search?q=XXXX` | Prueba protegida de búsqueda sin afectar a clientes reales |
 | `POST /admin/release/:userId` | Libera un handoff manual (vuelve el bot a atender) y marca para pedir rating |
+| `GET /admin/pilots/derco` | Panel aislado del cliente #1 para revisar citas del piloto DERCO |
+| `GET /admin/pilots/derco/data` | Datos y métricas de citas, limitados al tenant DERCO |
+| `POST /webhooks/elevenlabs/post-call` | Recibe eventos firmados de ElevenLabs y sincroniza citas con Nextfor |
 
 ### Webhook de Instagram
 
@@ -176,6 +194,7 @@ después de autenticar, de modo que el mismo acceso pueda servir a más clientes
 - Plantillas WhatsApp iniciales: [`docs/whatsapp-templates.md`](docs/whatsapp-templates.md)
 - Playbook comercial para asesoras: [`docs/commercial-playbook.md`](docs/commercial-playbook.md)
 - Onboarding comercial para futuros clientes: [`docs/commercial-onboarding.md`](docs/commercial-onboarding.md)
+- Setup operativo de clientes piloto: [`docs/pilot-client-setup.md`](docs/pilot-client-setup.md)
 - Roadmap multi-cliente: [`docs/multi-tenant-roadmap.md`](docs/multi-tenant-roadmap.md)
 - División Admin/Super admin: [`docs/admin-super-admin-split.md`](docs/admin-super-admin-split.md)
 - Política de retargeting: [`docs/retargeting-policy.md`](docs/retargeting-policy.md)
@@ -369,6 +388,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v71 | Facebook Messenger con webhook firmado, respuestas, métricas y handoff en la bandeja omnicanal |
 | v72 | Bandeja de conversaciones más amplia y conversaciones cerrables |
 | v73 | Configuración guiada de NexforIA y memoria comercial del cliente |
+| v80 | Super Admin Panel rediseñado desde el handoff NexforIA: navegación de plataforma, clientes registrados, salud, readiness y estados futuros sin datos ficticios |
 | v74 | Ventas asistidas y cierres por confirmar en el resumen del cliente |
 
 ---

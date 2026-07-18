@@ -7,7 +7,7 @@ La pestaña **Configuración de tu NexforIA** reúne el conocimiento mínimo que
 El formulario está organizado en siete pasos:
 
 1. Identidad del negocio, industria, cliente ideal y diferenciadores.
-2. Sedes, cómo llegar, horarios y cobertura.
+2. Sedes, cómo llegar, horarios, cobertura y país principal de atención.
 3. Productos o servicios, preguntas frecuentes y condiciones de atención.
 4. Tres preguntas que cambian automáticamente según la industria.
 5. Tono, vocabulario, saludo y canales.
@@ -29,6 +29,7 @@ Al publicar, `bot-setup.js` normaliza las respuestas y genera una capa de instru
 
 - identidad y nombre del asistente;
 - conocimiento del negocio, sedes, horarios y políticas;
+- país atendido y confirmación amable cuando el número de WhatsApp parece extranjero;
 - tono, formalidad, emojis, palabras preferidas y prohibidas;
 - canales habilitados;
 - acciones permitidas, límites y escalamiento;

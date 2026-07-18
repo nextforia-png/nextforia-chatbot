@@ -1,3 +1,5 @@
+const { normalizeCountryCode } = require("./service-area");
+
 const INDUSTRY_PROFILES = {
   commerce: {
     label: "Comercio y retail",
@@ -88,7 +90,10 @@ const DEFAULT_ANSWERS = {
     locations: "",
     how_to_arrive: "",
     hours: "",
-    coverage: ""
+    coverage: "",
+    service_country_code: "CO",
+    service_country_name: "Colombia",
+    foreign_number_check_enabled: true
   },
   service: {
     main_offering: "",
@@ -189,6 +194,8 @@ function normalizeAnswers(input) {
   INDUSTRY_PROFILES[industry].questions.forEach(function (question) {
     industryAnswers[question.id] = cleanText((input.industry_answers || {})[question.id], 3000);
   });
+  const serviceCountryCode = normalizeCountryCode(presence.service_country_code, "CO");
+  const serviceCountryName = cleanText(presence.service_country_name, 80) || (serviceCountryCode === "CO" ? "Colombia" : serviceCountryCode);
   return {
     business: {
       name: cleanText(business.name, 120),
@@ -204,7 +211,10 @@ function normalizeAnswers(input) {
       locations: cleanText(presence.locations, 4000),
       how_to_arrive: cleanText(presence.how_to_arrive, 3000),
       hours: cleanText(presence.hours, 2000),
-      coverage: cleanText(presence.coverage, 2000)
+      coverage: cleanText(presence.coverage, 2000),
+      service_country_code: serviceCountryCode,
+      service_country_name: serviceCountryName,
+      foreign_number_check_enabled: presence.foreign_number_check_enabled !== false
     },
     service: {
       main_offering: cleanText(service.main_offering, 4000),
@@ -325,7 +335,10 @@ function buildDerivedConfig(answers) {
     ["Sedes o puntos", answers.presence.locations],
     ["Cómo llegar", answers.presence.how_to_arrive],
     ["Horarios", answers.presence.hours],
-    ["Cobertura", answers.presence.coverage]
+    ["Cobertura", answers.presence.coverage],
+    ["País o mercado atendido", answers.presence.service_country_name],
+    ["Código de país", answers.presence.service_country_code],
+    ["Confirmar ubicación de números extranjeros", answers.presence.foreign_number_check_enabled ? "Sí" : "No"]
   ]);
   addSection(lines, "SERVICIO AL CLIENTE", [
     ["Oferta principal", answers.service.main_offering],
@@ -372,6 +385,11 @@ function buildDerivedConfig(answers) {
     industry: answers.business.industry,
     industry_label: profile.label,
     enabled_channels: enabledChannels,
+    service_area: {
+      country_code: answers.presence.service_country_code,
+      country_name: answers.presence.service_country_name,
+      foreign_number_check_enabled: answers.presence.foreign_number_check_enabled
+    },
     retargeting: answers.retargeting,
     completion: calculateCompletion(answers),
     system_prompt: lines.join("\n")

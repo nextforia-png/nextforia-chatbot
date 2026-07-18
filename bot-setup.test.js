@@ -39,6 +39,9 @@ assert.strictEqual(normalized.business.web_platform, "shopify");
 assert.strictEqual(normalized.voice.formality, "cercano");
 assert.strictEqual(normalized.channels.instagram, true);
 assert.strictEqual(normalized.channels.instagram_handle, "@negocio");
+assert.strictEqual(normalized.presence.service_country_code, "CO");
+assert.strictEqual(normalized.presence.service_country_name, "Colombia");
+assert.strictEqual(normalized.presence.foreign_number_check_enabled, true);
 assert.strictEqual(normalized.retargeting.mode, "disabled");
 assert.strictEqual(normalized.retargeting.require_marketing_opt_in, true);
 
@@ -79,6 +82,9 @@ assert(derived.system_prompt.includes("shopify"));
 assert(derived.system_prompt.includes("@ravtoys"));
 assert.deepStrictEqual(derived.enabled_channels, ["instagram", "messenger"]);
 assert.strictEqual(derived.retargeting.mode, "disabled");
+assert.strictEqual(derived.service_area.country_code, "CO");
+assert.strictEqual(derived.service_area.foreign_number_check_enabled, true);
+assert(derived.system_prompt.includes("País o mercado atendido: Colombia"));
 
 const record = createSetupRecord(answers, { tenant_id: "rav-toys", status: "published", updated_by: "Admin" });
 assert.strictEqual(record.status, "published");

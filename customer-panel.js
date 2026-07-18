@@ -1059,6 +1059,9 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
                 <label class="setupField"><span>¿Cómo llega una persona?</span><textarea data-setup="presence.how_to_arrive" placeholder="Referencias, parqueadero, piso, local o enlace de Maps."></textarea></label>
                 <label class="setupField"><span>¿Cuáles son tus horarios?</span><textarea data-setup="presence.hours" placeholder="Días, horas, festivos y diferencias por sede."></textarea></label>
                 <label class="setupField"><span>¿En qué zonas atiendes?</span><textarea data-setup="presence.coverage" placeholder="Ciudades, países, zonas de entrega o atención virtual."></textarea></label>
+                <label class="setupField"><span>País principal de atención</span><input data-setup="presence.service_country_name" maxlength="80" placeholder="Ej. Colombia"></label>
+                <label class="setupField"><span>Código ISO del país</span><input data-setup="presence.service_country_code" maxlength="2" placeholder="Ej. CO" autocapitalize="characters"></label>
+                <div class="setupField wide"><span>Validación de ubicación</span><div class="channelChoices"><label class="channelChoice"><input type="checkbox" data-setup="presence.foreign_number_check_enabled">Preguntar a los números extranjeros si están en el país atendido</label></div></div>
               </div>
             </section>
 

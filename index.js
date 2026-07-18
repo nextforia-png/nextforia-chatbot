@@ -2,6 +2,7 @@ const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
 const path = require("path");
+const { ElevenLabsClient } = require("@elevenlabs/elevenlabs-js");
 const {
   createRateLimiter,
   decryptStoredText,
@@ -17,7 +18,15 @@ const {
 const WHATSAPP_TEMPLATES = require("./whatsapp-templates");
 const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
+const renderSuperAdminPanel = require("./super-admin-panel");
+const renderAppointmentPanel = require("./appointment-panel");
 const renderCustomerPasswordSetup = require("./customer-access");
+const renderClientOnboarding = require("./client-onboarding-page");
+const {
+  buildCoverageConversationContext,
+  cloneDefaults: defaultClientOnboarding,
+  createOnboardingRecord
+} = require("./client-onboarding");
 const {
   INDUSTRY_PROFILES,
   copyDefaults: defaultBotSetupAnswers,
@@ -38,6 +47,24 @@ const {
   isStopMessage
 } = require("./retargeting");
 const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
+const { AppointmentRegistry } = require("./appointments");
+const {
+  DERCO_TENANT_ID,
+  getRegisteredClient,
+  listRegisteredClients,
+  parseAgentTenantMap
+} = require("./client-registry");
+const {
+  cleanTenantId,
+  createTenantConfig,
+  validateWhatsAppDestination
+} = require("./tenant-config");
+const {
+  buildServiceAreaContext,
+  buildServiceAreaQuestion,
+  classifyServiceAreaReply,
+  serviceAreaCheckForPhone
+} = require("./service-area");
 
 function boundedEnvInt(name, fallback, min, max) {
   const parsed = Number(process.env[name]);
@@ -96,6 +123,7 @@ const app = express();
 app.disable("x-powered-by");
 if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
 app.use(securityHeaders);
+app.post("/webhooks/elevenlabs/post-call", express.raw({ type: "application/json", limit: "1mb" }), receiveElevenLabsPostCallWebhook);
 app.use(express.json({
   limit: process.env.JSON_BODY_LIMIT || "128kb",
   verify: function (req, res, buffer) {
@@ -105,7 +133,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v79-emoji-picker";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v80-super-admin-handoff";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -118,7 +146,7 @@ const DASHBOARD_ROLE_LABELS = {
 };
 const DASHBOARD_ACCESS_MODEL = {
   version: "2026-07-11",
-  current_mode: "single_tenant_rav",
+  current_mode: "multi_tenant_pilot",
   future_panels: [
     {
       id: "client_admin",
@@ -142,7 +170,7 @@ const DASHBOARD_ACCESS_MODEL = {
     { role: "viewer", level: 1, scope: "tenant", owner: "Cliente", purpose: "Consulta metricas y conversaciones sin intervenir." }
   ],
   migration_steps: [
-    "Mantener RAV Toys como cliente #1 y tenant inicial.",
+    "Mantener RAV Toys como entorno legado y DERCO como cliente registrado #1.",
     "Crear usuarios super_admin para NexforIA y admin/agent/viewer por cliente.",
     "Mantener separado el dashboard Admin del panel Super admin.",
     "Agregar tenant_id a logs, usuarios y configuracion.",
@@ -161,10 +189,19 @@ const SUPABASE_URL = normalizedSupabaseUrl && (
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const SUPABASE_TABLE = "conversation_logs";
 const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de conversaciones
+const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
+const SUPABASE_APPOINTMENTS_TABLE = "appointments";
+const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
+const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
+const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
+const appointmentRegistry = new AppointmentRegistry();
 const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
 const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
 const WA_TOKEN = process.env.WA_TOKEN;
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
+const TENANT_CONFIG = createTenantConfig(process.env);
+const DEFAULT_TENANT_ID = TENANT_CONFIG.id;
+const PHONE_NUMBER_ID = TENANT_CONFIG.phoneNumberId;
 const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
 const IG_USER_ID = process.env.IG_USER_ID || "";
 const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
@@ -206,7 +243,6 @@ const SHOPIFY_STORE_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STORE_
 const SHOPIFY_STOREFRONT_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STOREFRONT_DOMAIN) || SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
-const DEFAULT_TENANT_ID = process.env.DEFAULT_TENANT_ID || "rav-toys";
 const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.env.SHOPIFY_ORDER_PREFIX || "RAV")
   .split(",")
   .map(s => s.trim().replace(/[^A-Za-z0-9-]/g, "").replace(/-+$/g, ""))
@@ -217,10 +253,12 @@ const INSTAGRAM_PROFILE_TOOL = "instagram_customer_profile_v1";
 const INSTAGRAM_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const INSTAGRAM_PROFILE_RETRY_MS = 15 * 60 * 1000;
 const DASHBOARD_CUSTOMER_USER_TOOL = "dashboard_customer_user_v1";
-const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:rav-toys:primary-admin";
+const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:" + DEFAULT_TENANT_ID + ":primary-admin";
 const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
-const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:rav-toys:draft";
-const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:rav-toys:published";
+const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":draft";
+const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":published";
+const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
+const CLIENT_ONBOARDING_RECORD_ID = "client-onboarding:" + DEFAULT_TENANT_ID;
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
 const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
@@ -233,10 +271,10 @@ const CUSTOMER_META_TAGS = [
   { id: "revisar", label: "Revisar" }
 ];
 const CUSTOMER_PANEL_BUSINESS = {
-  id: "rav-toys",
-  name: "RAV Toys",
-  customer_number: 1,
-  status: "active"
+  id: TENANT_CONFIG.id,
+  name: TENANT_CONFIG.brandName,
+  customer_number: TENANT_CONFIG.customerNumber,
+  status: TENANT_CONFIG.status
 };
 // ─────────────────────────────────────────────────────────────────────────────────
 
@@ -317,10 +355,12 @@ const conversationLogs = [];
 const instagramProfileCache = new Map();
 const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
+const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
 const inboundMessageWindows = new Map();
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
+let clientOnboardingCache = { loaded_at: 0, record: null };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
 const retargetingAppendLocks = new Map();
@@ -331,6 +371,46 @@ let turnRating = null;     // rating capturado en el turno
 
 // ─── Persistencia en Supabase (v37) ───────────────────────────────────
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+async function persistAppointment(row) {
+  if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
+  const payload = {
+    tenant_id: row.tenant_id,
+    conversation_id: row.conversation_id,
+    agent_id: row.agent_id || null,
+    status: row.status,
+    starts_at: row.starts_at,
+    payload: encryptStoredText(JSON.stringify(row), DATA_ENCRYPTION_KEY),
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+  await axios.post(
+    SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE + "?on_conflict=tenant_id,conversation_id",
+    payload,
+    { headers: Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS), timeout: 8000 }
+  );
+  return true;
+}
+
+async function hydrateAppointmentsForTenant(tenantId) {
+  if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE, {
+      params: { select: "*", tenant_id: "eq." + tenantId, order: "updated_at.desc", limit: 500 },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    const rows = (response.data || []).map(function (stored) {
+      try { return JSON.parse(decryptStoredText(stored.payload, DATA_ENCRYPTION_KEY)); }
+      catch (_) { return null; }
+    }).filter(Boolean);
+    appointmentRegistry.hydrate(rows);
+    return true;
+  } catch (error) {
+    console.error("hydrateAppointmentsForTenant error:", error.message);
+    return false;
+  }
+}
+
 async function supabaseInsert(rec) {
   if (!SUPABASE_ENABLED) return;
   try {
@@ -339,6 +419,11 @@ async function supabaseInsert(rec) {
       tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
       rating: rec.rating, num_tools: rec.numTools, status: rec.status
     };
+    if (SUPABASE_TENANT_COLUMNS_ENABLED) {
+      payload.tenant_id = rec.tenantId || DEFAULT_TENANT_ID;
+      payload.phone_number_id = rec.phoneNumberId || PHONE_NUMBER_ID || null;
+      payload.channel = rec.channel || conversationChannel(rec.userId);
+    }
     if (rec.eval !== undefined) payload.eval = rec.eval;
     await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, payload, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 8000 });
   } catch (e) { console.error("supabaseInsert error:", e.response ? JSON.stringify(e.response.data).slice(0,200) : e.message); }
@@ -350,6 +435,11 @@ async function supabaseInsertStrict(rec) {
     tools: rec.tools, zero_result_queries: rec.zeroResultQueries, handoff: rec.handoff,
     rating: rec.rating, num_tools: rec.numTools, status: rec.status
   };
+  if (SUPABASE_TENANT_COLUMNS_ENABLED) {
+    payload.tenant_id = rec.tenantId || DEFAULT_TENANT_ID;
+    payload.phone_number_id = rec.phoneNumberId || PHONE_NUMBER_ID || null;
+    payload.channel = rec.channel || conversationChannel(rec.userId);
+  }
   if (rec.eval !== undefined) payload.eval = rec.eval;
   await axios.post(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, payload, {
     headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS),
@@ -359,14 +449,16 @@ async function supabaseInsertStrict(rec) {
 async function supabaseFetchRecent(limit) {
   if (!SUPABASE_ENABLED) return null;
   try {
-    const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
+    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(DEFAULT_TENANT_ID) : "";
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*" + tenantFilter + "&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
     return r.data;
   } catch (e) { console.error("supabaseFetchRecent error:", e.message); return null; }
 }
 async function supabaseFetchUserRecent(userId, limit) {
   if (!SUPABASE_ENABLED) return null;
   try {
-    const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&user_id=eq." + encodeURIComponent(userId) + "&order=ts.desc&limit=" + (limit || 20);
+    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(DEFAULT_TENANT_ID) : "";
+    const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&user_id=eq." + encodeURIComponent(userId) + tenantFilter + "&order=ts.desc&limit=" + (limit || 20);
     const r = await axios.get(url, { headers: SB_HEADERS, timeout: 8000 });
     return r.data;
   } catch (e) { console.error("supabaseFetchUserRecent error:", e.message); return null; }
@@ -379,6 +471,7 @@ async function supabaseFetchUserToolRecent(userId, toolName, limit) {
       params: {
         select: "*",
         user_id: "eq." + userId,
+        ...(SUPABASE_TENANT_COLUMNS_ENABLED ? { tenant_id: "eq." + DEFAULT_TENANT_ID } : {}),
         tools: "cs." + JSON.stringify([toolName]),
         order: "ts.desc",
         limit: limit || 1
@@ -392,7 +485,8 @@ async function supabaseFetchUserToolRecent(userId, toolName, limit) {
 async function supabaseFetchPending(limit) {
   if (!SUPABASE_ENABLED) return null;
   try {
-    const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&eval=is.null&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
+    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(DEFAULT_TENANT_ID) : "";
+    const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&eval=is.null" + tenantFilter + "&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
     return r.data;
   } catch (e) { console.error("supabaseFetchPending error:", e.message); return null; }
 }
@@ -416,6 +510,9 @@ function normalizeTurnRow(r) {
   }
   return {
     ts: r.ts,
+    tenantId: r.tenant_id || DEFAULT_TENANT_ID,
+    phoneNumberId: r.phone_number_id || null,
+    channel: r.channel || conversationChannel(r.user_id),
     userId: r.user_id,
     userMessage,
     botReply,
@@ -514,6 +611,11 @@ function isBotSetupTurn(turn) {
   return tools.includes(BOT_SETUP_TOOL);
 }
 
+function isClientOnboardingTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(CLIENT_ONBOARDING_TOOL);
+}
+
 function isRetargetingEventTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(RETARGETING_EVENT_TOOL);
@@ -530,7 +632,7 @@ function isCustomerMemoryTurn(turn) {
 }
 
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -567,6 +669,28 @@ function conversationChannel(value) {
 
 function conversationExternalId(value) {
   return normalizeConversationUserId(value).replace(/^(ig|ms):/, "");
+}
+
+function serviceAreaConfigForSetup(setup, onboarding) {
+  const presence = setup && setup.published && setup.published.answers && setup.published.answers.presence || {};
+  const onboardingReady = onboarding && ["submitted", "in_review", "ready"].includes(onboarding.status);
+  const onboardingOperations = onboardingReady && onboarding.answers && onboarding.answers.operations || {};
+  return {
+    enabled: onboardingOperations.foreign_number_location_check === undefined
+      ? (presence.foreign_number_check_enabled === undefined
+        ? TENANT_CONFIG.foreignNumberCheckEnabled
+        : presence.foreign_number_check_enabled !== false)
+      : onboardingOperations.foreign_number_location_check !== false,
+    countryCode: presence.service_country_code || TENANT_CONFIG.serviceCountryCode,
+    countryName: presence.service_country_name || TENANT_CONFIG.serviceCountryName
+  };
+}
+
+function rememberServiceAreaCheck(userId, state) {
+  serviceAreaChecks.set(userId, state);
+  if (serviceAreaChecks.size <= 10000) return;
+  const oldest = serviceAreaChecks.keys().next().value;
+  if (oldest) serviceAreaChecks.delete(oldest);
 }
 
 function maskedIdentifier(value) {
@@ -872,6 +996,9 @@ function recordTurn(userId, userMessage, botReply, status) {
   try {
     const rec = {
       ts: new Date().toISOString(),
+      tenantId: DEFAULT_TENANT_ID,
+      phoneNumberId: PHONE_NUMBER_ID || null,
+      channel: conversationChannel(userId),
       userId,
       userMessage: String(userMessage || "").slice(0, 500),
       botReply: String(botReply || "").slice(0, 1000),
@@ -893,6 +1020,9 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride) {
     const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : !["admin_release", "admin_resolve"].includes(tool);
     const rec = {
       ts: new Date().toISOString(),
+      tenantId: DEFAULT_TENANT_ID,
+      phoneNumberId: PHONE_NUMBER_ID || null,
+      channel: conversationChannel(userId),
       userId,
       userMessage: "",
       botReply: String(message || "").slice(0, 1000),
@@ -2483,6 +2613,48 @@ async function handleConversation(userId, userMessage, conversationMeta) {
 
   if (!conversations.has(userId) || newSession) conversations.set(userId, []);
   const history = conversations.get(userId);
+  const activeBotSetup = await loadBotSetup(false);
+  const activeClientOnboarding = await loadClientOnboarding(false);
+  const serviceAreaConfig = serviceAreaConfigForSetup(activeBotSetup, activeClientOnboarding);
+  const phoneCheck = conversationChannel(userId) === "whatsapp"
+    ? serviceAreaCheckForPhone(conversationExternalId(userId), serviceAreaConfig)
+    : null;
+  let serviceAreaState = serviceAreaChecks.get(userId) || null;
+  let serviceAreaContext = "";
+
+  if (serviceAreaState && (!phoneCheck || !phoneCheck.shouldAsk || serviceAreaState.serviceCountryCode !== phoneCheck.serviceCountryCode)) {
+    serviceAreaChecks.delete(userId);
+    serviceAreaState = null;
+  }
+  if (phoneCheck && phoneCheck.shouldAsk && !serviceAreaState) {
+    const question = buildServiceAreaQuestion(serviceAreaConfig);
+    const askedAt = new Date().toISOString();
+    history.push({ role: "user", content: userMessage });
+    history.push({ role: "assistant", content: question });
+    conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+    turnTools.push("service_area_confirmation");
+    const sent = await sendText(userId, question);
+    if (sent) {
+      rememberServiceAreaCheck(userId, {
+        status: "pending",
+        serviceCountryCode: phoneCheck.serviceCountryCode,
+        phoneCountryCode: phoneCheck.phoneCountryCode,
+        askedAt,
+        updatedAt: askedAt
+      });
+    }
+    recordTurn(userId, userMessage, question, sent ? "ok" : "error");
+    return;
+  }
+  if (serviceAreaState) {
+    if (["pending", "unclear"].includes(serviceAreaState.status)) {
+      serviceAreaState.status = classifyServiceAreaReply(userMessage, serviceAreaConfig.countryName);
+      serviceAreaState.updatedAt = new Date().toISOString();
+      rememberServiceAreaCheck(userId, serviceAreaState);
+    }
+    serviceAreaContext = buildServiceAreaContext(serviceAreaState, serviceAreaConfig);
+  }
+
   let customerMemory = await loadCustomerMemory(userId);
   customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
     userMessage,
@@ -2499,7 +2671,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     limits: ADAPTIVE_TOKEN_LIMITS
   });
   let memoryContext = buildCustomerMemoryContext(customerMemory, { newSession });
-  let activeBotSetup = await loadBotSetup(false);
+  let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
   let publishedSetupPrompt = activeBotSetup.published && activeBotSetup.published.derived
     ? activeBotSetup.published.derived.system_prompt
     : "";
@@ -2518,6 +2690,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
           system: [
         { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
         ...(publishedSetupPrompt ? [{ type: "text", text: publishedSetupPrompt, cache_control: { type: "ephemeral" } }] : []),
+        ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
+        ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
         ...(pendingRatings.has(userId) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
         ...(cartContextFor(userId) ? [{ type: "text", text: cartContextFor(userId) }] : []),
         ...(memoryContext ? [{ type: "text", text: memoryContext }] : [])
@@ -2729,6 +2903,15 @@ app.post("/webhook", async (req, res) => {
     const value = changes?.value;
     const messages = value?.messages;
     if (!messages || messages.length === 0) return;
+    const destination = validateWhatsAppDestination(TENANT_CONFIG, value, { requireMetadata: process.env.NODE_ENV === "production" });
+    if (!destination.ok) {
+      log("warn", "whatsapp_destination_rejected", {
+        tenant_id: DEFAULT_TENANT_ID,
+        reason: destination.reason,
+        configured_phone_number_id: PHONE_NUMBER_ID ? "configured" : "missing"
+      });
+      return;
+    }
     const message = messages[0];
     if (!acceptMetaEventId(message.id)) return;
     const from = message.from;
@@ -2739,7 +2922,12 @@ app.post("/webhook", async (req, res) => {
     if (type === "text") {
       const text = message.text.body;
       console.log(`Inbound ${maskedIdentifier(from)}: text (${String(text || "").length} chars)`);
-      await handleConversation(from, text, { source_event_id: message.id || "wa:" + Date.now(), source_at: new Date().toISOString() });
+      await handleConversation(from, text, {
+        tenant_id: destination.tenantId,
+        phone_number_id: destination.phoneNumberId,
+        source_event_id: message.id || "wa:" + Date.now(),
+        source_at: new Date().toISOString()
+      });
     } else if (type === "audio" || type === "voice") {
       console.log(`Inbound ${maskedIdentifier(from)}: voice note`);
       if (await humanControlActiveFor(from)) {
@@ -2848,6 +3036,37 @@ app.post("/messenger/webhook", async (req, res) => {
   }
 });
 
+async function receiveElevenLabsPostCallWebhook(req, res) {
+  if (!ELEVENLABS_WEBHOOK_SECRET) {
+    res.status(503).json({ ok: false, error: "elevenlabs_webhook_not_configured" });
+    return;
+  }
+  const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : "";
+  const signature = String(req.get("elevenlabs-signature") || "");
+  if (!rawBody || !signature) {
+    res.status(401).json({ ok: false, error: "invalid_webhook" });
+    return;
+  }
+  try {
+    const event = await ELEVENLABS_WEBHOOK_CLIENT.webhooks.constructEvent(rawBody, signature, ELEVENLABS_WEBHOOK_SECRET);
+    if (event.type !== "post_call_transcription") {
+      res.json({ ok: true, ignored: true });
+      return;
+    }
+    const agentId = String(event.data && event.data.agent_id || "").trim();
+    const tenantId = ELEVENLABS_AGENT_TENANT_MAP[agentId];
+    if (!tenantId || !getRegisteredClient(tenantId)) {
+      res.status(202).json({ ok: true, ignored: true, reason: "unregistered_agent" });
+      return;
+    }
+    const appointment = await appointmentRegistry.ingestElevenLabs(event, tenantId);
+    if (appointment) await persistAppointment(appointment);
+    res.json({ ok: true, tenant_id: tenantId, conversation_id: appointment && appointment.conversation_id || null });
+  } catch (error) {
+    res.status(401).json({ ok: false, error: "invalid_webhook" });
+  }
+}
+
 // ─── ADMIN ENDPOINTS ─────────────────────────────────────────────────────────
 
 function cleanDashboardRole(role) {
@@ -2868,7 +3087,8 @@ function parseDashboardUsers(raw) {
       email: String(user.email || "").trim().toLowerCase(),
       password: String(user.password || user.pass || "").trim(),
       name: String(user.name || user.username || user.user || "").trim(),
-      role: cleanDashboardRole(user.role)
+      role: cleanDashboardRole(user.role),
+      tenant_id: cleanTenantId(user.tenant_id || user.tenant) || null
     })).filter(user => user.username && user.password);
   } catch (_) {
     return value.split(/[,\n;]/).map(chunk => {
@@ -2878,7 +3098,8 @@ function parseDashboardUsers(raw) {
         password: String(parts[1] || "").trim(),
         role: cleanDashboardRole(parts[2] || "agent"),
         name: String(parts[3] || parts[0] || "").trim(),
-        email: String(parts[4] || "").trim().toLowerCase()
+        email: String(parts[4] || "").trim().toLowerCase(),
+        tenant_id: cleanTenantId(parts[5]) || null
       };
     }).filter(user => user.username && user.password);
   }
@@ -2908,6 +3129,7 @@ function createDashboardSession(user) {
     u: user.username,
     n: user.name || user.username,
     r: cleanDashboardRole(user.role),
+    t: cleanTenantId(user.tenant_id) || null,
     exp: Date.now() + DASHBOARD_SESSION_TTL_HOURS * 60 * 60 * 1000
   })).toString("base64url");
   return payload + "." + signDashboardPayload(payload);
@@ -2928,6 +3150,7 @@ function readDashboardSession(req) {
       username: String(session.u || "usuario"),
       name: String(session.n || session.u || "usuario"),
       role: cleanDashboardRole(session.r),
+      tenant_id: cleanTenantId(session.t) || null,
       method: "session"
     };
   } catch (_) {
@@ -3101,6 +3324,66 @@ async function persistBotSetup(answers, status, auth) {
   return record;
 }
 
+function parseClientOnboardingTurn(turn) {
+  if (!isClientOnboardingTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id || !parsed.answers) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadClientOnboarding(force) {
+  const now = Date.now();
+  if (!force && clientOnboardingCache.loaded_at && now - clientOnboardingCache.loaded_at < 30000) return clientOnboardingCache.record;
+  let record = clientOnboardingCache.record;
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(CLIENT_ONBOARDING_RECORD_ID, 1);
+    if (rows) record = rows.map(normalizeTurnRow).map(parseClientOnboardingTurn).find(Boolean) || record;
+  } else {
+    record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === CLIENT_ONBOARDING_RECORD_ID; }).map(parseClientOnboardingTurn).find(Boolean) || record;
+  }
+  if (!record) {
+    record = createOnboardingRecord(defaultClientOnboarding(), {
+      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      status: "draft",
+      updated_by: ""
+    });
+    record.updated_at = null;
+  }
+  clientOnboardingCache = { loaded_at: now, record };
+  return record;
+}
+
+async function persistClientOnboarding(answers, status, auth) {
+  const record = createOnboardingRecord(answers, {
+    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    status: status === "submitted" ? "submitted" : "draft",
+    updated_by: auth && (auth.name || auth.username)
+  });
+  const rec = {
+    ts: record.updated_at,
+    userId: CLIENT_ONBOARDING_RECORD_ID,
+    userMessage: "",
+    botReply: "[ClientOnboarding] " + JSON.stringify(record),
+    tools: [CLIENT_ONBOARDING_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: CLIENT_ONBOARDING_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  clientOnboardingCache = { loaded_at: Date.now(), record };
+  return record;
+}
+
 async function retargetingPolicyForTenant(tenantId) {
   if (tenantId !== CUSTOMER_PANEL_BUSINESS.id) return { mode: "disabled" };
   const setup = await loadBotSetup(false);
@@ -3221,7 +3504,7 @@ function readDashboardCustomerInvite(token) {
 function dashboardAuth(req) {
   const suppliedKey = String(req.get("x-dashboard-key") || "");
   if (DASHBOARD_KEY && suppliedKey && safeEqualText(suppliedKey, DASHBOARD_KEY)) {
-    return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "super_admin", method: "key" };
+    return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "super_admin", tenant_id: null, method: "key" };
   }
   return readDashboardSession(req) || { ok: false, role: "none" };
 }
@@ -4156,6 +4439,82 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
   res.json({ ok: true, userId, meta });
 });
 
+app.get("/admin/client-onboarding-demo", (req, res) => {
+  const answers = defaultClientOnboarding();
+  answers.business.brand_name = "Comercio piloto";
+  answers.business.contact_name = "Responsable del proyecto";
+  answers.business.contact_email = "contacto@comercio.com";
+  answers.meta.whatsapp_number = "+57 300 000 0000";
+  answers.meta.number_status = "business_app";
+  answers.commerce.store_url = "https://tienda-ejemplo.com";
+  answers.team.admin_name = "Administrador del cliente";
+  const record = createOnboardingRecord(answers, { tenant_id: "pilot-demo", status: "draft", updated_by: "NexforIA" });
+  renderClientOnboarding(res, {
+    tenant: { id: "pilot-demo", name: "Comercio piloto" },
+    record,
+    actor: "NexforIA",
+    demo: true,
+    apiPath: ""
+  });
+});
+
+app.get("/admin/client-onboarding", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || !adminAuthOk(req, "admin")) {
+    renderAdminLogin(res, "/admin/client-onboarding");
+    return;
+  }
+  if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
+  const record = await loadClientOnboarding(false);
+  renderClientOnboarding(res, {
+    tenant: CUSTOMER_PANEL_BUSINESS,
+    record,
+    actor: auth.name || auth.username,
+    demo: false,
+    apiPath: "/admin/client-onboarding/data"
+  });
+});
+
+app.get("/admin/client-onboarding/data", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  res.json({ ok: true, tenant: CUSTOMER_PANEL_BUSINESS, onboarding: await loadClientOnboarding(false) });
+});
+
+app.put("/admin/client-onboarding/data", async (req, res) => {
+  if (!adminAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const requestedStatus = req.body && req.body.status === "submitted" ? "submitted" : "draft";
+    const candidate = createOnboardingRecord(req.body && req.body.answers, {
+      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      status: requestedStatus,
+      updated_by: auth.name || auth.username
+    });
+    const confirmations = candidate.answers.confirmations || {};
+    const confirmationsReady = confirmations.owns_information && confirmations.accepts_guided_setup && confirmations.understands_meta_dependency;
+    if (requestedStatus === "submitted" && (candidate.completion < 75 || !confirmationsReady)) {
+      res.status(422).json({
+        ok: false,
+        error: "onboarding_incomplete",
+        completion: candidate.completion,
+        message: "Completa al menos el 75% y las confirmaciones antes de enviar la información para revisión."
+      });
+      return;
+    }
+    const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth);
+    res.json({ ok: true, onboarding: record });
+  } catch (error) {
+    console.error("client onboarding save error:", error.message);
+    res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
+  }
+});
+
 app.get("/admin/bot-setup", async (req, res) => {
   if (!adminAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -4745,68 +5104,62 @@ app.get("/admin/super-admin", (req, res) => {
     setDashboardSessionCookie(req, res, auth);
   }
 
-  const stages = COMMERCIAL_READINESS.stages || [];
-  const readyCount = stages.filter(stage => stage.status === "ready").length;
-  const waitingCount = stages.filter(stage => stage.status === "waiting_meta").length;
-  const draftCount = stages.filter(stage => stage.status === "draft").length;
-  const statusLabels = { ready: "Listo", draft: "Pendiente", waiting_meta: "Esperando Meta" };
-  const statusClasses = { ready: "ready", draft: "draft", waiting_meta: "waiting" };
-  const clientDashboardHref = "/admin/panel?tab=summary";
-  const roleCards = (DASHBOARD_ACCESS_MODEL.roles || []).map(role => `
-    <article class="roleCard"><div class="row"><code>${escapeAdminHtml(role.role)}</code><span>Nivel ${escapeAdminHtml(role.level)}</span></div><strong>${escapeAdminHtml(role.owner)} · ${escapeAdminHtml(role.scope)}</strong><p>${escapeAdminHtml(role.purpose)}</p></article>`).join("");
-  const panelCards = (DASHBOARD_ACCESS_MODEL.future_panels || []).map(panel => `
-    <article class="panelCard"><div class="row"><h3>${escapeAdminHtml(panel.label)}</h3><span>${escapeAdminHtml(panel.owner)}</span></div><p>${escapeAdminHtml(panel.purpose)}</p><div class="roleList">${(panel.roles || []).map(role => `<code>${escapeAdminHtml(role)}</code>`).join("")}</div></article>`).join("");
-  const readinessRows = stages.map(stage => {
-    const status = statusLabels[stage.status] || stage.status;
-    const statusClass = statusClasses[stage.status] || "draft";
-    return `<div class="readinessRow"><div><strong>${escapeAdminHtml(stage.label)}</strong><span>${escapeAdminHtml(stage.owner)}</span></div><span class="status ${statusClass}">${escapeAdminHtml(status)}</span></div>`;
-  }).join("");
-  const tenantFields = (COMMERCIAL_READINESS.requiredTenantFields || []).map(field => `<code>${escapeAdminHtml(field)}</code>`).join("");
-  const nextTenantSteps = [
-    { label: "tenant_id en logs", detail: "Propagar rav-toys a cada log y configuracion nueva antes del cliente #2." },
-    { label: "dedicated user store", detail: "Mover el acceso inicial de RAV a una tabla de usuarios aislada por tenant." },
-    { label: "tenant config", detail: "Crear una fuente de configuracion aislada por comercio." },
-    { label: "health per tenant", detail: "Reportar integraciones y alertas por cliente." },
-    { label: "WhatsApp/Shopify config per tenant", detail: "Resolver credenciales e identificadores sin exponer sus valores." }
-  ];
-  const nextSteps = nextTenantSteps.map((step, index) => `<li><span class="stepIndex">${index + 1}</span><div><strong>${escapeAdminHtml(step.label)}</strong><p>${escapeAdminHtml(step.detail)}</p></div><span class="status draft">Siguiente fase</span></li>`).join("");
+  renderSuperAdminPanel(res, {
+    auth,
+    botVersion: BOT_VERSION,
+    commercialReadiness: COMMERCIAL_READINESS,
+    accessModel: DASHBOARD_ACCESS_MODEL,
+    tenant: CUSTOMER_PANEL_BUSINESS,
+    registeredClients: listRegisteredClients()
+  });
+});
 
-  res.setHeader("content-type", "text/html; charset=utf-8");
-  res.send(`<!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Super admin · NexforIA</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#F4F5F7;color:#1F2A44;padding:22px;line-height:1.5}.wrap{max-width:1120px;margin:0 auto}.headcard{background:#fff;border:1px solid #E5E8EC;border-radius:12px;padding:15px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px}.brand{display:flex;align-items:center;gap:12px}.logo{width:42px;height:42px;border-radius:10px;background:#E1F5EE;color:#0F6E56;display:grid;place-items:center;font-size:12px;font-weight:750}.brand h1{font-size:17px;font-weight:650}.brand p{font-size:12px;color:#9AA0A6}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.btn{font:inherit;font-size:12px;color:#2E8B8B;cursor:pointer;border:1px solid #CFE3E3;background:#fff;padding:7px 12px;border-radius:8px;text-decoration:none}.btn:hover{background:#F0FAF7}.inviteStatus{font-size:10px;color:#64748B;max-width:210px}.roleBadge{font-size:11px;color:#475569;background:#F4F5F7;border:1px solid #E5E8EC;padding:7px 10px;border-radius:8px}.callout{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;background:#FFF8EA;border:1px solid #F3D19C;border-radius:12px;padding:14px 16px;margin-bottom:14px}.callout strong{font-size:13px;color:#7C4A08}.callout p{font-size:12px;color:#9A6216;margin-top:3px}.status{display:inline-flex;align-items:center;white-space:nowrap;font-size:10px;border-radius:999px;padding:3px 8px;font-weight:650}.status.ready{background:#E1F5EE;color:#0F6E56}.status.draft{background:#F4F5F7;color:#64748B}.status.waiting{background:#FAEEDA;color:#9A6216}.status.error{background:#FAECE7;color:#B94723}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.kpi,.card{background:#fff;border:1px solid #E5E8EC;border-radius:12px}.kpi{padding:14px 16px}.kpi .label{font-size:11px;color:#6B7280}.kpi .value{font-size:23px;font-weight:650;margin-top:6px}.kpi .sub{font-size:10px;color:#9AA0A6;margin-top:2px}.layout{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}.card{padding:17px 18px}.card.wide{grid-column:1/-1}.cardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:13px}.cardHead h2{font-size:14px}.cardHead p{font-size:11px;color:#9AA0A6;margin-top:2px}.healthList,.readinessList{display:grid;gap:8px}.healthRow,.readinessRow{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #EEF1F4;padding-top:8px;font-size:12px}.healthRow:first-child,.readinessRow:first-child{border-top:0;padding-top:0}.healthRow span:first-child{color:#64748B}.checkValue{font-size:11px;font-weight:650}.checkValue.ok{color:#0F6E56}.checkValue.warn{color:#9A6216}.checkValue.err{color:#B94723}.roleGrid,.panelGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.roleCard,.panelCard{border:1px solid #E5E8EC;border-radius:9px;padding:11px;background:#FBFCFD}.row{display:flex;align-items:center;justify-content:space-between;gap:8px}.roleCard .row span,.panelCard .row span{font-size:10px;color:#9AA0A6}.roleCard strong{display:block;font-size:11px;margin-top:8px}.roleCard p,.panelCard p{font-size:11px;color:#6B7280;margin-top:4px}.panelCard h3{font-size:13px}.roleList,.fields{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;color:#0F6E56;background:#EDF8F4;border:1px solid #D5EDE4;padding:3px 6px;border-radius:6px}.readinessRow div{display:grid}.readinessRow strong{font-size:12px}.readinessRow div span{font-size:10px;color:#9AA0A6}.summaryLine{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}.summaryLine span{font-size:10px;color:#64748B;background:#F4F5F7;border-radius:999px;padding:3px 8px}.fieldsNote{font-size:10px;color:#9AA0A6;margin-top:10px}.tenantTable{width:100%;border-collapse:collapse;font-size:11px}.tenantTable th{text-align:left;color:#9AA0A6;font-weight:500;padding:0 8px 8px}.tenantTable td{border-top:1px solid #EEF1F4;padding:10px 8px}.tenantName{font-weight:650}.steps{list-style:none;display:grid;gap:0}.steps li{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;border-top:1px solid #EEF1F4;padding:10px 0}.steps li:first-child{border-top:0;padding-top:0}.stepIndex{width:24px;height:24px;border-radius:7px;background:#F4F5F7;color:#64748B;display:grid;place-items:center;font-size:10px;font-weight:700}.steps strong{font-size:12px}.steps p{font-size:10px;color:#9AA0A6;margin-top:2px}.footer{font-size:10px;color:#9AA0A6;text-align:center;padding:2px 0 8px}
-@media(max-width:840px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}.card.wide{grid-column:auto}}@media(max-width:560px){body{padding:12px}.kpis,.roleGrid,.panelGrid{grid-template-columns:1fr}.steps li{grid-template-columns:auto 1fr}.steps li>.status{grid-column:2;justify-self:start}.callout{display:block}.callout>.status{margin-top:8px}}
-</style></head><body><div class="wrap">
-<header class="headcard"><div class="brand"><div class="logo">NX</div><div><h1>NexforIA · Super admin</h1><p>Operaciones de plataforma · RAV Bot ${escapeAdminHtml(BOT_VERSION)}</p></div></div><div class="actions"><span class="roleBadge">${escapeAdminHtml(auth.name || auth.username)} · Super admin</span><a class="btn" href="${clientDashboardHref}">Admin RAV</a><button class="btn" id="customerInviteBtn" type="button" onclick="createCustomerInvite()">Crear acceso RAV</button><span class="inviteStatus" id="customerInviteStatus"></span><button class="btn" type="button" onclick="loadHealth()">Actualizar salud</button><button class="btn" type="button" onclick="logoutSuperAdmin()">Salir</button></div></header>
+function canAccessRegisteredClient(auth, tenantId) {
+  if (!auth || !auth.ok) return false;
+  return auth.role === "super_admin" || auth.tenant_id === tenantId;
+}
 
-<section class="callout"><div><strong>Bloqueador actual: Meta App Review pendiente</strong><p>La infraestructura puede estar operativa, pero la aprobacion de permisos de WhatsApp sigue siendo requisito externo antes de escalar a clientes reales.</p></div><span class="status waiting">Esperando Meta</span></section>
+app.get("/admin/registered-clients", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(403).json({ ok: false, error: "forbidden" });
+    return;
+  }
+  res.json({ ok: true, clients: listRegisteredClients() });
+});
 
-<section class="kpis" aria-label="Resumen de plataforma"><article class="kpi"><div class="label">Version del bot</div><div class="value">${escapeAdminHtml(BOT_VERSION)}</div><div class="sub">Produccion NexforIA Bots</div></article><article class="kpi"><div class="label">Infraestructura</div><div class="value" id="infraValue">Verificando</div><div class="sub" id="infraSub">Consultando /admin/health</div></article><article class="kpi"><div class="label">Readiness comercial</div><div class="value">${readyCount}/${stages.length}</div><div class="sub">etapas listas · version ${escapeAdminHtml(COMMERCIAL_READINESS.version)}</div></article><article class="kpi"><div class="label">Clientes</div><div class="value">1</div><div class="sub">RAV Toys · cliente #1</div></article></section>
+app.get("/admin/pilots/derco", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok) {
+    renderAdminLogin(res, "/admin/pilots/derco");
+    return;
+  }
+  if (!canAccessRegisteredClient(auth, DERCO_TENANT_ID)) {
+    res.status(403).send("Acceso restringido al tenant DERCO.");
+    return;
+  }
+  renderAppointmentPanel(res, {
+    auth,
+    business: getRegisteredClient(DERCO_TENANT_ID),
+    dataPath: "/admin/pilots/derco/data",
+    integration: {
+      webhook_ready: !!ELEVENLABS_WEBHOOK_SECRET && Object.values(ELEVENLABS_AGENT_TENANT_MAP).includes(DERCO_TENANT_ID)
+    }
+  });
+});
 
-<div class="layout">
-  <section class="card"><div class="cardHead"><div><h2>Salud de infraestructura</h2><p>Estados normalizados; no se muestran tokens ni identificadores.</p></div><span class="status draft" id="healthBadge">Verificando</span></div><div class="healthList"><div class="healthRow"><span>Uptime</span><span class="checkValue" id="healthUptime">-</span></div><div class="healthRow"><span>Shopify storefront</span><span class="checkValue" id="healthShopify">-</span></div><div class="healthRow"><span>Meta WhatsApp API</span><span class="checkValue" id="healthMeta">-</span></div><div class="healthRow"><span>Supabase</span><span class="checkValue" id="healthSupabase">-</span></div><div class="healthRow"><span>Anthropic</span><span class="checkValue" id="healthAnthropic">-</span></div></div></section>
-  <section class="card"><div class="cardHead"><div><h2>Readiness comercial</h2><p>Resumen directo de COMMERCIAL_READINESS.</p></div><span class="status waiting">${waitingCount} esperando Meta</span></div><div class="summaryLine"><span>${readyCount} lista</span><span>${draftCount} pendientes</span><span>${stages.length} etapas totales</span></div><div class="readinessList">${readinessRows}</div></section>
-  <section class="card wide"><div class="cardHead"><div><h2>Modelo de acceso actual</h2><p>Super admin opera la plataforma; los demas roles permanecen en el alcance del comercio.</p></div><span class="status ready">Modelo ${escapeAdminHtml(DASHBOARD_ACCESS_MODEL.version)}</span></div><div class="roleGrid">${roleCards}</div></section>
-  <section class="card wide"><div class="cardHead"><div><h2>Division de paneles</h2><p>La vista operativa del cliente se mantiene sin cambios.</p></div></div><div class="panelGrid">${panelCards}</div></section>
-  <section class="card"><div class="cardHead"><div><h2>Primer cliente</h2><p>RAV Toys inaugura el modelo de Panel de Control por comercio.</p></div><span class="status ready">Cliente activo</span></div><table class="tenantTable"><thead><tr><th>Cliente</th><th>ID</th><th>Estado</th></tr></thead><tbody><tr><td class="tenantName">RAV Toys</td><td><code>rav-toys</code></td><td>Cliente #1</td></tr></tbody></table></section>
-  <section class="card"><div class="cardHead"><div><h2>Campos requeridos para onboarding</h2><p>Esquema futuro por cliente.</p></div><span class="status draft">${(COMMERCIAL_READINESS.requiredTenantFields || []).length} campos</span></div><div class="fields">${tenantFields}</div><p class="fieldsNote">Solo se muestran nombres de campos. Los valores sensibles deben vivir en configuracion segura por tenant.</p></section>
-  <section class="card wide"><div class="cardHead"><div><h2>Siguientes pasos multi-cliente</h2><p>Checklist tecnico para la proxima fase, sin activar routing multi-tenant todavia.</p></div></div><ol class="steps">${nextSteps}</ol></section>
-</div>
-<footer class="footer">Super Admin Panel v1 · Informacion de plataforma NexforIA</footer>
-</div><script>
-function setSuperText(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
-function checkKind(value){value=String(value||"");if(value==="ok"||value.indexOf("key_present")===0)return "ok";if(value==="missing_env"||value==="missing_key")return "warn";return "err";}
-function checkLabel(value){var kind=checkKind(value);if(kind==="ok")return value==="ok"?"OK":"Configurado";if(kind==="warn")return "No configurado";return "Revisar";}
-function paintCheck(id,value){var el=document.getElementById(id);if(!el)return;el.textContent=checkLabel(value);el.className="checkValue "+checkKind(value);}
-function uptimeLabel(seconds){seconds=Math.max(0,Number(seconds)||0);var days=Math.floor(seconds/86400),hours=Math.floor((seconds%86400)/3600),minutes=Math.floor((seconds%3600)/60);return (days?days+"d ":"")+hours+"h "+minutes+"m";}
-function createCustomerInvite(){var button=document.getElementById("customerInviteBtn"),status=document.getElementById("customerInviteStatus");button.disabled=true;status.textContent="Generando enlace...";fetch("/admin/customer-invite",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"No se pudo generar");return body;});}).then(function(body){if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(body.setup_url).then(function(){status.textContent="Enlace copiado · vence en 24 h";});}status.textContent=body.setup_url;}).catch(function(error){status.textContent=error.message==="customer_admin_already_configured"?"La cuenta RAV ya está configurada.":"No se pudo generar el enlace.";}).finally(function(){button.disabled=false;});}
-function loadHealth(){setSuperText("infraValue","Verificando");setSuperText("infraSub","Consultando /admin/health");fetch("/admin/health",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error("HTTP "+r.status);return j;});}).then(function(h){var ready=!!(h.production_readiness&&h.production_readiness.infrastructure_ready),blockers=(h.production_readiness&&h.production_readiness.blockers)||[],badge=document.getElementById("healthBadge");setSuperText("infraValue",ready?"Operativa":"Revisar");setSuperText("infraSub",ready?"Servicios base disponibles":blockers.length+" bloqueo"+(blockers.length===1?"":"s")+" tecnico"+(blockers.length===1?"":"s"));if(badge){badge.textContent=ready?"Infra OK":"Requiere revision";badge.className="status "+(ready?"ready":"error");}setSuperText("healthUptime",uptimeLabel(h.bot&&h.bot.uptime_seconds));paintCheck("healthShopify",h.checks&&h.checks.shopify_storefront);paintCheck("healthMeta",h.checks&&h.checks.meta_whatsapp);paintCheck("healthSupabase",h.checks&&h.checks.supabase_conversation_logs);paintCheck("healthAnthropic",h.checks&&h.checks.anthropic_api);}).catch(function(){var badge=document.getElementById("healthBadge");setSuperText("infraValue","No disponible");setSuperText("infraSub","No se pudo consultar salud");if(badge){badge.textContent="Sin respuesta";badge.className="status error";}["healthShopify","healthMeta","healthSupabase","healthAnthropic"].forEach(function(id){var el=document.getElementById(id);if(el){el.textContent="Sin respuesta";el.className="checkValue err";}});});}
-function logoutSuperAdmin(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
-try{var cleanUrl=new URL(location.href);if(cleanUrl.searchParams.has("key")){cleanUrl.searchParams.delete("key");history.replaceState(null,"",cleanUrl.pathname+cleanUrl.search+cleanUrl.hash);}}catch(e){}
-loadHealth();
-</script></body></html>`);
+app.get("/admin/pilots/derco/data", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!canAccessRegisteredClient(auth, DERCO_TENANT_ID)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const persistent = await hydrateAppointmentsForTenant(DERCO_TENANT_ID);
+  res.json(Object.assign({
+    ok: true,
+    business: getRegisteredClient(DERCO_TENANT_ID),
+    source: persistent ? "supabase" : "memory"
+  }, appointmentRegistry.snapshot(DERCO_TENANT_ID)));
 });
 
 app.get("/admin/panel", (req, res) => {

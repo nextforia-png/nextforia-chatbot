@@ -134,7 +134,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v83-customer-panel-sidebar";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v84-mobile-navigation-human-control";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5194,11 +5194,14 @@ app.get("/admin/panel", (req, res) => {
 });
 
 app.get("/admin/panel-demo", (req, res) => {
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer", method: "demo" };
+  const auth = { username: "demo", name: "Demo RAV Toys", role: "agent", method: "demo" };
+  const capabilities = customerPanelCapabilities("agent");
+  capabilities.manage_notes_tags = false;
   const initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
-    capabilities: customerPanelCapabilities("viewer"),
+    capabilities,
+    demoMode: true,
     initialTab,
     dataPath: "/admin/panel/demo-data",
     setupPath: "/admin/panel/demo-setup",

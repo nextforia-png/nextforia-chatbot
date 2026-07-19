@@ -11,6 +11,9 @@ function escapeHtml(value) {
 const PANEL_ICONS = {
   resumen: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>',
   conversaciones: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>',
+  calendar: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path></svg>',
+  bot: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>',
+  edit: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
   intervencion: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><polyline points="16 11 18 13 22 9"></polyline></svg>',
   plan: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>',
   package: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="M3.3 7 12 12l8.7-5"></path><path d="M12 22V12"></path></svg>',
@@ -18,6 +21,7 @@ const PANEL_ICONS = {
   check: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
   sparkles: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"></path></svg>',
   settings: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88L4.2 6.56a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.37.72.68 1 .3.26.7.4 1.1.4H21a2 2 0 1 1 0 4h-.09c-.4 0-.8.14-1.1.4-.2.18-.34.38-.41.6Z"></path></svg>',
+  clock: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
   instagram: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"></line></svg>'
 };
 
@@ -85,33 +89,65 @@ button,input,textarea{font:inherit}
 button{cursor:pointer}
 .app{min-height:100vh;display:grid;grid-template-columns:250px minmax(0,1fr)}
 .mobileTop,.mobileModuleBar,.mobileTabbar,.mobileBack,.mobilePeriodShell{display:none}
-.sidebar{height:100vh;position:sticky;top:0;background:linear-gradient(180deg,var(--navy-950),var(--navy-900));color:#fff;padding:26px 18px;display:flex;flex-direction:column;gap:30px}
-.brand{display:flex;align-items:center;gap:14px;padding:0 2px}
-.ravLogo{width:56px;height:56px;border-radius:14px;background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));display:grid;place-items:center;font-size:22px;font-weight:800;letter-spacing:-.04em;box-shadow:0 14px 28px rgba(18,168,244,.24)}
-.brand h1{font-size:21px;line-height:1;font-weight:800;letter-spacing:-.04em}
-.brand p{margin-top:5px;color:#96A7C4;font-size:14px;font-weight:600}
+.sidebar{height:100vh;position:sticky;top:0;background:linear-gradient(180deg,var(--navy-950),var(--navy-900));color:#fff;padding:24px 18px;display:flex;flex-direction:column;gap:24px;overflow-y:auto;scrollbar-width:thin}
+.ravLogo{width:48px;height:48px;border-radius:13px;background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));display:grid;place-items:center;font-size:19px;font-weight:800;letter-spacing:-.04em;box-shadow:0 10px 22px rgba(18,168,244,.22);flex:0 0 auto}
+.brand{width:100%;border:0;background:transparent;color:#fff;cursor:pointer;text-align:left;display:flex;align-items:center;gap:13px;padding:8px;border-radius:14px;transition:background .15s}
+.brand:hover{background:rgba(255,255,255,.05)}
+.brand h1{color:#fff;font-family:var(--font-display);font-size:19px;line-height:1;font-weight:800;letter-spacing:-.03em}
+.brand p{margin-top:5px;color:#96A7C4;font-size:12.5px;font-weight:600}
 .brand p span{color:var(--cyan-400)}
-.moduleSwitcher{display:grid;gap:8px;margin-top:-10px}
-.moduleTitle{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:#6F819F;font-weight:950;padding:0 14px}
-.moduleBtn{border:1px solid rgba(255,255,255,.08);border-radius:16px;background:rgba(255,255,255,.04);color:#B9C5D8;padding:12px 14px;text-align:left;display:grid;gap:5px}
-.moduleBtn strong{font-size:14px;color:#fff;font-weight:950}
-.moduleBtn span{font-size:11px;color:#91A2BF;font-weight:800}
-.moduleBtn.active{background:rgba(18,168,244,.14);border-color:rgba(37,191,255,.30);box-shadow:0 14px 26px rgba(18,168,244,.10)}
-.moduleBtn.locked strong{color:#D8E2F2}
-.moduleStatus{display:inline-flex;width:max-content;border-radius:999px;padding:4px 8px;background:rgba(20,169,113,.16);color:#9DF0C8;font-size:10px;font-weight:950}
-.moduleStatus.off{background:rgba(245,165,36,.16);color:#FFD28A}
-.nav{display:grid;gap:12px}
-.navItem{height:52px;border:0;border-radius:16px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:17px}
+.brandInfo{flex:1;min-width:0}
+.brandEdit{opacity:0;color:#93A4C2;display:inline-flex;flex:0 0 auto;transition:opacity .15s}
+.brand:hover .brandEdit{opacity:1}
+.brandEdit svg{width:17px;height:17px}
+.botSwitch{display:grid;gap:8px}
+.botSwitchTitle,.footTitle{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:#6F819F;font-weight:800;padding:0 6px}
+.botCard{display:flex;align-items:center;gap:11px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:inherit;border-radius:14px;padding:11px 12px;cursor:pointer;text-align:left;transition:border-color .15s,background .15s}
+.botCard:hover{background:rgba(255,255,255,.06)}
+.botCard.active{background:rgba(18,168,244,.14);border-color:rgba(37,191,255,.35)}
+.botIcon{width:34px;height:34px;flex:0 0 auto;border-radius:10px;background:rgba(255,255,255,.06);color:#CFE0F5;display:grid;place-items:center}
+.botCard.active .botIcon{background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));color:#fff}
+.botIcon svg{width:18px;height:18px}
+.botMeta{flex:1;min-width:0;display:grid;gap:2px}
+.botMeta strong{font-size:13.5px;color:#fff;font-weight:800;line-height:1.15}
+.botMeta span{font-size:11px;color:#8FA1BE;font-weight:700}
+.botDot{width:8px;height:8px;flex:0 0 auto;border-radius:50%;background:#22C778;box-shadow:0 0 0 3px rgba(34,199,120,.16)}
+.nav{display:grid;gap:8px}
+.navItem{height:46px;border:0;border-radius:14px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:15px}
 .navItem:hover{background:rgba(255,255,255,.06);color:#fff}
-.navItem.active{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;box-shadow:0 18px 36px rgba(18,168,244,.24)}
+.navItem.active{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;box-shadow:0 10px 22px rgba(18,168,244,.22)}
 .navIcon{font-size:22px;line-height:1;opacity:.92;display:inline-flex;align-items:center;justify-content:center}
 .navIcon svg{width:20px;height:20px;display:block}
 .navBadge{min-width:26px;height:22px;border-radius:999px;background:rgba(148,163,184,.35);color:#fff;display:grid;place-items:center;font-size:12px;padding:0 7px}
 .navBadge.hot{background:var(--amber-500);color:#3C2600}
-.whatsappCard{margin-top:auto;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.06);border-radius:16px;padding:18px 16px;color:#EAF2FF}
+.sidebarFoot{margin-top:auto;display:flex;flex-direction:column;gap:6px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
+.footTitle{padding-bottom:4px}
+.sidebarFoot .whatsappCard{margin-top:10px}
+.botsActive{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;color:#9DF0C8;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.whatsappCard{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.06);border-radius:16px;padding:18px 16px;color:#EAF2FF}
 .whatsappCard strong{display:flex;align-items:center;gap:9px;font-size:15px}
 .whatsappCard p{margin-top:8px;color:#92A2BE;font-size:13px;font-weight:600}
 .statusDot{width:9px;height:9px;border-radius:50%;background:#22C778;box-shadow:0 0 0 4px rgba(34,199,120,.14)}
+.profileModal{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;padding:20px}
+.profileModal.open{display:flex}
+.profileScrim{position:absolute;inset:0;background:rgba(6,15,34,.55);backdrop-filter:blur(4px)}
+.profileModal .profileCard{position:relative;width:min(440px,100%);background:#fff;border:0;border-radius:20px;padding:24px;box-shadow:0 40px 90px -25px rgba(6,15,34,.5)}
+.profileHead{display:flex;align-items:center;justify-content:space-between}
+.profileHead h3{font-family:var(--font-display);font-size:19px;font-weight:800;color:var(--navy-900)}
+.profileClose{border:0;background:var(--slate-100);width:32px;height:32px;border-radius:10px;font-size:18px;color:var(--slate-700);cursor:pointer}
+.profileHint{margin-top:4px;color:var(--slate-700);font-size:13px;font-weight:600}
+.profileLogoRow{display:flex;align-items:center;gap:16px;margin:18px 0}
+.profileLogo{width:72px;height:72px;flex:0 0 auto;border-radius:18px;background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));display:grid;place-items:center;color:#fff;font-size:22px;font-weight:800;background-size:cover;background-position:center}
+.profileUpload{display:inline-flex;align-items:center;gap:8px;border:1.5px solid var(--line);border-radius:12px;padding:10px 14px;font-size:13px;font-weight:800;color:var(--navy-900);cursor:pointer}
+.profileUpload svg{width:16px;height:16px}
+.profileField{display:grid;gap:6px;margin-bottom:18px}
+.profileField span{font-size:13px;font-weight:700;color:var(--slate-700)}
+.profileField input{height:46px;border:1.5px solid var(--line);border-radius:12px;padding:0 14px;font-size:15px;font-family:inherit;color:var(--navy-900)}
+.profileField input:focus{outline:3px solid rgba(18,168,244,.28);border-color:var(--cyan-500)}
+.profileActions{display:flex;justify-content:flex-end;gap:10px}
+.profileBtn{height:44px;padding:0 18px;border-radius:12px;font-size:14px;font-weight:800;cursor:pointer;border:0}
+.profileBtn.ghost{background:var(--slate-100);color:var(--slate-700)}
+.profileBtn.primary{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff}
 .main{min-width:0}
 .topbar{height:72px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:18px;padding:0 28px;position:sticky;top:0;z-index:4}
 .pageTitle h2{font-size:30px;line-height:1;font-weight:900;letter-spacing:-.05em}
@@ -826,7 +862,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
 <body>
 <div class="app">
   <header class="mobileTop">
-    <div class="mobileBrand"><div class="ravLogo">RAV</div><div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div></div>
+    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">RAV</div><div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div></div>
     <div class="mobileAvatar">RA</div>
   </header>
   <div class="mobileModuleBar" aria-label="Módulos">
@@ -836,27 +872,35 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
     <button id="mobileModule-appointments" class="locked" type="button" onclick="showTab('appointments')">Agendamiento de citas · No activo</button>
   </div>
   <aside class="sidebar">
-    <div class="brand">
-      <div class="ravLogo">RAV</div>
-      <div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div>
+    <button class="brand" type="button" onclick="openProfile()" aria-label="Editar perfil del negocio">
+      <span class="brandAvatar"><span class="ravLogo" id="brandLogo">RAV</span></span>
+      <span class="brandInfo"><h1 id="brandName">RAV Toys</h1><p>con Nextfor <span>IA</span></p></span>
+      <span class="brandEdit" aria-hidden="true">${PANEL_ICONS.edit}</span>
+    </button>
+    <div class="botSwitch" aria-label="Tus bots">
+      <div class="botSwitchTitle">Tus bots</div>
+      <button class="botCard active" id="bot-support" type="button" onclick="selectBot('support')"><span class="botIcon">${PANEL_ICONS.bot}</span><span class="botMeta"><strong>Atención al cliente</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>
+      <button class="botCard" id="bot-appointments" type="button" onclick="selectBot('appointments')"><span class="botIcon">${PANEL_ICONS.calendar}</span><span class="botMeta"><strong>Agendamiento</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>
     </div>
-    <div class="moduleSwitcher" aria-label="Módulos del panel">
-      <div class="moduleTitle">Módulos</div>
-      <button class="moduleBtn" id="module-support" type="button" onclick="showChannel('all')"><strong>Atención al cliente</strong><span class="moduleStatus" id="moduleStatus-support">Activo</span><span>WhatsApp + Instagram</span></button>
-      <button class="moduleBtn" id="module-setup" type="button" onclick="showTab('setup')"><strong>Configuración de tu Nextfor IA</strong><span class="moduleStatus" id="moduleStatus-setup">Por completar</span><span>Personalidad, conocimiento y reglas</span></button>
-      <button class="moduleBtn" id="module-retargeting" type="button" onclick="showTab('retargeting')"><strong>Seguimientos comerciales</strong><span class="moduleStatus off" id="moduleStatus-retargeting">Simulación segura</span><span>Cola, aprobaciones y bloqueos</span></button>
-      <button class="moduleBtn locked" id="module-appointments" type="button" onclick="showTab('appointments')"><strong>Agendamiento de citas</strong><span class="moduleStatus off">No activo</span></button>
-    </div>
-    <nav class="nav" aria-label="Secciones">
+    <nav class="nav" id="navSupport" aria-label="Secciones de Atención al cliente">
       <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
       <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
-      ${planNav}
-      <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
       <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
-    <div class="whatsappCard">
-      <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">Bot de atención conectado</span></strong>
-      <p id="channelStatusDetail">Atención al cliente · Plan Growth</p>
+    <nav class="nav" id="navAppointments" style="display:none" aria-label="Secciones de Agendamiento">
+      <button class="navItem" id="nav-appointments" type="button" onclick="showTab('appointments')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
+      <button class="navItem" type="button" onclick="showTab('appointments')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
+      <button class="navItem" type="button" onclick="showTab('appointments')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
+    </nav>
+    <div class="sidebarFoot">
+      <div class="footTitle">Cuenta</div>
+      ${planNav}
+      <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
+      <div class="whatsappCard">
+        <div class="botsActive"><span class="statusDot"></span><span>2 bots activos</span></div>
+        <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">Bot de atención conectado</span></strong>
+        <p id="channelStatusDetail">Atención al cliente · Plan Growth</p>
+      </div>
     </div>
   </aside>
   <main class="main">
@@ -1186,14 +1230,33 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
     ${planMobileNav}
     <button id="mnav-setup" type="button" onclick="showTab('setup')"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Config.</span></button>
   </nav>
+  <div class="profileModal" id="profileModal" role="dialog" aria-modal="true" aria-label="Editar perfil del negocio">
+    <div class="profileScrim" onclick="closeProfile()"></div>
+    <div class="profileCard">
+      <div class="profileHead"><h3>Editar perfil del negocio</h3><button class="profileClose" type="button" onclick="closeProfile()" aria-label="Cerrar">×</button></div>
+      <p class="profileHint">Así te verá tu equipo dentro del panel.</p>
+      <div class="profileLogoRow">
+        <div class="profileLogo" id="profileLogoPreview">RAV</div>
+        <label class="profileUpload">${PANEL_ICONS.edit}<span>Cambiar imagen</span><input type="file" accept="image/*" onchange="handleLogoFile(this)" hidden></label>
+      </div>
+      <label class="profileField"><span>Nombre del negocio</span><input id="profileNameInput" type="text" value="RAV Toys"></label>
+      <div class="profileActions"><button class="profileBtn ghost" type="button" onclick="closeProfile()">Cancelar</button><button class="profileBtn primary" type="button" onclick="saveProfile()">Guardar cambios</button></div>
+    </div>
+  </div>
 </div>
 <script>
 var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)};
 var PLAN_DATA={nombre:"Bot Atención al cliente",estado:"Activo",mensualidad:"$299.900/mes",renovacion:"Renueva el 1 de agosto",chatsIncluidos:500,chatsConsumidos:410,rescatesFrecuentes:true,referidos:{codigo:"RAVTOYS",count:0,mesesGanados:0}};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:INITIAL_TAB==="appointments"?"appointments":"support",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
+function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";if(bs){bs.classList.toggle("active",support);bs.setAttribute("aria-pressed",support?"true":"false");}if(ba){ba.classList.toggle("active",!support);ba.setAttribute("aria-pressed",support?"false":"true");}}
+function selectBot(bot){state.bot=bot==="appointments"?"appointments":"support";syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
+function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():"RAV Toys";modal.classList.add("open");if(input)input.focus();}
+function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");}
+function saveProfile(){var input=document.getElementById("profileNameInput"),value=input?(input.value||"").trim():"";if(value){text("brandName",value);var mobileName=document.querySelector(".mobileBrand h1");if(mobileName)mobileName.textContent=value;}closeProfile();}
+function handleLogoFile(input){var file=input.files&&input.files[0];if(!file)return;var url=URL.createObjectURL(file),targets=[document.getElementById("profileLogoPreview"),document.getElementById("brandLogo")];document.querySelectorAll(".mobileBrand .ravLogo").forEach(function(el){targets.push(el);});targets.forEach(function(el){if(!el)return;el.style.backgroundImage="url("+url+")";el.style.backgroundSize="cover";el.style.backgroundPosition="center";el.textContent="";});}
 function api(url,opts){opts=opts||{};opts.headers=Object.assign({accept:"application/json"},opts.headers||{});if(opts.body&&!opts.headers["content-type"])opts.headers["content-type"]="application/json";return fetch(url,opts).then(function(response){return response.json().catch(function(){return {};}).then(function(body){if(response.status===401){if(PANEL_LOGIN_PATH)location.href=PANEL_LOGIN_PATH;throw new Error("Sesión vencida");}if(!response.ok){var error=new Error(body.message||body.error||("HTTP "+response.status));error.body=body;throw error;}return body;});});}
 function when(ts){if(!ts)return "";var d=new Date(ts);if(isNaN(d.getTime()))return "";return d.toLocaleString("es-CO",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});}
 function setBusy(id,busy,busyText,normalText){var b=document.getElementById(id);if(!b)return;b.disabled=!!busy;b.textContent=busy?busyText:normalText;}
@@ -1208,6 +1271,9 @@ function showTab(name){
   if(name==="human")name="conversations";
   if(name==="tests"&&!SERVER_CAPABILITIES.run_tests)name="plan";
   state.tab=name;
+  if(name==="appointments")state.bot="appointments";
+  if(name==="summary"||name==="conversations"||name==="retargeting")state.bot="support";
+  syncBotSidebar();
   document.body.classList.remove("chat-open");
   document.body.classList.toggle("conversations-view",name==="conversations");
   var supportModule=name==="summary"||name==="conversations",setupModule=name==="setup",retargetingModule=name==="retargeting",appointmentsModule=name==="appointments";

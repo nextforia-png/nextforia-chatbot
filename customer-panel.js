@@ -1,3 +1,5 @@
+const customerAppointments = require("./customer-appointments");
+
 function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
 }
@@ -32,6 +34,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const healthPath = options.healthPath === null ? "" : (options.healthPath || "/admin/panel/health");
   const setupPath = options.setupPath || "/admin/bot-setup";
   const retargetingPath = options.retargetingPath || "/admin/retargeting";
+  const appointmentsPath = options.appointmentsPath || "/admin/panel/appointments-data";
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
   const demoMode = !!options.demoMode;
   const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(options.initialTab)
@@ -873,6 +876,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   .stateBand{align-items:flex-start}
   .profileColumn{display:none}
 }
+${customerAppointments.styles}
 </style>
 </head>
 <body>
@@ -902,9 +906,9 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
       <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
     <nav class="nav" id="navAppointments" style="display:none" aria-label="Secciones de Agendamiento">
-      <button class="navItem" id="nav-appointments" type="button" onclick="showTab('appointments')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
-      <button class="navItem" type="button" onclick="showTab('appointments')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
-      <button class="navItem" type="button" onclick="showTab('appointments')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
+      <button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
+      <button class="navItem" data-appt-nav="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button>
+      <button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab('appointments');showAppointmentSection('reminders')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
     </nav>
     <div class="sidebarFoot">
       <div class="footTitle">Cuenta</div>
@@ -975,44 +979,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
       </section>
 
       <section class="view" id="panel-appointments">
-        <div class="planView">
-          <section class="moduleHero">
-            <div>
-              <span class="moduleBadge">Módulo no activo</span>
-              <h3>Agendamiento de citas</h3>
-              <p>Este módulo tendrá su propio resumen, agenda, recordatorios y métricas cuando el bot de citas esté contratado y funcionando. No mezclamos estas métricas con Atención al cliente.</p>
-              <div class="planMeta"><span class="planPill">Servicio independiente</span><span class="planPill">Activación desde Mi plan</span></div>
-            </div>
-            <aside class="moduleHeroCard">
-              <strong>Qué pasará al activarlo</strong>
-              <p>El panel mostrará solo datos del bot de citas: solicitudes, citas agendadas, confirmaciones, recordatorios, cancelaciones y no-shows.</p>
-              <button class="primaryBtn" type="button" onclick="showTab('plan')" style="margin-top:16px">Ver en Mi plan</button>
-            </aside>
-          </section>
-
-          <div class="appointmentGrid">
-            <article class="card appointmentMetric"><span>Citas solicitadas</span><strong>—</strong><p>Clientes que pidieron reservar una cita.</p></article>
-            <article class="card appointmentMetric"><span>Citas agendadas</span><strong>—</strong><p>Reservas confirmadas por el bot.</p></article>
-            <article class="card appointmentMetric"><span>Recordatorios enviados</span><strong>—</strong><p>Mensajes automáticos para evitar ausencias.</p></article>
-            <article class="card appointmentMetric"><span>No-shows reducidos</span><strong>—</strong><p>Impacto esperado cuando haya historial.</p></article>
-          </div>
-
-          <div class="moduleInfoGrid">
-            <section class="planBlock">
-              <h3>Qué medirá este módulo</h3>
-              <p>Métricas pensadas para negocios que dependen de agenda, reservas y asistencia.</p>
-              <ul class="moduleList">
-                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Citas solicitadas, agendadas y confirmadas</li>
-                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Reagendamientos y cancelaciones</li>
-                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Recordatorios enviados por WhatsApp</li>
-                <li><span class="benefitIcon">${PANEL_ICONS.check}</span>Tasa de asistencia y no-shows</li>
-              </ul>
-            </section>
-            <section class="planBlock recommendation">
-              <div class="recommendationText"><div class="recommendationIcon">${PANEL_ICONS.sparkles}</div><div><h3>Te recomiendo mantenerlo separado</h3><p>Atención al cliente prueba cuánto responde y resuelve tu bot. Agendamiento prueba cuántas citas logra llenar y confirmar. Son dos valores distintos.</p></div></div>
-            </section>
-          </div>
-        </div>
+        ${customerAppointments.markup}
       </section>
 
       <section class="view" id="panel-plan">
@@ -1243,7 +1210,8 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
     <button id="mnav-summary" data-bot="support" type="button" onclick="showTab('summary')"><span class="mobileNavIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
     <button id="mnav-conversations" data-bot="support" type="button" onclick="showTab('conversations')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span></button>
     <button id="mnav-retargeting" data-bot="support" type="button" onclick="showTab('retargeting')"><span class="mobileNavIcon">${PANEL_ICONS.gift}</span><span>Seguim.</span></button>
-    <button id="mnav-appointments" data-bot="appointments" type="button" onclick="showTab('appointments')"><span class="mobileNavIcon">${PANEL_ICONS.calendar}</span><span>Agenda</span></button>
+    <button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="mobileNavIcon">${PANEL_ICONS.calendar}</span><span>Agenda</span></button>
+    <button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button>
     ${planMobileNav}
     <button id="mnav-setup" data-bot="account" type="button" onclick="showTab('setup')"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Config.</span></button>
   </nav>
@@ -1262,13 +1230,13 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   </div>
 </div>
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)};
 var PLAN_DATA={nombre:"Bot Atención al cliente",estado:"Activo",mensualidad:"$299.900/mes",renovacion:"Renueva el 1 de agosto",chatsIncluidos:500,chatsConsumidos:410,rescatesFrecuentes:true,referidos:{codigo:"RAVTOYS",count:0,mesesGanados:0}};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:INITIAL_TAB==="appointments"?"appointments":"support",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:INITIAL_TAB==="appointments"?"appointments":"support",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
-function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";[[bs,support],[ba,!support],[mbs,support],[mba,!support]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");button.style.display=scope==="account"||scope===state.bot?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",support?"5":"3");}
+function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";[[bs,support],[ba,!support],[mbs,support],[mba,!support]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");button.style.display=scope==="account"||scope===state.bot?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",support?"5":"4");}
 function selectBot(bot){state.bot=bot==="appointments"?"appointments":"support";syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
 function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():"RAV Toys";modal.classList.add("open");if(input)input.focus();}
 function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");}
@@ -1293,6 +1261,7 @@ function showTab(name){
   syncBotSidebar();
   document.body.classList.remove("chat-open");
   document.body.classList.toggle("conversations-view",name==="conversations");
+  document.body.classList.toggle("appointment-view",name==="appointments");
   var supportModule=name==="summary"||name==="conversations",setupModule=name==="setup",retargetingModule=name==="retargeting",appointmentsModule=name==="appointments";
   ["summary","conversations","appointments","plan","setup","retargeting","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});
   ["module-support","mobileModule-support"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",supportModule);});
@@ -1308,13 +1277,13 @@ function showTab(name){
   if(retargeting)retargeting.classList.toggle("active",name==="retargeting");
   if(tests)tests.classList.toggle("active",name==="tests");
   if(toolbar)toolbar.style.display=(name==="plan"||name==="appointments"||name==="setup"||name==="retargeting")?"none":"flex";
-  var pageTitle=name==="summary"?"Resumen":name==="tests"?"Pruebas":name==="plan"?"Mi plan":name==="setup"?"Configuración de tu Nextfor IA":name==="retargeting"?"Seguimientos comerciales":name==="appointments"?"Agendamiento de citas":"Conversaciones";
-  var pageSubtitle=name==="summary"?"Resultados del bot de atención · Últimos 7 días":name==="tests"?"Herramientas seguras para validar el bot.":name==="plan"?"Plan, módulos y consumo":name==="setup"?"Tu negocio, tu voz y tus reglas en un solo lugar":name==="retargeting"?"Cola segura, aprobaciones, cancelaciones y auditoría":name==="appointments"?"Módulo independiente · Se activa cuando esté funcionando":"La IA atiende y te deja solo lo que necesita de ti.";
+  var pageTitle=name==="summary"?"Resumen":name==="tests"?"Pruebas":name==="plan"?"Mi plan":name==="setup"?"Configuración de tu Nextfor IA":name==="retargeting"?"Seguimientos comerciales":name==="appointments"?"Citas":"Conversaciones";
+  var pageSubtitle=name==="summary"?"Resultados del bot de atención · Últimos 7 días":name==="tests"?"Herramientas seguras para validar el bot.":name==="plan"?"Plan, módulos y consumo":name==="setup"?"Tu negocio, tu voz y tus reglas en un solo lugar":name==="retargeting"?"Cola segura, aprobaciones, cancelaciones y auditoría":name==="appointments"?"Tu agenda llenándose, sin perseguir confirmaciones.":"La IA atiende y te deja solo lo que necesita de ti.";
   text("pageTitle",pageTitle);
   text("pageSubtitle",pageSubtitle);
-  if(window.innerWidth<=760){var activeMobileModule=document.getElementById("mobileModule-"+name);if(activeMobileModule)activeMobileModule.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});}
+  if(window.innerWidth<=760&&name!=="appointments"){var activeMobileModule=document.getElementById("mobileModule-"+name);if(activeMobileModule)activeMobileModule.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});}
   try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("channel");url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}
-  if(name==="setup")loadBotSetup();if(name==="retargeting")loadRetargeting(false);renderInbox();renderPlan();window.scrollTo(0,0);
+  if(name==="setup")loadBotSetup();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
 }
 function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH).then(function(data){state.data=data;state.allConversations=data.conversations||[];applyChannelData();if(!DEMO_MODE)SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderChannelState();renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
 function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;}).catch(function(){});}
@@ -1466,7 +1435,9 @@ function markSetupDirty(){if(!state.setup||!state.setup.can_edit)return;state.se
 function setSetupBusy(busy,action){var save=document.getElementById("saveSetupBtn"),publish=document.getElementById("publishSetupBtn"),back=document.getElementById("setupBackBtn");if(save){save.disabled=busy;save.textContent=busy&&action==="save"?"Guardando…":"Guardar avance";}if(publish){publish.disabled=busy;if(busy&&action==="publish")publish.textContent="Activando…";}if(back)back.disabled=busy;if(!busy)renderSetupWizard();}
 function saveBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),save=document.getElementById("saveSetupBtn"),feedback="";setSetupBusy(true,"save");text("setupMessage","Guardando tu avance…");api("/admin/bot-setup",{method:"PUT",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setupDirty=false;fillSetupForm();feedback="✓ Avance guardado. El bot activo todavía no cambió.";}).catch(function(error){feedback="No se pudo guardar: "+error.message;}).finally(function(){setSetupBusy(false,"save");text("setupMessage",feedback||"Completa la información a tu ritmo.");if(feedback.indexOf("✓")===0&&save){save.textContent="Avance guardado ✓";setTimeout(function(){save.textContent="Guardar avance";},2000);}});}
 function publishBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),feedback="";setSetupBusy(true,"publish");text("setupMessage","Validando y personalizando tu bot…");api("/admin/bot-setup/publish",{method:"POST",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setup.published={status:"published",completion:result.setup.completion,updated_at:result.setup.updated_at,published_at:result.setup.published_at};state.setupDirty=false;state.setupActivated=true;fillSetupForm();feedback="✓ Configuración activa. Se aplicará a los mensajes nuevos.";}).catch(function(error){var detail=error.body&&error.body.completion!=null?" Vas en "+error.body.completion+"%.":"";feedback=(error.body&&error.body.message||"No se pudo activar la configuración.")+detail;}).finally(function(){setSetupBusy(false,"publish");text("setupMessage",feedback||"Revisa la configuración e intenta nuevamente.");});}
+${customerAppointments.clientScript}
 var reply=document.getElementById("replyText");if(reply)reply.addEventListener("keydown",function(event){if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();sendReply();}});document.addEventListener("click",function(event){if(!event.target.closest(".emojiControl"))closeEmojiPickers();});document.addEventListener("keydown",function(event){if(event.key==="Escape")closeEmojiPickers();});var searchForm=document.getElementById("searchTestForm");if(searchForm)searchForm.addEventListener("submit",runProductTest);var orderForm=document.getElementById("orderTestForm");if(orderForm)orderForm.addEventListener("submit",runOrderTest);
+try{var initialView=new URL(location.href).searchParams.get("view");if(["agenda","chats","reminders"].includes(initialView))state.appointmentSection=initialView;}catch(e){}
 renderChannelStrips();showTab(INITIAL_TAB);loadBotSetup();loadPanelData(false);loadPanelHealth();setInterval(function(){if(!DEMO_MODE&&!state.metaDirty)loadPanelData(false);},30000);setInterval(loadPanelHealth,120000);
 </script>
 </body>

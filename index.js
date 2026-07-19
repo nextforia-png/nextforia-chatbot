@@ -21,6 +21,10 @@ const renderCustomerPanel = require("./customer-panel");
 const renderSuperAdminPanel = require("./super-admin-panel");
 const renderSuperAdminLogin = require("./super-admin-login");
 const renderAppointmentPanel = require("./appointment-panel");
+const {
+  customerAppointmentSnapshot,
+  demoAppointmentSnapshot
+} = require("./customer-appointments");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
@@ -134,7 +138,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v84-mobile-navigation-human-control";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v85-customer-appointment-panel";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3510,11 +3514,19 @@ function dashboardAuth(req) {
   return readDashboardSession(req) || { ok: false, role: "none" };
 }
 
+function canAccessTenant(auth, tenantId) {
+  if (!auth || !auth.ok) return false;
+  if (auth.role === "super_admin") return true;
+  const scopedTenant = cleanTenantId(auth.tenant_id);
+  // Existing single-tenant users predate tenant_id and belong to the default tenant.
+  return scopedTenant ? scopedTenant === cleanTenantId(tenantId) : cleanTenantId(tenantId) === DEFAULT_TENANT_ID;
+}
+
 function adminAuthOk(req, minRole = "viewer") {
   const auth = dashboardAuth(req);
   const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
   const actual = DASHBOARD_ROLES[auth.role] || 0;
-  return !!auth.ok && actual >= required;
+  return !!auth.ok && actual >= required && canAccessTenant(auth, DEFAULT_TENANT_ID);
 }
 
 function adminKeyOk(req) {
@@ -4813,6 +4825,21 @@ app.get("/admin/panel/demo-data", (req, res) => {
   res.json(buildCustomerPanelDemoSnapshot());
 });
 
+app.get("/admin/panel/appointments-data", async (req, res) => {
+  if (!adminAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const persistent = await hydrateAppointmentsForTenant(DEFAULT_TENANT_ID);
+  const snapshot = appointmentRegistry.snapshot(DEFAULT_TENANT_ID);
+  snapshot.source = persistent ? "supabase" : "memory";
+  res.json(customerAppointmentSnapshot(snapshot, CUSTOMER_PANEL_BUSINESS));
+});
+
+app.get("/admin/panel/demo-appointments-data", (req, res) => {
+  res.json(demoAppointmentSnapshot());
+});
+
 app.get("/admin/panel/demo-setup", (req, res) => {
   const demo = createSetupRecord(defaultBotSetupAnswers(), {
     tenant_id: CUSTOMER_PANEL_BUSINESS.id,
@@ -5123,8 +5150,7 @@ app.get("/admin/super-admin/login", (req, res) => {
 });
 
 function canAccessRegisteredClient(auth, tenantId) {
-  if (!auth || !auth.ok) return false;
-  return auth.role === "super_admin" || auth.tenant_id === tenantId;
+  return canAccessTenant(auth, tenantId);
 }
 
 app.get("/admin/registered-clients", (req, res) => {
@@ -5177,6 +5203,10 @@ app.get("/admin/panel", (req, res) => {
     renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
+  if (!canAccessTenant(auth, DEFAULT_TENANT_ID)) {
+    res.status(403).send("Acceso restringido al tenant de este panel.");
+    return;
+  }
   if (auth.method === "key") {
     setDashboardSessionCookie(req, res, auth);
   }
@@ -5204,6 +5234,7 @@ app.get("/admin/panel-demo", (req, res) => {
     demoMode: true,
     initialTab,
     dataPath: "/admin/panel/demo-data",
+    appointmentsPath: "/admin/panel/demo-appointments-data",
     setupPath: "/admin/panel/demo-setup",
     retargetingPath: "/admin/panel/demo-retargeting",
     healthPath: null,

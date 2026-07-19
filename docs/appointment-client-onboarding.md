@@ -17,6 +17,25 @@
 7. El cliente recibe acceso únicamente a su panel.
 8. Después de aprobación se activan llamadas, recordatorios y operación real.
 
+## Flujo operativo de citas
+
+1. Cliente llama, escribe o entra desde un canal conectado.
+2. El bot conversa, valida intención y recoge datos mínimos.
+3. El bot consulta disponibilidad según las reglas del cliente.
+4. El bot agenda, solicita confirmación o deja la cita pendiente.
+5. ElevenLabs envía el evento post-call a Nextfor.
+6. Nextfor guarda la cita y la muestra en el panel del cliente.
+7. El bot confirma la cita 24 horas antes y luego 6 horas antes, si el cliente activó esos recordatorios.
+8. Si el usuario Nextfor modifica la agenda, el bot detecta las citas afectadas y busca reprogramarlas con el cliente, ofreciendo disculpas y nuevas opciones.
+
+## Panel del cliente y futura consolidación
+
+- El módulo vive en `/admin/panel?tab=appointments` y mantiene separadas las métricas de Atención al cliente.
+- `GET /admin/panel/appointments-data` entrega una vista segura y aislada por `tenant_id`; no incluye tokens ni credenciales del proveedor de calendario.
+- Citas, conversaciones de agendamiento y recordatorios comparten el identificador de cita para reflejar confirmaciones y handoffs en una sola fuente de verdad.
+- Super Admin podrá consolidar después los mismos snapshots por `tenant_id`. La pantalla global no debe leer el HTML del panel ni reconstruir métricas desde la interfaz.
+- Las acciones del demo mutan únicamente el estado local de la vista. El envío real, Google Calendar y las mutaciones persistentes se habilitan al conectar los proveedores del cliente.
+
 ## Información necesaria del cliente
 
 ### Negocio y bot
@@ -37,7 +56,8 @@
 - Servicios que pueden agendarse.
 - Modalidad: virtual, presencial o ambas; sedes y enlaces.
 - Reglas para confirmar, reagendar, cancelar y no-show.
-- Recordatorios: momento, canal y texto aprobado.
+- Recordatorios configurables: activar/desactivar, 24 horas antes, 6 horas antes, canal y texto aprobado.
+- Reprogramación por cambios internos: bloqueos de agenda, vacaciones, eventos, viajes, incapacidades y mensaje de disculpa aprobado.
 
 ### Datos y cumplimiento
 

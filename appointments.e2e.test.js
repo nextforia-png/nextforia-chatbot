@@ -143,6 +143,10 @@ function elevenLabsSignature(body, secret, timestamp) {
     const otherCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
     response = await fetch(base + "/admin/pilots/derco/data", { headers: { cookie: otherCookie } });
     assert.strictEqual(response.status, 401, "another tenant must not access DERCO data");
+    response = await fetch(base + "/admin/panel/data", { headers: { cookie: otherCookie } });
+    assert.strictEqual(response.status, 401, "another tenant must not access the default tenant data");
+    response = await fetch(base + "/admin/panel", { headers: { cookie: otherCookie } });
+    assert.strictEqual(response.status, 403, "another tenant must not access the default tenant panel");
 
     console.log("appointments e2e tests: ok");
   } finally {

@@ -138,7 +138,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v85-customer-appointment-panel";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v86-instagram-resilience";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -213,6 +213,15 @@ const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
+const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
+  ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
+  : "";
+const INSTAGRAM_HEALTH_INTERVAL_MS = boundedEnvInt(
+  "INSTAGRAM_HEALTH_INTERVAL_MS",
+  7 * 60 * 1000,
+  2 * 60 * 1000,
+  14 * 60 * 1000
+);
 const MESSENGER_PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN || process.env.FB_PAGE_ACCESS_TOKEN || "";
 const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_ID || "";
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
@@ -2960,6 +2969,37 @@ app.post("/webhook", async (req, res) => {
 
 // Instagram API with Instagram Login webhook. Instagram sender IDs are namespaced
 // internally so conversation state and outbound replies stay on the right channel.
+async function instagramConnectionHealth() {
+  const checkedAt = new Date().toISOString();
+  if (!IG_ACCESS_TOKEN || !IG_USER_ID || !IG_SEND_ID) {
+    return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt };
+  }
+
+  try {
+    await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(IG_USER_ID)}`, {
+      params: { fields: "id,username" },
+      headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+      timeout: 10000
+    });
+    return { ok: true, configured: true, status: "connected", checked_at: checkedAt };
+  } catch (err) {
+    const metaError = err.response?.data?.error || {};
+    return {
+      ok: false,
+      configured: true,
+      status: "api_error",
+      error_code: metaError.code || null,
+      error_type: metaError.type || "request_failed",
+      checked_at: checkedAt
+    };
+  }
+}
+
+app.get("/instagram/health", async (req, res) => {
+  const health = await instagramConnectionHealth();
+  res.status(health.ok ? 200 : 503).json(health);
+});
+
 app.get("/instagram/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -6279,4 +6319,25 @@ app.listen(PORT, () => {
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
+
+  if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
+    const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;
+    const runSelfCheck = async function () {
+      try {
+        await axios.get(checkUrl, {
+          timeout: 20000,
+          headers: { "User-Agent": "rav-bot-instagram-heartbeat/1.0" }
+        });
+        console.log("Instagram heartbeat: OK");
+      } catch (err) {
+        console.error("Instagram heartbeat failed:", err.response?.data || err.message);
+      }
+    };
+
+    const initialInstagramHealthCheck = setTimeout(runSelfCheck, 30000);
+    initialInstagramHealthCheck.unref();
+    const instagramHealthTimer = setInterval(runSelfCheck, INSTAGRAM_HEALTH_INTERVAL_MS);
+    instagramHealthTimer.unref();
+    console.log(`Instagram heartbeat scheduled every ${Math.round(INSTAGRAM_HEALTH_INTERVAL_MS / 60000)} minutes`);
+  }
 });

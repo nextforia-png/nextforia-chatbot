@@ -138,7 +138,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v87-instagram-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v88-instagram-webhook-parser";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -383,7 +383,11 @@ const instagramRuntimeState = {
   last_outbound_at: null,
   last_error_at: null,
   last_error_stage: null,
-  last_handoff_auto_release_at: null
+  last_handoff_auto_release_at: null,
+  last_webhook_object: null,
+  last_entry_shape: null,
+  last_event_shape: null,
+  last_skip_reason: null
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
@@ -3039,9 +3043,35 @@ app.get("/instagram/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+function instagramEventsFromEntry(entry) {
+  const events = Array.isArray(entry?.messaging) ? entry.messaging.slice() : [];
+  for (const change of entry?.changes || []) {
+    const value = change?.value || {};
+    if (Array.isArray(value.messaging)) events.push(...value.messaging);
+    if (value.sender?.id && value.message) events.push(value);
+    for (const message of value.messages || []) {
+      const senderId = message?.from?.id || message?.sender?.id || value.sender?.id;
+      if (!senderId) continue;
+      events.push({
+        sender: { id: senderId },
+        recipient: value.recipient || null,
+        timestamp: message.timestamp || value.timestamp || entry?.time,
+        message: {
+          mid: message.id || message.mid || null,
+          text: message.text?.body || message.text || null,
+          attachments: message.attachments || null,
+          is_echo: !!message.is_echo
+        }
+      });
+    }
+  }
+  return events;
+}
+
 app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.webhook_requests++;
   instagramRuntimeState.last_webhook_at = new Date().toISOString();
+  instagramRuntimeState.last_webhook_object = String(req.body?.object || "missing").slice(0, 40);
   if (!validMetaWebhookSignature(req)) {
     instagramRuntimeState.last_error_at = new Date().toISOString();
     instagramRuntimeState.last_error_stage = "webhook_signature";
@@ -3049,13 +3079,37 @@ app.post("/instagram/webhook", async (req, res) => {
   }
   res.sendStatus(200);
   try {
-    if (req.body?.object !== "instagram") return;
+    if (!req.body?.object || !["instagram", "page"].includes(req.body.object)) {
+      instagramRuntimeState.last_skip_reason = "unsupported_object";
+      return;
+    }
     for (const entry of req.body?.entry || []) {
-      for (const event of entry.messaging || []) {
-        if (!event.sender?.id || event.message?.is_echo || !acceptMetaEventId(event.message?.mid)) continue;
+      const events = instagramEventsFromEntry(entry);
+      instagramRuntimeState.last_entry_shape = Array.isArray(entry?.messaging)
+        ? "messaging"
+        : Array.isArray(entry?.changes) ? "changes" : "unknown";
+      if (!events.length) instagramRuntimeState.last_skip_reason = "no_messaging_events";
+      for (const event of events) {
+        instagramRuntimeState.last_event_shape = event.message?.text
+          ? "text"
+          : event.message?.attachments?.length ? "attachment" : event.message?.is_echo ? "echo" : "other";
+        if (!event.sender?.id) {
+          instagramRuntimeState.last_skip_reason = "missing_sender";
+          continue;
+        }
+        if (event.message?.is_echo || String(event.sender.id) === String(IG_USER_ID)) {
+          instagramRuntimeState.last_skip_reason = "echo_or_business_sender";
+          continue;
+        }
+        const eventId = event.message?.mid || ["ig", event.sender.id, event.timestamp || entry?.time || "", event.message?.text || ""].join(":");
+        if (!acceptMetaEventId(eventId)) {
+          instagramRuntimeState.last_skip_reason = "duplicate_event";
+          continue;
+        }
         const userId = `ig:${event.sender.id}`;
         instagramRuntimeState.inbound_messages++;
         instagramRuntimeState.last_inbound_at = new Date().toISOString();
+        instagramRuntimeState.last_skip_reason = null;
         refreshInstagramProfile(userId);
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {

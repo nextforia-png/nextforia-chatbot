@@ -262,6 +262,7 @@ function renderSuperAdminPanel(res, options) {
 .sidebar{width:242px;flex:0 0 242px;background:var(--navy-950);color:#fff;padding:18px 13px;display:flex;flex-direction:column;gap:2px;overflow-y:auto;border-right:1px solid rgba(255,255,255,.06)}
 .brand{display:flex;align-items:center;gap:10px;padding:4px 8px 14px}
 .brand-mark{height:28px;width:auto;object-fit:contain}
+.brand-lumen{display:none}
 .brand-name{font-family:var(--font-display);font-weight:800;font-size:15px;letter-spacing:-.01em;line-height:1}.brand-name span{color:var(--cyan-400)}
 .brand-role{margin-top:3px;font-size:9.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.42)}
 .nav-group{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.32);font-weight:700;padding:14px 9px 5px}
@@ -479,13 +480,13 @@ function renderSuperAdminPanel(res, options) {
 @keyframes fade{from{opacity:0}}
 @keyframes drawer{from{opacity:.5;transform:translateX(28px)}}
 @media(max-width:1080px){.grid-4{grid-template-columns:repeat(2,1fr)}.attention{grid-template-columns:repeat(2,1fr)}.bot-grid,.two-col,.source-grid{grid-template-columns:1fr}.top-actions .optional{display:none}}
-@media(max-width:820px){.app{height:auto;min-height:100%;display:block;overflow:visible}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:12px 14px;flex-direction:row;align-items:center;gap:6px;overflow-x:auto}.brand{padding:0 8px 0 0}.brand-role,.sidebar-bottom,.nav-group,.nav-badge{display:none}.nav-button{width:auto;min-width:max-content;height:38px}.workspace{overflow:visible}.topbar{position:sticky;top:62px;z-index:15}.content{overflow:visible}.view{padding:18px}.split-grid,.role-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.app{height:auto;min-height:100%;display:block;overflow:visible}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:12px 14px;flex-direction:row;align-items:center;gap:6px;overflow-x:auto}.brand{padding:0 8px 0 0}.brand-role,.sidebar-bottom,.nav-group,.nav-badge{display:none}.brand-lumen{display:block;height:34px;width:auto;margin-left:6px}.nav-button{width:auto;min-width:max-content;height:38px}.workspace{overflow:visible}.topbar{position:sticky;top:62px;z-index:15}.content{overflow:visible}.view{padding:18px}.split-grid,.role-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.topbar{align-items:flex-start;flex-wrap:wrap}.top-actions{width:100%}.top-actions .button{flex:1}.top-actions .button.icon-only{flex:0 0 40px}.page-heading h1{font-size:18px}.grid-4,.attention{grid-template-columns:1fr 1fr;gap:10px}.stat-card{padding:14px}.stat-value{font-size:22px}.toolbar{display:block}.filter-chips{margin-top:10px}.steps li{grid-template-columns:auto 1fr}.steps li>.badge{grid-column:2;justify-self:start;margin-bottom:9px}.mini-grid,.drawer-foot{grid-template-columns:1fr}.callout{display:block}.callout>.badge{margin-top:10px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:0ms!important;transition-duration:0ms!important;scroll-behavior:auto!important}}
 </style></head>
 <body><div class="app">
 <aside class="sidebar" aria-label="Navegación Super Admin">
-<div class="brand"><img class="brand-mark" src="/admin/assets/nexfor-mark-light.png" alt="Nextfor IA"><div><div class="brand-name">Nextfor <span>IA</span></div><div class="brand-role">Super Admin</div></div></div>
+<div class="brand"><img class="brand-mark" src="/admin/assets/nexfor-mark-light.png" alt="Nextfor IA"><div><div class="brand-name">Nextfor <span>IA</span></div><div class="brand-role">Super Admin</div></div><img class="brand-lumen" src="/admin/assets/lumen.png" alt="" aria-hidden="true"></div>
 <div class="nav-group">Consolidado</div>
 <nav aria-label="Consolidado"><button class="nav-button active" data-view="overview" aria-current="page">${icon("overview", 18)}<span>Resumen</span></button><button class="nav-button" data-view="leads">${icon("lead", 18)}<span>Leads</span><span class="nav-badge">${leadsData && leadsData.kpis ? num(leadsData.kpis.active) : 0}</span></button><button class="nav-button" data-view="clients">${icon("users", 18)}<span>Clientes</span><span class="nav-badge">${currentClients}</span></button></nav>
 <div class="nav-group">Bots</div>

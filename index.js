@@ -138,7 +138,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v86-instagram-resilience";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v87-instagram-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -222,6 +222,8 @@ const INSTAGRAM_HEALTH_INTERVAL_MS = boundedEnvInt(
   2 * 60 * 1000,
   14 * 60 * 1000
 );
+const BOT_HANDOFF_TTL_MS = boundedEnvInt("BOT_HANDOFF_TTL_MINUTES", 120, 5, 1440) * 60 * 1000;
+const ADMIN_HANDOFF_TTL_MS = boundedEnvInt("ADMIN_HANDOFF_TTL_MINUTES", 720, 15, 2880) * 60 * 1000;
 const MESSENGER_PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN || process.env.FB_PAGE_ACCESS_TOKEN || "";
 const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_ID || "";
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
@@ -372,6 +374,17 @@ const conversationLastActiveAt = new Map();
 const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
 const inboundMessageWindows = new Map();
+const instagramRuntimeState = {
+  webhook_requests: 0,
+  inbound_messages: 0,
+  outbound_messages: 0,
+  last_webhook_at: null,
+  last_inbound_at: null,
+  last_outbound_at: null,
+  last_error_at: null,
+  last_error_stage: null,
+  last_handoff_auto_release_at: null
+};
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 let clientOnboardingCache = { loaded_at: 0, record: null };
@@ -1075,13 +1088,24 @@ function recordHumanPausedInbound(userId, message) {
 }
 
 async function humanControlActiveFor(userId) {
-  if (humanHandoff.has(userId)) return true;
+  const instagramConversation = conversationChannel(userId) === "instagram";
+  if (humanHandoff.has(userId) && !instagramConversation) return true;
+  if (instagramConversation) humanHandoff.delete(userId);
   const rows = await supabaseFetchUserRecent(userId, 20);
   if (!rows || !rows.length) return false;
   for (const row of rows) {
     const tools = row.tools || [];
     if (tools.includes("admin_release") || tools.includes("admin_resolve")) return false;
-    if (tools.includes("admin_takeover") || tools.includes("admin_send_message") || tools.includes("request_human_handoff") || row.handoff) {
+    const adminHandoff = tools.includes("admin_takeover") || tools.includes("admin_send_message");
+    const botHandoff = tools.includes("request_human_handoff");
+    if (adminHandoff || botHandoff) {
+      const activatedAt = Date.parse(row.ts || row.created_at || "");
+      const ttl = adminHandoff ? ADMIN_HANDOFF_TTL_MS : BOT_HANDOFF_TTL_MS;
+      if (activatedAt && Date.now() - activatedAt > ttl) {
+        recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false);
+        if (conversationChannel(userId) === "instagram") instagramRuntimeState.last_handoff_auto_release_at = new Date().toISOString();
+        return false;
+      }
       humanHandoff.add(userId);
       return true;
     }
@@ -2045,6 +2069,8 @@ async function sendText(to, text) {
         { recipient: { id: recipient.id }, message: { text: String(text || "").slice(0, 2000) } },
         { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
+      instagramRuntimeState.outbound_messages++;
+      instagramRuntimeState.last_outbound_at = new Date().toISOString();
       console.log(`Instagram text sent to ${maskedIdentifier(to)}`);
       return true;
     }
@@ -2066,6 +2092,10 @@ async function sendText(to, text) {
     console.log(`Text sent to ${maskedIdentifier(to)}`);
     return true;
   } catch (err) {
+    if (recipient.channel === "instagram") {
+      instagramRuntimeState.last_error_at = new Date().toISOString();
+      instagramRuntimeState.last_error_stage = "send_text";
+    }
     console.error(`${channelLabel(to)} text error:`, err.response?.data?.error || err.message);
     return false;
   }
@@ -2972,7 +3002,7 @@ app.post("/webhook", async (req, res) => {
 async function instagramConnectionHealth() {
   const checkedAt = new Date().toISOString();
   if (!IG_ACCESS_TOKEN || !IG_USER_ID || !IG_SEND_ID) {
-    return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt };
+    return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt, runtime: { ...instagramRuntimeState } };
   }
 
   try {
@@ -2981,7 +3011,7 @@ async function instagramConnectionHealth() {
       headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
       timeout: 10000
     });
-    return { ok: true, configured: true, status: "connected", checked_at: checkedAt };
+    return { ok: true, configured: true, status: "connected", checked_at: checkedAt, runtime: { ...instagramRuntimeState } };
   } catch (err) {
     const metaError = err.response?.data?.error || {};
     return {
@@ -2990,7 +3020,8 @@ async function instagramConnectionHealth() {
       status: "api_error",
       error_code: metaError.code || null,
       error_type: metaError.type || "request_failed",
-      checked_at: checkedAt
+      checked_at: checkedAt,
+      runtime: { ...instagramRuntimeState }
     };
   }
 }
@@ -3009,7 +3040,13 @@ app.get("/instagram/webhook", (req, res) => {
 });
 
 app.post("/instagram/webhook", async (req, res) => {
-  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
+  instagramRuntimeState.webhook_requests++;
+  instagramRuntimeState.last_webhook_at = new Date().toISOString();
+  if (!validMetaWebhookSignature(req)) {
+    instagramRuntimeState.last_error_at = new Date().toISOString();
+    instagramRuntimeState.last_error_stage = "webhook_signature";
+    return res.sendStatus(401);
+  }
   res.sendStatus(200);
   try {
     if (req.body?.object !== "instagram") return;
@@ -3017,6 +3054,8 @@ app.post("/instagram/webhook", async (req, res) => {
       for (const event of entry.messaging || []) {
         if (!event.sender?.id || event.message?.is_echo || !acceptMetaEventId(event.message?.mid)) continue;
         const userId = `ig:${event.sender.id}`;
+        instagramRuntimeState.inbound_messages++;
+        instagramRuntimeState.last_inbound_at = new Date().toISOString();
         refreshInstagramProfile(userId);
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {
@@ -3033,6 +3072,8 @@ app.post("/instagram/webhook", async (req, res) => {
       }
     }
   } catch (err) {
+    instagramRuntimeState.last_error_at = new Date().toISOString();
+    instagramRuntimeState.last_error_stage = "webhook_processing";
     console.error("Error processing Instagram message:", err.response?.data || err.message);
   }
 });

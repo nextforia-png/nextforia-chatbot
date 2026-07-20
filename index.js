@@ -5214,7 +5214,24 @@ app.get("/admin/super-admin", (req, res) => {
     commercialReadiness: COMMERCIAL_READINESS,
     accessModel: DASHBOARD_ACCESS_MODEL,
     tenant: CUSTOMER_PANEL_BUSINESS,
-    registeredClients: listRegisteredClients()
+    registeredClients: listRegisteredClients(),
+    // Contrato de datos del diseño aprobado del Super Admin.
+    // Se mantienen en null a propósito: el panel renderiza estados vacíos
+    // honestos en vez de cifras de ejemplo. Al conectar la fuente real basta
+    // con reemplazar estos valores; el panel ya sabe pintarlos.
+    //
+    // finance: {
+    //   currency: "COP",
+    //   bots: [{ id: "agendamiento"|"atencion", name, clients, mrr, users, usersUnit, costs }],
+    //   pareto: [{ name, revenue, botId }],
+    //   attention: { webhooks, pendingAppointments, queues, overdue }
+    // }
+    finance: null,
+    // leads: {
+    //   kpis: { active, won, demos, conversion },
+    //   sources: [{ name, paid: true|false, leads, won }]
+    // }
+    leads: null
   });
 });
 

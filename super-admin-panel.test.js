@@ -44,6 +44,11 @@ assert.match(html, /data-view="clients"/);
 assert.match(html, /data-view="leads"/);
 assert.match(html, /data-view="incidents"/);
 assert.match(html, /data-view="billing"/);
+assert.match(html, /data-view="agendamiento"/);
+assert.match(html, /data-view="atencion"/);
+assert.match(html, /Bandeja de operación/);
+assert.match(html, /\/admin\/assets\/lumen\.png/);
+assert.match(html, /--gradient-cyan/);
 assert.match(html, /Grupo Jurídico DERCO/);
 assert.match(html, /\/admin\/pilots\/derco/);
 assert.match(html, /Cliente #1 · Grupo Jurídico DERCO/);
@@ -55,5 +60,40 @@ assert.match(html, /Meta App Review pendiente/);
 assert.match(html, /No se muestran datos de ejemplo como si fueran producción/);
 assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
 assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+
+// Sin fuente financiera el panel no inventa cifras.
+assert.match(html, /sin fuente financiera conectada/);
+assert.match(html, /El Pareto de ingresos aparece con ventas reales/);
+
+// Con fuente financiera conectada el diseño pinta desglose, tabla y Pareto.
+let richHtml = "";
+renderSuperAdminPanel({
+  setHeader: function () {},
+  send: function (body) { richHtml = body; }
+}, {
+  auth: { username: "root", name: "Root", role: "super_admin" },
+  botVersion: "v-test",
+  tenant: { id: "rav-toys", name: "RAV Toys", status: "active" },
+  registeredClients: [],
+  commercialReadiness: { stages: [], requiredTenantFields: [] },
+  accessModel: { roles: [], future_panels: [] },
+  finance: {
+    currency: "COP",
+    bots: [
+      { id: "agendamiento", name: "Agendamiento", clients: 3, mrr: 6000000, users: 420, usersUnit: "citas/mes", costs: 1500000 },
+      { id: "atencion", name: "Atención al cliente", clients: 2, mrr: 4000000, users: 1800, usersUnit: "conv./mes", costs: 1200000 }
+    ],
+    pareto: [
+      { name: "Agendamiento", revenue: 6000000, botId: "agendamiento" },
+      { name: "Atención al cliente", revenue: 4000000, botId: "atencion" }
+    ],
+    attention: { webhooks: 2, pendingAppointments: 7, queues: 1, overdue: 0 }
+  },
+  leads: { kpis: { active: 12, won: 3, demos: 5, conversion: 25 }, sources: [{ name: "Meta Ads", paid: true, leads: 8, won: 2 }] }
+});
+assert.match(richHtml, /Consolidado/);
+assert.match(richHtml, /Pareto de ingresos/);
+assert.match(richHtml, /Meta Ads/);
+assert.doesNotMatch(richHtml, /sin fuente financiera conectada/);
 
 console.log("super-admin-panel.test.js: ok");

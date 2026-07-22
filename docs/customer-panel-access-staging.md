@@ -20,21 +20,30 @@ La fuente de verdad contractual es `docs/customer-access-contract.md`, incorpora
 
 | Caso | Resultado esperado | Evidencia |
 |---|---|---|
-| Email invitado correcto | Activa membresía y permite login | Pendiente de suite integrada |
-| Contraseña débil | `400 weak_password` | Pendiente de suite integrada |
-| Confirmación diferente | `400 password_mismatch` | Pendiente de suite integrada |
-| Token alterado | `403 invalid_invitation` | Pendiente de suite integrada |
-| Token vencido | `410 invitation_expired` | Pendiente de suite integrada |
-| Token revocado | `409 invitation_revoked` | Pendiente de suite integrada |
-| Token usado | `409 invitation_already_used` | Pendiente de suite integrada |
-| Token de tenant incorrecto | `403 invalid_invitation` | Pendiente de suite integrada |
-| Segundo consumo concurrente | Solo uno puede responder `201` | Pendiente de suite integrada |
-| Login por username nuevo | Rechazado; no se crean usernames v2 | Pendiente de suite integrada |
-| Signup alternativo | `404` o `403` | Pendiente de suite integrada |
-| Lectura A → B | Rechazada sin revelar datos | Pendiente de suite integrada |
-| Escritura A → B | Rechazada sin mutar B | Pendiente de suite integrada |
-| Membresía inactiva | Sesión deja de funcionar | Pendiente de suite integrada |
-| Gate apagado | Comportamiento legado sin regresión | Smoke local validado |
+| Email invitado correcto | Activa membresía y permite login | E2E `customer-panel-access-v2.e2e.test.js` |
+| Contraseña débil | `400 weak_password` | Unit `customer-access-v2.test.js` |
+| Confirmación diferente | `400 password_mismatch` | E2E Customer Panel |
+| Token alterado | `403 invalid_invitation` | Unit Customer Access v2 |
+| Token vencido | `410 invitation_expired` | E2E Customer Panel |
+| Token revocado | `409 invitation_revoked` | E2E Customer Panel |
+| Token usado | `409 invitation_already_used` | E2E Customer Panel |
+| Token de tenant incorrecto | `403 invalid_invitation` | E2E Customer Panel |
+| Segundo consumo concurrente | Solo uno puede responder `201` | Unit Customer Access v2 |
+| Login por username nuevo | Rechazado; no se crean usernames v2 | E2E Customer Panel |
+| Signup alternativo | `404` o `403` | E2E Customer Panel |
+| Lectura A → B | A conserva su tenant y no recibe datos de B | E2E Customer Panel |
+| Escritura A → B | Query/body de B se ignoran y la escritura queda en A | E2E Customer Panel |
+| Cookie con tenant alterado | Firma inválida; sesión rechazada | E2E Customer Panel |
+| Membresía inactiva | Sesión firmada deja de funcionar | Unit + E2E Customer Panel |
+| Gate apagado | Comportamiento legado sin regresión | Suite completa + `appointments.e2e.test.js` |
+
+## Evidencia de aislamiento
+
+- El tenant efectivo se deriva de la cookie firmada v2 y se revalida contra una membresía activa en cada request autenticado.
+- `tenant_id` recibido por query o body no participa en la selección del tenant del cliente.
+- El setup de cliente persiste registros con un identificador y `tenantId` derivados de la sesión.
+- Las consultas globales de conversaciones no se ejecutan para un tenant v2; mientras una fuente operativa multi-tenant no esté conectada, el panel devuelve un estado vacío y aislado.
+- Las tablas de acceso tienen RLS forzado; `anon` y `authenticated` no reciben permisos, y los RPC de plataforma exigen `service_role`.
 
 ## QA visual completado
 

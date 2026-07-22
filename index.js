@@ -291,7 +291,6 @@ const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
 const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":draft";
 const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":published";
 const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
-const CLIENT_ONBOARDING_RECORD_ID = "client-onboarding:" + DEFAULT_TENANT_ID;
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
 const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
@@ -346,11 +345,24 @@ const loginRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 12,
   keyGenerator: function (req) {
-    const username = String(req.body && (req.body.username || (req.body.key ? "master-key" : "unknown")) || "unknown").trim().toLowerCase();
+    const username = String(req.body && (req.body.email || req.body.username || (req.body.key ? "master-key" : "unknown")) || "unknown").trim().toLowerCase();
     return String(req.ip || req.socket && req.socket.remoteAddress || "unknown") + ":" + username;
   }
 });
 app.use("/admin", adminRateLimiter);
+app.use("/admin", async function revalidateCustomerSession(req, res, next) {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
+  const session = readDashboardSession(req);
+  if (!session || session.version !== 2) return next();
+  req.dashboardSessionChecked = true;
+  try {
+    const activeUser = await customerAccessService.validateSession(session);
+    req.dashboardVerifiedSession = activeUser ? Object.assign({}, session, activeUser, { ok: true, version: 2, session_version: 2, method: "session" }) : null;
+    return next();
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "customer_access_unavailable" });
+  }
+});
 app.use("/admin", function protectAdminStateChanges(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   const auth = dashboardAuth(req);
@@ -412,7 +424,7 @@ const instagramRuntimeState = {
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
-let clientOnboardingCache = { loaded_at: 0, record: null };
+const clientOnboardingCacheByTenant = new Map();
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
 const retargetingAppendLocks = new Map();
@@ -428,6 +440,24 @@ const customerAccessStore = CUSTOMER_ACCESS_V2_ENABLED
       ? new InMemoryCustomerAccessStore()
       : new SupabaseCustomerAccessStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
   : null;
+if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_USERS) {
+  try {
+    const fixtures = JSON.parse(process.env.CUSTOMER_ACCESS_TEST_USERS);
+    if (!Array.isArray(fixtures)) throw new Error("fixtures_must_be_array");
+    fixtures.forEach(function (fixture) { customerAccessStore.seedActiveUser(fixture); });
+  } catch (_) {
+    throw new Error("CUSTOMER_ACCESS_TEST_USERS must be a valid fixture array");
+  }
+}
+if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_INVITATIONS) {
+  try {
+    const fixtures = JSON.parse(process.env.CUSTOMER_ACCESS_TEST_INVITATIONS);
+    if (!Array.isArray(fixtures)) throw new Error("fixtures_must_be_array");
+    fixtures.forEach(function (fixture) { customerAccessStore.seedInvitation(fixture); });
+  } catch (_) {
+    throw new Error("CUSTOMER_ACCESS_TEST_INVITATIONS must be a valid fixture array");
+  }
+}
 const customerAccessEmailSender = CUSTOMER_ACCESS_V2_ENABLED
   ? (CUSTOMER_ACCESS_TEST_MODE
       ? createMemoryEmailSender()
@@ -3539,49 +3569,58 @@ async function persistBotSetup(answers, status, auth) {
   return record;
 }
 
-function parseClientOnboardingTurn(turn) {
+function clientOnboardingRecordId(tenantId) {
+  return "client-onboarding:" + (cleanTenantId(tenantId) || DEFAULT_TENANT_ID);
+}
+
+function parseClientOnboardingTurn(turn, tenantId) {
   if (!isClientOnboardingTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    if (parsed.version !== 1 || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id || !parsed.answers) return null;
+    if (parsed.version !== 1 || parsed.tenant_id !== (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) || !parsed.answers) return null;
     return parsed;
   } catch (_) {
     return null;
   }
 }
 
-async function loadClientOnboarding(force) {
+async function loadClientOnboarding(force, tenantId) {
+  tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
-  if (!force && clientOnboardingCache.loaded_at && now - clientOnboardingCache.loaded_at < 30000) return clientOnboardingCache.record;
-  let record = clientOnboardingCache.record;
+  const cached = clientOnboardingCacheByTenant.get(tenantId) || { loaded_at: 0, record: null };
+  if (!force && cached.loaded_at && now - cached.loaded_at < 30000) return cached.record;
+  let record = cached.record;
+  const recordId = clientOnboardingRecordId(tenantId);
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(CLIENT_ONBOARDING_RECORD_ID, 1);
-    if (rows) record = rows.map(normalizeTurnRow).map(parseClientOnboardingTurn).find(Boolean) || record;
+    const rows = await supabaseFetchUserRecent(recordId, 1);
+    if (rows) record = rows.map(normalizeTurnRow).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
   } else {
-    record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === CLIENT_ONBOARDING_RECORD_ID; }).map(parseClientOnboardingTurn).find(Boolean) || record;
+    record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === recordId; }).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
   }
   if (!record) {
     record = createOnboardingRecord(defaultClientOnboarding(), {
-      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      tenant_id: tenantId,
       status: "draft",
       updated_by: ""
     });
     record.updated_at = null;
   }
-  clientOnboardingCache = { loaded_at: now, record };
+  clientOnboardingCacheByTenant.set(tenantId, { loaded_at: now, record });
   return record;
 }
 
-async function persistClientOnboarding(answers, status, auth) {
+async function persistClientOnboarding(answers, status, auth, tenantId) {
+  tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const record = createOnboardingRecord(answers, {
-    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+    tenant_id: tenantId,
     status: status === "submitted" ? "submitted" : "draft",
     updated_by: auth && (auth.name || auth.username)
   });
   const rec = {
     ts: record.updated_at,
-    userId: CLIENT_ONBOARDING_RECORD_ID,
+    userId: clientOnboardingRecordId(tenantId),
+    tenantId,
     userMessage: "",
     botReply: "[ClientOnboarding] " + JSON.stringify(record),
     tools: [CLIENT_ONBOARDING_TOOL],
@@ -3595,7 +3634,7 @@ async function persistClientOnboarding(answers, status, auth) {
   if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
-  clientOnboardingCache = { loaded_at: Date.now(), record };
+  clientOnboardingCacheByTenant.set(tenantId, { loaded_at: Date.now(), record });
   return record;
 }
 
@@ -3674,7 +3713,7 @@ async function createRetargetingJobForCustomer(userId, eventType, sourceEventId,
   }
 }
 
-async function dashboardUserFromCredentials(username, password) {
+async function dashboardUserFromCredentials(username, password, options) {
   const cleanUser = String(username || "").trim();
   const normalizedUser = normalizeDashboardUsername(cleanUser);
   const cleanPass = String(password || "");
@@ -3683,7 +3722,7 @@ async function dashboardUserFromCredentials(username, password) {
     (user.email && user.email === normalizedUser)
   ) && safeEqualText(user.password, cleanPass));
   if (environmentUser) return environmentUser;
-  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && validEmailIdentity(normalizedUser)) {
+  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
     const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
     if (customerAccessUser) return customerAccessUser;
   }
@@ -3738,6 +3777,7 @@ function dashboardAuth(req) {
   if (DASHBOARD_KEY && suppliedKey && safeEqualText(suppliedKey, DASHBOARD_KEY)) {
     return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "super_admin", tenant_id: null, method: "key" };
   }
+  if (req.dashboardSessionChecked) return req.dashboardVerifiedSession || { ok: false, role: "none" };
   return readDashboardSession(req) || { ok: false, role: "none" };
 }
 
@@ -3754,6 +3794,35 @@ function adminAuthOk(req, minRole = "viewer") {
   const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
   const actual = DASHBOARD_ROLES[auth.role] || 0;
   return !!auth.ok && actual >= required && canAccessTenant(auth, DEFAULT_TENANT_ID);
+}
+
+function customerTenantForAuth(auth) {
+  if (!auth || !auth.ok) return "";
+  if (auth.version === 2) return cleanTenantId(auth.tenant_id);
+  return DEFAULT_TENANT_ID;
+}
+
+function customerPanelAuthOk(req, minRole = "viewer") {
+  const auth = dashboardAuth(req);
+  if (auth.version !== 2) return adminAuthOk(req, minRole);
+  const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
+  const actual = DASHBOARD_ROLES[auth.role] || 0;
+  const tenantId = customerTenantForAuth(auth);
+  return !!auth.ok && !!tenantId && actual >= required && canAccessTenant(auth, tenantId);
+}
+
+function customerBusinessForAuth(auth) {
+  const tenantId = customerTenantForAuth(auth);
+  if (auth && auth.version === 2) {
+    return {
+      id: tenantId,
+      name: String(auth.company_name || tenantId),
+      company_name: String(auth.company_name || tenantId),
+      customer_number: null,
+      status: "setup"
+    };
+  }
+  return CUSTOMER_PANEL_BUSINESS;
 }
 
 function adminKeyOk(req) {
@@ -4387,7 +4456,9 @@ function buildCustomerPanelDemoSnapshot() {
 }
 
 app.post("/admin/login", loginRateLimiter, async (req, res) => {
-  const username = String(req.body && (req.body.email || req.body.username) || "").trim();
+  const email = String(req.body && req.body.email || "").trim();
+  const username = String(req.body && req.body.username || "").trim();
+  const identity = email || username;
   const password = String(req.body && req.body.password || "");
   const key = String(req.body && req.body.key || "").trim();
 
@@ -4400,7 +4471,7 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
 
   let user;
   try {
-    user = await dashboardUserFromCredentials(username, password);
+    user = await dashboardUserFromCredentials(identity, password, { customerV2: !!email });
   } catch (_) {
     res.status(503).json({ ok: false, error: "customer_access_unavailable" });
     return;
@@ -4420,7 +4491,8 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
       role: user.role,
       tenant_id: user.tenant_id || null,
       method: "session"
-    }
+    },
+    redirect: "/admin/panel?tab=summary"
   });
 });
 
@@ -4556,9 +4628,8 @@ app.get("/admin/setup/:tenantId", async (req, res) => {
       const invitation = await customerAccessService.inspectInvitation(tenantId, invite);
       renderCustomerPasswordSetup(res, {
         valid: true,
-        v2: true,
         invite,
-        tenant: { id: invitation.tenant_id, company_name: invitation.company_name },
+        businessName: invitation.company_name,
         email: invitation.email,
         expiresAt: invitation.expires_at
       });
@@ -4570,7 +4641,7 @@ app.get("/admin/setup/:tenantId", async (req, res) => {
         invitation_already_used: "Esta invitación ya fue utilizada. Ingresa con tu correo y contraseña.",
         invalid_invitation: "El enlace no es válido o pertenece a otro negocio."
       };
-      renderCustomerPasswordSetup(res, { valid: false, v2: true, status: problem.status, reason: reasons[problem.code] || "No pudimos validar el acceso en este momento." });
+      renderCustomerPasswordSetup(res, { valid: false, status: problem.status, reason: reasons[problem.code] || "No pudimos validar el acceso en este momento." });
     }
     return;
   }
@@ -4834,14 +4905,16 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
 
 app.get("/admin/client-onboarding", async (req, res) => {
   const auth = dashboardAuth(req);
-  if (!auth.ok || !adminAuthOk(req, "admin")) {
-    renderAdminLogin(res, "/admin/client-onboarding");
+  if (!auth.ok || !customerPanelAuthOk(req, "admin")) {
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/client-onboarding" });
+    else renderAdminLogin(res, "/admin/client-onboarding");
     return;
   }
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
-  const record = await loadClientOnboarding(false);
+  const tenantId = customerTenantForAuth(auth);
+  const record = await loadClientOnboarding(false, tenantId);
   renderClientOnboarding(res, {
-    tenant: CUSTOMER_PANEL_BUSINESS,
+    tenant: customerBusinessForAuth(auth),
     record,
     actor: auth.name || auth.username,
     demo: false,
@@ -4850,23 +4923,26 @@ app.get("/admin/client-onboarding", async (req, res) => {
 });
 
 app.get("/admin/client-onboarding/data", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  res.json({ ok: true, tenant: CUSTOMER_PANEL_BUSINESS, onboarding: await loadClientOnboarding(false) });
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  res.json({ ok: true, tenant: customerBusinessForAuth(auth), onboarding: await loadClientOnboarding(false, tenantId) });
 });
 
 app.put("/admin/client-onboarding/data", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!customerPanelAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
   try {
     const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
     const requestedStatus = req.body && req.body.status === "submitted" ? "submitted" : "draft";
     const candidate = createOnboardingRecord(req.body && req.body.answers, {
-      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      tenant_id: tenantId,
       status: requestedStatus,
       updated_by: auth.name || auth.username
     });
@@ -4881,7 +4957,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       });
       return;
     }
-    const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth);
+    const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
     res.json({ ok: true, onboarding: record });
   } catch (error) {
     console.error("client onboarding save error:", error.message);
@@ -5159,14 +5235,18 @@ app.post("/admin/retargeting/worker", async (req, res) => {
 });
 
 app.get("/admin/panel/data", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
   const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 500, 500));
-  let source = "memory";
-  let turns = conversationLogs.slice().reverse();
-  if (SUPABASE_ENABLED) {
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let source = tenantId === DEFAULT_TENANT_ID ? "memory" : "tenant_isolated";
+  let turns = tenantId === DEFAULT_TENANT_ID
+    ? conversationLogs.slice().reverse()
+    : conversationLogs.filter(function (turn) { return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId; }).reverse();
+  if (SUPABASE_ENABLED && tenantId === DEFAULT_TENANT_ID) {
     const rows = await supabaseFetchRecent(500);
     if (rows) {
       source = "supabase";
@@ -5176,10 +5256,16 @@ app.get("/admin/panel/data", async (req, res) => {
   turns.sort(function (a, b) {
     return new Date(b.ts || 0) - new Date(a.ts || 0);
   });
-  const auth = dashboardAuth(req);
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns);
-  res.json(buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit));
+  const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
+  if (auth.version === 2) snapshot.business = Object.assign({}, snapshot.business, customerBusinessForAuth(auth), {
+    whatsapp_setup: { status: "pending", label: "WhatsApp pendiente" },
+    instagram_setup: { status: "pending", label: "Instagram pendiente" },
+    messenger_setup: { status: "pending", label: "Messenger pendiente" },
+    channels: {}
+  });
+  res.json(snapshot);
 });
 
 app.get("/admin/panel/demo-data", (req, res) => {
@@ -5583,7 +5669,8 @@ app.get("/admin/panel", (req, res) => {
     else renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
-  if (!canAccessTenant(auth, DEFAULT_TENANT_ID)) {
+  const panelTenantId = customerTenantForAuth(auth);
+  if (!panelTenantId || !canAccessTenant(auth, panelTenantId)) {
     res.status(403).send("Acceso restringido al tenant de este panel.");
     return;
   }

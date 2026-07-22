@@ -399,7 +399,7 @@ $$;
 create or replace function public.platform_active_tenant_user_by_email_v2(p_email text)
 returns table (
   user_id uuid, tenant_id text, email_normalized text, role text, active boolean,
-  password_hash text, password_salt text
+  password_hash text, password_salt text, company_name text
 )
 language plpgsql
 security definer
@@ -409,8 +409,9 @@ begin
   perform public.platform_require_service_role_v2();
   return query
   select u.user_id, u.tenant_id, u.email_normalized, u.role, u.active,
-    u.password_hash, u.password_salt
+    u.password_hash, u.password_salt, t.company_name
   from public.tenant_users u
+  join public.tenants t on t.id = u.tenant_id
   where u.email_normalized = lower(btrim(p_email)) and u.status = 'active' and u.active
   limit 1;
 end;

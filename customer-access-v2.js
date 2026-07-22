@@ -211,6 +211,91 @@ class InMemoryCustomerAccessStore {
     this.users = [];
     this.invitations = [];
     this.audit = [];
+    this.now = typeof options.now === "function" ? options.now : function () { return new Date(); };
+  }
+
+  setNow(now) {
+    if (typeof now === "function") this.now = now;
+  }
+
+  seedActiveUser(input) {
+    const email = normalizeEmail(input && input.email);
+    const tenantId = cleanIdentifier(input && input.tenant_id);
+    const companyName = String(input && input.company_name || tenantId).trim();
+    const password = String(input && input.password || "");
+    if (!validEmail(email) || !tenantId || !companyName || !password) throw new Error("invalid_test_fixture");
+    const tenant = this.tenants.find(function (row) { return row.id === tenantId; }) || {
+      id: tenantId,
+      company_name: companyName,
+      plan_id: "growth",
+      assigned_bot_id: "atencion-cliente",
+      status: "setup",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    if (!this.tenants.some(function (row) { return row.id === tenantId; })) this.tenants.push(tenant);
+    const suppliedSalt = String(input.password_salt || "");
+    const suppliedHash = String(input.password_hash || "");
+    const salt = suppliedSalt ? Buffer.from(suppliedSalt, "base64url") : crypto.randomBytes(16);
+    const user = {
+      user_id: String(input.user_id || crypto.randomUUID()),
+      tenant_id: tenantId,
+      email_normalized: email,
+      role: input.role || "admin",
+      status: "active",
+      active: input.active !== false,
+      password_hash: suppliedHash || hashPassword(password, salt),
+      password_salt: salt.toString("base64url"),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    this.users.push(user);
+    return Object.assign({}, user, { company_name: companyName });
+  }
+
+  seedInvitation(input) {
+    const email = normalizeEmail(input && input.email);
+    const tenantId = cleanIdentifier(input && input.tenant_id);
+    const companyName = String(input && input.company_name || tenantId).trim();
+    const token = String(input && input.token || "");
+    if (!validEmail(email) || !tenantId || !companyName || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error("invalid_test_invitation_fixture");
+    const now = new Date().toISOString();
+    if (!this.tenants.some(function (row) { return row.id === tenantId; })) {
+      this.tenants.push({ id: tenantId, company_name: companyName, plan_id: "growth", assigned_bot_id: "atencion-cliente", status: "setup", created_at: now, updated_at: now });
+    }
+    const user = {
+      user_id: String(input.user_id || crypto.randomUUID()),
+      tenant_id: tenantId,
+      email_normalized: email,
+      role: "admin",
+      status: "pending",
+      active: false,
+      password_hash: null,
+      password_salt: null,
+      created_at: now,
+      updated_at: now
+    };
+    const invitation = {
+      id: String(input.invitation_id || crypto.randomUUID()),
+      tenant_id: tenantId,
+      tenant_user_id: user.user_id,
+      email_normalized: email,
+      company_name: companyName,
+      plan_id: "growth",
+      assigned_bot_id: "atencion-cliente",
+      role: "admin",
+      token_hash: hashInvitationToken(token),
+      delivery_status: "sent",
+      created_by: "test-fixture",
+      created_at: now,
+      expires_at: input.expires_at || new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      delivered_at: now,
+      used_at: input.used_at || null,
+      revoked_at: input.revoked_at || null
+    };
+    this.users.push(user);
+    this.invitations.push(invitation);
+    return Object.assign({}, invitation, { token: undefined });
   }
 
   async catalogs() {
@@ -257,7 +342,7 @@ class InMemoryCustomerAccessStore {
   async consumeInvitation(input) {
     const row = this.invitations.find(function (item) { return item.tenant_id === input.tenant_id && item.token_hash === input.token_hash; });
     if (!row) throw new CustomerAccessError("invalid_invitation", 403);
-    const status = invitationStatus(row, new Date());
+    const status = invitationStatus(row, this.now());
     if (status === "used") throw new CustomerAccessError("invitation_already_used", 409);
     if (status === "revoked") throw new CustomerAccessError("invitation_revoked", 409);
     if (status === "expired") throw new CustomerAccessError("invitation_expired", 410);
@@ -276,7 +361,9 @@ class InMemoryCustomerAccessStore {
   async activeUserByEmail(email) {
     const normalized = normalizeEmail(email);
     const row = this.users.find(function (item) { return item.email_normalized === normalized && item.active && item.status === "active"; });
-    return row ? Object.assign({}, row) : null;
+    if (!row) return null;
+    const tenant = this.tenants.find(function (item) { return item.id === row.tenant_id; });
+    return Object.assign({}, row, { company_name: tenant ? tenant.company_name : null });
   }
 
   async listInvitations() {
@@ -341,6 +428,7 @@ function createCustomerAccessService(options) {
   const baseUrl = String(options.baseUrl || "").replace(/\/$/, "");
   const ttlHours = Math.max(1, Math.min(168, Number(options.inviteTtlHours) || 24));
   const now = typeof options.now === "function" ? options.now : function () { return new Date(); };
+  if (store && typeof store.setNow === "function") store.setNow(now);
 
   async function inspectInvitation(tenantId, token) {
     const cleanTenant = String(tenantId || "").trim().toLowerCase();
@@ -437,7 +525,28 @@ function createCustomerAccessService(options) {
       const stored = Buffer.from(String(user.password_hash));
       const supplied = Buffer.from(String(candidate));
       if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
-      return { user_id: user.user_id, email: normalized, username: normalized, name: normalized, role: user.role || "admin", tenant_id: user.tenant_id };
+      return { user_id: user.user_id, email: normalized, username: normalized, name: normalized, role: user.role || "admin", tenant_id: user.tenant_id, company_name: user.company_name || null };
+    },
+
+    async validateSession(session) {
+      const email = normalizeEmail(session && session.email);
+      const userId = String(session && session.user_id || "");
+      const tenantId = String(session && session.tenant_id || "").trim().toLowerCase();
+      if (!validEmail(email) || !userId || !tenantId) return null;
+      let user;
+      try { user = await store.activeUserByEmail(email); }
+      catch (error) { throw mapStoreError(error); }
+      if (!user || !user.active || String(user.user_id) !== userId || String(user.tenant_id) !== tenantId) return null;
+      if ((user.role || "admin") !== (session.role || "admin")) return null;
+      return {
+        user_id: String(user.user_id),
+        email,
+        username: email,
+        name: email,
+        role: user.role || "admin",
+        tenant_id: tenantId,
+        company_name: user.company_name || null
+      };
     },
 
     async listInvitations() {

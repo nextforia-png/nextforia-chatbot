@@ -80,7 +80,20 @@ async function expectError(promise, code, status) {
   const authenticated = await service.authenticate("ADMIN@EMPRESA.EXAMPLE", "SecurePassword2026");
   assert(authenticated);
   assert.strictEqual(authenticated.user_id, user.user_id);
+  assert.strictEqual(authenticated.company_name, "Empresa A");
   assert.strictEqual(await service.authenticate("admin@empresa.example", "wrong-password"), null);
+  const validSession = await service.validateSession({
+    user_id: user.user_id,
+    email: "ADMIN@EMPRESA.EXAMPLE",
+    role: "admin",
+    tenant_id: created.tenant.id
+  });
+  assert(validSession);
+  assert.strictEqual(validSession.company_name, "Empresa A");
+  assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: "otro-tenant" }), null);
+  store.users.find(function (row) { return row.user_id === user.user_id; }).active = false;
+  assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: created.tenant.id }), null);
+  store.users.find(function (row) { return row.user_id === user.user_id; }).active = true;
 
   const revoked = await service.createInvitation({ company_name: "Empresa C", admin_email: "c@empresa.example", plan_id: "starter", assigned_bot_id: "agendamiento" }, { user_id: "platform-user-1" });
   const revokedToken = new URL(email.outbox[1].setup_url).searchParams.get("invite");

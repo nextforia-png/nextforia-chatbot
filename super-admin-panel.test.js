@@ -48,6 +48,12 @@ assert.match(html, /data-view="agendamiento"/);
 assert.match(html, /data-view="atencion"/);
 assert.match(html, /Bandeja de operación/);
 assert.match(html, /\/admin\/assets\/lumen\.png/);
+// La tarjeta del sidebar acompaña el camino a los 340 clientes, no el margen.
+assert.match(html, /Camino a 340/);
+assert.match(html, /de 340 clientes/);
+assert.match(html, /id="goalHeadline"/);
+assert.match(html, /id="goalPhrase"/);
+assert.doesNotMatch(html, /Margen del mes/);
 assert.match(html, /--gradient-cyan/);
 assert.match(html, /Grupo Jurídico DERCO/);
 assert.match(html, /\/admin\/pilots\/derco/);

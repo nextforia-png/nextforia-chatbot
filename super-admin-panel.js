@@ -100,9 +100,25 @@ function renderSuperAdminPanel(res, options) {
   const draftCount = stages.filter(function (stage) { return stage.status === "draft"; }).length;
   const tenantFields = readiness.requiredTenantFields || [];
   const targetClients = 340;
+  // La tarjeta del sidebar acompaña el camino a la meta. El tono es directo y en
+  // segunda persona: el que construye esto es Santiago, no el panel. El panel solo
+  // le muestra dónde está parado. Nada de porcentajes vacíos ni felicitaciones
+  // genéricas: cada etapa nombra lo que ya logró y lo que sigue.
+  function goalCopy(count) {
+    const remaining = Math.max(0, targetClients - count);
+    if (count <= 0) return { titular: "Tu primer cliente", frase: "Todo empieza con uno. Ese es el que enseña el camino." };
+    if (count >= targetClients) return { titular: "Meta cumplida", frase: "340 negocios que ya no pierden ventas de noche. Lo lograste." };
+    if (count === 1) return { titular: "Faltan " + remaining, frase: "Ya no estás en cero. Esa era la parte difícil." };
+    if (count < targetClients * 0.1) return { titular: "Faltan " + remaining, frase: "Los primeros son los que prueban que funciona." };
+    if (count < targetClients * 0.34) return { titular: "Faltan " + remaining, frase: "El camino ya tiene forma. Seguí firme." };
+    if (count < targetClients * 0.67) return { titular: "Faltan " + remaining, frase: "Pasaste el tercio. Ya sabés cómo se hace." };
+    if (count < targetClients * 0.9) return { titular: "Faltan " + remaining, frase: "Más de la mitad atrás. La meta ya se ve." };
+    return { titular: "Faltan " + remaining, frase: "Estás a un empujón. No aflojes ahora." };
+  }
   const currentClients = registeredClients.length;
   const firstClient = registeredClients.find(function (client) { return client.customer_number === 1; }) || registeredClients[0] || null;
   const goalPercent = Math.max(1, Math.round(currentClients / targetClients * 100));
+  const goalInitial = goalCopy(currentClients);
   const statusLabels = { ready: "Listo", draft: "Pendiente", waiting_meta: "Esperando Meta" };
   const statusVariants = { ready: "success", draft: "neutral", waiting_meta: "warning" };
 
@@ -338,12 +354,17 @@ function renderSuperAdminPanel(res, options) {
 .nav-button.active .nav-badge{background:rgba(6,15,34,.28);color:#fff}
 .nav-soon{font-size:8.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:2px 5px}
 .sidebar-bottom{margin-top:auto;display:flex;flex-direction:column;gap:11px;padding-top:14px}
-.margin-card{position:relative;padding:13px 13px 13px 15px;background:linear-gradient(150deg,rgba(0,160,240,.16),rgba(255,255,255,.03));border-radius:var(--radius-lg);border:1px solid rgba(255,255,255,.08);overflow:hidden}
-.margin-card img{position:absolute;right:-14px;bottom:-10px;height:82px;width:auto;opacity:.92;pointer-events:none}
-.margin-card>div{position:relative;max-width:120px}
-.margin-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.5);font-weight:700;margin-bottom:6px}
-.margin-value{font-family:var(--font-display);font-weight:800;font-size:24px;letter-spacing:-.03em;color:var(--cyan-300);line-height:1}
-.margin-note{font-size:11px;color:rgba(255,255,255,.6);line-height:1.3;margin-top:3px}
+.goal-card{position:relative;padding:14px 13px 13px 15px;background:linear-gradient(150deg,rgba(0,160,240,.16),rgba(255,255,255,.03));border-radius:var(--radius-lg);border:1px solid rgba(255,255,255,.08);overflow:hidden}
+.goal-card img{position:absolute;right:-16px;bottom:-8px;height:74px;width:auto;opacity:.9;pointer-events:none}
+.goal-body{position:relative;max-width:132px}
+.goal-label{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5);font-weight:700;margin-bottom:6px}
+.goal-value{font-family:var(--font-display);font-weight:800;font-size:20px;letter-spacing:-.03em;color:var(--cyan-300);line-height:1.05}
+.goal-count{display:flex;align-items:baseline;gap:5px;margin-top:7px}
+.goal-count strong{font-family:var(--font-display);font-weight:800;font-size:15px;color:#fff;line-height:1}
+.goal-count span{font-size:10px;color:rgba(255,255,255,.5)}
+.goal-track{height:5px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden;margin-top:8px}
+.goal-track>span{display:block;height:100%;border-radius:inherit;min-width:4px;background:linear-gradient(90deg,#00A0F0,#57C2F3);transition:width .5s var(--ease)}
+.goal-phrase{font-size:10.5px;color:rgba(255,255,255,.62);line-height:1.35;margin:9px 0 0;max-width:118px}
 .user-card{display:flex;align-items:center;gap:10px;padding:4px 8px}
 .avatar{display:inline-grid;place-items:center;border-radius:50%;background:var(--gradient-cyan);color:#fff;font:800 12px var(--font-display);flex:0 0 auto}
 .avatar.sm{width:32px;height:32px}.avatar.lg{width:50px;height:50px;font-size:15px}
@@ -595,7 +616,7 @@ function renderSuperAdminPanel(res, options) {
 <div class="nav-group">Operación</div>
 <nav aria-label="Operación"><button class="nav-button" data-view="incidents">${icon("inbox", 18)}<span>Bandeja de operación</span><span class="nav-badge" id="incidentNavCount">…</span></button>${customerAccessV2Enabled ? `<button class="nav-button" data-view="catalogs">${icon("layers", 18)}<span>Planes y bots</span></button>` : ""}<button class="nav-button" data-view="billing">${icon("card", 18)}<span>Facturación</span><span class="nav-badge">0</span></button></nav>
 <div class="sidebar-bottom">
-<div class="margin-card"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><div><div class="margin-label">Margen del mes</div><div class="margin-value">${marginPct == null ? "—" : marginPct + "%"}</div><div class="margin-note">${marginPct == null ? "sin fuente conectada" : "ingresos vs. costos"}</div></div></div>
+<div class="goal-card"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><div class="goal-body"><div class="goal-label">Camino a ${targetClients}</div><div class="goal-value" id="goalHeadline">${escapeHtml(goalInitial.titular)}</div><div class="goal-count"><strong id="goalCount">${currentClients}</strong><span>de ${targetClients} clientes</span></div><div class="goal-track"><span id="goalBar" style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></div><p class="goal-phrase" id="goalPhrase">${escapeHtml(goalInitial.frase)}</p></div></div>
 <div class="user-card"><span class="avatar sm">SA</span><div><strong>${escapeHtml(auth.name || auth.username || "Super Admin")}</strong><span>Nextfor IA · interno</span></div></div>
 </div></aside>
 <main class="workspace"><header class="topbar"><div class="page-heading"><h1 id="pageTitle">Resumen</h1><p id="pageSubtitle">La operación completa de Nextfor IA de un vistazo</p></div><div class="top-actions"><button class="button optional" id="customerInviteButton" type="button" onclick="createCustomerInvite()">${customerAccessV2Enabled ? "Crear cliente" : "Crear acceso RAV"}</button><a class="button optional" href="/admin/client-onboarding">Onboarding</a><a class="button optional" href="/admin/panel?tab=summary">Admin RAV</a><button class="button icon-only" type="button" onclick="loadHealth()" aria-label="Actualizar salud" title="Actualizar salud">${icon("refresh", 18)}</button><button class="button icon-only danger" type="button" onclick="logoutSuperAdmin()" aria-label="Cerrar sesión" title="Cerrar sesión">${icon("logout", 18)}</button></div></header>
@@ -774,7 +795,23 @@ if(tenant.status==="suspendido"||tenant.status==="archivado"){var reactivate=el(
 else{var suspend=el("button","button","Suspender");suspend.type="button";suspend.addEventListener("click",function(){setTenantStatus(tenant.id,"suspendido").then(loadTenants);});actions.appendChild(suspend);}
 var remove=el("button","button danger","Eliminar");remove.type="button";remove.addEventListener("click",function(){openTenantDelete(tenant.id,tenant.company_name,tenant.status);});actions.appendChild(remove);
 line.appendChild(actions);root.appendChild(line);});}
-function loadTenants(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/tenants",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){tenantCache=body.tenants||[];renderTenants();}).catch(function(error){var root=document.getElementById("tenantLifecycleRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
+/* La tarjeta de meta se actualiza con los clientes reales, no con el registro fijo. */
+var META_CLIENTES=${targetClients};
+function goalCopy(count){var faltan=Math.max(0,META_CLIENTES-count);
+if(count<=0)return{titular:"Tu primer cliente",frase:"Todo empieza con uno. Ese es el que enseña el camino."};
+if(count>=META_CLIENTES)return{titular:"Meta cumplida",frase:"340 negocios que ya no pierden ventas de noche. Lo lograste."};
+if(count===1)return{titular:"Faltan "+faltan,frase:"Ya no estás en cero. Esa era la parte difícil."};
+if(count<META_CLIENTES*0.1)return{titular:"Faltan "+faltan,frase:"Los primeros son los que prueban que funciona."};
+if(count<META_CLIENTES*0.34)return{titular:"Faltan "+faltan,frase:"El camino ya tiene forma. Seguí firme."};
+if(count<META_CLIENTES*0.67)return{titular:"Faltan "+faltan,frase:"Pasaste el tercio. Ya sabés cómo se hace."};
+if(count<META_CLIENTES*0.9)return{titular:"Faltan "+faltan,frase:"Más de la mitad atrás. La meta ya se ve."};
+return{titular:"Faltan "+faltan,frase:"Estás a un empujón. No aflojes ahora."};}
+function paintGoal(count){var copy=goalCopy(count),headline=document.getElementById("goalHeadline");if(!headline)return;
+headline.textContent=copy.titular;
+document.getElementById("goalCount").textContent=String(count);
+document.getElementById("goalPhrase").textContent=copy.frase;
+document.getElementById("goalBar").style.width=Math.max(2,Math.min(100,Math.round(count/META_CLIENTES*100)))+"%";}
+function loadTenants(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/tenants",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){tenantCache=body.tenants||[];renderTenants();paintGoal(tenantCache.length);}).catch(function(error){var root=document.getElementById("tenantLifecycleRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
 function setTenantStatus(tenantId,status){var mensajes={activo:"Cliente reactivado. Ya puede entrar a su panel.",suspendido:"Cliente suspendido. Perdió el acceso, los datos quedan intactos.",archivado:"Cliente archivado."};
 return postJson("/admin/tenants/"+encodeURIComponent(tenantId)+"/status",{status:status}).then(function(){showToast(mensajes[status]||"Estado actualizado.");}).catch(function(error){showToast(catalogErrorLabel(error.message));});}
 function openTenantDelete(tenantId,companyName,status){document.getElementById("tenantDeleteId").value=tenantId;

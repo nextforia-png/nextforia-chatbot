@@ -177,7 +177,29 @@ class SupabaseCustomerAccessStore {
 
   async activeUserByEmail(email) {
     const rows = await this.rpc("platform_active_tenant_user_by_email_v2", { p_email: normalizeEmail(email) });
-    return rows[0] || null;
+    const user = rows[0] || null;
+    if (!user || !user.tenant_id) return user;
+    try {
+      const response = await this.axios.get(this.url + "/rest/v1/tenants", {
+        params: {
+          select: "id,company_name,plan_id,assigned_bot_id,status",
+          id: "eq." + cleanIdentifier(user.tenant_id),
+          limit: 1
+        },
+        headers: this.headers,
+        timeout: 8000
+      });
+      const tenant = Array.isArray(response.data) ? response.data[0] : null;
+      if (!tenant || tenant.id !== user.tenant_id) throw new Error("tenant_context_unavailable");
+      return Object.assign({}, user, {
+        company_name: tenant.company_name,
+        plan_id: tenant.plan_id,
+        assigned_bot_id: tenant.assigned_bot_id,
+        tenant_status: tenant.status
+      });
+    } catch (error) {
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
   }
 
   async listInvitations() {
@@ -227,9 +249,9 @@ class InMemoryCustomerAccessStore {
     const tenant = this.tenants.find(function (row) { return row.id === tenantId; }) || {
       id: tenantId,
       company_name: companyName,
-      plan_id: "growth",
-      assigned_bot_id: "atencion-cliente",
-      status: "setup",
+      plan_id: cleanIdentifier(input.plan_id) || "growth",
+      assigned_bot_id: cleanIdentifier(input.assigned_bot_id) || "atencion-cliente",
+      status: cleanIdentifier(input.tenant_status) || "setup",
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
@@ -363,7 +385,12 @@ class InMemoryCustomerAccessStore {
     const row = this.users.find(function (item) { return item.email_normalized === normalized && item.active && item.status === "active"; });
     if (!row) return null;
     const tenant = this.tenants.find(function (item) { return item.id === row.tenant_id; });
-    return Object.assign({}, row, { company_name: tenant ? tenant.company_name : null });
+    return Object.assign({}, row, {
+      company_name: tenant ? tenant.company_name : null,
+      plan_id: tenant ? tenant.plan_id : null,
+      assigned_bot_id: tenant ? tenant.assigned_bot_id : null,
+      tenant_status: tenant ? tenant.status : null
+    });
   }
 
   async listInvitations() {
@@ -525,7 +552,18 @@ function createCustomerAccessService(options) {
       const stored = Buffer.from(String(user.password_hash));
       const supplied = Buffer.from(String(candidate));
       if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
-      return { user_id: user.user_id, email: normalized, username: normalized, name: normalized, role: user.role || "admin", tenant_id: user.tenant_id, company_name: user.company_name || null };
+      return {
+        user_id: user.user_id,
+        email: normalized,
+        username: normalized,
+        name: normalized,
+        role: user.role || "admin",
+        tenant_id: user.tenant_id,
+        company_name: user.company_name || null,
+        plan_id: user.plan_id || null,
+        assigned_bot_id: user.assigned_bot_id || null,
+        tenant_status: user.tenant_status || null
+      };
     },
 
     async validateSession(session) {
@@ -545,7 +583,10 @@ function createCustomerAccessService(options) {
         name: email,
         role: user.role || "admin",
         tenant_id: tenantId,
-        company_name: user.company_name || null
+        company_name: user.company_name || null,
+        plan_id: user.plan_id || null,
+        assigned_bot_id: user.assigned_bot_id || null,
+        tenant_status: user.tenant_status || null
       };
     },
 

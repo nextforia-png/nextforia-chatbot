@@ -147,7 +147,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v89-staging-customer-access-v2";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v90-staging-tenant-branding";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3819,7 +3819,9 @@ function customerBusinessForAuth(auth) {
       name: String(auth.company_name || tenantId),
       company_name: String(auth.company_name || tenantId),
       customer_number: null,
-      status: "setup"
+      status: String(auth.tenant_status || "setup"),
+      plan_id: String(auth.plan_id || ""),
+      assigned_bot_id: String(auth.assigned_bot_id || "")
     };
   }
   return CUSTOMER_PANEL_BUSINESS;
@@ -5273,14 +5275,16 @@ app.get("/admin/panel/demo-data", (req, res) => {
 });
 
 app.get("/admin/panel/appointments-data", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const persistent = await hydrateAppointmentsForTenant(DEFAULT_TENANT_ID);
-  const snapshot = appointmentRegistry.snapshot(DEFAULT_TENANT_ID);
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const persistent = await hydrateAppointmentsForTenant(tenantId);
+  const snapshot = appointmentRegistry.snapshot(tenantId);
   snapshot.source = persistent ? "supabase" : "memory";
-  res.json(customerAppointmentSnapshot(snapshot, CUSTOMER_PANEL_BUSINESS));
+  res.json(customerAppointmentSnapshot(snapshot, customerBusinessForAuth(auth)));
 });
 
 app.get("/admin/panel/demo-appointments-data", (req, res) => {
@@ -5686,6 +5690,7 @@ app.get("/admin/panel", (req, res) => {
     auth,
     capabilities,
     initialTab,
+    tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
     botVersion: BOT_VERSION
   });
 });

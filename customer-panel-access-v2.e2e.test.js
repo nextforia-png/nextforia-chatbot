@@ -78,7 +78,7 @@ function signedSessionCookie(secret, user) {
   const fixtureHash = "vI4zYyHL91qWraHNLobM1UGoSLRKOz1_YcbXI30oWkRTA9nROmpb5PpP-S4bUfx9E6A5bIMHzvbVVehS_nubIw";
   const fixtures = [
     { user_id: "11111111-1111-4111-8111-111111111111", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin" },
-    { user_id: "22222222-2222-4222-8222-222222222222", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin" },
+    { user_id: "22222222-2222-4222-8222-222222222222", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", plan_id: "scale", assigned_bot_id: "agendamiento" },
     { user_id: "33333333-3333-4333-8333-333333333333", tenant_id: "tenant-disabled", company_name: "Empresa Disabled", email: "disabled@example.com", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", active: false }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
@@ -160,6 +160,38 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(userB.body.user.tenant_id, "tenant-b");
     assert.match(userA.cookie, /^rav_dashboard_session=/);
 
+    response = await fetch(base + "/admin/panel?tab=appointments", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
+    const shellA = await response.text();
+    assert(shellA.includes("<title>Panel de control · Empresa A</title>"));
+    assert(shellA.includes('<h1 id="brandName">Empresa A</h1>'));
+    assert(shellA.includes("Plan Growth"));
+    assert(shellA.includes('id="bot-support"'));
+    assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
+    assert(shellA.includes("1 bot activo"));
+    assert(!shellA.includes(">RAV Toys<"));
+    assert(!shellA.includes(">Empresa B<"));
+
+    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: userB.cookie } });
+    assert.strictEqual(response.status, 200);
+    const shellB = await response.text();
+    assert(shellB.includes("<title>Panel de control · Empresa B</title>"));
+    assert(shellB.includes('<h1 id="brandName">Empresa B</h1>'));
+    assert(shellB.includes("Plan Scale"));
+    assert(shellB.includes('id="bot-appointments"'));
+    assert(!shellB.includes('id="bot-support"'), "tenant B must not receive the unassigned support bot switch");
+    assert(shellB.includes("1 bot activo"));
+    assert(shellB.includes('INITIAL_TAB="appointments"'), "appointment-only tenants must open their assigned module");
+    assert(!shellB.includes(">RAV Toys<"));
+    assert(!shellB.includes(">Empresa A<"));
+
+    response = await fetch(base + "/admin/panel/appointments-data?tenant_id=tenant-a", { headers: { cookie: userB.cookie } });
+    assert.strictEqual(response.status, 200);
+    const appointmentsB = await response.json();
+    assert.strictEqual(appointmentsB.business.id, "tenant-b");
+    assert.strictEqual(appointmentsB.business.name, "Empresa B");
+    assert(!JSON.stringify(appointmentsB).includes("Empresa A"));
+
     const usernameAttempt = await login(base, { username: "admin@a.example", password: fixturePassword }, 401);
     assert.strictEqual(usernameAttempt.body.error, "invalid_credentials", "v2 customer login requires the email field");
 
@@ -168,8 +200,19 @@ function signedSessionCookie(secret, user) {
     const panelA = await response.json();
     assert.strictEqual(panelA.business.id, "tenant-a");
     assert.strictEqual(panelA.business.name, "Empresa A");
+    assert.strictEqual(panelA.business.plan_id, "growth");
+    assert.strictEqual(panelA.business.assigned_bot_id, "atencion-cliente");
     assert.strictEqual(panelA.data_window.source, "tenant_isolated");
     assert(!JSON.stringify(panelA).includes("Empresa B"));
+
+    response = await fetch(base + "/admin/panel/data?tenant_id=tenant-a", { headers: { cookie: userB.cookie } });
+    assert.strictEqual(response.status, 200);
+    const panelB = await response.json();
+    assert.strictEqual(panelB.business.id, "tenant-b");
+    assert.strictEqual(panelB.business.name, "Empresa B");
+    assert.strictEqual(panelB.business.plan_id, "scale");
+    assert.strictEqual(panelB.business.assigned_bot_id, "agendamiento");
+    assert(!JSON.stringify(panelB).includes("Empresa A"));
 
     response = await fetch(base + "/admin/client-onboarding/data?tenant_id=tenant-b", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);

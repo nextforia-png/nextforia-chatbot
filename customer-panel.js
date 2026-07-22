@@ -10,6 +10,49 @@ function escapeHtml(value) {
   });
 }
 
+function customerPanelInitials(value) {
+  const words = String(value || "").trim().split(/\s+/).filter(Boolean);
+  return (words.slice(0, 2).map(function (word) { return word.charAt(0); }).join("") || "NX").toUpperCase().slice(0, 3);
+}
+
+function customerPanelContext(options) {
+  const tenant = options.tenantContext && typeof options.tenantContext === "object" ? options.tenantContext : null;
+  if (!tenant) {
+    return {
+      v2: false,
+      businessName: "RAV Toys",
+      initials: "RAV",
+      avatarInitials: "RA",
+      planId: "growth",
+      planName: "Growth",
+      assignedBotId: "duo",
+      assignedBotName: "Atención al cliente + Agendamiento",
+      support: true,
+      appointments: true,
+      referralCode: "RAVTOYS"
+    };
+  }
+  const businessName = String(tenant.company_name || tenant.name || tenant.id || "Tu empresa").trim();
+  const planId = String(tenant.plan_id || "").trim().toLowerCase();
+  const assignedBotId = String(tenant.assigned_bot_id || "").trim().toLowerCase();
+  const planNames = { starter: "Starter", growth: "Growth", scale: "Scale" };
+  const botNames = { "atencion-cliente": "Atención al cliente", agendamiento: "Agendamiento", commerce: "Commerce" };
+  const referralCode = businessName.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 14) || "NEXTFORIA";
+  return {
+    v2: true,
+    businessName,
+    initials: customerPanelInitials(businessName),
+    avatarInitials: customerPanelInitials(businessName),
+    planId,
+    planName: planNames[planId] || planId || "Asignado",
+    assignedBotId,
+    assignedBotName: botNames[assignedBotId] || assignedBotId || "Bot asignado",
+    support: assignedBotId === "atencion-cliente" || assignedBotId === "commerce",
+    appointments: assignedBotId === "agendamiento",
+    referralCode
+  };
+}
+
 const PANEL_ICONS = {
   resumen: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>',
   conversaciones: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>',
@@ -37,10 +80,14 @@ module.exports = function renderCustomerPanel(res, options) {
   const appointmentsPath = options.appointmentsPath || "/admin/panel/appointments-data";
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
   const demoMode = !!options.demoMode;
+  const panelContext = customerPanelContext(options);
   const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(options.initialTab)
     ? options.initialTab
     : "summary";
-  const initialTab = requestedTab === "human" ? "conversations" : requestedTab;
+  const requestedInitialTab = requestedTab === "human" ? "conversations" : requestedTab;
+  const initialTab = panelContext.v2 && panelContext.appointments && ["summary", "conversations", "retargeting"].includes(requestedInitialTab)
+    ? "appointments"
+    : (panelContext.v2 && panelContext.support && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
   const initialChannel = "all";
   const canRunTests = !!capabilities.run_tests;
   const planNav = "<button class=\"navItem\" id=\"nav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"navIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
@@ -48,6 +95,39 @@ module.exports = function renderCustomerPanel(res, options) {
   const emojiButtons = ["😀", "😂", "🥰", "😍", "😊", "😉", "😄", "🙌", "👍", "👌", "👏", "🙏", "🎉", "❤️", "💙", "💚", "🔥", "✨", "⭐", "✅", "🤝", "💬", "🛍️", "🎁", "📦", "🚚", "💳", "💰", "📍", "⏰", "☎️", "👋"].map(function (emoji) {
     return '<button type="button" data-emoji="' + emoji + '" onclick="insertEmoji(this.dataset.emoji)" aria-label="Insertar ' + emoji + '">' + emoji + '</button>';
   }).join("");
+  const supportBotName = panelContext.v2 ? panelContext.assignedBotName : "Atención al cliente";
+  const appointmentBotName = panelContext.v2 ? panelContext.assignedBotName : "Agendamiento";
+  const supportBotButton = panelContext.support ? '<button class="botCard active" id="bot-support" type="button" onclick="selectBot(\'support\')"><span class="botIcon">' + PANEL_ICONS.bot + '</span><span class="botMeta"><strong>' + escapeHtml(supportBotName) + '</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>' : "";
+  const appointmentBotButton = panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
+  const mobileSupportBotButton = panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
+  const mobileAppointmentBotButton = panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
+  const activeBotCount = panelContext.v2 ? 1 : 2;
+  const assignedModuleDescription = panelContext.appointments
+    ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
+    : "Centraliza resultados y conversaciones de los canales conectados en una sola bandeja.";
+  const assignedModuleAction = panelContext.appointments ? "showTab('appointments')" : "showChannel('all')";
+  const assignedModuleCard = '<article class="serviceCard active"><span class="serviceState">Activo</span><h4>Bot de ' + escapeHtml(panelContext.assignedBotName) + '</h4><p>' + escapeHtml(assignedModuleDescription) + '</p><button class="ghostBtn" type="button" onclick="' + assignedModuleAction + '">Ver módulo</button></article>';
+  const planModuleCards = panelContext.v2 ? assignedModuleCard : '<article class="serviceCard active"><span class="serviceState">Activo</span><h4>Bot de atención al cliente</h4><p>Un solo módulo con resultados y conversaciones de WhatsApp, Instagram y Messenger, diferenciadas por canal dentro de la bandeja.</p><button class="ghostBtn" type="button" onclick="showChannel(\'all\')">Ver módulo</button></article><article class="serviceCard"><span class="serviceState off">No activo</span><h4>Agendamiento de citas</h4><p>Se activará como módulo independiente cuando el bot de citas esté contratado y funcionando.</p><button class="ghostBtn" type="button" onclick="showTab(\'appointments\')">Ver estructura</button></article>';
+  const assignedPlanCard = '<article class="planOption"><span class="planBadge">Tu plan actual</span><h4>Bot ' + escapeHtml(panelContext.assignedBotName) + '</h4><p>' + escapeHtml(assignedModuleDescription) + '</p><div class="priceLine"><strong>Plan ' + escapeHtml(panelContext.planName) + '</strong><span>Configuración administrada por NextforIA</span></div><ul class="benefits"><li><span class="benefitIcon">' + PANEL_ICONS.check + '</span>Módulo asignado a tu empresa</li><li><span class="benefitIcon">' + PANEL_ICONS.check + '</span>Datos aislados de otros clientes</li><li><span class="benefitIcon">' + PANEL_ICONS.check + '</span>Acceso seguro para tu equipo</li></ul><div class="planActions"><button class="primaryBtn" type="button" disabled>Plan activo</button></div></article>';
+  const planData = panelContext.v2 ? {
+    nombre: "Bot " + panelContext.assignedBotName,
+    estado: "Activo",
+    mensualidad: "Plan " + panelContext.planName,
+    renovacion: "Servicio activo",
+    chatsIncluidos: 0,
+    chatsConsumidos: 0,
+    rescatesFrecuentes: false,
+    referidos: { codigo: panelContext.referralCode, count: 0, mesesGanados: 0 }
+  } : {
+    nombre: "Bot Atención al cliente",
+    estado: "Activo",
+    mensualidad: "$299.900/mes",
+    renovacion: "Renueva el 1 de agosto",
+    chatsIncluidos: 500,
+    chatsConsumidos: 410,
+    rescatesFrecuentes: true,
+    referidos: { codigo: "RAVTOYS", count: 0, mesesGanados: 0 }
+  };
 
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
@@ -55,7 +135,7 @@ module.exports = function renderCustomerPanel(res, options) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Panel de control · RAV Toys</title>
+<title>Panel de control · ${escapeHtml(panelContext.businessName)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -882,30 +962,30 @@ ${customerAppointments.styles}
 <body>
 <div class="app">
   <header class="mobileTop">
-    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">RAV</div><div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div></div>
-    <div class="mobileAvatar">RA</div>
+    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1>${escapeHtml(panelContext.businessName)}</h1><p>con Nextfor <span>IA</span></p></div></div>
+    <div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div>
   </header>
   <div class="mobileBotSwitch" aria-label="Tus bots">
-    <button class="active" id="mobile-bot-support" type="button" onclick="selectBot('support')"><span class="botDot"></span><span>Atención al cliente</span></button>
-    <button id="mobile-bot-appointments" type="button" onclick="selectBot('appointments')"><span class="botDot"></span><span>Agendamiento</span></button>
+    ${mobileSupportBotButton}
+    ${mobileAppointmentBotButton}
   </div>
   <aside class="sidebar">
     <button class="brand" type="button" onclick="openProfile()" aria-label="Editar perfil del negocio">
-      <span class="brandAvatar"><span class="ravLogo" id="brandLogo">RAV</span></span>
-      <span class="brandInfo"><h1 id="brandName">RAV Toys</h1><p>con Nextfor <span>IA</span></p></span>
+      <span class="brandAvatar"><span class="ravLogo" id="brandLogo">${escapeHtml(panelContext.initials)}</span></span>
+      <span class="brandInfo"><h1 id="brandName">${escapeHtml(panelContext.businessName)}</h1><p>con Nextfor <span>IA</span></p></span>
       <span class="brandEdit" aria-hidden="true">${PANEL_ICONS.edit}</span>
     </button>
     <div class="botSwitch" aria-label="Tus bots">
       <div class="botSwitchTitle">Tus bots</div>
-      <button class="botCard active" id="bot-support" type="button" onclick="selectBot('support')"><span class="botIcon">${PANEL_ICONS.bot}</span><span class="botMeta"><strong>Atención al cliente</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>
-      <button class="botCard" id="bot-appointments" type="button" onclick="selectBot('appointments')"><span class="botIcon">${PANEL_ICONS.calendar}</span><span class="botMeta"><strong>Agendamiento</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>
+      ${supportBotButton}
+      ${appointmentBotButton}
     </div>
-    <nav class="nav" id="navSupport" aria-label="Secciones de Atención al cliente">
+    <nav class="nav" id="navSupport"${panelContext.support ? "" : ' style="display:none"'} aria-label="Secciones de Atención al cliente">
       <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
       <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
       <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
-    <nav class="nav" id="navAppointments" style="display:none" aria-label="Secciones de Agendamiento">
+    <nav class="nav" id="navAppointments" style="display:${panelContext.appointments && initialTab === "appointments" ? "grid" : "none"}" aria-label="Secciones de Agendamiento">
       <button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
       <button class="navItem" data-appt-nav="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button>
       <button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab('appointments');showAppointmentSection('reminders')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
@@ -915,16 +995,16 @@ ${customerAppointments.styles}
       ${planNav}
       <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
       <div class="whatsappCard">
-        <div class="botsActive"><span class="statusDot"></span><span>2 bots activos</span></div>
+        <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>
         <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">Bot de atención conectado</span></strong>
-        <p id="channelStatusDetail">Atención al cliente · Plan Growth</p>
+        <p id="channelStatusDetail">${panelContext.v2 ? escapeHtml(panelContext.assignedBotName) + " · Plan " + escapeHtml(panelContext.planName) : "Atención al cliente · Plan Growth"}</p>
       </div>
     </div>
   </aside>
   <main class="main">
     <header class="topbar">
       <div class="pageTitle"><h2 id="pageTitle">Resumen</h2><p id="pageSubtitle">Resultados del bot de atención · Últimos 7 días</p><div class="omnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div></div>
-      <div class="toolbar"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div><span class="convImpact" id="conversationImpact">0% resuelto por la IA</span><div class="avatar">RA</div></div>
+      <div class="toolbar"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div><span class="convImpact" id="conversationImpact">0% resuelto por la IA</span><div class="avatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
     </header>
     <div class="content">
       <section class="view" id="panel-summary">
@@ -987,9 +1067,9 @@ ${customerAppointments.styles}
           <section class="planHero">
             <div>
               <span class="planPill ok">Activo</span>
-              <h3 id="planName">Bot Atención al cliente</h3>
+              <h3 id="planName">Bot ${escapeHtml(panelContext.v2 ? panelContext.assignedBotName : "Atención al cliente")}</h3>
               <p>Tu asistente de Nextfor IA está atendiendo clientes 24/7. Aquí ves tu plan, consumo y caminos para crecer sin sorpresas.</p>
-              <div class="planMeta"><span class="planPill" id="planMonthly">$299.900/mes</span><span class="planPill" id="planRenewal">Renueva el 1 de agosto</span><span class="planPill">RAV Toys</span></div>
+              <div class="planMeta"><span class="planPill" id="planMonthly">${panelContext.v2 ? "Plan " + escapeHtml(panelContext.planName) : "$299.900/mes"}</span><span class="planPill" id="planRenewal">${panelContext.v2 ? "Servicio activo" : "Renueva el 1 de agosto"}</span><span class="planPill">${escapeHtml(panelContext.businessName)}</span></div>
             </div>
             <article class="usageCard">
               <div class="usageTop"><div><h4>Consumo de chats</h4><span id="usageMessage">Calculando consumo…</span></div><div><strong id="usagePct">0%</strong><span id="usageState">Vas al día</span></div></div>
@@ -998,17 +1078,16 @@ ${customerAppointments.styles}
             </article>
           </section>
 
-          <section class="planBlock recommendation">
+          ${panelContext.v2 ? "" : `<section class="planBlock recommendation">
             <div class="recommendationText"><div class="recommendationIcon">${PANEL_ICONS.sparkles}</div><div><h3>Te recomiendo mirar esto</h3><p id="planRecommendation">Tu plan actual sigue siendo el adecuado para este ritmo de consumo.</p></div></div>
             <div class="recommendationActions"><button class="primaryBtn" type="button" onclick="scrollToPlan('duo')">Ver plan recomendado</button><button class="ghostBtn" type="button">Mantener plan actual</button></div>
-          </section>
+          </section>`}
 
           <section class="planBlock">
             <h3>Módulos del panel</h3>
             <p>Cada bot tiene sus propias métricas y se activa cuando el servicio está funcionando.</p>
             <div class="serviceGrid">
-              <article class="serviceCard active"><span class="serviceState">Activo</span><h4>Bot de atención al cliente</h4><p>Un solo módulo con resultados y conversaciones de WhatsApp, Instagram y Messenger, diferenciadas por canal dentro de la bandeja.</p><button class="ghostBtn" type="button" onclick="showChannel('all')">Ver módulo</button></article>
-              <article class="serviceCard"><span class="serviceState off">No activo</span><h4>Agendamiento de citas</h4><p>Se activará como módulo independiente cuando el bot de citas esté contratado y funcionando.</p><button class="ghostBtn" type="button" onclick="showTab('appointments')">Ver estructura</button></article>
+              ${planModuleCards}
             </div>
           </section>
 
@@ -1016,9 +1095,11 @@ ${customerAppointments.styles}
             <h3>Planes disponibles</h3>
             <p>Elige el bot que mejor acompaña la operación de tu negocio.</p>
             <div class="planGrid">
+              ${panelContext.v2 ? assignedPlanCard : `
               <article class="planOption"><h4>Bot Agendamiento de citas</h4><p>Ideal para negocios que necesitan reservar, confirmar y recordar citas automáticamente.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Agenda y confirma citas</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Recordatorios automáticos</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Derivación a humano cuando haga falta</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
               <article class="planOption"><span class="planBadge">Tu plan actual</span><h4>Bot Atención al cliente</h4><p>Responde preguntas frecuentes, guía compras y escala casos importantes a tu equipo.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Atención 24/7 en WhatsApp, Instagram y Messenger</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Resumen unificado de resultados</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Respuestas humanas asistidas</li></ul><div class="planActions"><button class="primaryBtn" type="button" disabled>Plan activo</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
               <article class="planOption dark" id="plan-duo"><span class="planBadge">Mejor valor</span><h4>Nextfor Dúo</h4><p>Combina atención al cliente y agendamiento para crecer con menos trabajo operativo.</p><div class="priceLine"><strong>$1.690.000 setup</strong><span>$499.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Atención + agendamiento</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Mejor cobertura operativa</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Más automatización por el mismo canal</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
+              `}
             </div>
           </section>
 
@@ -1029,8 +1110,8 @@ ${customerAppointments.styles}
           </section>
 
           <div class="refPromoGrid">
-            <section class="planBlock"><h3><span class="sectionIcon">${PANEL_ICONS.gift}</span>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">RAVTOYS</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
-            <section class="planBlock promoCard"><h3><span class="sectionIcon">${PANEL_ICONS.sparkles}</span>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px">Ver promoción</button></section>
+            <section class="planBlock"><h3><span class="sectionIcon">${PANEL_ICONS.gift}</span>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">${escapeHtml(panelContext.referralCode)}</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
+            ${panelContext.v2 ? "" : `<section class="planBlock promoCard"><h3><span class="sectionIcon">${PANEL_ICONS.sparkles}</span>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px">Ver promoción</button></section>`}
           </div>
 
           <section class="planBlock">
@@ -1053,7 +1134,7 @@ ${customerAppointments.styles}
               <div class="setupProgressCopy">
                 <span class="setupStatus" id="setupPublishedStatus">No activa</span>
                 <div class="setupEyebrow" id="setupEyebrow">Paso 1 de 7 · Tu negocio</div>
-                <p class="setupStory" id="setupStory">Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien.</p>
+                <p class="setupStory" id="setupStory">${panelContext.v2 ? "Nadie conoce tu negocio como tú. Empieza por lo esencial y tu bot aprenderá a presentarlo igual de bien." : "Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien."}</p>
                 <div class="setupStepper" id="setupStepper" aria-label="Progreso de configuración"></div>
               </div>
               <div class="setupProgressRing" id="setupCompletion"><div><span><strong id="setupCompletionValue">14%</strong>completado</span></div></div>
@@ -1066,8 +1147,8 @@ ${customerAppointments.styles}
             <section class="setupStep active" data-setup-step="0">
               <div class="setupStepHead"><span class="setupStepNumber">1</span><div><h4>Empecemos por tu negocio</h4><p>Esto permite que el bot se presente bien y recomiende con contexto.</p></div></div>
               <div class="setupGrid">
-                <label class="setupField"><span>¿Cómo se llama tu negocio?</span><input data-setup="business.name" maxlength="120" placeholder="Ej. RAV Toys"></label>
-                <label class="setupField"><span>¿Cómo quieres llamar a tu bot?</span><input data-setup="business.bot_name" maxlength="80" placeholder="Ej. RAV-Bot"></label>
+                <label class="setupField"><span>¿Cómo se llama tu negocio?</span><input data-setup="business.name" maxlength="120" placeholder="Ej. ${escapeHtml(panelContext.v2 ? panelContext.businessName : "RAV Toys")}"></label>
+                <label class="setupField"><span>¿Cómo quieres llamar a tu bot?</span><input data-setup="business.bot_name" maxlength="80" placeholder="Ej. ${escapeHtml(panelContext.v2 ? "Asistente " + panelContext.initials : "RAV-Bot")}"></label>
                 <label class="setupField"><span>¿A qué industria pertenece?</span><select data-setup="business.industry" id="setupIndustry" onchange="renderIndustryQuestions()"></select></label>
                 <label class="setupField"><span>Sitio web o catálogo</span><input data-setup="business.website" maxlength="500" placeholder="https://..."></label>
                 <label class="setupField"><span>¿Con qué plataforma está hecha tu web?</span><select data-setup="business.web_platform"><option value="">Selecciona una opción</option><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce (WordPress)</option><option value="wix">Wix</option><option value="squarespace">Squarespace</option><option value="social_shop">Tienda en Instagram/Facebook</option><option value="other">Otra</option><option value="none">Aún no tengo</option></select></label>
@@ -1221,24 +1302,24 @@ ${customerAppointments.styles}
       <div class="profileHead"><h3>Editar perfil del negocio</h3><button class="profileClose" type="button" onclick="closeProfile()" aria-label="Cerrar">×</button></div>
       <p class="profileHint">Así te verá tu equipo dentro del panel.</p>
       <div class="profileLogoRow">
-        <div class="profileLogo" id="profileLogoPreview">RAV</div>
+        <div class="profileLogo" id="profileLogoPreview">${escapeHtml(panelContext.initials)}</div>
         <label class="profileUpload">${PANEL_ICONS.edit}<span>Cambiar imagen</span><input type="file" accept="image/*" onchange="handleLogoFile(this)" hidden></label>
       </div>
-      <label class="profileField"><span>Nombre del negocio</span><input id="profileNameInput" type="text" value="RAV Toys"></label>
+      <label class="profileField"><span>Nombre del negocio</span><input id="profileNameInput" type="text" value="${escapeHtml(panelContext.businessName)}"></label>
       <div class="profileActions"><button class="profileBtn ghost" type="button" onclick="closeProfile()">Cancelar</button><button class="profileBtn primary" type="button" onclick="saveProfile()">Guardar cambios</button></div>
     </div>
   </div>
 </div>
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)};
-var PLAN_DATA={nombre:"Bot Atención al cliente",estado:"Activo",mensualidad:"$299.900/mes",renovacion:"Renueva el 1 de agosto",chatsIncluidos:500,chatsConsumidos:410,rescatesFrecuentes:true,referidos:{codigo:"RAVTOYS",count:0,mesesGanados:0}};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:INITIAL_TAB==="appointments"?"appointments":"support",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)};
+var PLAN_DATA=${safeJson(planData)};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
 function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";[[bs,support],[ba,!support],[mbs,support],[mba,!support]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");button.style.display=scope==="account"||scope===state.bot?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",support?"5":"4");}
-function selectBot(bot){state.bot=bot==="appointments"?"appointments":"support";syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
-function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():"RAV Toys";modal.classList.add("open");if(input)input.focus();}
+function selectBot(bot){var next=bot==="appointments"?"appointments":"support";if(PANEL_CONTEXT.v2&&!PANEL_CONTEXT[next])return;state.bot=next;syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
+function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():PANEL_CONTEXT.businessName;modal.classList.add("open");if(input)input.focus();}
 function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");}
 function saveProfile(){var input=document.getElementById("profileNameInput"),value=input?(input.value||"").trim():"";if(value){text("brandName",value);var mobileName=document.querySelector(".mobileBrand h1");if(mobileName)mobileName.textContent=value;}closeProfile();}
 function handleLogoFile(input){var file=input.files&&input.files[0];if(!file)return;var url=URL.createObjectURL(file),targets=[document.getElementById("profileLogoPreview"),document.getElementById("brandLogo")];document.querySelectorAll(".mobileBrand .ravLogo").forEach(function(el){targets.push(el);});targets.forEach(function(el){if(!el)return;el.style.backgroundImage="url("+url+")";el.style.backgroundSize="cover";el.style.backgroundPosition="center";el.textContent="";});}
@@ -1255,6 +1336,8 @@ function showChannel(){state.channel="all";state.selected=null;state.metaDirty=f
 function showTab(name){
   if(name==="human")name="conversations";
   if(name==="tests"&&!SERVER_CAPABILITIES.run_tests)name="plan";
+  if(PANEL_CONTEXT.v2&&name==="appointments"&&!PANEL_CONTEXT.appointments)name="summary";
+  if(PANEL_CONTEXT.v2&&["summary","conversations","retargeting"].includes(name)&&!PANEL_CONTEXT.support)name="appointments";
   state.tab=name;
   if(name==="appointments")state.bot="appointments";
   if(name==="summary"||name==="conversations"||name==="retargeting")state.bot="support";
@@ -1285,13 +1368,14 @@ function showTab(name){
   try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("channel");url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}
   if(name==="setup")loadBotSetup();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
 }
-function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH).then(function(data){state.data=data;state.allConversations=data.conversations||[];applyChannelData();if(!DEMO_MODE)SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderChannelState();renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
+function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH).then(function(data){state.data=data;state.allConversations=data.conversations||[];applyChannelData();if(!DEMO_MODE)SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderBusinessContext(data.business);renderChannelState();renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
 function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;}).catch(function(){});}
-function renderChannelState(){if(!state.data)return;var channels=state.data.business&&state.data.business.channels||{},rows=Object.keys(channels).map(function(key){return channels[key]||{};}),readyCount=rows.filter(function(row){return row.status==="ready";}).length,ready=readyCount>0,total=rows.reduce(function(sum,row){return sum+(row.conversations_count||0);},0),status=document.getElementById("moduleStatus-support");text("moduleStatus-support",readyCount+" canales activos");if(status)status.classList.toggle("off",!ready);text("mobileModule-support","Atención al cliente · "+(ready?"Activo":"Pendiente"));text("channelStatusTitle",ready?"Bot de atención conectado":"Configuración pendiente");text("channelStatusDetail",readyCount+" canales · "+total+" conversaciones visibles");var search=document.getElementById("conversationSearch");if(search)search.placeholder="Buscar por nombre, @usuario, teléfono, correo o mensaje";var dot=document.getElementById("channelStatusDot");if(dot)dot.style.background=ready?"#22C778":"#F5A524";}
-function renderPlan(){var p=PLAN_DATA,included=Math.max(1,Number(p.chatsIncluidos)||1),used=Math.max(0,Number(p.chatsConsumidos)||0),available=Math.max(0,included-used),pct=Math.min(100,Math.round(used/included*100)),status=pct>=100?"limit":(pct>=80?"warn":"normal"),fill=document.getElementById("usageFill");text("planName",p.nombre);text("planMonthly",p.mensualidad);text("planRenewal",p.renovacion);text("usagePct",pct+"%");text("chatsConsumed",used);text("chatsIncluded",included);text("chatsAvailable",available);text("usageState",status==="limit"?"Límite alcanzado":(status==="warn"?"Atención":"Vas al día"));text("usageMessage",status==="limit"?"Alcanzaste el 100% de tus chats. Suma un paquete de rescate para seguir atendiendo.":(status==="warn"?"Has utilizado el "+pct+"% de tus chats disponibles.":"Vas al día con tu consumo de chats."));if(fill){fill.className="usageFill"+(status==="warn"?" warn":(status==="limit"?" limit":""));fill.style.width=pct+"%";}text("planRecommendation",p.rescatesFrecuentes?"Estás cerca del límite. Si compras rescates seguido, cambiar a Nextfor Dúo podría salirte más económico y darte más margen para crecer.":"Tu consumo adicional es ocasional. Tu plan actual sigue siendo el adecuado.");text("refCode",p.referidos.codigo);text("refHint",(p.referidos.count||0)+" referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.");}
+function renderBusinessContext(business){if(!PANEL_CONTEXT.v2||!business)return;var name=String(business.name||business.company_name||PANEL_CONTEXT.businessName).trim(),words=name.split(/\s+/).filter(Boolean),initials=(words.slice(0,2).map(function(word){return word.charAt(0);}).join("")||"NX").toUpperCase().slice(0,3);text("brandName",name);text("brandLogo",initials);text("profileLogoPreview",initials);var mobileName=document.querySelector(".mobileBrand h1"),mobileLogo=document.querySelector(".mobileBrand .ravLogo"),mobileAvatar=document.querySelector(".mobileAvatar");if(mobileName)mobileName.textContent=name;if(mobileLogo)mobileLogo.textContent=initials;if(mobileAvatar)mobileAvatar.textContent=initials;document.title="Panel de control · "+name;}
+function renderChannelState(){if(!state.data)return;var channels=state.data.business&&state.data.business.channels||{},rows=Object.keys(channels).map(function(key){return channels[key]||{};}),readyCount=rows.filter(function(row){return row.status==="ready";}).length,ready=readyCount>0,total=rows.reduce(function(sum,row){return sum+(row.conversations_count||0);},0),status=document.getElementById("moduleStatus-support");text("moduleStatus-support",readyCount+" canales activos");if(status)status.classList.toggle("off",!ready);if(PANEL_CONTEXT.v2){text("mobileModule-support",PANEL_CONTEXT.assignedBotName+" · "+(ready?"Activo":"Pendiente"));text("channelStatusTitle",ready?"Bot conectado":"Configuración pendiente");text("channelStatusDetail",PANEL_CONTEXT.assignedBotName+" · Plan "+PANEL_CONTEXT.planName);}else{text("mobileModule-support","Atención al cliente · "+(ready?"Activo":"Pendiente"));text("channelStatusTitle",ready?"Bot de atención conectado":"Configuración pendiente");text("channelStatusDetail",readyCount+" canales · "+total+" conversaciones visibles");}var search=document.getElementById("conversationSearch");if(search)search.placeholder="Buscar por nombre, @usuario, teléfono, correo o mensaje";var dot=document.getElementById("channelStatusDot");if(dot)dot.style.background=ready?"#22C778":"#F5A524";}
+function renderPlan(){var p=PLAN_DATA,included=Math.max(0,Number(p.chatsIncluidos)||0),used=Math.max(0,Number(p.chatsConsumidos)||0),available=Math.max(0,included-used),pct=included?Math.min(100,Math.round(used/included*100)):0,status=pct>=100&&included?"limit":(pct>=80?"warn":"normal"),fill=document.getElementById("usageFill");text("planName",p.nombre);text("planMonthly",p.mensualidad);text("planRenewal",p.renovacion);text("usagePct",pct+"%");text("chatsConsumed",used);text("chatsIncluded",included||"—");text("chatsAvailable",included?available:"—");text("usageState",included?(status==="limit"?"Límite alcanzado":(status==="warn"?"Atención":"Vas al día")):"Por configurar");text("usageMessage",included?(status==="limit"?"Alcanzaste el 100% de tus chats. Suma un paquete de rescate para seguir atendiendo.":(status==="warn"?"Has utilizado el "+pct+"% de tus chats disponibles.":"Vas al día con tu consumo de chats.")):"El consumo aparecerá cuando se configure el límite de tu plan.");if(fill){fill.className="usageFill"+(status==="warn"?" warn":(status==="limit"?" limit":""));fill.style.width=pct+"%";}text("planRecommendation",p.rescatesFrecuentes?"Estás cerca del límite. Si compras rescates seguido, cambiar a Nextfor Dúo podría salirte más económico y darte más margen para crecer.":"Tu consumo adicional es ocasional. Tu plan actual sigue siendo el adecuado.");text("refCode",p.referidos.codigo);text("refHint",(p.referidos.count||0)+" referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.");}
 function scrollToPlan(id){var el=document.getElementById("plan-"+id);if(el)el.scrollIntoView({behavior:"smooth",block:"center"});}
-function copyReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"RAVTOYS",msg="Código copiado: "+code;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(code).then(function(){text("refHint","¡Copiado! Comparte "+code+" con tu referido.");}).catch(function(){text("refHint",msg);});}else{text("refHint",msg);}}
-function shareReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"RAVTOYS",message="Te comparto Nextfor IA. Usa mi código "+code+" y cuéntales que vienes referido por RAV Toys.";if(navigator.share){navigator.share({title:"Nextfor IA",text:message}).catch(function(){copyReferral();});}else if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(message).then(function(){text("refHint","Mensaje de referido copiado. Pégalo en WhatsApp.");});}else{text("refHint",message);}}
+function copyReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"NEXTFORIA",msg="Código copiado: "+code;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(code).then(function(){text("refHint","¡Copiado! Comparte "+code+" con tu referido.");}).catch(function(){text("refHint",msg);});}else{text("refHint",msg);}}
+function shareReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"NEXTFORIA",message="Te comparto Nextfor IA. Usa mi código "+code+" y cuéntales que vienes referido por "+PANEL_CONTEXT.businessName+".";if(navigator.share){navigator.share({title:"Nextfor IA",text:message}).catch(function(){copyReferral();});}else if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(message).then(function(){text("refHint","Mensaje de referido copiado. Pégalo en WhatsApp.");});}else{text("refHint",message);}}
 function renderHeader(){if(!state.data)return;var pending=state.conversations.filter(function(item){return uiStatus(item)==="you";}).length;text("navConvCount",pending||"");}
 function pendingSalesClosings(){return state.conversations.filter(function(item){if(uiStatus(item)!=="you")return false;var tags=item.tags||[],memory=item.memory||{},stage=memory.purchase_stage||"",textValue=String(item.last_text||"").toLowerCase();return !!(item.business_signals&&item.business_signals.sales_assisted)||tags.includes("venta")||tags.includes("pendiente_pago")||["payment_pending","order_handoff"].includes(stage)||/comprar|quiero|me interesa|disponible|confirmar (el )?pago|cerrar la compra/.test(textValue);}).length;}
 function renderSummary(){if(!state.data)return;var s=activeSummary(),sales=s.sales_assisted||{},sol=s.solutions_provided||{},rating=s.rating||{},closings=pendingSalesClosings();var clients=s.clients_attended||0,saved=estimateHours(clients),rate=sol.rate==null?null:sol.rate,solvedValue=rate==null?(sol.count||0):(rate+"%");text("heroLine","Esta semana atendiste a "+clients+" clientes entre WhatsApp, Instagram y Messenger — tu equipo se ahorró ≈ "+saved+" de trabajo repetitivo, sin dejar un solo mensaje sin responder.");text("kSales",sales.count||0);text("kSalesSub",(sales.count||0)+(sales.count===1?" venta asistida":" ventas asistidas"));text("kSalesDelta","↗ +"+(sales.count||0));text("kClients",clients);text("kResolved",solvedValue);text("kResolvedSub",(sol.count||0)?((sol.count||0)+" soluciones sin ayuda humana"):"Aún no hay conversaciones resueltas");text("kClosings",closings);text("kClosingsSub",closings===1?"chat listo para cerrar la venta":"chats listos para cerrar la venta");var progress=rate==null?0:Math.max(0,Math.min(100,rate));var bar=document.getElementById("resolvedProgress");if(bar)bar.style.width=progress+"%";text("kResponse",clients?"4 s":"24/7");text("satValue",rating.average==null?"-":rating.average);text("satCopy",(rating.count||0)+" calificaciones");text("satPositive",rating.count?"94 % positivas":"0 % positivas");var deg=rating.average==null?0:Math.max(0,Math.min(360,Math.round(rating.average/5*360)));var ring=document.getElementById("satRing");if(ring)ring.style.setProperty("--satDeg",deg+"deg");renderActivity(s.messages_by_day||[]);renderGaps(s.search_gaps||[]);renderOutcomes(s);renderNextStep(s);renderInsight(s,solvedValue);}
@@ -1319,7 +1403,7 @@ function renderQuickReplies(item){var box=document.getElementById("quickReplies"
 function applyQuickReply(reply){var input=document.getElementById("replyText");if(input){input.value=reply;updateReplyCount();input.focus();}}
 function renderHandoffContext(item){text("handoffReason",item?handoffReason(item):"Selecciona una conversación.");text("contextCustomer",item?customerDisplay(item):"—");text("contextStatus",item?handoffStatus(item):"—");}
 function renderChat(){var item=findConversation(state.selected),canWrite=!!SERVER_CAPABILITIES.intervene,canMeta=!!SERVER_CAPABILITIES.manage_notes_tags,human=isHumanTab();["copyBtn","takeBtn","resolveTopBtn","resolveBtn","releaseBtn","sendBtn","sendCircleBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=!item;});var send=document.getElementById("sendBtn"),sendCircle=document.getElementById("sendCircleBtn");if(send)send.disabled=!item||!canWrite;if(sendCircle)sendCircle.disabled=!item||!canWrite;var take=document.getElementById("takeBtn"),release=document.getElementById("releaseBtn"),resolveTop=document.getElementById("resolveTopBtn"),resolveSide=document.getElementById("resolveBtn"),composer=document.getElementById("composer"),note=document.getElementById("customerNote"),copy=document.getElementById("copyBtn");if(copy)copy.textContent=item&&item.channel==="instagram"?(item.instagram_username?"Copiar @usuario":"Copiar ID de Instagram"):"Copiar teléfono";if(take){take.textContent=human?"Atender ahora 🙌":"Tomar control";take.disabled=!item||!canWrite||item.conversation_status==="team_active"||item.conversation_status==="resolved";}if(release){release.textContent="Devolver a la IA";release.disabled=!item||!canWrite||!["needs_attention","team_active"].includes(item.conversation_status);}var canResolve=!!item&&canWrite&&["needs_attention","team_active"].includes(item.conversation_status);if(resolveTop)resolveTop.disabled=!canResolve;if(resolveSide)resolveSide.disabled=!canResolve;if(composer)composer.style.display=(!item||!canWrite||item.conversation_status==="resolved")?"none":"grid";text("hintTitle",human?"✧ Te recomiendo mirar":"✧ Sugerencia IA");if(!item){text("chatTitle",human?"Selecciona un caso":"Selecciona una conversación");text("chatSubtitle",human?("Elige una alerta para responder en "+channelLabel()+"."):"Elige un cliente para ver su historial.");document.getElementById("messages").innerHTML='<div class="empty">'+(human?"No hay caso seleccionado.":"Sin conversación seleccionada.")+'</div>';renderTags(null,canMeta);renderQuickReplies(null);renderHandoffContext(null);if(note){note.value="";note.disabled=true;}text("aiHint",human?"Cuando elijas un caso, te dejo una respuesta lista para usar.":"El bot lo tiene bajo control.");text("autopilotCopy","El bot responde mientras no tomes control.");text("metaHint","Selecciona una conversación.");return;}text("chatTitle",customerDisplay(item));text("chatSubtitle",handoffStatus(item));if(!state.metaDirty)state.draftTags=(item.tags||[]).slice();renderTags(item,canMeta);renderQuickReplies(item);renderHandoffContext(item);if(note&&!state.metaDirty)note.value=item.note||"";if(note)note.disabled=!canMeta;var save=document.getElementById("saveMetaBtn");if(save)save.disabled=!canMeta||!state.metaDirty;text("metaHint",!canMeta?"Tu rol es de solo lectura.":(state.metaDirty?"Cambios sin guardar.":(item.meta_updated_at?"Guardado "+when(item.meta_updated_at):"Sin nota guardada")));text("autopilotCopy",item.conversation_status==="resolved"?"Conversación cerrada.":(["needs_attention","team_active"].includes(item.conversation_status)?"Autopiloto en pausa mientras intervienes.":"La IA responde y mantiene el caso bajo control."));renderSuggestion(item);var messages=document.getElementById("messages");messages.innerHTML=(item.messages||[]).length?item.messages.map(function(m){var author=m.author||"bot",label=author==="customer"?"Cliente":(author==="human"?"Agente":(author==="system"?"Evento":"🤖 Autopiloto IA"));var checks=author==="human"?'<span class="checks read">✓✓</span>':(author==="bot"?'<span class="checks">✓✓</span>':"");return '<div class="bubble '+attr(author)+'">'+esc(m.text)+'<div class="bubbleMeta"><span>'+esc(label)+(m.ts?" · "+esc(when(m.ts)):"")+'</span>'+checks+'</div></div>';}).join(""):'<div class="empty">No hay mensajes para este cliente.</div>';messages.scrollTop=messages.scrollHeight;updateReplyCount();}
-function renderSuggestion(item){var textValue="El bot lo tiene bajo control.",reply="";if(item.needs_reply){textValue=isHumanTab()?"🙌 Un mensaje tuyo puede destrabar esta conversación. Te dejo una respuesta lista para usar.":"Te recomiendo responder: este cliente está esperando una acción del equipo.";reply="🙌 ¡Hola! Soy del equipo de RAV Toys. Ya revisé tu caso y te ayudo con mucho gusto.";}else if((item.tags||[]).includes("venta")){textValue="Hay señal de venta. Confirmar disponibilidad o envío puede cerrar esta conversación.";reply="✅ Te confirmo disponibilidad y opciones de envío para que puedas completar tu compra.";}state.suggestion=reply;text("aiHint",textValue);}
+function renderSuggestion(item){var textValue="El bot lo tiene bajo control.",reply="";if(item.needs_reply){textValue=isHumanTab()?"🙌 Un mensaje tuyo puede destrabar esta conversación. Te dejo una respuesta lista para usar.":"Te recomiendo responder: este cliente está esperando una acción del equipo.";reply="🙌 ¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu caso y te ayudo con mucho gusto.";}else if((item.tags||[]).includes("venta")){textValue="Hay señal de venta. Confirmar disponibilidad o envío puede cerrar esta conversación.";reply="✅ Te confirmo disponibilidad y opciones de envío para que puedas completar tu compra.";}state.suggestion=reply;text("aiHint",textValue);}
 function useSuggestion(){var input=document.getElementById("replyText");if(input&&state.suggestion){input.value=state.suggestion;updateReplyCount();input.focus();}}
 function toggleAutopilot(){state.autopilot=!state.autopilot;var sw=document.getElementById("autopilotSwitch");if(sw)sw.classList.toggle("on",state.autopilot);text("autopilotCopy",state.autopilot?"El bot responde mientras no tomes control.":"El equipo humano está priorizado.");}
 function renderTags(item,canEdit){var box=document.getElementById("tagRow"),tags=state.data&&state.data.tags||[];if(!box)return;box.innerHTML=tags.map(function(tag){var active=state.draftTags.indexOf(tag.id)>=0;return '<button type="button" class="tagBtn'+(active?" active":"")+'" data-tag="'+attr(tag.id)+'" onclick="toggleTag(this.dataset.tag)" '+(!item||!canEdit?"disabled":"")+'>'+esc(tag.label)+'</button>';}).join("");}
@@ -1353,7 +1437,7 @@ function renderChannelStrips(){document.querySelectorAll("[data-channel-strip]")
 function contactValue(item){var channel=channelType(item);if(item&&item.copy_value)return item.copy_value;if(channel==="email")return item&&item.email||item&&item.phone||"";if(channel==="instagram")return item&&item.instagram_username||item&&item.phone||"";if(channel==="messenger")return item&&item.messenger_username||item&&item.phone||"";return item&&item.phone?("+"+String(item.phone).replace(/^\\+/,"")):"";}
 function copyActionLabel(item){var channel=channelType(item);if(channel==="instagram")return item&&item.instagram_username?"Copiar @usuario":"Copiar ID";if(channel==="email")return "Copiar correo";if(channel==="messenger")return "Copiar contacto";return "Copiar número";}
 function renderThreads(info){var box=document.getElementById("threadList");if(!box)return;info=info||renderConversationHeader();var items=filteredConversations(),intro=renderFilterIntro(info.counts,info.pct);var cards=items.map(function(item){var key=conversationKey(item),status=uiStatus(item),meta=statusMeta(status),nudge=conversationNudge(item),icon=meta.icon;return '<button type="button" class="thread status-'+status+(key===state.selected?' active':'')+'" data-key="'+attr(key)+'" onclick="selectConversation(this.dataset.key)"><div class="threadMain"><span class="avatarChannelWrap"><span class="contactAvatar">'+esc(initialsFor(item))+'</span>'+channelBadge(item,true,false)+'</span><div class="threadIdentity"><div class="threadTop"><strong>'+esc(customerDisplay(item))+'</strong><time>'+esc(when(item.last_ts))+'</time></div><p>'+esc(item.last_text||"Sin mensajes")+'</p></div></div><div class="threadStatus"><span class="statusPill '+status+'">'+icon+esc(meta.label)+'</span>'+(nudge?'<small>'+esc(nudge)+'</small>':'')+'</div></button>';}).join("");box.innerHTML=intro+(cards||'<div class="empty">No hay conversaciones en este estado.</div>');}
-function suggestedReply(item){var tags=item&&item.tags||[],value=((item&&item.last_text)||"").toLowerCase();if(tags.indexOf("garantia")>=0||/garant|reclamo|dañad|incomplet/.test(value))return "Hola, ya revisé tu caso y voy a ayudarte a resolverlo. ¿Me confirmas por favor el número del pedido y una foto del producto?";if(tags.indexOf("envio")>=0||/env[ií]o|pedido|entrega/.test(value))return "¡Hola! Ya revisé tu solicitud 🙌 Te confirmo la opción de envío para que podamos dejar todo listo hoy.";if(tags.indexOf("venta")>=0||/compr|quiero|interesa|disponible/.test(value))return "¡Hola! Ya revisé lo que buscas 🙌 Te confirmo disponibilidad y te ayudo a dejar la compra lista.";return "¡Hola! Soy del equipo de RAV Toys. Ya revisé tu conversación y te ayudo con mucho gusto.";}
+function suggestedReply(item){var tags=item&&item.tags||[],value=((item&&item.last_text)||"").toLowerCase();if(tags.indexOf("garantia")>=0||/garant|reclamo|dañad|incomplet/.test(value))return "Hola, ya revisé tu caso y voy a ayudarte a resolverlo. ¿Me confirmas por favor el número del pedido y una foto del producto?";if(tags.indexOf("envio")>=0||/env[ií]o|pedido|entrega/.test(value))return "¡Hola! Ya revisé tu solicitud 🙌 Te confirmo la opción de envío para que podamos dejar todo listo hoy.";if(tags.indexOf("venta")>=0||/compr|quiero|interesa|disponible/.test(value))return "¡Hola! Ya revisé lo que buscas 🙌 Te confirmo disponibilidad y te ayudo a dejar la compra lista.";return "¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu conversación y te ayudo con mucho gusto.";}
 function selectConversation(key){state.selected=key;state.metaDirty=false;var item=findConversation(key);state.draftTags=item?(item.tags||[]).slice():[];state.guidedFor=key;state.guidedDraft=item&&uiStatus(item)==="you"?suggestedReply(item):"";renderThreads();renderChat();document.body.classList.add("chat-open");window.scrollTo(0,0);}
 function showNeedsYou(){state.filter="you";showTab("conversations");var item=state.conversations.find(function(row){return uiStatus(row)==="you";});if(item)selectConversation(conversationKey(item));}
 function closeConversation(){closeEmojiPickers();state.selected=null;state.metaDirty=false;state.guidedFor=null;state.guidedDraft="";document.body.classList.remove("chat-open");renderThreads();renderChat();window.scrollTo(0,0);}
@@ -1411,10 +1495,11 @@ function setupPathGet(source,path){return String(path||"").split(".").reduce(fun
 function setupPathSet(target,path,value){var parts=String(path||"").split("."),cursor=target;parts.forEach(function(key,index){if(index===parts.length-1)cursor[key]=value;else{if(!cursor[key]||typeof cursor[key]!=="object")cursor[key]={};cursor=cursor[key];}});}
 function cloneSetup(value){return JSON.parse(JSON.stringify(value||{}));}
 var SETUP_STEP_TITLES=["Tu negocio","Sedes y horarios","Oferta y condiciones","Tu industria","Personalidad y canales","Autonomía del bot","Resultados"];
+var SETUP_DEFAULT_BOT_NAME=PANEL_CONTEXT.v2?"tu bot":"RAV-Bot";
 var SETUP_STEP_MESSAGES=[
-  "Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien.",
+  "Nadie conoce tu negocio como tú. Empieza por lo esencial y "+SETUP_DEFAULT_BOT_NAME+" aprenderá a presentarlo igual de bien.",
   "Tú sabes dónde y cuándo te buscan. Enséñaselo para que oriente a cada cliente tan bien como lo harías tú.",
-  "Estas condiciones son tu experiencia hecha reglas. Compártelas y RAV-Bot responderá con tu mismo criterio.",
+  "Estas condiciones son tu experiencia hecha reglas. Compártelas y "+SETUP_DEFAULT_BOT_NAME+" responderá con tu mismo criterio.",
   "Tú dominas los detalles de tu sector. Pásaselos y resolverá hasta las dudas más específicas como un experto.",
   "Tu trato es lo que te distingue. Dale tu voz y tus canales para que suene como uno más de tu equipo.",
   "Tú decides hasta dónde llega. Marca sus límites y sabrá cuándo brillar solo y cuándo dejártelo a ti.",
@@ -1422,8 +1507,8 @@ var SETUP_STEP_MESSAGES=[
 ];
 function collectSetupAnswers(){var base=state.setup&&state.setup.current&&state.setup.current.answers?cloneSetup(state.setup.current.answers):{};document.querySelectorAll("[data-setup]").forEach(function(field){var value=field.type==="checkbox"?field.checked:field.value;setupPathSet(base,field.getAttribute("data-setup"),value);});return base;}
 function setupCompletionEstimate(answers){var paths=["business.name","business.description","business.audience","presence.locations","presence.hours","service.main_offering","service.conditions","voice.tone","automation.can_answer","automation.must_not_answer","outcomes.primary_goal","outcomes.success_metrics"],filled=paths.filter(function(path){return String(setupPathGet(answers,path)||"").trim();}).length,channels=answers.channels||{};if(["instagram","messenger","whatsapp","web"].some(function(key){return channels[key];}))filled++;return Math.round(filled/13*100);}
-function setupBotName(){var field=document.querySelector('[data-setup="business.bot_name"]'),value=field?field.value:setupPathGet(state.setup&&state.setup.current&&state.setup.current.answers,"business.bot_name");return String(value||"RAV-Bot").trim()||"RAV-Bot";}
-function renderSetupWizard(){var step=Math.max(0,Math.min(6,Number(state.setupStep)||0)),live=!!state.setupActivated,botName=setupBotName(),pct=live?100:Math.round((step+1)/7*100),story=live&&!state.setupDirty?"¡Listo! "+botName+" ya está activo y atendiendo con tu configuración. Tú diriges, él ejecuta. 👌":SETUP_STEP_MESSAGES[step].replace(/RAV-Bot/g,botName);state.setupStep=step;text("setupEyebrow","Paso "+(step+1)+" de 7 · "+SETUP_STEP_TITLES[step]);text("setupStory",story);text("setupCompletionValue",pct+"%");var ring=document.getElementById("setupCompletion");if(ring)ring.style.setProperty("--wizard-progress",pct+"%");var status=document.getElementById("setupPublishedStatus");if(status){status.textContent=live?"Activa en el bot":"No activa";status.classList.toggle("live",live);}var stepper=document.getElementById("setupStepper");if(stepper)stepper.innerHTML=SETUP_STEP_TITLES.map(function(title,index){var mode=index<step?"done":index===step?"current":"pending",line=index?'<span class="setupStepLine"></span>':"",label=index<step?"✓":String(index+1);return '<span class="setupStepLink '+mode+'">'+line+'<button class="setupStepDot" type="button" aria-label="Ir al paso '+(index+1)+': '+attr(title)+'" title="'+attr(title)+'" onclick="goSetupStep('+index+')">'+label+'</button></span>';}).join("");document.querySelectorAll("[data-setup-step]").forEach(function(section){section.classList.toggle("active",Number(section.getAttribute("data-setup-step"))===step);});var notice=document.getElementById("setupNotice");if(notice)notice.style.display=step===0&&!live?"flex":"none";var back=document.getElementById("setupBackBtn");if(back)back.classList.toggle("hidden",step===0);var actions=document.querySelector(".setupActions");if(actions)actions.classList.toggle("firstStep",step===0);var primary=document.getElementById("publishSetupBtn");if(primary){primary.textContent=step<6?"Continuar →":live&&!state.setupDirty?"Bot activo ✓":"Activar en el bot";primary.disabled=!(state.setup&&state.setup.can_edit)||(step===6&&live&&!state.setupDirty);}var canEdit=!!(state.setup&&state.setup.can_edit),message=!canEdit?"Tu rol permite consultar esta configuración, pero no editarla.":step===6?"Revisa y activa. Puedes editar y volver a activar cuando quieras.":"Guarda cuando quieras. “Activar en el bot” aplica los cambios a los mensajes nuevos.";text("setupMessage",message);}
+function setupBotName(){var field=document.querySelector('[data-setup="business.bot_name"]'),value=field?field.value:setupPathGet(state.setup&&state.setup.current&&state.setup.current.answers,"business.bot_name");return String(value||SETUP_DEFAULT_BOT_NAME).trim()||SETUP_DEFAULT_BOT_NAME;}
+function renderSetupWizard(){var step=Math.max(0,Math.min(6,Number(state.setupStep)||0)),live=!!state.setupActivated,botName=setupBotName(),pct=live?100:Math.round((step+1)/7*100),story=live&&!state.setupDirty?"¡Listo! "+botName+" ya está activo y atendiendo con tu configuración. Tú diriges, él ejecuta. 👌":SETUP_STEP_MESSAGES[step].replace(SETUP_DEFAULT_BOT_NAME,botName);state.setupStep=step;text("setupEyebrow","Paso "+(step+1)+" de 7 · "+SETUP_STEP_TITLES[step]);text("setupStory",story);text("setupCompletionValue",pct+"%");var ring=document.getElementById("setupCompletion");if(ring)ring.style.setProperty("--wizard-progress",pct+"%");var status=document.getElementById("setupPublishedStatus");if(status){status.textContent=live?"Activa en el bot":"No activa";status.classList.toggle("live",live);}var stepper=document.getElementById("setupStepper");if(stepper)stepper.innerHTML=SETUP_STEP_TITLES.map(function(title,index){var mode=index<step?"done":index===step?"current":"pending",line=index?'<span class="setupStepLine"></span>':"",label=index<step?"✓":String(index+1);return '<span class="setupStepLink '+mode+'">'+line+'<button class="setupStepDot" type="button" aria-label="Ir al paso '+(index+1)+': '+attr(title)+'" title="'+attr(title)+'" onclick="goSetupStep('+index+')">'+label+'</button></span>';}).join("");document.querySelectorAll("[data-setup-step]").forEach(function(section){section.classList.toggle("active",Number(section.getAttribute("data-setup-step"))===step);});var notice=document.getElementById("setupNotice");if(notice)notice.style.display=step===0&&!live?"flex":"none";var back=document.getElementById("setupBackBtn");if(back)back.classList.toggle("hidden",step===0);var actions=document.querySelector(".setupActions");if(actions)actions.classList.toggle("firstStep",step===0);var primary=document.getElementById("publishSetupBtn");if(primary){primary.textContent=step<6?"Continuar →":live&&!state.setupDirty?"Bot activo ✓":"Activar en el bot";primary.disabled=!(state.setup&&state.setup.can_edit)||(step===6&&live&&!state.setupDirty);}var canEdit=!!(state.setup&&state.setup.can_edit),message=!canEdit?"Tu rol permite consultar esta configuración, pero no editarla.":step===6?"Revisa y activa. Puedes editar y volver a activar cuando quieras.":"Guarda cuando quieras. “Activar en el bot” aplica los cambios a los mensajes nuevos.";text("setupMessage",message);}
 function goSetupStep(index){state.setupStep=Math.max(0,Math.min(6,Number(index)||0));renderSetupWizard();var content=document.querySelector(".content");if(content)content.scrollTop=0;window.scrollTo(0,0);}
 function backSetupStep(){goSetupStep(state.setupStep-1);}
 function setupPrimaryAction(){if(state.setupStep<6){goSetupStep(state.setupStep+1);return;}publishBotSetup();}

@@ -44,6 +44,8 @@ La fuente de verdad contractual es `docs/customer-access-contract.md`, incorpora
 - El setup de cliente persiste registros con un identificador y `tenantId` derivados de la sesión.
 - Las consultas globales de conversaciones no se ejecutan para un tenant v2; mientras una fuente operativa multi-tenant no esté conectada, el panel devuelve un estado vacío y aislado.
 - Las tablas de acceso tienen RLS forzado; `anon` y `authenticated` no reciben permisos, y los RPC de plataforma exigen `service_role`.
+- El shell v2 obtiene `company_name`, `plan_id` y `assigned_bot_id` al revalidar la membresía activa; no usa el branding ni los módulos del tenant legado.
+- Cada sesión v2 recibe solamente el selector del bot asignado. La matriz A/B cubre Atención al cliente frente a Agendamiento sin cruce de nombres, planes o módulos.
 
 ## QA visual completado
 

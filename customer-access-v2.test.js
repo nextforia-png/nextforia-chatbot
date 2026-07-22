@@ -4,6 +4,7 @@ const assert = require("assert");
 const {
   CustomerAccessError,
   InMemoryCustomerAccessStore,
+  SupabaseCustomerAccessStore,
   createCustomerAccessService,
   createMemoryEmailSender,
   hashInvitationToken
@@ -81,6 +82,8 @@ async function expectError(promise, code, status) {
   assert(authenticated);
   assert.strictEqual(authenticated.user_id, user.user_id);
   assert.strictEqual(authenticated.company_name, "Empresa A");
+  assert.strictEqual(authenticated.plan_id, "growth");
+  assert.strictEqual(authenticated.assigned_bot_id, "atencion-cliente");
   assert.strictEqual(await service.authenticate("admin@empresa.example", "wrong-password"), null);
   const validSession = await service.validateSession({
     user_id: user.user_id,
@@ -90,6 +93,8 @@ async function expectError(promise, code, status) {
   });
   assert(validSession);
   assert.strictEqual(validSession.company_name, "Empresa A");
+  assert.strictEqual(validSession.plan_id, "growth");
+  assert.strictEqual(validSession.assigned_bot_id, "atencion-cliente");
   assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: "otro-tenant" }), null);
   store.users.find(function (row) { return row.user_id === user.user_id; }).active = false;
   assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: created.tenant.id }), null);
@@ -112,6 +117,27 @@ async function expectError(promise, code, status) {
   assert(!JSON.stringify(store.audit).includes(token));
   assert(!JSON.stringify(store.audit).includes("SecurePassword2026"));
   assert(!JSON.stringify(store.audit).includes(store.invitations[0].token_hash));
+
+  const supabaseStore = new SupabaseCustomerAccessStore({
+    url: "https://staging-project.supabase.co",
+    headers: { Authorization: "Bearer staging-service-role" },
+    axiosClient: {
+      post: async function (url, payload) {
+        assert(url.endsWith("/rpc/platform_active_tenant_user_by_email_v2"));
+        assert.strictEqual(payload.p_email, "admin@tenant-a.example");
+        return { data: [{ user_id: "user-a", tenant_id: "tenant-a", email_normalized: "admin@tenant-a.example", role: "admin", active: true, password_hash: "hash", password_salt: "salt" }] };
+      },
+      get: async function (url, config) {
+        assert(url.endsWith("/rest/v1/tenants"));
+        assert.strictEqual(config.params.id, "eq.tenant-a");
+        return { data: [{ id: "tenant-a", company_name: "Tenant A", plan_id: "scale", assigned_bot_id: "agendamiento", status: "live" }] };
+      }
+    }
+  });
+  const persistedContext = await supabaseStore.activeUserByEmail("ADMIN@TENANT-A.EXAMPLE");
+  assert.strictEqual(persistedContext.company_name, "Tenant A");
+  assert.strictEqual(persistedContext.plan_id, "scale");
+  assert.strictEqual(persistedContext.assigned_bot_id, "agendamiento");
 
   const failedStore = new InMemoryCustomerAccessStore();
   const failedService = createCustomerAccessService({

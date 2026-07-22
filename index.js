@@ -135,7 +135,10 @@ function configuredHttpsOrigin(value, fallback, allowedHostnames) {
 
 const app = express();
 app.disable("x-powered-by");
-if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
+// Every deployed environment (Production and Staging) runs behind Cloudflare + Render.
+// Without this, req.ip resolves to the proxy address and per-IP rate limiting collapses
+// into a single shared bucket for all clients, so one noisy source locks out everyone.
+app.set("trust proxy", 1);
 app.use(securityHeaders);
 app.post("/webhooks/elevenlabs/post-call", express.raw({ type: "application/json", limit: "1mb" }), receiveElevenLabsPostCallWebhook);
 app.use(express.json({
@@ -147,7 +150,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v90-staging-tenant-branding";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v91-staging-trust-proxy";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";

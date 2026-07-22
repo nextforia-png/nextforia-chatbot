@@ -12,7 +12,7 @@ Customer Access v2 is active only in the isolated Staging environment. Productio
 - Render environment: `Staging`
 - Render service: `nextforia-staging`
 - GitHub branch deployed: `codex/staging-customer-panel`
-- Exact commit: `1b5e7452b34b33b984ff5e9f4d01954e05fa15b7`
+- Application implementation commit: `1b5e7452b34b33b984ff5e9f4d01954e05fa15b7`
 - Supabase project: `nextforia-staging` (`qhsstmgxfwmmsbcwcjus`)
 - Resend sending domain: `mail-staging.nextforia.com`
 - Feature gate: `CUSTOMER_ACCESS_V2_ENABLED=1` in Staging only
@@ -33,7 +33,7 @@ The deployed commit includes the shared access contract from `741c4b8` and the s
 1. Created an isolated Supabase project and applied `docs/migrations/20260721_customer_access_v2_up.sql`.
 2. Created an isolated Resend API key and verified DKIM, SPF and MX for `mail-staging.nextforia.com`.
 3. Created the Render `Staging` environment and `nextforia-staging` service.
-4. Connected the service to `codex/staging-customer-panel` at the exact commit listed above.
+4. Connected the service to `codex/staging-customer-panel`; the application implementation under test is the commit listed above. Later documentation-only commits do not change runtime behavior.
 5. Added only Staging credentials and safe placeholders; no production WhatsApp, Anthropic or tenant secrets were copied.
 6. Added and verified the Cloudflare hostname `staging.nextforia.com` with SSL.
 7. Set `PUBLIC_BASE_URL` and `CUSTOMER_PANEL_BASE_URL` to the Staging hostname and activated the v2 feature gate only after all isolated dependencies were ready.
@@ -71,4 +71,3 @@ The production service remained on `v88-instagram-webhook-parser` after Staging 
 4. Only after backup, apply `docs/migrations/20260721_customer_access_v2_down.sql` to the Staging Supabase project.
 5. Revoke the Staging Resend API key and remove `mail-staging.nextforia.com` DNS records only if the Staging environment is being retired.
 6. Remove the `staging.nextforia.com` custom domain and Render service only as a final teardown step.
-

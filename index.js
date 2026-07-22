@@ -27,6 +27,14 @@ const {
 } = require("./customer-appointments");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
+const {
+  CustomerAccessError,
+  InMemoryCustomerAccessStore,
+  SupabaseCustomerAccessStore,
+  createCustomerAccessService,
+  createMemoryEmailSender,
+  createResendEmailSender
+} = require("./customer-access-v2");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
   buildCoverageConversationContext,
@@ -139,7 +147,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v88-instagram-webhook-parser";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v89-staging-customer-access-v2";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -186,7 +194,6 @@ const DASHBOARD_ACCESS_MODEL = {
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
-const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL);
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
@@ -199,6 +206,14 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
+const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
+const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24, 1, 168);
+const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
+const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
+const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
+const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
 const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
 const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
@@ -312,6 +327,10 @@ if (process.env.NODE_ENV === "production" && RAW_SUPABASE_URL && !SUPABASE_URL) 
 if (process.env.NODE_ENV === "production" && (!IG_GRAPH_BASE_URL || !MESSENGER_GRAPH_BASE_URL)) productionConfigErrors.push("Meta Graph API base URLs are invalid");
 if (process.env.NODE_ENV === "production" && RAW_DATA_ENCRYPTION_KEY && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY must be a base64url-encoded 32-byte key");
 if (process.env.NODE_ENV === "production" && SUPABASE_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when Supabase persistence is enabled");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("SUPABASE_URL and SUPABASE_KEY are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (productionConfigErrors.length) {
   console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
   process.exit(1);
@@ -404,6 +423,24 @@ let turnRating = null;     // rating capturado en el turno
 
 // ─── Persistencia en Supabase (v37) ───────────────────────────────────
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+const customerAccessStore = CUSTOMER_ACCESS_V2_ENABLED
+  ? (CUSTOMER_ACCESS_TEST_MODE
+      ? new InMemoryCustomerAccessStore()
+      : new SupabaseCustomerAccessStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const customerAccessEmailSender = CUSTOMER_ACCESS_V2_ENABLED
+  ? (CUSTOMER_ACCESS_TEST_MODE
+      ? createMemoryEmailSender()
+      : createResendEmailSender({ apiKey: RESEND_API_KEY, from: CUSTOMER_INVITE_FROM_EMAIL, replyTo: CUSTOMER_INVITE_REPLY_TO, axiosClient: axios }))
+  : null;
+const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
+  ? createCustomerAccessService({
+      store: customerAccessStore,
+      emailSender: customerAccessEmailSender,
+      baseUrl: CUSTOMER_PANEL_BASE_URL,
+      inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
+    })
+  : null;
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -3280,6 +3317,9 @@ function createDashboardSession(user) {
     return payloadV2 + "." + signDashboardPayload(payloadV2);
   }
   const payload = Buffer.from(JSON.stringify({
+    v: 1,
+    uid: null,
+    e: user.email || null,
     u: user.username,
     n: user.name || user.username,
     r: cleanDashboardRole(user.role),
@@ -3306,6 +3346,7 @@ function readDashboardSession(req) {
       if (!CUSTOMER_ACCESS_V2_ENABLED || !userId || !email || !tenantId || !session.r) return null;
       return {
         ok: true,
+        version: 2,
         session_version: 2,
         user_id: userId,
         email,
@@ -3318,6 +3359,9 @@ function readDashboardSession(req) {
     }
     return {
       ok: true,
+      version: Number(session.v) || 1,
+      user_id: session.uid ? String(session.uid) : null,
+      email: session.e ? normalizeDashboardUsername(session.e) : null,
       username: String(session.u || "usuario"),
       name: String(session.n || session.u || "usuario"),
       role: cleanDashboardRole(session.r),
@@ -3639,6 +3683,10 @@ async function dashboardUserFromCredentials(username, password) {
     (user.email && user.email === normalizedUser)
   ) && safeEqualText(user.password, cleanPass));
   if (environmentUser) return environmentUser;
+  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && validEmailIdentity(normalizedUser)) {
+    const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    if (customerAccessUser) return customerAccessUser;
+  }
   const customerUser = await loadDashboardCustomerUser(false);
   if (!customerUser || customerUser.username !== normalizedUser) return null;
   let candidate = "";
@@ -3648,6 +3696,19 @@ async function dashboardUserFromCredentials(username, password) {
     return null;
   }
   return safeEqualText(candidate, customerUser.password_hash) ? customerUser : null;
+}
+
+function validEmailIdentity(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || ""));
+}
+
+function sendCustomerAccessError(res, error) {
+  const problem = error instanceof CustomerAccessError
+    ? error
+    : new CustomerAccessError("customer_access_unavailable", 503);
+  const payload = { ok: false, error: problem.code };
+  if (problem.details && typeof problem.details === "object") Object.assign(payload, problem.details);
+  res.status(problem.status).json(payload);
 }
 
 function createDashboardCustomerInvite() {
@@ -4326,7 +4387,7 @@ function buildCustomerPanelDemoSnapshot() {
 }
 
 app.post("/admin/login", loginRateLimiter, async (req, res) => {
-  const username = String(req.body && req.body.username || "").trim();
+  const username = String(req.body && (req.body.email || req.body.username) || "").trim();
   const password = String(req.body && req.body.password || "");
   const key = String(req.body && req.body.key || "").trim();
 
@@ -4337,13 +4398,30 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
     return;
   }
 
-  const user = await dashboardUserFromCredentials(username, password);
+  let user;
+  try {
+    user = await dashboardUserFromCredentials(username, password);
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "customer_access_unavailable" });
+    return;
+  }
   if (!user) {
     res.status(401).json({ ok: false, error: "invalid_credentials" });
     return;
   }
   setDashboardSessionCookie(req, res, user);
-  res.json({ ok: true, user: { username: user.username, name: user.name, role: user.role, method: "session" } });
+  res.json({
+    ok: true,
+    user: {
+      user_id: user.user_id || null,
+      email: user.email || null,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      tenant_id: user.tenant_id || null,
+      method: "session"
+    }
+  });
 });
 
 app.post("/admin/logout", (req, res) => {
@@ -4364,13 +4442,81 @@ app.get("/admin/session", async (req, res) => {
     users_enabled: DASHBOARD_USERS.length > 0 || !!customerUser,
     customer_user_configured: !!customerUser,
     access_model_version: DASHBOARD_ACCESS_MODEL.version,
-    user: { username: auth.username, name: auth.name, role: auth.role, method: auth.method }
+    user: {
+      user_id: auth.user_id || null,
+      email: auth.email || null,
+      username: auth.username,
+      name: auth.name,
+      role: auth.role,
+      tenant_id: auth.tenant_id || null,
+      method: auth.method
+    }
   });
+});
+
+app.get("/admin/customer-access/catalogs", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json(Object.assign({ ok: true }, await customerAccessService.catalogs()));
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.get("/admin/customer-invitations", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, invitations: await customerAccessService.listInvitations() });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.post("/admin/customer-invitations/:invitationId/revoke", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, invitation: await customerAccessService.revokeInvitation(req.params.invitationId, auth) });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
 });
 
 app.post("/admin/customer-invite", async (req, res) => {
   if (!adminAuthOk(req, "super_admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (CUSTOMER_ACCESS_V2_ENABLED) {
+    try {
+      const created = await customerAccessService.createInvitation(req.body, dashboardAuth(req));
+      res.status(201).json(Object.assign({ ok: true }, created));
+    } catch (error) {
+      sendCustomerAccessError(res, error);
+    }
     return;
   }
   if (!SUPABASE_ENABLED) {
@@ -4405,6 +4551,29 @@ app.post("/admin/customer-invite", async (req, res) => {
 app.get("/admin/setup/:tenantId", async (req, res) => {
   const tenantId = String(req.params.tenantId || "");
   const invite = String(req.query.invite || "");
+  if (CUSTOMER_ACCESS_V2_ENABLED) {
+    try {
+      const invitation = await customerAccessService.inspectInvitation(tenantId, invite);
+      renderCustomerPasswordSetup(res, {
+        valid: true,
+        v2: true,
+        invite,
+        tenant: { id: invitation.tenant_id, company_name: invitation.company_name },
+        email: invitation.email,
+        expiresAt: invitation.expires_at
+      });
+    } catch (error) {
+      const problem = error instanceof CustomerAccessError ? error : new CustomerAccessError("customer_access_unavailable", 503);
+      const reasons = {
+        invitation_expired: "Esta invitación venció. Solicita una nueva a Nextfor IA.",
+        invitation_revoked: "Esta invitación fue revocada por Nextfor IA.",
+        invitation_already_used: "Esta invitación ya fue utilizada. Ingresa con tu correo y contraseña.",
+        invalid_invitation: "El enlace no es válido o pertenece a otro negocio."
+      };
+      renderCustomerPasswordSetup(res, { valid: false, v2: true, status: problem.status, reason: reasons[problem.code] || "No pudimos validar el acceso en este momento." });
+    }
+    return;
+  }
   const invitation = readDashboardCustomerInvite(invite);
   if (tenantId !== CUSTOMER_PANEL_BUSINESS.id || !invitation) {
     renderCustomerPasswordSetup(res, { valid: false, reason: "El enlace no es válido o ya venció." });
@@ -4427,6 +4596,32 @@ app.get("/admin/setup/:tenantId", async (req, res) => {
 app.post("/admin/setup/:tenantId", async (req, res) => {
   const tenantId = String(req.params.tenantId || "");
   const invite = String(req.body && req.body.invite || "");
+  if (CUSTOMER_ACCESS_V2_ENABLED) {
+    const keys = Object.keys(req.body || {});
+    const allowed = ["invite", "password", "password_confirmation"];
+    if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
+      res.status(400).json({ ok: false, error: "invalid_request" });
+      return;
+    }
+    try {
+      const user = await customerAccessService.consumeInvitation({
+        tenant_id: tenantId,
+        token: invite,
+        password: req.body.password,
+        password_confirmation: req.body.password_confirmation
+      });
+      setDashboardSessionCookie(req, res, user);
+      res.status(201).json({
+        ok: true,
+        tenant: { id: user.tenant_id, company_name: user.company_name },
+        user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+        redirect: "/admin/panel?tab=summary"
+      });
+    } catch (error) {
+      sendCustomerAccessError(res, error);
+    }
+    return;
+  }
   const username = normalizeDashboardUsername(req.body && req.body.username);
   const name = String(req.body && req.body.name || "Administrador RAV Toys").trim();
   const password = String(req.body && req.body.password || "");
@@ -5298,6 +5493,7 @@ app.get("/admin/super-admin", (req, res) => {
     botVersion: BOT_VERSION,
     commercialReadiness: COMMERCIAL_READINESS,
     accessModel: DASHBOARD_ACCESS_MODEL,
+    customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
     tenant: CUSTOMER_PANEL_BUSINESS,
     registeredClients: listRegisteredClients(),
     // Contrato de datos del diseño aprobado del Super Admin.

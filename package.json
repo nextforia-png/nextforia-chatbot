@@ -6,7 +6,7 @@
       "main": "index.js",
       "scripts": {
             "start": "node index.js",
-            "test": "node security.test.js && node security.e2e.test.js && node tenant-config.test.js && node service-area.test.js && node client-onboarding.test.js && node commerce.test.js && node customer-intelligence.test.js && node bot-setup.test.js && node customer-access.test.js && node customer-login.test.js && node appointments.test.js && node customer-appointments.test.js && node appointments.e2e.test.js && node super-admin-login.test.js && node super-admin-panel.test.js && node retargeting.test.js && node retargeting.e2e.test.js",
+            "test": "node security.test.js && node security.e2e.test.js && node tenant-config.test.js && node service-area.test.js && node client-onboarding.test.js && node commerce.test.js && node customer-intelligence.test.js && node bot-setup.test.js && node customer-access.test.js && node customer-login.test.js && node appointments.test.js && node customer-appointments.test.js && node appointments.e2e.test.js && node super-admin-login.test.js && node super-admin-panel.test.js && node customer-access-v2.test.js && node customer-access-migration.test.js && node customer-access-v2.e2e.test.js && node retargeting.test.js && node retargeting.e2e.test.js",
             "security:scan": "node security-audit.js",
             "security:audit": "node security-audit.js && pnpm audit --prod --audit-level high && pnpm test",
             "test:retargeting": "node retargeting.test.js && node retargeting.e2e.test.js",

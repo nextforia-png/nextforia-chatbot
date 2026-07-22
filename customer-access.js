@@ -10,7 +10,46 @@ function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
 }
 
+function renderCustomerPasswordSetupV2(res, options) {
+  const valid = !!options.valid;
+  const tenant = options.tenant || {};
+  const companyName = escapeHtml(tenant.company_name || "Tu empresa");
+  const email = escapeHtml(options.email || "");
+  const invite = safeJson(options.invite || "");
+  const reason = escapeHtml(options.reason || "Este enlace no está disponible.");
+  const status = valid ? 200 : Number(options.status) || 403;
+  const content = valid ? `
+    <div class="eyebrow">INVITACIÓN PRIVADA · NEXTFOR IA</div>
+    <h1>Crea tu contraseña</h1>
+    <p class="lead">Activa el acceso administrador de <strong>${companyName}</strong>. Tu correo ya quedó vinculado únicamente a este negocio.</p>
+    <form id="setupForm" novalidate>
+      <label for="email">Correo administrador</label>
+      <input id="email" type="email" value="${email}" readonly aria-readonly="true">
+      <label for="password">Contraseña</label>
+      <div class="password-wrap"><input id="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required><button id="showButton" type="button">Mostrar</button></div>
+      <div class="rules"><span id="ruleLength">12 caracteres</span><span id="ruleLetter">Una letra</span><span id="ruleNumber">Un número</span></div>
+      <label for="passwordConfirmation">Confirma la contraseña</label>
+      <input id="passwordConfirmation" type="password" autocomplete="new-password" maxlength="128" required>
+      <button class="primary" id="submitButton" type="submit" disabled>Crear acceso</button>
+      <div class="error" id="error" role="alert" aria-live="assertive"></div>
+    </form>` : `
+    <div class="invalid">!</div><div class="eyebrow">INVITACIÓN PRIVADA · NEXTFOR IA</div>
+    <h1>Este enlace no está disponible</h1><p class="lead">${reason}</p>
+    <a class="primary link" href="/admin/panel">Ir al inicio de sesión</a>`;
+  res.status(status).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><title>Crear acceso · Nextfor IA</title><style>
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+:root{--navy:#0A1836;--cyan:#00A0F0;--border:#DFE6F0;--muted:#647289;--page:#F2F6FB;--green:#087E54;--red:#B94723}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--page);color:var(--navy);font-family:"Plus Jakarta Sans",sans-serif}.shell{width:min(940px,100%);min-height:610px;display:grid;grid-template-columns:360px 1fr;overflow:hidden;border:1px solid var(--border);border-radius:26px;background:#fff;box-shadow:0 32px 80px -34px rgba(6,15,34,.4)}.brand{padding:40px;display:flex;flex-direction:column;justify-content:space-between;color:#fff;background:linear-gradient(155deg,#0E2148,#060F22)}.brand strong{font:800 19px "Sora",sans-serif}.brand span{display:block;margin-top:6px;color:rgba(255,255,255,.58);font-size:11px}.brand h2{font:800 28px/1.16 "Sora",sans-serif;letter-spacing:-.03em}.brand p{color:rgba(255,255,255,.68);font-size:13px;line-height:1.65}.form{padding:52px;display:grid;align-content:center}.eyebrow{color:#0587CC;font-size:10px;font-weight:800;letter-spacing:.14em;margin-bottom:12px}h1{font:800 30px/1.12 "Sora",sans-serif;letter-spacing:-.035em;margin:0}.lead{color:var(--muted);font-size:14px;line-height:1.65;margin:12px 0 24px}.lead strong{color:var(--navy)}label{display:block;margin:16px 0 7px;font-size:12px;font-weight:800}input{width:100%;height:48px;border:1.5px solid #C6D1E0;border-radius:12px;padding:0 13px;font:600 13px inherit;outline:none}input:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,160,240,.15)}input[readonly]{background:#F6F8FB;color:#49576E}.password-wrap{position:relative}.password-wrap input{padding-right:84px}.password-wrap button{position:absolute;right:7px;top:7px;height:34px;border:0;border-radius:8px;background:#EDF1F7;color:#49576E;font-size:10px;font-weight:800}.rules{display:flex;gap:7px;flex-wrap:wrap;margin-top:9px}.rules span{padding:5px 8px;border-radius:999px;background:#F6F8FB;color:#94A3BC;font-size:10px;font-weight:700}.rules span.met{background:#E9F8F2;color:var(--green)}.primary{width:100%;min-height:50px;display:grid;place-items:center;margin-top:22px;border:0;border-radius:12px;background:linear-gradient(135deg,#20B5F5,#0587CC);color:#fff;font:800 14px "Sora",sans-serif;text-decoration:none;cursor:pointer}.primary:disabled{opacity:.5}.error{min-height:18px;margin-top:10px;color:var(--red);font-size:11px;text-align:center}.invalid{width:48px;height:48px;display:grid;place-items:center;margin-bottom:17px;border-radius:14px;background:#FFF3E6;color:#B66A10;font-weight:900}@media(max-width:760px){body{display:block;padding:0}.shell{width:100%;min-height:100vh;display:block;border:0;border-radius:0}.brand{padding:22px 24px}.brand h2,.brand p{display:none}.form{padding:34px 24px}h1{font-size:26px}}
+  </style></head><body><main class="shell"><aside class="brand"><div><strong>Nextfor IA</strong><span>Panel de Control</span></div><div><h2>Un acceso privado para tu negocio.</h2><p>Esta invitación fue creada por el equipo de Nextfor IA y solo puede utilizarse una vez.</p></div></aside><section class="form">${content}</section></main>${valid ? `<script>
+var invite=${invite},form=document.getElementById("setupForm"),password=document.getElementById("password"),confirmation=document.getElementById("passwordConfirmation"),submit=document.getElementById("submitButton"),error=document.getElementById("error"),show=document.getElementById("showButton");
+function update(){var value=password.value||"",length=value.length>=12,letter=/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(value),number=/\\d/.test(value),match=confirmation.value.length>0&&value===confirmation.value;document.getElementById("ruleLength").classList.toggle("met",length);document.getElementById("ruleLetter").classList.toggle("met",letter);document.getElementById("ruleNumber").classList.toggle("met",number);submit.disabled=!(length&&letter&&number&&match);}
+[password,confirmation].forEach(function(input){input.addEventListener("input",update);});show.addEventListener("click",function(){var visible=password.type==="text";password.type=visible?"password":"text";confirmation.type=visible?"password":"text";show.textContent=visible?"Mostrar":"Ocultar";});
+form.addEventListener("submit",function(event){event.preventDefault();if(submit.disabled)return;error.textContent="";submit.disabled=true;submit.textContent="Creando acceso…";fetch(location.pathname,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({invite:invite,password:password.value,password_confirmation:confirmation.value})}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"No se pudo crear el acceso");return body;});}).then(function(body){location.href=body.redirect||"/admin/panel";}).catch(function(problem){var labels={invitation_expired:"La invitación venció.",invitation_revoked:"La invitación fue revocada.",invitation_already_used:"La invitación ya fue utilizada.",weak_password:"La contraseña no cumple los requisitos.",password_mismatch:"Las contraseñas no coinciden."};error.textContent=labels[problem.message]||"No se pudo crear el acceso.";submit.textContent="Crear acceso";update();});});update();
+  </script>` : ""}</body></html>`);
+}
+
 function renderCustomerPasswordSetup(res, options) {
+  if (options && options.v2) return renderCustomerPasswordSetupV2(res, options);
   const valid = !!(options && options.valid);
   const invite = safeJson(options && options.invite || "");
   const businessName = escapeHtml(options && options.businessName || "Tu empresa");

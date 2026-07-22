@@ -76,6 +76,12 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
 | `SUPABASE_TENANT_COLUMNS_ENABLED` | Activa escritura y filtrado por tenant después de aplicar la migración Phase A |
+| `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
+| `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
+| `CUSTOMER_INVITE_TTL_HOURS` | Vigencia de la invitación privada (default `24`, máximo `168`) |
+| `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |
+| `CUSTOMER_INVITE_FROM_EMAIL` | Remitente verificado del entorno de Staging |
+| `RESEND_API_KEY` | API key exclusiva de Staging para entregar invitaciones; nunca se registra ni se devuelve |
 | `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |
 | `ELEVENLABS_DERCO_AGENT_ID` | ID del agente de DERCO; lo vincula al tenant `grupo-derco` |
 | `ELEVENLABS_AGENT_TENANT_MAP` | Mapa JSON opcional `agent_id -> tenant_id` para más clientes |
@@ -97,8 +103,11 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
 | `GET /admin/super-admin/login` | Entrada independiente de plataforma por correo/usuario; incluye recuperación mediante la clave maestra de Render |
-| `POST /admin/customer-invite` | Super admin: genera una invitación firmada de 24 horas para crear el primer acceso |
-| `GET/POST /admin/setup/rav-toys` | Formulario y creación segura del usuario administrador del cliente |
+| `POST /admin/customer-invite` | Super admin: crea tenant, membresía admin pendiente y envía la invitación privada |
+| `GET /admin/customer-access/catalogs` | Super admin: catálogos activos de planes y bots para el alta |
+| `GET /admin/customer-invitations` | Super admin: estados de entrega, vencimiento, uso y revocación sin tokens |
+| `POST /admin/customer-invitations/:id/revoke` | Super admin: revoca una invitación no consumida |
+| `GET/POST /admin/setup/:tenantId` | Validación y consumo atómico de la invitación; el cliente crea su contraseña sin username |
 | `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/super-admin` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/super-admin/login` | Entrada interna y separada para usuarios Super Admin de NexforIA |
@@ -177,15 +186,18 @@ alto. El panel muestra prioridad, intereses y condición recurrente cuando exist
 memoria solo se crea con una señal comercial fuerte o un hito de compra; no conserva
 cédula, dirección, teléfono de checkout ni método de pago.
 
-### Primer cliente: RAV Toys
+### Alta privada de clientes
 
-RAV Toys es el cliente #1 y usa el tenant actual `rav-toys`. El super admin genera una
-invitación desde `/admin/super-admin` con **Crear acceso RAV**. El cliente abre el enlace,
-elige su usuario y contraseña, y entra con rol `admin`. La invitación vence en 24 horas y
-deja de funcionar cuando la cuenta queda creada. La contraseña nunca se guarda en texto
-plano: se almacena como un hash `scrypt` con salt dentro del registro interno persistente.
-La pantalla de ingreso es genérica de Nextfor IA: el nombre del comercio solo aparece
-después de autenticar, de modo que el mismo acceso pueda servir a más clientes en el futuro.
+RAV Toys sigue siendo el tenant legado default `rav-toys`. Con
+`CUSTOMER_ACCESS_V2_ENABLED=1` únicamente en Staging, el Super Admin usa **Crear cliente**
+e ingresa empresa, correo administrador, plan y bot. El servidor crea tenant y membresía
+pendiente en una transacción, guarda solo el hash de un token aleatorio y envía el enlace
+exclusivamente al correo indicado. El cliente no elige username ni se registra públicamente:
+acepta la invitación y define una contraseña que se almacena con `scrypt` y salt. El gate
+apagado conserva sin cambios el flujo legado de producción.
+
+Contrato compartido: [`docs/customer-access-contract.md`](docs/customer-access-contract.md).
+Activación y rollback de Staging: [`docs/staging-customer-access-v2.md`](docs/staging-customer-access-v2.md).
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
 

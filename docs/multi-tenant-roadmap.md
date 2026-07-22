@@ -8,7 +8,7 @@ El bot actual funciona como single-tenant para RAV Toys. Para comercializarlo, l
 - Un solo `WA_TOKEN`.
 - Un solo `SHOPIFY_STORE_DOMAIN`.
 - Un solo `SHOPIFY_ADMIN_TOKEN`.
-- Un dashboard operativo para RAV Toys y una vista Super admin v1 separada, ambos sobre datos/configuracion single-tenant y con roles (`super_admin`, `admin`, `agent`, `viewer`).
+- Un dashboard operativo para RAV Toys y una vista Super admin separada, ambos con roles (`super_admin`, `admin`, `agent`, `viewer`). Customer Access v2 ya modela altas persistentes por tenant en Staging, pero el routing de mensajes sigue single-tenant.
 - Logs persistentes en Supabase `conversation_logs`.
 
 ## Objetivo de plataforma
@@ -68,7 +68,7 @@ No deben ir en codigo. Guardar en Render env vars, Supabase Vault o gestor de se
 | Campo | Uso |
 |---|---|
 | `tenant_id` | Relacion con tenant |
-| `username` | Login |
+| `email_normalized` | Identidad única de login para clientes nuevos |
 | `password_hash` | Hash, nunca texto plano |
 | `role` | `admin`, `agent`, `viewer` |
 | `active` | Control de acceso |
@@ -103,6 +103,9 @@ Agregar gradualmente:
    - Crear endpoint admin de readiness/comercializacion.
    - Mantener `super_admin` como rol de plataforma y `admin` como rol del cliente.
    - Mantener variables actuales para no romper produccion.
+   - [x] Definir contrato único de alta privada sin signup público.
+   - [x] Preparar migración de `tenants`, `tenant_users` e invitaciones con RLS y RPCs de plataforma.
+   - [x] Mantener Customer Access v2 apagado por defecto y activable solo en Staging.
 
 2. Fase B: configuracion por tenant
    - Resolver tenant por `phone_number_id` del webhook.

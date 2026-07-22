@@ -96,4 +96,28 @@ assert.match(richHtml, /Pareto de ingresos/);
 assert.match(richHtml, /Meta Ads/);
 assert.doesNotMatch(richHtml, /sin fuente financiera conectada/);
 
+let accessV2Html = "";
+renderSuperAdminPanel({
+  setHeader: function () {},
+  send: function (body) { accessV2Html = body; }
+}, {
+  auth: { username: "root", name: "Root", role: "super_admin" },
+  botVersion: "v-test",
+  tenant: { id: "rav-toys", name: "RAV Toys", status: "active" },
+  registeredClients: [],
+  commercialReadiness: { stages: [], requiredTenantFields: [] },
+  accessModel: { roles: [], future_panels: [] },
+  customerAccessV2Enabled: true
+});
+assert.match(accessV2Html, /Crear cliente/);
+assert.match(accessV2Html, /Altas e invitaciones/);
+assert.match(accessV2Html, /name="company_name"/);
+assert.match(accessV2Html, /name="admin_email"/);
+assert.match(accessV2Html, /name="plan_id"/);
+assert.match(accessV2Html, /name="assigned_bot_id"/);
+assert.match(accessV2Html, /\/admin\/customer-access\/catalogs/);
+assert.match(accessV2Html, /\/admin\/customer-invitations/);
+assert.match(accessV2Html, /No existe registro público/);
+assert.doesNotMatch(accessV2Html, /body:JSON\.stringify\(\{[^}]*setup_url/);
+
 console.log("super-admin-panel.test.js: ok");

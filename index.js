@@ -28,6 +28,12 @@ const {
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
 const {
+  CatalogError,
+  InMemoryCatalogStore,
+  SupabaseCatalogStore,
+  createCatalogService
+} = require("./platform-catalogs");
+const {
   CustomerAccessError,
   InMemoryCustomerAccessStore,
   SupabaseCustomerAccessStore,
@@ -150,7 +156,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v91-staging-trust-proxy";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v92-staging-catalogo-planes";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -474,6 +480,13 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
       inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
     })
   : null;
+// Catálogo editable de planes y bots. Comparte el gate de customer access v2.
+const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
+  ? (CUSTOMER_ACCESS_TEST_MODE
+      ? new InMemoryCatalogStore({ accessStore: customerAccessStore })
+      : new SupabaseCatalogStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const catalogService = CUSTOMER_ACCESS_V2_ENABLED ? createCatalogService({ store: catalogStore }) : null;
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -4579,6 +4592,149 @@ app.post("/admin/customer-invitations/:invitationId/revoke", async (req, res) =>
     res.json({ ok: true, invitation: await customerAccessService.revokeInvitation(req.params.invitationId, auth) });
   } catch (error) {
     sendCustomerAccessError(res, error);
+  }
+});
+
+// ─── Catálogo de planes y bots ────────────────────────────────────────────
+// Escritura y lectura completa: solo super_admin.
+// Lectura de activos: también clientes autenticados (la consume el Panel de Cliente).
+
+function sendCatalogError(res, error) {
+  const problem = error instanceof CatalogError ? error : new CatalogError("catalog_unavailable", 503);
+  res.status(problem.status).json({ ok: false, error: problem.code });
+}
+
+function catalogSuperAdminGuard(req, res) {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return null;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return null;
+  }
+  return auth;
+}
+
+app.get("/admin/catalogs", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json(Object.assign({ ok: true }, await catalogService.adminCatalogs()));
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/catalogs/plans", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: true, plan: await catalogService.upsertPlan(req.body, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/catalogs/bots", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: true, bot: await catalogService.upsertBot(req.body, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/catalogs/plans/:id/toggle", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const activo = req.body && typeof req.body.activo === "boolean" ? req.body.activo : false;
+    res.json({ ok: true, plan: await catalogService.togglePlan(req.params.id, activo, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// Solo lectura, solo activos. Es el contrato que consume el Panel de Cliente
+// para dejar de tener los planes escritos a mano en HTML.
+app.get("/admin/panel/catalogs", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json(Object.assign({ ok: true }, await catalogService.activeCatalogs()));
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// ─── Ciclo de vida del cliente ────────────────────────────────────────────
+
+app.get("/admin/tenants", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: true, tenants: await catalogService.listTenants() });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/tenants/:tenantId/status", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const status = req.body && req.body.status;
+    res.json({ ok: true, tenant: await catalogService.setTenantStatus(req.params.tenantId, status, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// Respaldo descargable. Se genera antes de cualquier borrado, y también
+// puede pedirse por separado.
+app.get("/admin/tenants/:tenantId/backup", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const backup = await catalogService.tenantBackup(req.params.tenantId);
+    res.setHeader("content-disposition",
+      'attachment; filename="respaldo-' + String(req.params.tenantId).replace(/[^a-z0-9-]/gi, "") + '.json"');
+    res.json(backup);
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// Borrado irreversible. Tres salvaguardas: el cliente debe estar suspendido,
+// hay que escribir el nombre exacto de la empresa, y confirmar explícitamente.
+// El respaldo se genera y se devuelve en la misma respuesta.
+app.post("/admin/tenants/:tenantId/delete", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const outcome = await catalogService.deleteTenant({
+      tenant_id: req.params.tenantId,
+      company_name_confirmacion: req.body && req.body.company_name_confirmacion,
+      confirmacion_final: req.body && req.body.confirmacion_final === true
+    }, auth);
+    console.log("[tenant-eliminado]", JSON.stringify({
+      actor: auth.username || auth.email || "super_admin",
+      tenant_id: outcome.result && outcome.result.tenant_id,
+      company_name: outcome.result && outcome.result.company_name,
+      at: new Date().toISOString()
+    }));
+    res.json({ ok: true, deleted: outcome.result, backup: outcome.backup });
+  } catch (error) {
+    sendCatalogError(res, error);
   }
 });
 

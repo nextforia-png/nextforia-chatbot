@@ -242,12 +242,60 @@ function renderSuperAdminPanel(res, options) {
   <div class="invite-head" aria-hidden="true"><span>Cliente</span><span>Plan / bot</span><span>Entrega</span><span>Vencimiento</span><span>Acción</span></div><div id="customerInvitationRows"><div class="invite-loading">Cargando invitaciones…</div></div>
   </section>` : "";
 
+  // Ciclo de vida: suspender corta el acceso y conserva los datos; eliminar es
+  // irreversible y exige tres confirmaciones más un respaldo descargado.
+  const tenantLifecyclePanel = customerAccessV2Enabled ? `
+  <section class="card access-card" aria-labelledby="tenantLifecycleTitle"><div class="card-head"><div><h2 id="tenantLifecycleTitle">Ciclo de vida de clientes</h2><p>Suspender corta el acceso al panel y conserva todos los datos; es reversible con un clic. Eliminar borra todo y no se puede deshacer.</p></div><button class="button" type="button" onclick="loadTenants()">${icon("refresh", 15)} Actualizar</button></div>
+  <div class="invite-head" aria-hidden="true"><span>Cliente</span><span>Plan contratado</span><span>Estado</span><span>Usuarios</span><span>Acciones</span></div><div id="tenantLifecycleRows"><div class="invite-loading">Cargando clientes…</div></div>
+  </section>` : "";
+
   const customerAccessModal = customerAccessV2Enabled ? `
   <div class="modal-layer" id="customerCreateModal" aria-hidden="true"><button class="modal-scrim" type="button" aria-label="Cerrar alta de cliente" onclick="closeCustomerCreate()"></button><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="customerCreateTitle"><div class="modal-head"><div><span class="eyebrow">ACCESO PRIVADO</span><h2 id="customerCreateTitle">Crear cliente</h2><p>La persona invitada definirá su propia contraseña. No existe registro público.</p></div><button class="close-button" type="button" onclick="closeCustomerCreate()" aria-label="Cerrar">${icon("close", 19)}</button></div><form id="customerCreateForm" class="customer-form" novalidate>
     <label for="companyName">Empresa</label><input id="companyName" name="company_name" maxlength="120" autocomplete="organization" required>
     <label for="adminEmail">Correo administrador</label><input id="adminEmail" name="admin_email" type="email" maxlength="254" autocomplete="email" required>
     <div class="form-grid"><div><label for="planId">Plan</label><select id="planId" name="plan_id" required><option value="">Cargando…</option></select></div><div><label for="assignedBotId">Bot asignado</label><select id="assignedBotId" name="assigned_bot_id" required><option value="">Cargando…</option></select></div></div>
     <div class="form-note">La invitación es aleatoria, vence, funciona una sola vez y puede revocarse. Nextfor IA no recibe la contraseña.</div><div class="form-error" id="customerCreateError" role="alert" aria-live="assertive"></div><div class="modal-actions"><button class="button" type="button" onclick="closeCustomerCreate()">Cancelar</button><button class="button primary" id="customerCreateSubmit" type="submit">Crear y enviar invitación</button></div>
+  </form></section></div>` : "";
+
+  // ─── Planes y bots ────────────────────────────────────────────────────
+  // El catálogo es la fuente de verdad de precios. El Panel de Cliente lo lee
+  // desde /admin/panel/catalogs en vez de tener los planes escritos a mano.
+  const catalogView = customerAccessV2Enabled ? `
+  <section class="view" data-panel="catalogs"><div class="stack">
+    <div class="callout info-callout" style="margin-top:0"><div><strong>Esta pantalla define lo que ven tus clientes</strong><p>Los precios que cargues aquí aparecen en el Panel de Cliente. Los precios se guardan en pesos colombianos, sin decimales. Un plan desactivado deja de ofrecerse a clientes nuevos, pero los que ya lo tienen conservan el suyo.</p></div><span class="badge info">Catálogo</span></div>
+    <div>
+      <div class="section-title"><h2>Planes</h2><span>lo que se vende y a qué precio</span><button class="button primary" type="button" onclick="openPlanEditor()" style="margin-left:auto">Nuevo plan</button></div>
+      <section class="card table-card"><div id="planRows"><div class="invite-loading">Cargando catálogo…</div></div></section>
+    </div>
+    <div>
+      <div class="section-title"><h2>Bots</h2><span>los productos que se asignan a cada plan</span><button class="button" type="button" onclick="openBotEditor()" style="margin-left:auto">Nuevo bot</button></div>
+      <section class="card table-card"><div id="botRows"><div class="invite-loading">Cargando catálogo…</div></div></section>
+    </div>
+  </div></section>` : "";
+
+  const catalogModals = customerAccessV2Enabled ? `
+  <div class="modal-layer" id="planEditorModal" aria-hidden="true"><button class="modal-scrim" type="button" aria-label="Cerrar plan" onclick="closePlanEditor()"></button><section class="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="planEditorTitle"><div class="modal-head"><div><span class="eyebrow">CATÁLOGO</span><h2 id="planEditorTitle">Nuevo plan</h2><p>Los precios se muestran formateados al cliente; aquí se escriben en números.</p></div><button class="close-button" type="button" onclick="closePlanEditor()" aria-label="Cerrar">${icon("close", 19)}</button></div><form id="planEditorForm" class="customer-form" novalidate>
+    <input type="hidden" id="planEditorOriginalId" value="">
+    <div class="form-grid"><div><label for="planNombre">Nombre del plan</label><input id="planNombre" name="nombre" maxlength="120" placeholder="Bot Agendamiento de citas" required></div><div><label for="planIdField">Identificador</label><input id="planIdField" name="id" maxlength="64" placeholder="se genera solo"></div></div>
+    <label for="planDescripcion">Descripción de la tarjeta</label><input id="planDescripcion" name="descripcion" maxlength="400" placeholder="Agenda, confirma y reprograma citas por WhatsApp.">
+    <div class="form-grid"><div><label for="planBotId">Bot incluido</label><select id="planBotId" name="bot_id"><option value="">Sin bot asignado</option></select></div><div><label for="planEtiqueta">Etiqueta</label><input id="planEtiqueta" name="etiqueta" maxlength="40" placeholder="Mejor valor"></div></div>
+    <div class="form-grid three"><div><label for="planPrecioSetup">Precio de instalación (COP)</label><input id="planPrecioSetup" name="precio_setup" inputmode="numeric" placeholder="990000"></div><div><label for="planPrecioMensual">Precio mensual (COP)</label><input id="planPrecioMensual" name="precio_mensual" inputmode="numeric" placeholder="299900"></div><div><label for="planChats">Chats incluidos</label><input id="planChats" name="chats_incluidos" inputmode="numeric" placeholder="dejar vacío = por definir"></div></div>
+    <label for="planBeneficios">Beneficios <span class="label-hint">uno por línea</span></label><textarea id="planBeneficios" name="beneficios" rows="4" maxlength="3200" placeholder="Atención 24/7&#10;Respuestas en menos de 5 segundos&#10;Reportes mensuales"></textarea>
+    <div class="form-grid"><div><label for="planOrden">Orden</label><input id="planOrden" name="orden" inputmode="numeric" value="0"></div><div></div></div>
+    <div class="form-error" id="planEditorError" role="alert" aria-live="assertive"></div><div class="modal-actions"><button class="button" type="button" onclick="closePlanEditor()">Cancelar</button><button class="button primary" id="planEditorSubmit" type="submit">Guardar plan</button></div>
+  </form></section></div>
+  <div class="modal-layer" id="botEditorModal" aria-hidden="true"><button class="modal-scrim" type="button" aria-label="Cerrar bot" onclick="closeBotEditor()"></button><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="botEditorTitle"><div class="modal-head"><div><span class="eyebrow">CATÁLOGO</span><h2 id="botEditorTitle">Nuevo bot</h2><p>Un bot es el producto; el plan es cómo se cobra.</p></div><button class="close-button" type="button" onclick="closeBotEditor()" aria-label="Cerrar">${icon("close", 19)}</button></div><form id="botEditorForm" class="customer-form" novalidate>
+    <div class="form-grid"><div><label for="botNombre">Nombre del bot</label><input id="botNombre" name="nombre" maxlength="120" placeholder="Atención al cliente" required></div><div><label for="botIdField">Identificador</label><input id="botIdField" name="id" maxlength="64" placeholder="se genera solo"></div></div>
+    <label for="botDescripcion">Descripción</label><input id="botDescripcion" name="descripcion" maxlength="400" placeholder="Responde preguntas y atiende clientes 24/7.">
+    <div class="form-grid"><div><label for="botOrden">Orden</label><input id="botOrden" name="orden" inputmode="numeric" value="0"></div><div></div></div>
+    <div class="form-error" id="botEditorError" role="alert" aria-live="assertive"></div><div class="modal-actions"><button class="button" type="button" onclick="closeBotEditor()">Cancelar</button><button class="button primary" id="botEditorSubmit" type="submit">Guardar bot</button></div>
+  </form></section></div>
+  <div class="modal-layer" id="tenantDeleteModal" aria-hidden="true"><button class="modal-scrim" type="button" aria-label="Cerrar" onclick="closeTenantDelete()"></button><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="tenantDeleteTitle"><div class="modal-head"><div><span class="eyebrow danger-eyebrow">IRREVERSIBLE</span><h2 id="tenantDeleteTitle">Eliminar cliente</h2><p id="tenantDeleteLead">Esta acción no se puede deshacer.</p></div><button class="close-button" type="button" onclick="closeTenantDelete()" aria-label="Cerrar">${icon("close", 19)}</button></div><form id="tenantDeleteForm" class="customer-form" novalidate>
+    <input type="hidden" id="tenantDeleteId" value="">
+    <div class="danger-steps"><div class="danger-step"><span class="step-number">1</span><div><strong>El cliente debe estar suspendido</strong><p id="tenantDeleteStatusNote">Verificando estado…</p></div></div><div class="danger-step"><span class="step-number">2</span><div><strong>Escribe el nombre exacto de la empresa</strong><p>Así confirmás que sabés cuál estás eliminando.</p></div></div><div class="danger-step"><span class="step-number">3</span><div><strong>Se descarga un respaldo antes de borrar</strong><p>Incluye cliente, usuarios, invitaciones y auditoría.</p></div></div></div>
+    <label for="tenantDeleteConfirm">Nombre de la empresa</label><input id="tenantDeleteConfirm" name="company_name_confirmacion" maxlength="120" autocomplete="off" required>
+    <label class="checkbox-row"><input type="checkbox" id="tenantDeleteFinal"> Entiendo que esto es irreversible y que los datos no se pueden recuperar.</label>
+    <div class="form-error" id="tenantDeleteError" role="alert" aria-live="assertive"></div><div class="modal-actions"><button class="button" type="button" onclick="closeTenantDelete()">Cancelar</button><button class="button danger-solid" id="tenantDeleteSubmit" type="submit" disabled>Eliminar definitivamente</button></div>
   </form></section></div>` : "";
 
   res.setHeader("content-type", "text/html; charset=utf-8");
@@ -490,6 +538,44 @@ function renderSuperAdminPanel(res, options) {
 .toast.show{opacity:1;transform:none}
 .access-card{padding:0;overflow:hidden}.invite-head,.invite-row{display:grid;grid-template-columns:1.45fr 1fr .85fr .9fr auto;gap:12px;align-items:center}.invite-head{padding:10px 18px;background:var(--slate-50);border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);color:var(--text-subtle);font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.invite-row{min-height:65px;padding:12px 18px;border-top:1px solid var(--slate-100)}.invite-row:first-child{border-top:0}.invite-row strong{display:block;color:var(--text-strong);font-size:11.5px}.invite-row small{display:block;margin-top:3px;color:var(--text-muted);font-size:9.5px}.invite-loading{padding:28px;text-align:center;color:var(--text-muted);font-size:11px}.modal-layer{position:fixed;inset:0;z-index:70;display:none;place-items:center;padding:20px}.modal-layer.open{display:grid}.modal-scrim{position:absolute;inset:0;width:100%;border:0;background:rgba(6,15,34,.62);backdrop-filter:blur(4px)}.modal-card{position:relative;width:min(590px,96vw);max-height:94vh;overflow:auto;border:1px solid var(--border-subtle);border-radius:20px;background:var(--surface-card);box-shadow:var(--shadow-lg);animation:rise .2s var(--ease)}.modal-head{display:flex;align-items:flex-start;gap:15px;padding:22px 24px 17px;border-bottom:1px solid var(--border-subtle)}.modal-head>div{flex:1}.modal-head h2{font:800 20px var(--font-display);margin:2px 0 5px;color:var(--text-strong)}.modal-head p{margin:0;color:var(--text-muted);font-size:11px;line-height:1.55}.eyebrow{color:var(--cyan-700);font-size:9px;font-weight:800;letter-spacing:.13em}.customer-form{padding:21px 24px}.customer-form label{display:block;margin:13px 0 6px;color:var(--text-strong);font-size:10.5px;font-weight:800}.customer-form>label:first-child{margin-top:0}.customer-form input,.customer-form select{width:100%;height:43px;border:1.5px solid var(--border-default);border-radius:10px;padding:0 11px;background:#fff;color:var(--text-strong);font:600 12px var(--font-body);outline:0}.customer-form input:focus,.customer-form select:focus{border-color:var(--border-brand);box-shadow:var(--focus-ring)}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.form-note{margin-top:16px;padding:11px 12px;border-radius:10px;background:var(--cyan-50);color:var(--cyan-700);font-size:10px;line-height:1.5}.form-error{min-height:17px;margin-top:9px;color:#C83F3F;font-size:10.5px}.modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:9px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.section-title .button{margin-left:auto}
+.info-callout{border-color:var(--cyan-100);background:var(--cyan-50)}
+.info-callout strong{color:var(--cyan-700)}
+.info-callout p{color:var(--text-muted)}
+.catalog-row{display:grid;grid-template-columns:minmax(0,1.6fr) 1fr 1fr .8fr auto;gap:14px;align-items:center;padding:14px 18px;border-top:1px solid var(--slate-100)}
+.catalog-row:first-child{border-top:0}
+.catalog-row.inactive{opacity:.55}
+.catalog-main strong{display:block;font-size:13px;color:var(--text-strong)}
+.catalog-main span{display:block;font-size:10.5px;color:var(--text-muted);margin-top:2px}
+.catalog-main code{font:600 9.5px var(--font-mono);color:var(--cyan-700);background:var(--cyan-50);border:1px solid var(--cyan-100);padding:2px 5px;border-radius:6px;margin-top:5px;display:inline-block}
+.catalog-price{font-family:var(--font-mono);font-size:12.5px;color:var(--text-strong);font-weight:700}
+.catalog-price small{display:block;font:500 10px var(--font-body);color:var(--text-subtle);margin-top:2px}
+.catalog-actions{display:flex;gap:6px;align-items:center;justify-content:flex-end}
+.catalog-actions .button{min-height:32px;padding:0 10px;font-size:11px}
+.catalog-benefits{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.catalog-benefits span{font-size:10px;color:var(--text-muted);background:var(--slate-50);border:1px solid var(--border-subtle);border-radius:6px;padding:2px 6px}
+.modal-card.wide{max-width:660px}
+.form-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+.label-hint{font-weight:500;color:var(--text-subtle);font-size:10.5px}
+.customer-form textarea{width:100%;border:1.5px solid var(--border-default);border-radius:var(--radius-md);padding:10px 12px;font:500 13px var(--font-body);color:var(--text-strong);background:var(--surface-card);outline:0;resize:vertical}
+.customer-form textarea:focus{border-color:var(--border-brand);box-shadow:var(--focus-ring)}
+.danger-eyebrow{color:#C83F3F!important}
+.danger-steps{display:grid;gap:10px;margin:4px 0 14px;padding:14px;border:1px solid #F5CACA;border-radius:var(--radius-md);background:var(--red-50)}
+.danger-step{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start}
+.danger-step strong{font-size:11.5px;color:#8B2C2C}
+.danger-step p{font-size:10.5px;color:#A34545;margin:2px 0 0}
+.danger-step .step-number{background:#fff;color:#C83F3F}
+.checkbox-row{display:flex;gap:9px;align-items:flex-start;font-size:11.5px;color:var(--text-body);line-height:1.5;margin-top:4px}
+.checkbox-row input{width:16px;height:16px;flex:0 0 auto;margin-top:1px}
+.button.danger-solid{background:#C83F3F;border-color:#C83F3F;color:#fff}
+.button.danger-solid:hover:not(:disabled){background:#B23636;border-color:#B23636;color:#fff}
+.button.danger-solid:disabled{opacity:.45;cursor:not-allowed}
+.status-pill{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:800;border-radius:999px;padding:4px 9px}
+.status-pill.activo{background:var(--green-50);color:#087E54}
+.status-pill.suspendido{background:var(--amber-50);color:#9C650C}
+.status-pill.archivado{background:var(--slate-100);color:var(--slate-600)}
+.status-pill.setup{background:var(--cyan-50);color:var(--cyan-700)}
+@media(max-width:820px){.catalog-row{grid-template-columns:1fr;gap:8px}.catalog-actions{justify-content:flex-start}.form-grid.three{grid-template-columns:1fr}}
 :focus-visible{outline:0;box-shadow:var(--focus-ring)}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
 @keyframes fade{from{opacity:0}}
@@ -507,7 +593,7 @@ function renderSuperAdminPanel(res, options) {
 <div class="nav-group">Bots</div>
 <nav aria-label="Bots"><button class="nav-button" data-view="agendamiento">${icon("calendar", 18)}<span>Agendamiento</span></button><button class="nav-button" data-view="atencion">${icon("headset", 18)}<span>Atención al cliente</span></button><button class="nav-button" type="button" disabled aria-disabled="true">${icon("mic", 18)}<span>Voz saliente</span><span class="nav-soon">Pronto</span></button></nav>
 <div class="nav-group">Operación</div>
-<nav aria-label="Operación"><button class="nav-button" data-view="incidents">${icon("inbox", 18)}<span>Bandeja de operación</span><span class="nav-badge" id="incidentNavCount">…</span></button><button class="nav-button" data-view="billing">${icon("card", 18)}<span>Facturación</span><span class="nav-badge">0</span></button></nav>
+<nav aria-label="Operación"><button class="nav-button" data-view="incidents">${icon("inbox", 18)}<span>Bandeja de operación</span><span class="nav-badge" id="incidentNavCount">…</span></button>${customerAccessV2Enabled ? `<button class="nav-button" data-view="catalogs">${icon("layers", 18)}<span>Planes y bots</span></button>` : ""}<button class="nav-button" data-view="billing">${icon("card", 18)}<span>Facturación</span><span class="nav-badge">0</span></button></nav>
 <div class="sidebar-bottom">
 <div class="margin-card"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><div><div class="margin-label">Margen del mes</div><div class="margin-value">${marginPct == null ? "—" : marginPct + "%"}</div><div class="margin-note">${marginPct == null ? "sin fuente conectada" : "ingresos vs. costos"}</div></div></div>
 <div class="user-card"><span class="avatar sm">SA</span><div><strong>${escapeHtml(auth.name || auth.username || "Super Admin")}</strong><span>Nextfor IA · interno</span></div></div>
@@ -538,7 +624,7 @@ function renderSuperAdminPanel(res, options) {
   <div class="two-col" style="margin-top:0"><section class="card"><div class="card-head"><div><h2>Embudo previsto</h2><p>Estados para la siguiente fase.</p></div></div><ol class="steps"><li><span class="step-number">1</span><div><strong>Registro iniciado</strong><p>Datos básicos del comercio.</p></div></li><li><span class="step-number">2</span><div><strong>Datos de empresa</strong><p>Operación, políticas y contactos.</p></div></li><li><span class="step-number">3</span><div><strong>Conectó WhatsApp</strong><p>Cuenta y número autorizados.</p></div></li><li><span class="step-number">4</span><div><strong>Configuró primer bot</strong><p>Listo para validación técnica.</p></div></li></ol></section><section class="card"><div class="card-head"><div><h2>Datos de adquisición</h2><p>Requeridos para CAC y atribución.</p></div></div><div class="fields"><code>source_type</code><code>source_name</code><code>cac</code><code>expected_plan</code><code>potential_mrr</code><code>last_activity_at</code></div></section></div>
 </div></section>
 
-<section class="view" data-panel="clients"><div class="stack"><div><div class="toolbar"><div class="search">${icon("search", 18)}<label class="sr-only" for="clientSearch">Buscar cliente</label><input id="clientSearch" placeholder="Buscar cliente o vertical…" autocomplete="off"></div><div class="filter-chips"><button class="chip active" type="button">Todos <span>${currentClients}</span></button><button class="chip" type="button">Nuevos <span>0</span></button><button class="chip" type="button">Pilotos <span>${registeredClients.length}</span></button></div></div><section class="card table-card"><div class="table-scroll"><div class="table-head"><span>Cliente</span><span>Sector</span><span>Plan</span><span>Integraciones</span><span>Estado</span><span></span></div>${clientTableRows}<div class="empty" id="clientEmpty" hidden><div class="empty-icon">${icon("search", 23)}</div><h2>Sin resultados</h2><p>No hay clientes que coincidan con esta búsqueda.</p></div></div></section></div>${customerAccessPanel}<div class="callout"><div><strong>Vista preparada para crecer</strong><p>La búsqueda y los segmentos ya operan sobre el registro actual. La ficha completa por cliente (deep-dive con pestañas y facturas) se conecta cuando exista la fuente de tenants completa.</p></div><span class="badge info">${currentClients} de ${currentClients}</span></div></div></section>
+<section class="view" data-panel="clients"><div class="stack"><div><div class="toolbar"><div class="search">${icon("search", 18)}<label class="sr-only" for="clientSearch">Buscar cliente</label><input id="clientSearch" placeholder="Buscar cliente o vertical…" autocomplete="off"></div><div class="filter-chips"><button class="chip active" type="button">Todos <span>${currentClients}</span></button><button class="chip" type="button">Nuevos <span>0</span></button><button class="chip" type="button">Pilotos <span>${registeredClients.length}</span></button></div></div><section class="card table-card"><div class="table-scroll"><div class="table-head"><span>Cliente</span><span>Sector</span><span>Plan</span><span>Integraciones</span><span>Estado</span><span></span></div>${clientTableRows}<div class="empty" id="clientEmpty" hidden><div class="empty-icon">${icon("search", 23)}</div><h2>Sin resultados</h2><p>No hay clientes que coincidan con esta búsqueda.</p></div></div></section></div>${customerAccessPanel}${tenantLifecyclePanel}<div class="callout"><div><strong>Vista preparada para crecer</strong><p>La búsqueda y los segmentos ya operan sobre el registro actual. La ficha completa por cliente (deep-dive con pestañas y facturas) se conecta cuando exista la fuente de tenants completa.</p></div><span class="badge info">${currentClients} de ${currentClients}</span></div></div></section>
 
 <section class="view" data-panel="agendamiento"><div class="stack">
   <section class="card"><div class="empty"><img class="empty-lumen" src="/admin/assets/lumen.png" alt="" aria-hidden="true"><h2>El módulo de Agendamiento se activa con datos del bot</h2><p>Mostrará citas del mes, tasa de confirmación, calendarios conectados, consentimientos y clientes con el bot activo. Hoy el piloto de citas vive en el panel del cliente; aquí se consolidará toda la flota.</p></div></section>
@@ -555,6 +641,8 @@ function renderSuperAdminPanel(res, options) {
   <div class="two-col" style="margin-top:0"><section class="card"><div class="card-head"><div><h2>Servicios globales</h2><p>Último estado obtenido desde /admin/health.</p></div><button class="button" type="button" onclick="loadHealth()">${icon("refresh", 16)} Actualizar</button></div><div class="health-list"><div class="health-row"><span>Shopify storefront</span><span class="health-value" id="incidentShopify">Verificando</span></div><div class="health-row"><span>Meta WhatsApp API</span><span class="health-value" id="incidentMeta">Verificando</span></div><div class="health-row"><span>Supabase</span><span class="health-value" id="incidentSupabase">Verificando</span></div><div class="health-row"><span>Anthropic</span><span class="health-value" id="incidentAnthropic">Verificando</span></div></div></section><section class="card"><div class="empty" style="padding:30px 18px"><img class="empty-lumen" src="/admin/assets/lumen.png" alt="" aria-hidden="true"><h2>Sin incidencias internas registradas</h2><p>La bandeja consolidará webhooks caídos, errores de sincronización, consentimientos, colas altas y pagos vencidos de todos los bots, ordenados por prioridad.</p></div></section></div>
 </div></section>
 
+${catalogView}
+
 <section class="view" data-panel="billing"><div class="stack">
   <section class="card">${emptyBlock("card", "Facturación aún no está conectada", "DERCO figura como cliente piloto #1. Los planes, MRR, estado de pago e historial de facturas se habilitarán cuando exista una fuente financiera de confianza. Es la misma fuente que alimenta Ingresos, Costos, Margen y Pareto del Resumen.")}</section>
   <div class="two-col" style="margin-top:0"><section class="card"><div class="card-head"><div><h2>Modelo previsto</h2><p>Información necesaria por tenant.</p></div></div><div class="fields"><code>plan</code><code>monthly_price</code><code>billing_status</code><code>next_charge_at</code><code>invoice_id</code><code>currency</code></div></section><section class="card"><div class="card-head"><div><h2>Principio operativo</h2><p>Una sola fuente de verdad.</p></div></div><p style="font-size:12px;line-height:1.7;color:var(--text-muted);margin:0">El panel no inferirá ingresos ni pagos desde actividad de chat. Los indicadores comerciales aparecerán únicamente cuando provengan del sistema de facturación. Moneda base: COP.</p></section></div>
@@ -562,10 +650,11 @@ function renderSuperAdminPanel(res, options) {
 
 </div></main></div>
 ${customerAccessModal}
+${catalogModals}
 <div class="drawer-layer" id="tenantDrawer" aria-hidden="true"><button class="scrim" type="button" aria-label="Cerrar detalle" onclick="closeTenant()"></button><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="tenantTitle"><div class="drawer-head"><span class="avatar lg">RT</span><div class="drawer-title"><h2 id="tenantTitle">${escapeHtml(tenant.name)}</h2><p>Comercio electrónico · Entorno legado</p><div class="drawer-badges"><span class="badge neutral dot">Legado operativo</span><span class="badge warning dot">Meta pendiente</span></div></div><button class="close-button" id="drawerClose" type="button" onclick="closeTenant()" aria-label="Cerrar">${icon("close", 19)}</button></div><div class="drawer-body"><div class="next-card">${icon("spark", 20)}<div><strong>Siguiente paso</strong><p>Completar la revisión de Meta sin incluir este entorno en el registro comercial.</p></div></div><div class="mini-grid"><div class="mini-card"><span>Tenant ID</span><strong style="font-size:12px">${escapeHtml(tenant.id)}</strong></div><div class="mini-card"><span>Etapas listas</span><strong>${readyCount}/${stages.length}</strong></div><div class="mini-card"><span>Rol operativo</span><strong style="font-size:12px">Admin</strong></div><div class="mini-card"><span>Estado</span><strong style="font-size:12px">Legado activo</strong></div></div><section class="drawer-section"><h3>Integraciones</h3><div class="integration"><span>WhatsApp Cloud API</span><span class="badge warning">Revisión Meta</span></div><div class="integration"><span>Shopify Storefront</span><span class="badge neutral" id="drawerShopify">Verificando</span></div><div class="integration"><span>Supabase</span><span class="badge neutral" id="drawerSupabase">Verificando</span></div></section><section class="drawer-section"><h3>Operación permitida</h3><p style="font-size:10.5px;line-height:1.6;color:var(--text-muted);margin:0">La operación diaria, conversaciones e intervención humana permanecen exclusivamente en el panel Admin del comercio.</p></section></div><div class="drawer-foot"><a class="button" href="/admin/client-onboarding">Ver onboarding</a><a class="button primary" href="/admin/panel?tab=summary">Abrir Admin RAV</a></div></aside></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
-var customerAccessV2Enabled=${customerAccessV2Enabled ? "true" : "false"},titles={overview:["Resumen","La operación completa de Nextfor IA de un vistazo"],leads:["Leads","Prospectos por vendedor y canal antes de volverse clientes"],clients:["Clientes","Cuentas y tenants administrados por Nextfor IA"],agendamiento:["Agendamiento","Módulo de citas consolidado de toda la flota"],atencion:["Atención al cliente","Módulo de conversaciones consolidado de toda la flota"],incidents:["Bandeja de operación","Incidencias de todos los bots ordenadas por prioridad"],billing:["Facturación","Planes y pagos de los clientes de la plataforma"]};
+var customerAccessV2Enabled=${customerAccessV2Enabled ? "true" : "false"},titles={overview:["Resumen","La operación completa de Nextfor IA de un vistazo"],leads:["Leads","Prospectos por vendedor y canal antes de volverse clientes"],clients:["Clientes","Cuentas y tenants administrados por Nextfor IA"],agendamiento:["Agendamiento","Módulo de citas consolidado de toda la flota"],atencion:["Atención al cliente","Módulo de conversaciones consolidado de toda la flota"],incidents:["Bandeja de operación","Incidencias de todos los bots ordenadas por prioridad"],catalogs:["Planes y bots","Lo que se vende, a qué precio y con qué incluido"],billing:["Facturación","Planes y pagos de los clientes de la plataforma"]};
 var currentView="overview",lastFocus=null,toastTimer;
 function showView(name){if(!titles[name])return;currentView=name;document.querySelectorAll(".nav-button").forEach(function(el){var active=el.dataset.view===name;el.classList.toggle("active",active);el.setAttribute("aria-current",active?"page":"false");});document.querySelectorAll(".view").forEach(function(el){el.classList.toggle("active",el.dataset.panel===name);});document.getElementById("pageTitle").textContent=titles[name][0];document.getElementById("pageSubtitle").textContent=titles[name][1];try{history.replaceState(null,"","/admin/super-admin"+(name==="overview"?"":"?view="+encodeURIComponent(name)));}catch(e){}document.querySelector(".content").scrollTop=0;}
 document.querySelectorAll("[data-view]").forEach(function(el){el.addEventListener("click",function(){showView(el.dataset.view);});});document.querySelectorAll("[data-go]").forEach(function(el){el.addEventListener("click",function(){showView(el.dataset.go);});});
@@ -592,7 +681,128 @@ function loadCustomerInvitations(){if(!customerAccessV2Enabled)return Promise.re
 function revokeInvitation(id,button){button.disabled=true;fetch("/admin/customer-invitations/"+encodeURIComponent(id)+"/revoke",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"customer_access_unavailable");return body;});}).then(function(){showToast("Invitación revocada.");return loadCustomerInvitations();}).catch(function(error){button.disabled=false;showToast(customerErrorLabel(error.message));});}
 var customerCreateForm=document.getElementById("customerCreateForm");if(customerCreateForm)customerCreateForm.addEventListener("submit",function(event){event.preventDefault();var submit=document.getElementById("customerCreateSubmit"),error=document.getElementById("customerCreateError"),payload={company_name:document.getElementById("companyName").value,admin_email:document.getElementById("adminEmail").value,plan_id:document.getElementById("planId").value,assigned_bot_id:document.getElementById("assignedBotId").value};error.textContent="";submit.disabled=true;submit.textContent="Creando…";fetch("/admin/customer-invite",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"customer_access_unavailable");return body;});}).then(function(){customerCreateForm.reset();closeCustomerCreate();showView("clients");showToast("Cliente creado e invitación enviada al correo administrador.");return loadCustomerInvitations();}).catch(function(problem){error.textContent=customerErrorLabel(problem.message);if(problem.message==="email_delivery_failed")loadCustomerInvitations();}).finally(function(){submit.disabled=false;submit.textContent="Crear y enviar invitación";});});
 var search=document.getElementById("clientSearch");search.addEventListener("input",function(){var query=search.value.trim().toLowerCase(),shown=0;document.querySelectorAll(".tenant-row[data-search]").forEach(function(row){var match=row.dataset.search.indexOf(query)>=0;row.hidden=!match;if(match)shown++;});document.getElementById("clientEmpty").hidden=shown>0;});
-try{var url=new URL(location.href),requested=url.searchParams.get("view");if(requested&&titles[requested])showView(requested);if(url.searchParams.has("key")){url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}}catch(e){}loadHealth();if(customerAccessV2Enabled)loadCustomerInvitations();
+/* ── Catálogo de planes y bots ─────────────────────────────────────── */
+var catalogCache={plans:[],bots:[]};
+function copMoney(value){if(value==null||value==="")return "—";var n=parseInt(String(value).replace(/[^\\d-]/g,""),10);if(!isFinite(n))return "—";return "$"+String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}
+function catalogErrorLabel(code){var map={plan_name_required:"El plan necesita un nombre.",bot_name_required:"El bot necesita un nombre.",invalid_plan_id:"El identificador solo admite minúsculas, números, guion y guion bajo.",invalid_bot_id:"Ese bot no existe en el catálogo.",invalid_price:"Los precios no pueden ser negativos.",invalid_included_chats:"Los chats incluidos no pueden ser negativos.",plan_not_found:"Ese plan ya no existe.",tenant_not_found:"Ese cliente ya no existe.",tenant_not_suspended:"Primero hay que suspender al cliente.",company_name_mismatch:"El nombre de la empresa no coincide.",invalid_status:"Ese estado no es válido.",final_confirmation_required:"Falta marcar la confirmación final.",unauthorized:"Tu sesión expiró. Volvé a entrar.",catalog_unavailable:"No se pudo conectar con el catálogo."};return map[code]||"No se pudo completar la operación.";}
+function el(tag,cls,txt){var node=document.createElement(tag);if(cls)node.className=cls;if(txt!=null)node.textContent=txt;return node;}
+function renderCatalog(){var planRoot=document.getElementById("planRows"),botRoot=document.getElementById("botRows");if(!planRoot||!botRoot)return;
+planRoot.textContent="";botRoot.textContent="";
+if(!catalogCache.plans.length)planRoot.appendChild(el("div","invite-loading","Todavía no hay planes. Creá el primero."));
+catalogCache.plans.forEach(function(plan){var row=el("div","catalog-row"+(plan.activo?"":" inactive"));
+var main=el("div","catalog-main");main.appendChild(el("strong",null,plan.nombre||plan.name||plan.id));
+if(plan.descripcion)main.appendChild(el("span",null,plan.descripcion));
+main.appendChild(el("code",null,plan.id));
+if(plan.beneficios&&plan.beneficios.length){var bl=el("div","catalog-benefits");plan.beneficios.slice(0,4).forEach(function(b){bl.appendChild(el("span",null,b));});main.appendChild(bl);}
+row.appendChild(main);
+var setup=el("div","catalog-price",copMoney(plan.precio_setup));setup.appendChild(el("small",null,"instalación"));row.appendChild(setup);
+var mensual=el("div","catalog-price",copMoney(plan.precio_mensual));mensual.appendChild(el("small",null,"mensual"));row.appendChild(mensual);
+var chats=el("div","catalog-price",plan.chats_incluidos==null?"—":String(plan.chats_incluidos));chats.appendChild(el("small",null,plan.chats_incluidos==null?"por definir":"chats"));row.appendChild(chats);
+var actions=el("div","catalog-actions");
+var badge=el("span","badge "+(plan.activo?"success":"neutral")+" dot",plan.activo?"Activo":"Inactivo");actions.appendChild(badge);
+var edit=el("button","button","Editar");edit.type="button";edit.addEventListener("click",function(){openPlanEditor(plan.id);});actions.appendChild(edit);
+var toggle=el("button","button",plan.activo?"Desactivar":"Activar");toggle.type="button";toggle.addEventListener("click",function(){togglePlan(plan.id,!plan.activo);});actions.appendChild(toggle);
+row.appendChild(actions);planRoot.appendChild(row);});
+if(!catalogCache.bots.length)botRoot.appendChild(el("div","invite-loading","Todavía no hay bots."));
+catalogCache.bots.forEach(function(bot){var row=el("div","catalog-row"+(bot.activo?"":" inactive"));
+var main=el("div","catalog-main");main.appendChild(el("strong",null,bot.nombre||bot.name||bot.id));
+if(bot.descripcion)main.appendChild(el("span",null,bot.descripcion));
+main.appendChild(el("code",null,bot.id));row.appendChild(main);
+row.appendChild(el("div","catalog-price","—"));row.appendChild(el("div","catalog-price","—"));
+row.appendChild(el("div","catalog-price","#"+(bot.orden==null?0:bot.orden)));
+var actions=el("div","catalog-actions");
+var edit=el("button","button","Editar");edit.type="button";edit.addEventListener("click",function(){openBotEditor(bot.id);});actions.appendChild(edit);
+row.appendChild(actions);botRoot.appendChild(row);});
+var select=document.getElementById("planBotId");if(select){var current=select.value;select.textContent="";var blank=document.createElement("option");blank.value="";blank.textContent="Sin bot asignado";select.appendChild(blank);
+catalogCache.bots.forEach(function(bot){var opt=document.createElement("option");opt.value=bot.id;opt.textContent=bot.nombre||bot.name||bot.id;select.appendChild(opt);});select.value=current;}}
+function loadCatalog(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/catalogs",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){catalogCache={plans:body.plans||[],bots:body.bots||[]};renderCatalog();}).catch(function(error){var root=document.getElementById("planRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
+function openPlanEditor(planId){var plan=planId?catalogCache.plans.filter(function(p){return p.id===planId;})[0]:null;
+document.getElementById("planEditorTitle").textContent=plan?"Editar plan":"Nuevo plan";
+document.getElementById("planEditorOriginalId").value=plan?plan.id:"";
+document.getElementById("planNombre").value=plan?(plan.nombre||plan.name||""):"";
+document.getElementById("planIdField").value=plan?plan.id:"";
+document.getElementById("planIdField").readOnly=!!plan;
+document.getElementById("planDescripcion").value=plan?(plan.descripcion||""):"";
+document.getElementById("planEtiqueta").value=plan?(plan.etiqueta||""):"";
+document.getElementById("planPrecioSetup").value=plan?(plan.precio_setup==null?"":plan.precio_setup):"";
+document.getElementById("planPrecioMensual").value=plan?(plan.precio_mensual==null?"":plan.precio_mensual):"";
+document.getElementById("planChats").value=plan&&plan.chats_incluidos!=null?plan.chats_incluidos:"";
+document.getElementById("planBeneficios").value=plan&&plan.beneficios?plan.beneficios.join("\\n"):"";
+document.getElementById("planOrden").value=plan?(plan.orden==null?0:plan.orden):catalogCache.plans.length+1;
+document.getElementById("planEditorError").textContent="";
+renderCatalog();document.getElementById("planBotId").value=plan&&plan.bot_id?plan.bot_id:"";
+openModal("planEditorModal","planNombre");}
+function closePlanEditor(){closeModal("planEditorModal");}
+function openBotEditor(botId){var bot=botId?catalogCache.bots.filter(function(b){return b.id===botId;})[0]:null;
+document.getElementById("botEditorTitle").textContent=bot?"Editar bot":"Nuevo bot";
+document.getElementById("botNombre").value=bot?(bot.nombre||bot.name||""):"";
+document.getElementById("botIdField").value=bot?bot.id:"";
+document.getElementById("botIdField").readOnly=!!bot;
+document.getElementById("botDescripcion").value=bot?(bot.descripcion||""):"";
+document.getElementById("botOrden").value=bot?(bot.orden==null?0:bot.orden):catalogCache.bots.length+1;
+document.getElementById("botEditorError").textContent="";
+openModal("botEditorModal","botNombre");}
+function closeBotEditor(){closeModal("botEditorModal");}
+function openModal(id,focusId){var layer=document.getElementById(id);if(!layer)return;lastFocus=document.activeElement;layer.classList.add("open");layer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";var target=document.getElementById(focusId);if(target)target.focus();}
+function closeModal(id){var layer=document.getElementById(id);if(!layer)return;layer.classList.remove("open");layer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)lastFocus.focus();}
+function postJson(url,payload){return fetch(url,{method:"POST",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});});}
+function togglePlan(id,activo){postJson("/admin/catalogs/plans/"+encodeURIComponent(id)+"/toggle",{activo:activo}).then(function(){showToast(activo?"Plan activado.":"Plan desactivado. Los clientes que ya lo tienen no se ven afectados.");return loadCatalog();}).catch(function(error){showToast(catalogErrorLabel(error.message));});}
+function bindCatalogForms(){var planForm=document.getElementById("planEditorForm");
+if(planForm)planForm.addEventListener("submit",function(event){event.preventDefault();var button=document.getElementById("planEditorSubmit"),errorBox=document.getElementById("planEditorError");errorBox.textContent="";button.disabled=true;button.textContent="Guardando…";
+postJson("/admin/catalogs/plans",{id:document.getElementById("planIdField").value||document.getElementById("planEditorOriginalId").value,nombre:document.getElementById("planNombre").value,descripcion:document.getElementById("planDescripcion").value,bot_id:document.getElementById("planBotId").value,precio_setup:document.getElementById("planPrecioSetup").value,precio_mensual:document.getElementById("planPrecioMensual").value,chats_incluidos:document.getElementById("planChats").value,beneficios:document.getElementById("planBeneficios").value,etiqueta:document.getElementById("planEtiqueta").value,orden:document.getElementById("planOrden").value})
+.then(function(){closePlanEditor();showToast("Plan guardado. Ya se refleja en el Panel de Cliente.");return loadCatalog();})
+.catch(function(error){errorBox.textContent=catalogErrorLabel(error.message);})
+.finally(function(){button.disabled=false;button.textContent="Guardar plan";});});
+var botForm=document.getElementById("botEditorForm");
+if(botForm)botForm.addEventListener("submit",function(event){event.preventDefault();var button=document.getElementById("botEditorSubmit"),errorBox=document.getElementById("botEditorError");errorBox.textContent="";button.disabled=true;button.textContent="Guardando…";
+postJson("/admin/catalogs/bots",{id:document.getElementById("botIdField").value,nombre:document.getElementById("botNombre").value,descripcion:document.getElementById("botDescripcion").value,orden:document.getElementById("botOrden").value})
+.then(function(){closeBotEditor();showToast("Bot guardado.");return loadCatalog();})
+.catch(function(error){errorBox.textContent=catalogErrorLabel(error.message);})
+.finally(function(){button.disabled=false;button.textContent="Guardar bot";});});}
+/* ── Suspender y eliminar clientes ─────────────────────────────────── */
+var tenantCache=[];
+function statusPill(status){var label={activo:"Activo",suspendido:"Suspendido",archivado:"Archivado",setup:"En configuración"}[status]||status||"—";return el("span","status-pill "+(status||"setup"),label);}
+function renderTenants(){var root=document.getElementById("tenantLifecycleRows");if(!root)return;root.textContent="";
+if(!tenantCache.length){root.appendChild(el("div","invite-loading","Todavía no hay clientes creados."));return;}
+tenantCache.forEach(function(tenant){var line=el("div","invite-row");
+var who=el("div");who.appendChild(el("strong",null,tenant.company_name));who.appendChild(el("small",null,tenant.id));line.appendChild(who);
+var plan=el("div");plan.appendChild(el("strong",null,copMoney(tenant.precio_mensual_contratado)+" /mes"));plan.appendChild(el("small",null,tenant.plan_id+" · instalación "+copMoney(tenant.precio_setup_contratado)));line.appendChild(plan);
+var state=el("div");state.appendChild(statusPill(tenant.status));line.appendChild(state);
+var users=el("div");users.appendChild(el("strong",null,String(tenant.usuarios_activos==null?"—":tenant.usuarios_activos)));users.appendChild(el("small",null,"con acceso"));line.appendChild(users);
+var actions=el("div","catalog-actions");
+if(tenant.status==="suspendido"||tenant.status==="archivado"){var reactivate=el("button","button","Reactivar");reactivate.type="button";reactivate.addEventListener("click",function(){setTenantStatus(tenant.id,"activo").then(loadTenants);});actions.appendChild(reactivate);}
+else{var suspend=el("button","button","Suspender");suspend.type="button";suspend.addEventListener("click",function(){setTenantStatus(tenant.id,"suspendido").then(loadTenants);});actions.appendChild(suspend);}
+var remove=el("button","button danger","Eliminar");remove.type="button";remove.addEventListener("click",function(){openTenantDelete(tenant.id,tenant.company_name,tenant.status);});actions.appendChild(remove);
+line.appendChild(actions);root.appendChild(line);});}
+function loadTenants(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/tenants",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){tenantCache=body.tenants||[];renderTenants();}).catch(function(error){var root=document.getElementById("tenantLifecycleRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
+function setTenantStatus(tenantId,status){var mensajes={activo:"Cliente reactivado. Ya puede entrar a su panel.",suspendido:"Cliente suspendido. Perdió el acceso, los datos quedan intactos.",archivado:"Cliente archivado."};
+return postJson("/admin/tenants/"+encodeURIComponent(tenantId)+"/status",{status:status}).then(function(){showToast(mensajes[status]||"Estado actualizado.");}).catch(function(error){showToast(catalogErrorLabel(error.message));});}
+function openTenantDelete(tenantId,companyName,status){document.getElementById("tenantDeleteId").value=tenantId;
+document.getElementById("tenantDeleteLead").textContent='Vas a eliminar "'+companyName+'" y todos sus datos.';
+var suspended=status==="suspendido"||status==="archivado";
+document.getElementById("tenantDeleteStatusNote").textContent=suspended?"Cumplido: el cliente está suspendido.":"Falta: suspendé al cliente antes de poder eliminarlo.";
+document.getElementById("tenantDeleteConfirm").value="";
+document.getElementById("tenantDeleteFinal").checked=false;
+document.getElementById("tenantDeleteError").textContent="";
+document.getElementById("tenantDeleteSubmit").disabled=true;
+document.getElementById("tenantDeleteForm").dataset.companyName=companyName;
+document.getElementById("tenantDeleteForm").dataset.suspended=suspended?"1":"";
+openModal("tenantDeleteModal","tenantDeleteConfirm");}
+function closeTenantDelete(){closeModal("tenantDeleteModal");}
+function refreshTenantDeleteGate(){var form=document.getElementById("tenantDeleteForm");if(!form)return;
+var nameOk=document.getElementById("tenantDeleteConfirm").value.trim()===String(form.dataset.companyName||"").trim();
+var finalOk=document.getElementById("tenantDeleteFinal").checked;
+document.getElementById("tenantDeleteSubmit").disabled=!(nameOk&&finalOk&&form.dataset.suspended);}
+function downloadBackup(payload,tenantId){try{var blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});var url=URL.createObjectURL(blob);var link=document.createElement("a");link.href=url;link.download="respaldo-"+tenantId+".json";document.body.appendChild(link);link.click();document.body.removeChild(link);setTimeout(function(){URL.revokeObjectURL(url);},1000);}catch(e){}}
+function bindTenantDelete(){var form=document.getElementById("tenantDeleteForm");if(!form)return;
+document.getElementById("tenantDeleteConfirm").addEventListener("input",refreshTenantDeleteGate);
+document.getElementById("tenantDeleteFinal").addEventListener("change",refreshTenantDeleteGate);
+form.addEventListener("submit",function(event){event.preventDefault();var tenantId=document.getElementById("tenantDeleteId").value,button=document.getElementById("tenantDeleteSubmit"),errorBox=document.getElementById("tenantDeleteError");errorBox.textContent="";button.disabled=true;button.textContent="Eliminando…";
+postJson("/admin/tenants/"+encodeURIComponent(tenantId)+"/delete",{company_name_confirmacion:document.getElementById("tenantDeleteConfirm").value,confirmacion_final:true})
+.then(function(body){if(body.backup)downloadBackup(body.backup,tenantId);closeTenantDelete();showToast("Cliente eliminado. Se descargó el respaldo.");return loadTenants();})
+.catch(function(error){errorBox.textContent=catalogErrorLabel(error.message);button.disabled=false;})
+.finally(function(){button.textContent="Eliminar definitivamente";});});}
+try{var url=new URL(location.href),requested=url.searchParams.get("view");if(requested&&titles[requested])showView(requested);if(url.searchParams.has("key")){url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}}catch(e){}loadHealth();if(customerAccessV2Enabled){loadCustomerInvitations();bindCatalogForms();bindTenantDelete();loadCatalog();loadTenants();}
 </script></body></html>`);
 }
 

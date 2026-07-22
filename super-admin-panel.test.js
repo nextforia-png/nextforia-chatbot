@@ -120,4 +120,27 @@ assert.match(accessV2Html, /\/admin\/customer-invitations/);
 assert.match(accessV2Html, /No existe registro público/);
 assert.doesNotMatch(accessV2Html, /body:JSON\.stringify\(\{[^}]*setup_url/);
 
+// Catálogo de planes y bots: la sección solo existe con el gate encendido.
+assert.match(accessV2Html, /data-view="catalogs"/);
+assert.match(accessV2Html, /Planes y bots/);
+assert.match(accessV2Html, /id="planEditorModal"/);
+assert.match(accessV2Html, /id="botEditorModal"/);
+assert.match(accessV2Html, /name="precio_setup"/);
+assert.match(accessV2Html, /name="precio_mensual"/);
+assert.match(accessV2Html, /name="beneficios"/);
+assert.match(accessV2Html, /\/admin\/catalogs/);
+
+// Ciclo de vida: suspender y eliminar con las tres salvaguardas visibles.
+assert.match(accessV2Html, /Ciclo de vida de clientes/);
+assert.match(accessV2Html, /id="tenantDeleteModal"/);
+assert.match(accessV2Html, /El cliente debe estar suspendido/);
+assert.match(accessV2Html, /Escribe el nombre exacto de la empresa/);
+assert.match(accessV2Html, /Se descarga un respaldo antes de borrar/);
+assert.match(accessV2Html, /\/admin\/tenants/);
+
+// Sin el gate, nada del catálogo se filtra al panel.
+assert.doesNotMatch(html, /data-view="catalogs"/);
+assert.doesNotMatch(html, /id="planEditorModal"/);
+assert.doesNotMatch(html, /Ciclo de vida de clientes/);
+
 console.log("super-admin-panel.test.js: ok");

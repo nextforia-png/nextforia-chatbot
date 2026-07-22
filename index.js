@@ -26,6 +26,7 @@ const {
   demoAppointmentSnapshot
 } = require("./customer-appointments");
 const renderCustomerPasswordSetup = require("./customer-access");
+const renderCustomerLogin = require("./customer-login");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
   buildCoverageConversationContext,
@@ -185,6 +186,7 @@ const DASHBOARD_ACCESS_MODEL = {
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
+const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL);
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
@@ -3265,6 +3267,18 @@ function signDashboardPayload(payload) {
 }
 
 function createDashboardSession(user) {
+  if (CUSTOMER_ACCESS_V2_ENABLED && user.user_id && user.email && user.tenant_id) {
+    const payloadV2 = Buffer.from(JSON.stringify({
+      v: 2,
+      uid: String(user.user_id),
+      e: normalizeDashboardUsername(user.email),
+      n: normalizeDashboardUsername(user.email),
+      r: cleanDashboardRole(user.role),
+      t: cleanTenantId(user.tenant_id),
+      exp: Date.now() + DASHBOARD_SESSION_TTL_HOURS * 60 * 60 * 1000
+    })).toString("base64url");
+    return payloadV2 + "." + signDashboardPayload(payloadV2);
+  }
   const payload = Buffer.from(JSON.stringify({
     u: user.username,
     n: user.name || user.username,
@@ -3285,6 +3299,23 @@ function readDashboardSession(req) {
   try {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!session.exp || session.exp < Date.now()) return null;
+    if (session.v === 2) {
+      const email = normalizeDashboardUsername(session.e);
+      const tenantId = cleanTenantId(session.t);
+      const userId = String(session.uid || "");
+      if (!CUSTOMER_ACCESS_V2_ENABLED || !userId || !email || !tenantId || !session.r) return null;
+      return {
+        ok: true,
+        session_version: 2,
+        user_id: userId,
+        email,
+        username: email,
+        name: email,
+        role: cleanDashboardRole(session.r),
+        tenant_id: tenantId,
+        method: "session"
+      };
+    }
     return {
       ok: true,
       username: String(session.u || "usuario"),
@@ -5352,7 +5383,8 @@ app.get("/admin/panel", (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
     const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/panel?tab=" + requestedTab });
+    else renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
   if (!canAccessTenant(auth, DEFAULT_TENANT_ID)) {

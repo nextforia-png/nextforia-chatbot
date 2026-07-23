@@ -1,0 +1,54 @@
+// El panel no debe "rebotar" al entrar. El primer pintado del servidor
+// tiene que coincidir con el estado que showTab(INITIAL_TAB) dejaría:
+// mismo título, mismo subtítulo, mismo módulo activo y misma toolbar.
+// Si el servidor pinta "Resumen / Atención" y el JS lo cambia a "Citas",
+// el cliente de Agendamiento ve el salto. Eso es lo que aquí se previene.
+const assert = require("node:assert");
+const renderCustomerPanel = require("./customer-panel");
+
+function renderPanel(tenantContext, initialTab) {
+  let html = "";
+  const res = {
+    setHeader() {}, type() { return res; }, status() { return res; },
+    send(v) { html = v; }, end(v) { if (v) html = v; }
+  };
+  renderCustomerPanel(res, { auth: { name: "QA", role: "admin" }, capabilities: {}, tenantContext, initialTab });
+  return html;
+}
+function pick(html, re) { const m = re.exec(html); return m ? m[1].trim() : null; }
+function activeView(html) { const m = html.match(/class="view active" id="(panel-[a-z]+)"/); return m ? m[1] : null; }
+
+// ── Tenant de Agendamiento: arranca en Citas, sin pasar por Resumen ──
+const agenda = renderPanel({ id: "b", company_name: "Empresa B", plan_id: "scale", assigned_bot_id: "agendamiento" });
+assert.strictEqual(pick(agenda, /id="pageTitle">([^<]*)</), "Citas", "un tenant de Agendamiento debe pintar 'Citas' de una vez");
+assert.strictEqual(pick(agenda, /id="pageSubtitle">([^<]*)</), "Tu agenda llenándose, sin perseguir confirmaciones.");
+assert.strictEqual(activeView(agenda), "panel-appointments", "la sección de citas ya viene activa desde el servidor");
+assert.ok(/<div class="toolbar" style="display:none">/.test(agenda), "la toolbar de periodos no aplica a Citas y no debe parpadear");
+// Nunca debe verse el encabezado de Atención ni un módulo en blanco.
+assert.ok(!agenda.includes('id="pageTitle">Resumen<'), "no debe pintar 'Resumen' primero");
+assert.ok(!/class="view active" id="panel-summary"/.test(agenda), "no debe activar el resumen para un tenant de citas");
+
+// ── Tenant de Atención: arranca en Resumen ──
+const atencion = renderPanel({ id: "a", company_name: "Empresa A", plan_id: "growth", assigned_bot_id: "atencion-cliente" });
+assert.strictEqual(pick(atencion, /id="pageTitle">([^<]*)</), "Resumen");
+assert.strictEqual(pick(atencion, /id="pageSubtitle">([^<]*)</), "Resultados de Atención al cliente · Últimos 7 días");
+assert.strictEqual(activeView(atencion), "panel-summary");
+assert.ok(!/<div class="toolbar" style="display:none">/.test(atencion), "en Resumen la toolbar sí se muestra");
+
+// ── Siempre hay exactamente un módulo activo en el HTML inicial ──
+[agenda, atencion, renderPanel(null)].forEach(function (html) {
+  const count = (html.match(/class="view active"/g) || []).length;
+  assert.strictEqual(count, 1, "debe haber exactamente una vista activa en el primer pintado");
+});
+
+// ── El servidor respeta el tab pedido cuando es válido para el tenant ──
+const planTab = renderPanel({ id: "a", company_name: "Empresa A", plan_id: "growth", assigned_bot_id: "atencion-cliente" }, "plan");
+assert.strictEqual(pick(planTab, /id="pageTitle">([^<]*)</), "Mi plan");
+assert.strictEqual(activeView(planTab), "panel-plan");
+assert.ok(/<div class="toolbar" style="display:none">/.test(planTab), "en Mi plan la toolbar no aplica");
+
+// ── Un tenant de Atención que pide 'appointments' cae a Resumen, no a un módulo que no tiene ──
+const forced = renderPanel({ id: "a", company_name: "Empresa A", plan_id: "growth", assigned_bot_id: "atencion-cliente" }, "appointments");
+assert.strictEqual(activeView(forced), "panel-summary", "no se activa un módulo no asignado ni pidiéndolo por URL");
+
+console.log("customer-panel-no-flicker.test.js OK");

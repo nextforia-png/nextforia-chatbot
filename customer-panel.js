@@ -88,6 +88,18 @@ module.exports = function renderCustomerPanel(res, options) {
   const initialTab = panelContext.v2 && panelContext.appointments && ["summary", "conversations", "retargeting"].includes(requestedInitialTab)
     ? "appointments"
     : (panelContext.v2 && panelContext.support && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
+  // El primer pintado del servidor debe coincidir con lo que showTab(INITIAL_TAB)
+  // dejaría: si no, el header y el módulo saltan al cargar (el "parpadeo").
+  // Estos mapas son un espejo exacto de los del script de cliente (showTab).
+  const summarySubtitle = "Resultados de " + (panelContext.v2 ? panelContext.assignedBotName : "tu bot de atención") + " · Últimos 7 días";
+  const PAGE_TITLES = { summary: "Resumen", conversations: "Conversaciones", appointments: "Citas", plan: "Mi plan", setup: "Configuración de tu Nextfor IA", retargeting: "Seguimientos comerciales", tests: "Pruebas" };
+  const PAGE_SUBTITLES = { summary: summarySubtitle, conversations: "La IA atiende y te deja solo lo que necesita de ti.", appointments: "Tu agenda llenándose, sin perseguir confirmaciones.", plan: "Plan, módulos y consumo", setup: "Tu negocio, tu voz y tus reglas en un solo lugar", retargeting: "Cola segura, aprobaciones, cancelaciones y auditoría", tests: "Herramientas seguras para validar el bot." };
+  const initialTitle = PAGE_TITLES[initialTab] || "Conversaciones";
+  const initialSubtitle = PAGE_SUBTITLES[initialTab] || PAGE_SUBTITLES.conversations;
+  const SECTION_BY_TAB = { summary: "panel-summary", conversations: "panel-inbox", appointments: "panel-appointments", plan: "panel-plan", setup: "panel-setup", retargeting: "panel-retargeting", tests: "panel-tests" };
+  const initialSection = SECTION_BY_TAB[initialTab] || "panel-inbox";
+  const viewClass = function (id) { return "view" + (id === initialSection ? " active" : ""); };
+  const toolbarHidden = ["plan", "appointments", "setup", "retargeting"].includes(initialTab);
   const initialChannel = "all";
   const canRunTests = !!capabilities.run_tests;
   const planNav = "<button class=\"navItem\" id=\"nav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"navIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
@@ -1003,11 +1015,11 @@ ${customerAppointments.styles}
   </aside>
   <main class="main">
     <header class="topbar">
-      <div class="pageTitle"><h2 id="pageTitle">Resumen</h2><p id="pageSubtitle">Resultados del bot de atención · Últimos 7 días</p><div class="omnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div></div>
-      <div class="toolbar"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div><span class="convImpact" id="conversationImpact">0% resuelto por la IA</span><div class="avatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
+      <div class="pageTitle"><h2 id="pageTitle">${escapeHtml(initialTitle)}</h2><p id="pageSubtitle">${escapeHtml(initialSubtitle)}</p><div class="omnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div></div>
+      <div class="toolbar"${toolbarHidden ? ' style="display:none"' : ""}><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div><span class="convImpact" id="conversationImpact">0% resuelto por la IA</span><div class="avatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
     </header>
     <div class="content">
-      <section class="view" id="panel-summary">
+      <section class="${viewClass('panel-summary')}" id="panel-summary">
         <div class="mobilePeriodShell"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div></div>
         <div class="summary">
           <div class="iaBanner"><div class="iaIcon">✧</div><p id="heroLine">Esta semana atendiste a <strong>0 clientes</strong> entre WhatsApp, Instagram y Messenger — tu equipo se ahorró trabajo repetitivo, sin dejar un solo mensaje sin responder.</p></div>
@@ -1037,7 +1049,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-inbox">
+      <section class="${viewClass('panel-inbox')}" id="panel-inbox">
         <div class="inboxShell">
           <section class="column listColumn">
             <div class="convListControls"><div class="searchBox"><span class="searchIcon" aria-hidden="true">⌕</span><input id="conversationSearch" aria-label="Buscar conversaciones" placeholder="Buscar por nombre, teléfono, correo o mensaje" oninput="renderThreads()"></div><div class="mobileOmnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div><div class="filters"><button id="filter-all" type="button" onclick="setConversationFilter('all')">Todas <span>0</span></button><button id="filter-you" type="button" onclick="setConversationFilter('you')">Necesitan de ti <span>0</span></button><button id="filter-resolved" type="button" onclick="setConversationFilter('resolved')">Resueltas <span>0</span></button></div></div>
@@ -1058,11 +1070,11 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-appointments">
+      <section class="${viewClass('panel-appointments')}" id="panel-appointments">
         ${customerAppointments.markup}
       </section>
 
-      <section class="view" id="panel-plan">
+      <section class="${viewClass('panel-plan')}" id="panel-plan">
         <div class="planView">
           <section class="planHero">
             <div>
@@ -1123,7 +1135,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-setup">
+      <section class="${viewClass('panel-setup')}" id="panel-setup">
         <div class="setupView">
           <section class="setupProgressPanel">
             <div class="setupProgressBody">
@@ -1231,7 +1243,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-retargeting">
+      <section class="${viewClass('panel-retargeting')}" id="panel-retargeting">
         <div class="retargetingView">
           <section class="rtgHero">
             <div>
@@ -1275,7 +1287,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-tests">
+      <section class="${viewClass('panel-tests')}" id="panel-tests">
         <div class="testGrid">
           <article class="card testCard"><h3 class="sectionTitle">Buscar producto</h3><p class="muted">Consulta el catálogo visible para clientes.</p><form id="searchTestForm" class="formStack"><input id="testQuery" name="q" maxlength="80" placeholder="Ej. carro control remoto" required><button class="primaryBtn" id="searchTestBtn" type="submit">Probar búsqueda</button></form><div class="resultBox" id="searchTestResult">Aún no se ha ejecutado una búsqueda.</div></article>
           <article class="card testCard"><h3 class="sectionTitle">Consultar pedido</h3><p class="muted">Valida número y nombre sin mostrar datos sensibles.</p><form id="orderTestForm" class="formStack"><input id="orderNumber" maxlength="80" placeholder="Número de pedido" required><input id="customerName" maxlength="120" placeholder="Nombre completo" required><input id="phoneOrEmail" maxlength="160" placeholder="Teléfono o correo opcional"><button class="primaryBtn" id="orderTestBtn" type="submit">Consultar estado</button></form><div class="resultBox" id="orderTestResult">Aún no se ha consultado un pedido.</div></article>

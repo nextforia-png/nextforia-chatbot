@@ -129,7 +129,7 @@ module.exports = function renderClientOnboarding(res, options) {
           <div class="contractGrid" style="margin-top:14px">
             <article class="contractItem"><small>Bot asignado</small><strong>${escapeHtml(botName)}</strong><p>${escapeHtml(botDescription)}</p></article>
           </div>
-          <div class="info" style="margin-top:16px"><strong>Elección directa:</strong><span>Tu selección se guarda inmediatamente en tu empresa. No requiere autorización de Super Admin.</span></div>
+          <div class="info" style="margin-top:16px"><strong>Elección directa:</strong><span>Al guardar, tu selección se aplica directamente a tu empresa. No requiere autorización de Super Admin.</span></div>
           <div class="info" style="margin-top:16px"><strong>Último paso:</strong><span>Al terminar, guardaremos la configuración y te llevaremos al Panel de Control. En tus próximos ingresos abrirá directamente el panel.</span></div>
         </section>
       </form>

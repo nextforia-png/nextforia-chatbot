@@ -90,6 +90,15 @@ function renderSuperAdminPanel(res, options) {
   // Pipeline comercial. Mismo criterio: null hasta que onboarding persista leads.
   //   { kpis:{active,won,demos,conversion}, sources:[{name,paid,leads,won}], rows:[...] }
   const leadsData = options.leads || null;
+  const platformGoals = Array.isArray(options.platformGoals) ? options.platformGoals : [];
+  const customerGoal = platformGoals.find(function (goal) { return goal && goal.id === "customers"; }) || {
+    id: "customers",
+    type: "counter",
+    label: "Clientes",
+    unit: "clientes",
+    target: 340,
+    active: true
+  };
   const currency = (finance && finance.currency) || "COP";
   const registeredClients = (options.registeredClients || []).filter(function (client) {
     return client && client.tenant_id && client.tenant_id !== tenant.id;
@@ -111,7 +120,7 @@ function renderSuperAdminPanel(res, options) {
   const waitingCount = stages.filter(function (stage) { return stage.status === "waiting_meta"; }).length;
   const draftCount = stages.filter(function (stage) { return stage.status === "draft"; }).length;
   const tenantFields = readiness.requiredTenantFields || [];
-  const targetClients = 340;
+  const targetClients = Math.max(1, Number(customerGoal.target) || 340);
   // La tarjeta del sidebar acompaña el camino a la meta. El tono es directo y en
   // segunda persona: el que construye esto es Santiago, no el panel. El panel solo
   // le muestra dónde está parado. Nada de porcentajes vacíos ni felicitaciones
@@ -119,7 +128,7 @@ function renderSuperAdminPanel(res, options) {
   function goalCopy(count) {
     const remaining = Math.max(0, targetClients - count);
     if (count <= 0) return { titular: "Tu primer cliente", frase: "Todo empieza con uno. Ese es el que enseña el camino." };
-    if (count >= targetClients) return { titular: "Meta cumplida", frase: "340 negocios que ya no pierden ventas de noche. Lo lograste." };
+    if (count >= targetClients) return { titular: "Meta cumplida", frase: targetClients + " negocios atendidos por NextforIA. Lo lograste." };
     if (count === 1) return { titular: "Faltan " + remaining, frase: "Ya no estás en cero. Esa era la parte difícil." };
     if (count < targetClients * 0.1) return { titular: "Faltan " + remaining, frase: "Los primeros son los que prueban que funciona." };
     if (count < targetClients * 0.34) return { titular: "Faltan " + remaining, frase: "El camino ya tiene forma. Seguí firme." };
@@ -131,6 +140,14 @@ function renderSuperAdminPanel(res, options) {
   const firstClient = platformAccounts[0] || null;
   const goalPercent = Math.max(1, Math.round(currentClients / targetClients * 100));
   const goalInitial = goalCopy(currentClients);
+  const goalClientState = JSON.stringify({
+    id: "customers",
+    type: "counter",
+    label: customerGoal.label || "Clientes",
+    unit: customerGoal.unit || "clientes",
+    target: targetClients,
+    active: true
+  });
   const statusLabels = { ready: "Listo", draft: "Pendiente", waiting_meta: "Esperando Meta" };
   const statusVariants = { ready: "success", draft: "neutral", waiting_meta: "warning" };
 
@@ -366,17 +383,20 @@ function renderSuperAdminPanel(res, options) {
 .nav-button.active .nav-badge{background:rgba(6,15,34,.28);color:#fff}
 .nav-soon{font-size:8.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:2px 5px}
 .sidebar-bottom{margin-top:auto;display:flex;flex-direction:column;gap:11px;padding-top:14px}
-.goal-card{position:relative;padding:14px 13px 13px 15px;background:linear-gradient(150deg,rgba(0,160,240,.16),rgba(255,255,255,.03));border-radius:var(--radius-lg);border:1px solid rgba(255,255,255,.08);overflow:hidden}
-.goal-card img{position:absolute;right:-16px;bottom:-8px;height:74px;width:auto;opacity:.9;pointer-events:none}
-.goal-body{position:relative;max-width:132px}
-.goal-label{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5);font-weight:700;margin-bottom:6px}
-.goal-value{font-family:var(--font-display);font-weight:800;font-size:20px;letter-spacing:-.03em;color:var(--cyan-300);line-height:1.05}
+.goal-card{position:relative;width:100%;padding:14px 13px 13px 15px;background:linear-gradient(150deg,rgba(0,160,240,.18),rgba(255,255,255,.03));border-radius:var(--radius-lg);border:1px solid rgba(255,255,255,.1);overflow:hidden;color:#fff;text-align:left;font:inherit;cursor:pointer;transition:160ms var(--ease)}
+.goal-card:hover{border-color:rgba(84,199,255,.5);background:linear-gradient(150deg,rgba(0,160,240,.25),rgba(255,255,255,.05));transform:translateY(-1px)}
+.goal-card img{position:absolute;right:-17px;bottom:-9px;height:76px;width:auto;opacity:.9;pointer-events:none}
+.goal-body{position:relative;display:block;max-width:154px}
+.goal-label{display:block;font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:rgba(255,255,255,.5);font-weight:800;margin-bottom:5px}
+.goal-value{display:block;font:800 16px var(--font-display);letter-spacing:-.02em;color:#fff;line-height:1.15}
 .goal-count{display:flex;align-items:baseline;gap:5px;margin-top:7px}
 .goal-count strong{font-family:var(--font-display);font-weight:800;font-size:15px;color:#fff;line-height:1}
 .goal-count span{font-size:10px;color:rgba(255,255,255,.5)}
 .goal-track{height:5px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden;margin-top:8px}
 .goal-track>span{display:block;height:100%;border-radius:inherit;min-width:4px;background:linear-gradient(90deg,#00A0F0,#57C2F3);transition:width .5s var(--ease)}
 .goal-phrase{font-size:10.5px;color:rgba(255,255,255,.62);line-height:1.35;margin:9px 0 0;max-width:118px}
+.goal-edit{display:inline-flex;align-items:center;gap:4px;margin-top:7px;color:var(--cyan-300);font-size:9px;font-weight:800}
+.mobile-goal-shell{display:none}
 .user-card{display:flex;align-items:center;gap:10px;padding:4px 8px}
 .avatar{display:inline-grid;place-items:center;border-radius:50%;background:var(--gradient-cyan);color:#fff;font:800 12px var(--font-display);flex:0 0 auto}
 .avatar.sm{width:32px;height:32px}.avatar.lg{width:50px;height:50px;font-size:15px}
@@ -608,13 +628,29 @@ function renderSuperAdminPanel(res, options) {
 .status-pill.suspendido{background:var(--amber-50);color:#9C650C}
 .status-pill.archivado{background:var(--slate-100);color:var(--slate-600)}
 .status-pill.setup{background:var(--cyan-50);color:var(--cyan-700)}
+.goal-modal-layer{position:fixed;inset:0;z-index:75;display:none;align-items:center;justify-content:center;padding:20px}
+.goal-modal-layer.open{display:flex}
+.goal-modal{position:relative;width:min(460px,100%);background:var(--surface-card);border-radius:var(--radius-xl);box-shadow:var(--shadow-lg);animation:rise .22s var(--ease);overflow:hidden}
+.goal-modal-head{padding:21px 22px 17px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:flex-start;gap:12px}
+.goal-modal-head>div{flex:1}
+.goal-modal-head h2{font:700 17px var(--font-display);color:var(--text-strong);margin:0}
+.goal-modal-head p{font-size:11px;line-height:1.55;color:var(--text-muted);margin:5px 0 0}
+.goal-form{padding:20px 22px 22px;display:grid;gap:15px}
+.goal-field{display:grid;gap:6px}
+.goal-field label{font-size:11px;font-weight:800;color:var(--text-body)}
+.goal-field small{font-size:10px;line-height:1.5;color:var(--text-muted)}
+.goal-field input,.goal-field select{width:100%;height:43px;border:1.5px solid var(--border-default);border-radius:var(--radius-md);padding:0 12px;background:#fff;color:var(--text-strong);font:600 13px var(--font-body);outline:0}
+.goal-field input:focus,.goal-field select:focus{border-color:var(--border-brand);box-shadow:var(--focus-ring)}
+.goal-field select:disabled{background:var(--slate-50);color:var(--text-muted);opacity:1}
+.goal-form-error{min-height:16px;color:#B73535;font-size:10.5px}
+.goal-modal-actions{display:flex;justify-content:flex-end;gap:8px}
 @media(max-width:820px){.catalog-row{grid-template-columns:1fr;gap:8px}.catalog-actions{justify-content:flex-start}.form-grid.three{grid-template-columns:1fr}}
 :focus-visible{outline:0;box-shadow:var(--focus-ring)}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
 @keyframes fade{from{opacity:0}}
 @keyframes drawer{from{opacity:.5;transform:translateX(28px)}}
 @media(max-width:1080px){.grid-4{grid-template-columns:repeat(2,1fr)}.attention{grid-template-columns:repeat(2,1fr)}.bot-grid,.two-col,.source-grid{grid-template-columns:1fr}.top-actions .optional{display:none}}
-@media(max-width:820px){.app{height:auto;min-height:100%;display:block;overflow:visible}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:12px 14px;flex-direction:row;align-items:center;gap:6px;overflow-x:auto}.brand{padding:0 8px 0 0}.brand-role,.sidebar-bottom,.nav-group,.nav-badge{display:none}.brand-lumen{display:block;height:34px;width:auto;margin-left:6px}.nav-button{width:auto;min-width:max-content;height:38px}.workspace{overflow:visible}.topbar{position:sticky;top:62px;z-index:15}.content{overflow:visible}.view{padding:18px}.split-grid,.role-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.app{height:auto;min-height:100%;display:block;overflow:visible}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:12px 14px;flex-direction:row;align-items:center;gap:6px;overflow-x:auto}.brand{padding:0 8px 0 0}.brand-role,.sidebar-bottom,.nav-group,.nav-badge{display:none}.brand-lumen{display:block;height:34px;width:auto;margin-left:6px}.nav-button{width:auto;min-width:max-content;height:38px}.workspace{overflow:visible}.topbar{position:sticky;top:62px;z-index:15}.content{overflow:visible}.view{padding:18px}.mobile-goal-shell{display:block}.mobile-goal-shell .goal-card{min-height:148px;background:linear-gradient(150deg,var(--navy-800),var(--navy-950));box-shadow:var(--shadow)}.mobile-goal-shell .goal-body{max-width:210px}.mobile-goal-shell .goal-value{font-size:31px;color:var(--cyan-300)}.mobile-goal-shell .goal-card img{height:96px;right:-12px}.mobile-goal-shell .goal-phrase{max-width:210px;font-size:12px}.split-grid,.role-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.topbar{align-items:flex-start;flex-wrap:wrap}.top-actions{width:100%}.top-actions .button{flex:1}.top-actions .button.icon-only{flex:0 0 40px}.page-heading h1{font-size:18px}.grid-4,.attention{grid-template-columns:1fr 1fr;gap:10px}.stat-card{padding:14px}.stat-value{font-size:22px}.toolbar{display:block}.filter-chips{margin-top:10px}.steps li{grid-template-columns:auto 1fr}.steps li>.badge{grid-column:2;justify-self:start;margin-bottom:9px}.mini-grid,.drawer-foot,.form-grid{grid-template-columns:1fr}.callout{display:block}.callout>.badge{margin-top:10px}.invite-head{display:none}.invite-row{grid-template-columns:1fr 1fr}.invite-row>div:first-child{grid-column:1/-1}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:0ms!important;transition-duration:0ms!important;scroll-behavior:auto!important}}
 </style></head>
@@ -628,13 +664,14 @@ function renderSuperAdminPanel(res, options) {
 <div class="nav-group">Operación</div>
 <nav aria-label="Operación"><button class="nav-button" data-view="incidents">${icon("inbox", 18)}<span>Bandeja de operación</span><span class="nav-badge" id="incidentNavCount">…</span></button>${customerAccessV2Enabled ? `<button class="nav-button" data-view="catalogs">${icon("layers", 18)}<span>Planes y bots</span></button>` : ""}<button class="nav-button" data-view="billing">${icon("card", 18)}<span>Facturación</span><span class="nav-badge">0</span></button></nav>
 <div class="sidebar-bottom">
-<div class="goal-card"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><div class="goal-body"><div class="goal-label">Camino a ${targetClients}</div><div class="goal-value" id="goalHeadline">${escapeHtml(goalInitial.titular)}</div><div class="goal-count"><strong id="goalCount">${currentClients}</strong><span>de ${targetClients} clientes</span></div><div class="goal-track"><span id="goalBar" style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></div><p class="goal-phrase" id="goalPhrase">${escapeHtml(goalInitial.frase)}</p></div></div>
+<button class="goal-card" type="button" onclick="openGoalEditor()" aria-label="Editar meta de clientes"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><span class="goal-body"><span class="goal-label" id="goalLabel" data-goal-label>Camino a ${targetClients}</span><span class="goal-value" id="goalHeadline" data-goal-headline>${escapeHtml(goalInitial.titular)}</span><span class="goal-count"><strong id="goalCount" data-goal-count>${currentClients}</strong><span id="goalCountText" data-goal-count-text>de ${targetClients} ${escapeHtml(customerGoal.unit || "clientes")}</span></span><span class="goal-track"><span id="goalBar" data-goal-bar style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></span><span class="goal-phrase" id="goalPhrase" data-goal-phrase>${escapeHtml(goalInitial.frase)}</span><span class="goal-edit">${icon("spark", 11)} Editar meta</span></span></button>
 <div class="user-card"><span class="avatar sm">SA</span><div><strong>${escapeHtml(auth.name || auth.username || "Super Admin")}</strong><span>Nextfor IA · interno</span></div></div>
 </div></aside>
 <main class="workspace"><header class="topbar"><div class="page-heading"><h1 id="pageTitle">Resumen</h1><p id="pageSubtitle">La operación completa de Nextfor IA de un vistazo</p></div><div class="top-actions"><button class="button optional" id="customerInviteButton" type="button" onclick="createCustomerInvite()">${customerAccessV2Enabled ? "Crear cliente" : "Crear acceso RAV"}</button><a class="button optional" href="/admin/client-onboarding">Onboarding</a><a class="button optional" href="/admin/panel?tab=summary">Admin RAV</a><button class="button icon-only" type="button" onclick="loadHealth()" aria-label="Actualizar salud" title="Actualizar salud">${icon("refresh", 18)}</button><button class="button icon-only danger" type="button" onclick="logoutSuperAdmin()" aria-label="Cerrar sesión" title="Cerrar sesión">${icon("logout", 18)}</button></div></header>
 <div class="content">
 
 <section class="view active" data-panel="overview"><div class="stack">
+  <div class="mobile-goal-shell"><button class="goal-card" type="button" onclick="openGoalEditor()" aria-label="Editar meta de clientes"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><span class="goal-body"><span class="goal-label" data-goal-label>Camino a ${targetClients}</span><span class="goal-value" data-goal-headline>${escapeHtml(goalInitial.titular)}</span><span class="goal-count"><strong data-goal-count>${currentClients}</strong><span data-goal-count-text>de ${targetClients} ${escapeHtml(customerGoal.unit || "clientes")}</span></span><span class="goal-track"><span data-goal-bar style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></span><span class="goal-phrase" data-goal-phrase>${escapeHtml(goalInitial.frase)}</span><span class="goal-edit">${icon("spark", 11)} Editar meta</span></span></button></div>
   <div class="grid-4" aria-label="Indicadores económicos consolidados">${kpiCards}</div>
   <div><div class="section-title"><h2>Desglose por bot</h2><span>cuánto aporta y cuánto cuesta cada uno</span></div>${botBreakdown}</div>
   ${compareTable}
@@ -685,6 +722,7 @@ ${catalogView}
 ${customerAccessModal}
 ${catalogModals}
 <div class="drawer-layer" id="tenantDrawer" aria-hidden="true"><button class="scrim" type="button" aria-label="Cerrar detalle" onclick="closeTenant()"></button><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="tenantTitle"><div class="drawer-head"><span class="avatar lg">RT</span><div class="drawer-title"><h2 id="tenantTitle">${escapeHtml(tenant.name)}</h2><p>Comercio electronico · Integracion piloto #1</p><div class="drawer-badges"><span class="badge info dot">Piloto Nextfor</span><span class="badge success dot">Meta aprobada</span><span class="badge ${integrationTone} dot">${escapeHtml(integrationStateLabel)}</span></div></div><button class="close-button" id="drawerClose" type="button" onclick="closeTenant()" aria-label="Cerrar">${icon("close", 19)}</button></div><div class="drawer-body"><div class="next-card">${icon("spark", 20)}<div><strong>Siguiente paso</strong><p>${escapeHtml(integration.next_action)}</p></div></div><div class="mini-grid"><div class="mini-card"><span>Integracion</span><strong style="font-size:12px">#${escapeHtml(integration.integration_number)}</strong></div><div class="mini-card"><span>Tenant ID</span><strong style="font-size:12px">${escapeHtml(tenant.id)}</strong></div><div class="mini-card"><span>Numero objetivo</span><strong style="font-size:12px">${escapeHtml(integration.target_display_phone)}</strong></div><div class="mini-card"><span>Estado</span><strong style="font-size:12px">${escapeHtml(integrationStateLabel)}</strong></div></div><section class="drawer-section"><h3>Integraciones</h3><div class="integration"><span>Meta App Review</span><span class="badge success">Aprobada</span></div><div class="integration"><span>WhatsApp Graph API</span><span class="badge neutral" id="drawerMetaApi">Verificando</span></div><div class="integration"><span>Numero real</span><span class="badge ${integrationLive ? "success" : "warning"}">${integrationLive ? "Activo" : "Pendiente"}</span></div><div class="integration"><span>Shopify Storefront</span><span class="badge neutral" id="drawerShopify">Verificando</span></div><div class="integration"><span>Supabase</span><span class="badge neutral" id="drawerSupabase">Verificando</span></div></section><section class="drawer-section"><h3>Prueba de integracion</h3><p id="integrationTestResult" style="font-size:10.5px;line-height:1.6;color:var(--text-muted);margin:0 0 10px">Valida Meta, Shopify, historial, panel e intervencion sin enviar mensajes reales.</p><button class="button" id="integrationTestButton" type="button" onclick="testRavIntegration()">${icon("activity", 15)} Ejecutar prueba segura</button></section><section class="drawer-section"><h3>Operacion permitida</h3><p style="font-size:10.5px;line-height:1.6;color:var(--text-muted);margin:0">La operacion diaria, conversaciones e intervencion humana permanecen exclusivamente en el Panel de Control del comercio.</p></section></div><div class="drawer-foot"><a class="button" href="/admin/client-onboarding">Ver onboarding</a><a class="button primary" href="/admin/panel?tab=summary">Abrir Panel de Control</a></div></aside></div>
+<div class="goal-modal-layer" id="goalModal" aria-hidden="true"><button class="scrim" type="button" aria-label="Cerrar editor de meta" onclick="closeGoalEditor()"></button><section class="goal-modal" role="dialog" aria-modal="true" aria-labelledby="goalEditorTitle"><div class="goal-modal-head"><div><h2 id="goalEditorTitle">Editar meta de Lumen</h2><p>Este cambio se guarda para todo el Super Admin. La estructura permite sumar otras metas tipo contador más adelante.</p></div><button class="close-button" type="button" onclick="closeGoalEditor()" aria-label="Cerrar">${icon("close", 19)}</button></div><form class="goal-form" id="goalEditorForm"><div class="goal-field"><label for="goalTypeInput">Tipo de meta</label><select id="goalTypeInput" disabled><option value="counter">Contador</option></select><small>Clientes es la primera meta. Próximamente se podrán activar otros indicadores.</small></div><div class="goal-field"><label for="goalNameInput">Nombre</label><input id="goalNameInput" maxlength="60" required autocomplete="off"></div><div class="goal-field"><label for="goalTargetInput">Meta</label><input id="goalTargetInput" type="number" min="1" max="1000000000" step="1" inputmode="numeric" required><small>Usa un número entero mayor que cero.</small></div><div class="goal-form-error" id="goalEditorError" role="alert"></div><div class="goal-modal-actions"><button class="button" type="button" onclick="closeGoalEditor()">Cancelar</button><button class="button primary" id="goalSaveButton" type="submit">Guardar meta</button></div></form></section></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
 var customerAccessV2Enabled=${customerAccessV2Enabled ? "true" : "false"},titles={overview:["Resumen","La operación completa de Nextfor IA de un vistazo"],leads:["Leads","Prospectos por vendedor y canal antes de volverse clientes"],clients:["Clientes","Cuentas y tenants administrados por Nextfor IA"],agendamiento:["Agendamiento","Módulo de citas consolidado de toda la flota"],atencion:["Atención al cliente","Módulo de conversaciones consolidado de toda la flota"],incidents:["Bandeja de operación","Incidencias de todos los bots ordenadas por prioridad"],catalogs:["Planes y bots","Lo que se vende, a qué precio y con qué incluido"],billing:["Facturación","Planes y pagos de los clientes de la plataforma"]};
@@ -692,10 +730,31 @@ var currentView="overview",lastFocus=null,toastTimer;
 function showView(name){if(!titles[name])return;currentView=name;document.querySelectorAll(".nav-button").forEach(function(el){var active=el.dataset.view===name;el.classList.toggle("active",active);el.setAttribute("aria-current",active?"page":"false");});document.querySelectorAll(".view").forEach(function(el){el.classList.toggle("active",el.dataset.panel===name);});document.getElementById("pageTitle").textContent=titles[name][0];document.getElementById("pageSubtitle").textContent=titles[name][1];try{history.replaceState(null,"","/admin/super-admin"+(name==="overview"?"":"?view="+encodeURIComponent(name)));}catch(e){}document.querySelector(".content").scrollTop=0;}
 document.querySelectorAll("[data-view]").forEach(function(el){el.addEventListener("click",function(){showView(el.dataset.view);});});document.querySelectorAll("[data-go]").forEach(function(el){el.addEventListener("click",function(){showView(el.dataset.go);});});
 function showToast(message){var el=document.getElementById("toast");el.textContent=message;el.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(function(){el.classList.remove("show");},3200);}
+var platformGoal=${goalClientState},currentClientCount=${currentClients},META_CLIENTES=Math.max(1,Number(platformGoal.target)||${targetClients});
+function setAllGoalText(selector,value){document.querySelectorAll(selector).forEach(function(el){el.textContent=value;});}
+function platformGoalCopy(count,target){var faltan=Math.max(0,target-count);
+if(count<=0)return{titular:"Tu primer cliente",frase:"Todo empieza con uno. Ese es el que enseña el camino."};
+if(count>=target)return{titular:"Meta cumplida",frase:target+" negocios atendidos por NextforIA. Lo lograste."};
+if(count===1)return{titular:"Faltan "+faltan,frase:"Ya no estás en cero. Esa era la parte difícil."};
+if(count<target*0.1)return{titular:"Faltan "+faltan,frase:"Los primeros son los que prueban que funciona."};
+if(count<target*0.34)return{titular:"Faltan "+faltan,frase:"El camino ya tiene forma. Seguí firme."};
+if(count<target*0.67)return{titular:"Faltan "+faltan,frase:"Pasaste el tercio. Ya sabés cómo se hace."};
+if(count<target*0.9)return{titular:"Faltan "+faltan,frase:"Más de la mitad atrás. La meta ya se ve."};
+return{titular:"Faltan "+faltan,frase:"Estás a un empujón. No aflojes ahora."};}
+function refreshGoalCards(){var target=Math.max(1,Number(platformGoal.target)||META_CLIENTES||340),unit=platformGoal.unit||"clientes",copy=platformGoalCopy(currentClientCount,target);
+META_CLIENTES=target;setAllGoalText("[data-goal-label]","Camino a "+target);setAllGoalText("[data-goal-headline]",copy.titular);setAllGoalText("[data-goal-count]",String(currentClientCount));setAllGoalText("[data-goal-count-text]","de "+target+" "+unit);setAllGoalText("[data-goal-phrase]",copy.frase);document.querySelectorAll("[data-goal-bar]").forEach(function(el){el.style.width=Math.max(2,Math.min(100,Math.round(currentClientCount/target*100)))+"%";});
+var pct=document.getElementById("goalPercentValue");if(pct)pct.textContent=Math.round(currentClientCount/target*100)+"%";var pctSub=document.getElementById("goalPercentSub");if(pctSub)pctSub.textContent=currentClientCount+" de "+target+" "+unit;}
+function paintPlatformGoal(goal){if(!goal||goal.id!=="customers")return;platformGoal=goal;refreshGoalCards();}
+function openGoalEditor(){lastFocus=document.activeElement;document.getElementById("goalNameInput").value=platformGoal.label||"Clientes";document.getElementById("goalTargetInput").value=String(platformGoal.target||META_CLIENTES||340);document.getElementById("goalEditorError").textContent="";var layer=document.getElementById("goalModal");layer.classList.add("open");layer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";document.getElementById("goalNameInput").focus();}
+function closeGoalEditor(){var layer=document.getElementById("goalModal");layer.classList.remove("open");layer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)lastFocus.focus();}
+function loadPlatformGoals(){return fetch("/admin/platform-goals",{headers:{accept:"application/json"}}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"goal_load_failed");return body;});}).then(function(body){var goal=(body.goals||[]).find(function(item){return item.id==="customers";});if(goal)paintPlatformGoal(goal);});}
+document.getElementById("goalEditorForm").addEventListener("submit",function(event){event.preventDefault();var target=Number(document.getElementById("goalTargetInput").value),label=document.getElementById("goalNameInput").value.trim(),errorBox=document.getElementById("goalEditorError"),button=document.getElementById("goalSaveButton");errorBox.textContent="";
+if(label.length<2){errorBox.textContent="Escribe un nombre de al menos 2 caracteres.";return;}if(!Number.isSafeInteger(target)||target<1){errorBox.textContent="La meta debe ser un número entero mayor que cero.";return;}
+button.disabled=true;button.textContent="Guardando…";fetch("/admin/platform-goals/customers",{method:"PUT",headers:{"content-type":"application/json","accept":"application/json"},body:JSON.stringify({type:"counter",label:label,unit:"clientes",target:target,active:true})}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"goal_save_failed");return body;});}).then(function(body){paintPlatformGoal(body.goal);closeGoalEditor();showToast("Meta actualizada para todo el Super Admin.");}).catch(function(error){errorBox.textContent=error.message==="invalid_goal_target"?"La meta debe ser un número entero válido.":"No se pudo guardar la meta. Intenta de nuevo.";}).finally(function(){button.disabled=false;button.textContent="Guardar meta";});});
 function openTenant(){lastFocus=document.activeElement;var layer=document.getElementById("tenantDrawer");layer.classList.add("open");layer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";document.getElementById("drawerClose").focus();}
 function closeTenant(){var layer=document.getElementById("tenantDrawer");layer.classList.remove("open");layer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)lastFocus.focus();}
 function testRavIntegration(){var button=document.getElementById("integrationTestButton"),result=document.getElementById("integrationTestResult");if(!button||!result)return;button.disabled=true;button.textContent="Probando...";result.textContent="Validando la integracion sin enviar mensajes reales...";fetch("/admin/integrations/rav/test",{headers:{accept:"application/json"}}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"integration_test_failed");return body;});}).then(function(body){var passed=Object.keys(body.checks||{}).filter(function(key){return body.checks[key]===true;}).length,total=Object.keys(body.checks||{}).length;result.textContent=body.message+" "+passed+" de "+total+" controles correctos.";showToast(body.live_ready?"Integracion RAV lista para prueba real.":"Prueba tecnica completada; numero real pendiente.");}).catch(function(){result.textContent="No se pudo completar la prueba. Revisa la bandeja de operacion.";showToast("La prueba de integracion necesita revision.");}).finally(function(){button.disabled=false;button.textContent="Ejecutar prueba segura";});}
-document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeTenant();if(customerAccessV2Enabled)closeCustomerCreate();}});
+document.addEventListener("keydown",function(event){if(event.key==="Escape"){closeGoalEditor();closeTenant();if(customerAccessV2Enabled)closeCustomerCreate();}});
 function healthKind(value){value=String(value||"");if(value==="ok"||value.indexOf("key_present")===0)return "ok";if(value==="missing_env"||value==="missing_key"||value==="not_configured")return "warn";return "err";}
 function healthLabel(value){var kind=healthKind(value);if(kind==="ok")return value==="ok"?"Operativo":"Configurado";if(kind==="warn")return "No configurado";return "Revisar";}
 function paintHealth(ids,value){ids.forEach(function(id){var el=document.getElementById(id);if(!el)return;el.textContent=healthLabel(value);el.className=el.className.indexOf("badge")>=0?"badge "+(healthKind(value)==="ok"?"success":healthKind(value)==="warn"?"warning":"danger"):"health-value "+healthKind(value);});}
@@ -823,18 +882,13 @@ return{titular:"Faltan "+faltan,frase:"Estás a un empujón. No aflojes ahora."}
    Antes el badge del menú contaba el registro fijo del código y la tarjeta de
    meta contaba los tenants reales, así que la misma pantalla mostraba dos
    números distintos. Ahora todo se pinta desde /admin/tenants. */
-function paintClientCount(count,tenants){var copy=goalCopy(count),headline=document.getElementById("goalHeadline");
-if(headline){headline.textContent=copy.titular;
-document.getElementById("goalCount").textContent=String(count);
-document.getElementById("goalPhrase").textContent=copy.frase;
-document.getElementById("goalBar").style.width=Math.max(2,Math.min(100,Math.round(count/META_CLIENTES*100)))+"%";}
+function paintClientCount(count,tenants){currentClientCount=count;refreshGoalCards();
 var badge=document.getElementById("clientNavCount");if(badge)badge.textContent=String(count);
 var stat=document.getElementById("clientStatValue");if(stat)stat.textContent=String(count);
 var statSub=document.getElementById("clientStatSub");
 if(statSub){var primero=(tenants||[]).slice().sort(function(a,b){return String(a.created_at||"").localeCompare(String(b.created_at||""));})[0];
 statSub.textContent=primero?("Cliente #1 · "+primero.company_name):"Registro comercial vacío";}
-var pct=document.getElementById("goalPercentValue");if(pct)pct.textContent=Math.round(count/META_CLIENTES*100)+"%";
-var pctSub=document.getElementById("goalPercentSub");if(pctSub)pctSub.textContent=count+" de "+META_CLIENTES+" clientes";}
+}
 function loadTenants(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/tenants",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){tenantCache=body.tenants||[];renderTenants();paintClientCount(tenantCache.length,tenantCache);}).catch(function(error){var root=document.getElementById("tenantLifecycleRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
 function setTenantStatus(tenantId,status){var mensajes={activo:"Cliente reactivado. Ya puede entrar a su panel.",suspendido:"Cliente suspendido. Perdió el acceso, los datos quedan intactos.",archivado:"Cliente archivado."};
 return postJson("/admin/tenants/"+encodeURIComponent(tenantId)+"/status",{status:status}).then(function(){showToast(mensajes[status]||"Estado actualizado.");}).catch(function(error){showToast(catalogErrorLabel(error.message));});}
@@ -863,7 +917,7 @@ postJson("/admin/tenants/"+encodeURIComponent(tenantId)+"/delete",{company_name_
 .then(function(body){if(body.backup)downloadBackup(body.backup,tenantId);closeTenantDelete();showToast("Cliente eliminado. Se descargó el respaldo.");return loadTenants();})
 .catch(function(error){errorBox.textContent=catalogErrorLabel(error.message);button.disabled=false;})
 .finally(function(){button.textContent="Eliminar definitivamente";});});}
-try{var url=new URL(location.href),requested=url.searchParams.get("view");if(requested&&titles[requested])showView(requested);if(url.searchParams.has("key")){url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}}catch(e){}loadHealth();if(customerAccessV2Enabled){loadCustomerInvitations();bindCatalogForms();bindTenantDelete();loadCatalog();loadTenants();}
+try{var url=new URL(location.href),requested=url.searchParams.get("view");if(requested&&titles[requested])showView(requested);if(url.searchParams.has("key")){url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}}catch(e){}loadHealth();loadPlatformGoals().catch(function(){});if(customerAccessV2Enabled){loadCustomerInvitations();bindCatalogForms();bindTenantDelete();loadCatalog();loadTenants();}
 </script></body></html>`);
 }
 

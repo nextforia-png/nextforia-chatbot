@@ -41,6 +41,14 @@ const {
   createMemoryEmailSender,
   createResendEmailSender
 } = require("./customer-access-v2");
+const {
+  DEFAULT_PLATFORM_GOALS,
+  PLATFORM_GOAL_RECORD_ID,
+  PLATFORM_GOAL_TOOL,
+  buildPlatformGoalRecord,
+  normalizePlatformGoal,
+  platformGoalsFromTurns
+} = require("./platform-goals");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
   CUSTOMER_SETUP_QUESTIONS,
@@ -3709,6 +3717,40 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
   return record;
 }
 
+function isPlatformGoalTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(PLATFORM_GOAL_TOOL);
+}
+
+async function loadPlatformGoals(requirePersistentRead) {
+  let turns = conversationLogs.filter(isPlatformGoalTurn);
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(PLATFORM_GOAL_RECORD_ID, 100);
+    if (rows) turns = rows.map(normalizeTurnRow);
+    else if (requirePersistentRead) throw new Error("platform_goal_store_unavailable");
+  } else if (requirePersistentRead && process.env.NODE_ENV === "production") {
+    throw new Error("platform_goal_store_unavailable");
+  }
+  return platformGoalsFromTurns(turns);
+}
+
+async function persistPlatformGoal(goalId, input, auth) {
+  const goals = await loadPlatformGoals(true);
+  const current = goals.find(function (goal) { return goal.id === goalId; })
+    || DEFAULT_PLATFORM_GOALS.find(function (goal) { return goal.id === goalId; })
+    || null;
+  const goal = normalizePlatformGoal(
+    Object.assign({}, input || {}, { id: goalId }),
+    current,
+    auth && (auth.username || auth.name) || "super_admin"
+  );
+  const rec = buildPlatformGoalRecord(goal);
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  return goal;
+}
+
 async function retargetingPolicyForTenant(tenantId) {
   if (tenantId !== CUSTOMER_PANEL_BUSINESS.id) return { mode: "disabled" };
   const setup = await loadBotSetup(false);
@@ -5833,7 +5875,7 @@ function escapeAdminHtml(value) {
   });
 }
 
-app.get("/admin/super-admin", (req, res) => {
+app.get("/admin/super-admin", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
     res.redirect("/admin/super-admin/login");
@@ -5846,6 +5888,12 @@ app.get("/admin/super-admin", (req, res) => {
   if (auth.method === "key") {
     setDashboardSessionCookie(req, res, auth);
   }
+  let platformGoals = DEFAULT_PLATFORM_GOALS;
+  try {
+    platformGoals = await loadPlatformGoals(false);
+  } catch (_) {
+    platformGoals = DEFAULT_PLATFORM_GOALS;
+  }
 
   renderSuperAdminPanel(res, {
     auth,
@@ -5853,6 +5901,7 @@ app.get("/admin/super-admin", (req, res) => {
     commercialReadiness: COMMERCIAL_READINESS,
     accessModel: DASHBOARD_ACCESS_MODEL,
     customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
+    platformGoals,
     tenant: CUSTOMER_PANEL_BUSINESS,
     integration: currentRavIntegration(),
     registeredClients: listRegisteredClients(),
@@ -5874,6 +5923,51 @@ app.get("/admin/super-admin", (req, res) => {
     // }
     leads: null
   });
+});
+
+app.get("/admin/platform-goals", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const goals = await loadPlatformGoals(true);
+    res.json({
+      ok: true,
+      goals,
+      persistent_store: SUPABASE_ENABLED ? "supabase" : "memory_test_only"
+    });
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
+  }
+});
+
+app.put("/admin/platform-goals/:goalId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const goalId = String(req.params.goalId || "").trim().toLowerCase();
+  try {
+    const goal = await persistPlatformGoal(goalId, req.body, auth);
+    res.json({ ok: true, goal });
+  } catch (error) {
+    const validationErrors = new Set([
+      "invalid_goal_id",
+      "invalid_goal_type",
+      "invalid_goal_label",
+      "invalid_goal_unit",
+      "invalid_goal_target"
+    ]);
+    if (validationErrors.has(error && error.code)) {
+      res.status(400).json({ ok: false, error: error.code });
+      return;
+    }
+    log("error", "platform_goal_save_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
+  }
 });
 
 app.get("/admin/super-admin/login", (req, res) => {

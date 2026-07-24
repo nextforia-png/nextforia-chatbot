@@ -221,9 +221,27 @@ class SupabaseCatalogStore {
         headers: Object.assign({ Prefer: "return=representation" }, this.headers),
         timeout: 8000
       });
-      const tenant = Array.isArray(response.data) ? response.data[0] : null;
+      let tenant = Array.isArray(response.data) ? response.data[0] : null;
+      if (!tenant) tenant = await this.getTenant(tenantId);
       if (!tenant || tenant.id !== tenantId) throw new CatalogError("tenant_not_found", 404);
       return tenant;
+    } catch (error) {
+      throw mapStoreError((error && error.response && error.response.data) || error);
+    }
+  }
+
+  async getTenant(tenantId) {
+    try {
+      const response = await this.axios.get(this.url + "/rest/v1/tenants", {
+        params: {
+          select: "id,company_name,plan_id,assigned_bot_id,status,updated_at",
+          id: "eq." + tenantId,
+          limit: 1
+        },
+        headers: this.headers,
+        timeout: 8000
+      });
+      return Array.isArray(response.data) ? response.data[0] || null : null;
     } catch (error) {
       throw mapStoreError((error && error.response && error.response.data) || error);
     }

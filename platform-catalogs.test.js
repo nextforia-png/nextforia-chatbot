@@ -4,6 +4,7 @@ const assert = require("assert");
 const {
   CatalogError,
   InMemoryCatalogStore,
+  SupabaseCatalogStore,
   contractedPriceSnapshot,
   createCatalogService,
   formatCop,
@@ -112,6 +113,27 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
 
   const selected = await service.selectTenantPlan("panaderia-espiga", "scale", "atencion-cliente", { username: "duenio@espiga.example" });
   assert.strictEqual(selected.plan_id, "scale", "el cliente puede elegir directamente un plan activo");
+
+  // Supabase puede devolver 204/sin representación aunque el PATCH haya aplicado.
+  // En ese caso la app lee el tenant actualizado antes de bloquear el onboarding.
+  const calls = [];
+  const supabaseStore = new SupabaseCatalogStore({
+    url: "https://supabase.example",
+    headers: { apikey: "service-role-test" },
+    axiosClient: {
+      patch: async function (url, body, options) {
+        calls.push({ method: "patch", url: url, body: body, params: options.params });
+        return { data: null };
+      },
+      get: async function (url, options) {
+        calls.push({ method: "get", url: url, params: options.params });
+        return { data: [{ id: "panaderia-espiga", company_name: "Panadería La Espiga", plan_id: "scale", assigned_bot_id: "atencion-cliente", status: "activo", updated_at: "2026-07-24T00:00:00.000Z" }] };
+      }
+    }
+  });
+  const persistedSelection = await supabaseStore.selectTenantPlan("panaderia-espiga", "scale", "duenio@espiga.example");
+  assert.strictEqual(persistedSelection.plan_id, "scale");
+  assert.deepStrictEqual(calls.map(function (call) { return call.method; }), ["patch", "get"]);
 
   await service.upsertPlan({ id: "solo-agenda", nombre: "Solo agenda", bot_id: "agendamiento" }, actor);
   await assert.rejects(function () {

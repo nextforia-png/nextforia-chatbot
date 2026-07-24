@@ -45,6 +45,11 @@ por Super Admin. El cliente puede elegir directamente un plan compatible con su 
 la selección actualiza el `plan_id` de su propio tenant; no requiere autorización de
 Super Admin. Los precios no se escriben ni se editan en el Customer Panel.
 
+Corrección v101: si Supabase aplica el cambio de plan pero no devuelve la fila
+actualizada en el `PATCH`, el Customer Panel lee inmediatamente el tenant por `id`
+antes de reportar error. Así el botón "Terminar configuración" no queda bloqueado
+por una respuesta sin representación.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

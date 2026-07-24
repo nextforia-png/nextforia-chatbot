@@ -3735,9 +3735,8 @@ async function loadPlatformGoals(requirePersistentRead) {
 }
 
 async function persistPlatformGoal(goalId, input, auth) {
-  const memoryGoal = conversationLogs.slice().reverse().filter(isPlatformGoalTurn)
-    .map(function (turn) { return platformGoalsFromTurns([turn]).find(function (goal) { return goal.id === goalId; }); })
-    .find(Boolean);
+  const memoryGoal = platformGoalsFromTurns(conversationLogs.filter(isPlatformGoalTurn))
+    .find(function (goal) { return goal.id === goalId; });
   const current = memoryGoal
     || DEFAULT_PLATFORM_GOALS.find(function (goal) { return goal.id === goalId; })
     || null;

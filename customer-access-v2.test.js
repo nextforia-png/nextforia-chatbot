@@ -7,6 +7,7 @@ const {
   SupabaseCustomerAccessStore,
   createCustomerAccessService,
   createMemoryEmailSender,
+  createResendEmailSender,
   hashInvitationToken
 } = require("./customer-access-v2");
 
@@ -29,6 +30,7 @@ async function expectError(promise, code, status) {
     store: store,
     emailSender: email,
     baseUrl: "https://customer-panel.staging.example",
+    fallbackBaseUrls: ["https://customer-panel-staging.onrender.com", "https://customer-panel.staging.example"],
     inviteTtlHours: 24,
     now: function () { return new Date(clock); }
   });
@@ -46,6 +48,9 @@ async function expectError(promise, code, status) {
   assert.strictEqual(email.outbox.length, 1);
   assert.strictEqual(email.outbox[0].to, "admin@empresa.example");
   assert(email.outbox[0].setup_url.startsWith("https://customer-panel.staging.example/admin/setup/" + created.tenant.id + "?invite="));
+  assert.strictEqual(email.outbox[0].fallback_setup_urls.length, 1);
+  assert(email.outbox[0].fallback_setup_urls[0].startsWith("https://customer-panel-staging.onrender.com/admin/setup/" + created.tenant.id + "?invite="));
+  assert.strictEqual(new URL(email.outbox[0].fallback_setup_urls[0]).searchParams.get("invite"), new URL(email.outbox[0].setup_url).searchParams.get("invite"));
   assert.strictEqual("setup_url" in created, false, "API response must not expose the invitation URL");
   assert.strictEqual("token" in created.invitation, false, "API response must not expose the invitation token");
   const token = new URL(email.outbox[0].setup_url).searchParams.get("invite");
@@ -148,6 +153,28 @@ async function expectError(promise, code, status) {
   });
   await expectError(failedService.createInvitation({ company_name: "Empresa E", admin_email: "e@empresa.example", plan_id: "growth", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" }), "email_delivery_failed", 502);
   assert.strictEqual(failedStore.invitations[0].delivery_status, "failed");
+
+  let resendPayload;
+  const resendSender = createResendEmailSender({
+    apiKey: "resend-key",
+    from: "Nextfor IA <access@example.com>",
+    axiosClient: {
+      post: async function (url, payload) {
+        assert.strictEqual(url, "https://api.resend.com/emails");
+        resendPayload = payload;
+        return { data: { id: "resend-message-1" } };
+      }
+    }
+  });
+  await resendSender.sendInvitation({
+    to: "admin@empresa.example",
+    company_name: "Empresa F",
+    setup_url: "https://staging.nextforia.com/admin/setup/tenant-f?invite=token",
+    fallback_setup_urls: ["https://nextforia-staging.onrender.com/admin/setup/tenant-f?invite=token"],
+    expires_at: "2026-07-22T12:00:00.000Z"
+  });
+  assert(resendPayload.text.includes("https://nextforia-staging.onrender.com/admin/setup/tenant-f?invite=token"));
+  assert(resendPayload.html.includes("https://nextforia-staging.onrender.com/admin/setup/tenant-f?invite=token"));
 
   console.log("customer-access-v2.test.js: ok");
 })().catch(function (error) {

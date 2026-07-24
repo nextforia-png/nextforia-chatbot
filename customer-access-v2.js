@@ -56,6 +56,25 @@ function hashInvitationToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
 
+function normalizeHttpsOrigin(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash) return "";
+    return url.origin;
+  } catch (_) {
+    return "";
+  }
+}
+
+function uniqueInvitationOrigins(primary, fallbacks) {
+  const seen = new Set();
+  return [primary].concat(Array.isArray(fallbacks) ? fallbacks : []).map(normalizeHttpsOrigin).filter(function (origin) {
+    if (!origin || seen.has(origin)) return false;
+    seen.add(origin);
+    return true;
+  });
+}
+
 function hashPassword(password, salt) {
   return crypto.scryptSync(String(password || ""), salt, 64).toString("base64url");
 }
@@ -416,13 +435,22 @@ function createResendEmailSender(options) {
   const axiosClient = options.axiosClient;
   return {
     async sendInvitation(message) {
+      const fallbackUrls = Array.isArray(message.fallback_setup_urls) ? message.fallback_setup_urls : [];
+      const fallbackText = fallbackUrls.length
+        ? "\n\nSi el enlace principal esta bloqueado por una red publica o corporativa, usa este enlace alterno:\n" + fallbackUrls.join("\n")
+        : "";
+      const fallbackHtml = fallbackUrls.length
+        ? "<p>Si el enlace principal esta bloqueado por una red publica o corporativa, usa este enlace alterno:</p><ul>" + fallbackUrls.map(function (url) {
+          return "<li><a href=\"" + escapeHtml(url) + "\">" + escapeHtml(url) + "</a></li>";
+        }).join("") + "</ul>"
+        : "";
       const response = await axiosClient.post("https://api.resend.com/emails", {
         from: from,
         to: [message.to],
         reply_to: replyTo || undefined,
         subject: "Crea tu acceso a Nextfor IA",
-        text: "Hola. " + message.company_name + " fue creado en Nextfor IA. Define tu contraseña usando este enlace privado (vence el " + message.expires_at + "): " + message.setup_url,
-        html: "<p>Hola.</p><p><strong>" + escapeHtml(message.company_name) + "</strong> fue creado en Nextfor IA.</p><p><a href=\"" + escapeHtml(message.setup_url) + "\">Crear mi contraseña</a></p><p>Este enlace es privado, de un solo uso y vence el " + escapeHtml(message.expires_at) + ".</p>"
+        text: "Hola. " + message.company_name + " fue creado en Nextfor IA. Define tu contraseña usando este enlace privado (vence el " + message.expires_at + "): " + message.setup_url + fallbackText,
+        html: "<p>Hola.</p><p><strong>" + escapeHtml(message.company_name) + "</strong> fue creado en Nextfor IA.</p><p><a href=\"" + escapeHtml(message.setup_url) + "\">Crear mi contraseña</a></p>" + fallbackHtml + "<p>Este enlace es privado, de un solo uso y vence el " + escapeHtml(message.expires_at) + ".</p>"
       }, {
         headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
         timeout: 8000
@@ -452,7 +480,9 @@ function createMemoryEmailSender() {
 function createCustomerAccessService(options) {
   const store = options.store;
   const emailSender = options.emailSender;
-  const baseUrl = String(options.baseUrl || "").replace(/\/$/, "");
+  const invitationOrigins = uniqueInvitationOrigins(options.baseUrl, options.fallbackBaseUrls);
+  const baseUrl = invitationOrigins[0] || "";
+  const fallbackBaseUrls = invitationOrigins.slice(1);
   const ttlHours = Math.max(1, Math.min(168, Number(options.inviteTtlHours) || 24));
   const now = typeof options.now === "function" ? options.now : function () { return new Date(); };
   if (store && typeof store.setNow === "function") store.setNow(now);
@@ -492,9 +522,11 @@ function createCustomerAccessService(options) {
       } catch (error) {
         throw mapStoreError(error);
       }
-      const setupUrl = baseUrl + "/admin/setup/" + encodeURIComponent(created.tenant_id) + "?invite=" + encodeURIComponent(token);
+      const setupPath = "/admin/setup/" + encodeURIComponent(created.tenant_id) + "?invite=" + encodeURIComponent(token);
+      const setupUrl = baseUrl + setupPath;
+      const fallbackSetupUrls = fallbackBaseUrls.map(function (origin) { return origin + setupPath; });
       try {
-        const delivery = await emailSender.sendInvitation({ to: clean.admin_email, company_name: clean.company_name, setup_url: setupUrl, expires_at: expiresAt });
+        const delivery = await emailSender.sendInvitation({ to: clean.admin_email, company_name: clean.company_name, setup_url: setupUrl, fallback_setup_urls: fallbackSetupUrls, expires_at: expiresAt });
         const updated = await store.updateDelivery({ invitation_id: created.id, delivery_status: "sent", provider_message_id: delivery && delivery.id || null });
         return {
           tenant: { id: created.tenant_id, company_name: clean.company_name, plan_id: clean.plan_id, assigned_bot_id: clean.assigned_bot_id, status: created.tenant_status || "setup" },

@@ -140,6 +140,16 @@ function configuredHttpsOrigin(value, fallback, allowedHostnames) {
   }
 }
 
+function configuredHttpsOrigins(value) {
+  return String(value || "").split(",").map(function (entry) {
+    return configuredHttpsOrigin(entry.trim());
+  }).filter(Boolean);
+}
+
+function isSameOriginRequestFromAny(req, configuredOrigins) {
+  return configuredOrigins.some(function (origin) { return isSameOriginRequest(req, origin); });
+}
+
 const app = express();
 app.disable("x-powered-by");
 // Every deployed environment (Production and Staging) runs behind Cloudflare + Render.
@@ -220,6 +230,8 @@ const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24, 1, 168);
 const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
+const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
+const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL, CUSTOMER_PANEL_FALLBACK_BASE_URLS).filter(Boolean);
 const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
@@ -381,7 +393,7 @@ app.use("/admin", function protectAdminStateChanges(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   const auth = dashboardAuth(req);
   if (auth.ok && auth.method === "key") return next();
-  if (!isSameOriginRequest(req, PUBLIC_BASE_URL)) {
+  if (!isSameOriginRequestFromAny(req, ADMIN_ALLOWED_BASE_URLS)) {
     res.status(403).json({ ok: false, error: "invalid_request_origin" });
     return;
   }
@@ -482,6 +494,7 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
       store: customerAccessStore,
       emailSender: customerAccessEmailSender,
       baseUrl: CUSTOMER_PANEL_BASE_URL,
+      fallbackBaseUrls: CUSTOMER_PANEL_FALLBACK_BASE_URLS,
       inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
     })
   : null;

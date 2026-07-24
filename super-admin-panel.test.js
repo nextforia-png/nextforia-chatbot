@@ -49,6 +49,8 @@ assert.match(html, /data-view="atencion"/);
 assert.match(html, /Bandeja de operación/);
 assert.match(html, /\/admin\/assets\/lumen\.png/);
 assert.match(html, /class="goal-card"/);
+assert.match(html, /mobile-goal-shell/);
+assert.match(html, /data-goal-label/);
 assert.match(html, /Editar meta de Lumen/);
 assert.match(html, /\/admin\/platform-goals\/customers/);
 assert.match(html, /id="goalTargetInput"/);

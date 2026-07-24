@@ -315,6 +315,7 @@ function renderSuperAdminPanel(res, options) {
 .goal-track span{display:block;height:100%;min-width:3px;background:var(--gradient-cyan);border-radius:inherit}
 .goal-phrase{display:block;font-size:9.5px;line-height:1.35;color:rgba(255,255,255,.56);margin:7px 26px 0 0}
 .goal-edit{display:inline-flex;align-items:center;gap:4px;margin-top:7px;color:var(--cyan-300);font-size:9px;font-weight:800}
+.mobile-goal-shell{display:none}
 .user-card{display:flex;align-items:center;gap:10px;padding:4px 8px}
 .avatar{display:inline-grid;place-items:center;border-radius:50%;background:var(--gradient-cyan);color:#fff;font:800 12px var(--font-display);flex:0 0 auto}
 .avatar.sm{width:32px;height:32px}.avatar.lg{width:50px;height:50px;font-size:15px}
@@ -525,7 +526,7 @@ function renderSuperAdminPanel(res, options) {
 @keyframes fade{from{opacity:0}}
 @keyframes drawer{from{opacity:.5;transform:translateX(28px)}}
 @media(max-width:1080px){.grid-4{grid-template-columns:repeat(2,1fr)}.attention{grid-template-columns:repeat(2,1fr)}.bot-grid,.two-col,.source-grid{grid-template-columns:1fr}.top-actions .optional{display:none}}
-@media(max-width:820px){.app{height:auto;min-height:100%;display:block;overflow:visible}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:12px 14px;flex-direction:row;align-items:center;gap:6px;overflow-x:auto}.brand{padding:0 8px 0 0}.brand-role,.sidebar-bottom,.nav-group,.nav-badge{display:none}.brand-lumen{display:block;height:34px;width:auto;margin-left:6px}.nav-button{width:auto;min-width:max-content;height:38px}.workspace{overflow:visible}.topbar{position:sticky;top:62px;z-index:15}.content{overflow:visible}.view{padding:18px}.split-grid,.role-grid{grid-template-columns:1fr}}
+@media(max-width:820px){.app{height:auto;min-height:100%;display:block;overflow:visible}.sidebar{width:100%;height:auto;position:sticky;top:0;z-index:20;padding:12px 14px;flex-direction:row;align-items:center;gap:6px;overflow-x:auto}.brand{padding:0 8px 0 0}.brand-role,.sidebar-bottom,.nav-group,.nav-badge{display:none}.brand-lumen{display:block;height:34px;width:auto;margin-left:6px}.nav-button{width:auto;min-width:max-content;height:38px}.workspace{overflow:visible}.topbar{position:sticky;top:62px;z-index:15}.content{overflow:visible}.view{padding:18px}.mobile-goal-shell{display:block}.mobile-goal-shell .goal-card{min-height:148px;background:linear-gradient(150deg,var(--navy-800),var(--navy-950));box-shadow:var(--shadow)}.mobile-goal-shell .goal-body{max-width:210px}.mobile-goal-shell .goal-value{font-size:31px;color:var(--cyan-300)}.mobile-goal-shell .goal-card img{height:96px;right:-12px}.mobile-goal-shell .goal-phrase{max-width:210px;font-size:12px}.split-grid,.role-grid{grid-template-columns:1fr}}
 @media(max-width:560px){.topbar{align-items:flex-start;flex-wrap:wrap}.top-actions{width:100%}.top-actions .button{flex:1}.top-actions .button.icon-only{flex:0 0 40px}.page-heading h1{font-size:18px}.grid-4,.attention{grid-template-columns:1fr 1fr;gap:10px}.stat-card{padding:14px}.stat-value{font-size:22px}.toolbar{display:block}.filter-chips{margin-top:10px}.steps li{grid-template-columns:auto 1fr}.steps li>.badge{grid-column:2;justify-self:start;margin-bottom:9px}.mini-grid,.drawer-foot{grid-template-columns:1fr}.callout{display:block}.callout>.badge{margin-top:10px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:0ms!important;transition-duration:0ms!important;scroll-behavior:auto!important}}
 </style></head>
@@ -539,13 +540,14 @@ function renderSuperAdminPanel(res, options) {
 <div class="nav-group">Operación</div>
 <nav aria-label="Operación"><button class="nav-button" data-view="incidents">${icon("inbox", 18)}<span>Bandeja de operación</span><span class="nav-badge" id="incidentNavCount">…</span></button><button class="nav-button" data-view="billing">${icon("card", 18)}<span>Facturación</span><span class="nav-badge">0</span></button></nav>
 <div class="sidebar-bottom">
-<button class="goal-card" type="button" onclick="openGoalEditor()" aria-label="Editar meta de clientes"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><span class="goal-body"><span class="goal-label" id="goalLabel">Camino a ${targetClients}</span><span class="goal-value" id="goalHeadline">${escapeHtml(goalInitial.headline)}</span><span class="goal-count"><strong id="goalCount">${currentClients}</strong><span id="goalCountText">de ${targetClients} ${escapeHtml(customerGoal.unit || "clientes")}</span></span><span class="goal-track"><span id="goalBar" style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></span><span class="goal-phrase" id="goalPhrase">${escapeHtml(goalInitial.phrase)}</span><span class="goal-edit">${icon("spark", 11)} Editar meta</span></span></button>
+<button class="goal-card" type="button" onclick="openGoalEditor()" aria-label="Editar meta de clientes"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><span class="goal-body"><span class="goal-label" id="goalLabel" data-goal-label>Camino a ${targetClients}</span><span class="goal-value" id="goalHeadline" data-goal-headline>${escapeHtml(goalInitial.headline)}</span><span class="goal-count"><strong id="goalCount" data-goal-count>${currentClients}</strong><span id="goalCountText" data-goal-count-text>de ${targetClients} ${escapeHtml(customerGoal.unit || "clientes")}</span></span><span class="goal-track"><span id="goalBar" data-goal-bar style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></span><span class="goal-phrase" id="goalPhrase" data-goal-phrase>${escapeHtml(goalInitial.phrase)}</span><span class="goal-edit">${icon("spark", 11)} Editar meta</span></span></button>
 <div class="user-card"><span class="avatar sm">SA</span><div><strong>${escapeHtml(auth.name || auth.username || "Super Admin")}</strong><span>Nextfor IA · interno</span></div></div>
 </div></aside>
 <main class="workspace"><header class="topbar"><div class="page-heading"><h1 id="pageTitle">Resumen</h1><p id="pageSubtitle">La operación completa de Nextfor IA de un vistazo</p></div><div class="top-actions"><button class="button optional" id="customerInviteButton" type="button" onclick="createCustomerInvite()">Crear acceso RAV</button><a class="button optional" href="/admin/client-onboarding">Onboarding</a><a class="button optional" href="/admin/panel?tab=summary">Admin RAV</a><button class="button icon-only" type="button" onclick="loadHealth()" aria-label="Actualizar salud" title="Actualizar salud">${icon("refresh", 18)}</button><button class="button icon-only danger" type="button" onclick="logoutSuperAdmin()" aria-label="Cerrar sesión" title="Cerrar sesión">${icon("logout", 18)}</button></div></header>
 <div class="content">
 
 <section class="view active" data-panel="overview"><div class="stack">
+  <div class="mobile-goal-shell"><button class="goal-card" type="button" onclick="openGoalEditor()" aria-label="Editar meta de clientes"><img src="/admin/assets/lumen.png" alt="" aria-hidden="true"><span class="goal-body"><span class="goal-label" data-goal-label>Camino a ${targetClients}</span><span class="goal-value" data-goal-headline>${escapeHtml(goalInitial.headline)}</span><span class="goal-count"><strong data-goal-count>${currentClients}</strong><span data-goal-count-text>de ${targetClients} ${escapeHtml(customerGoal.unit || "clientes")}</span></span><span class="goal-track"><span data-goal-bar style="width:${Math.max(2, Math.min(100, Math.round(currentClients / targetClients * 100)))}%"></span></span><span class="goal-phrase" data-goal-phrase>${escapeHtml(goalInitial.phrase)}</span><span class="goal-edit">${icon("spark", 11)} Editar meta</span></span></button></div>
   <div class="grid-4" aria-label="Indicadores económicos consolidados">${kpiCards}</div>
   <div><div class="section-title"><h2>Desglose por bot</h2><span>cuánto aporta y cuánto cuesta cada uno</span></div>${botBreakdown}</div>
   ${compareTable}
@@ -610,15 +612,18 @@ if(count<target*.34)return{headline:"Faltan "+remaining,phrase:"El camino ya tie
 if(count<target*.67)return{headline:"Faltan "+remaining,phrase:"Pasaste el tercio. Ya sabés cómo se hace."};
 if(count<target*.9)return{headline:"Faltan "+remaining,phrase:"Más de la mitad atrás. La meta ya se ve."};
 return{headline:"Faltan "+remaining,phrase:"Estás a un empujón. No aflojes ahora."};}
-function paintPlatformGoal(goal){if(!goal||goal.id!=="customers")return;platformGoal=goal;var target=Math.max(1,Number(goal.target)||340),copy=platformGoalCopy(currentClientCount,target),unit=goal.unit||"clientes";
-document.getElementById("goalLabel").textContent="Camino a "+target;
-document.getElementById("goalHeadline").textContent=copy.headline;
-document.getElementById("goalCountText").textContent="de "+target+" "+unit;
-document.getElementById("goalBar").style.width=Math.max(2,Math.min(100,Math.round(currentClientCount/target*100)))+"%";
-document.getElementById("goalPhrase").textContent=copy.phrase;
-document.getElementById("goalStatLabel").textContent=(goal.label||"Clientes")+" · meta";
+function setAllGoalText(selector,text){document.querySelectorAll(selector).forEach(function(el){el.textContent=text;});}
+function refreshGoalCards(){var target=Math.max(1,Number(platformGoal.target)||340),copy=platformGoalCopy(currentClientCount,target),unit=platformGoal.unit||"clientes";
+setAllGoalText("[data-goal-label]","Camino a "+target);
+setAllGoalText("[data-goal-headline]",copy.headline);
+setAllGoalText("[data-goal-count]",String(currentClientCount));
+setAllGoalText("[data-goal-count-text]","de "+target+" "+unit);
+setAllGoalText("[data-goal-phrase]",copy.phrase);
+document.querySelectorAll("[data-goal-bar]").forEach(function(el){el.style.width=Math.max(2,Math.min(100,Math.round(currentClientCount/target*100)))+"%";});
+document.getElementById("goalStatLabel").textContent=(platformGoal.label||"Clientes")+" · meta";
 document.getElementById("goalPercentValue").textContent=Math.round(currentClientCount/target*100)+"%";
 document.getElementById("goalPercentSub").textContent=currentClientCount+" de "+target+" "+unit;}
+function paintPlatformGoal(goal){if(!goal||goal.id!=="customers")return;platformGoal=goal;refreshGoalCards();}
 function openGoalEditor(){lastFocus=document.activeElement;document.getElementById("goalNameInput").value=platformGoal.label||"Clientes";document.getElementById("goalTargetInput").value=String(platformGoal.target||340);document.getElementById("goalEditorError").textContent="";var layer=document.getElementById("goalModal");layer.classList.add("open");layer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";document.getElementById("goalNameInput").focus();}
 function closeGoalEditor(){var layer=document.getElementById("goalModal");layer.classList.remove("open");layer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)lastFocus.focus();}
 function loadPlatformGoals(){return fetch("/admin/platform-goals",{headers:{accept:"application/json"}}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"goal_load_failed");return body;});}).then(function(body){var goal=(body.goals||[]).find(function(item){return item.id==="customers";});if(goal)paintPlatformGoal(goal);});}

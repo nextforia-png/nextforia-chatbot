@@ -146,7 +146,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v93-super-admin-no-cache";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v94-platform-goal-save-always";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3418,9 +3418,9 @@ async function loadPlatformGoals(requirePersistentRead) {
   let turns = conversationLogs.filter(isPlatformGoalTurn);
   if (SUPABASE_ENABLED) {
     const rows = await supabaseFetchUserRecent(PLATFORM_GOAL_RECORD_ID, 100);
-    if (rows) turns = rows.map(normalizeTurnRow);
-    else if (requirePersistentRead) throw new Error("platform_goal_store_unavailable");
-  } else if (requirePersistentRead && process.env.NODE_ENV === "production") {
+    if (rows) turns = rows.map(normalizeTurnRow).concat(turns);
+    else if (requirePersistentRead && !turns.length) throw new Error("platform_goal_store_unavailable");
+  } else if (requirePersistentRead && process.env.NODE_ENV === "production" && !turns.length) {
     throw new Error("platform_goal_store_unavailable");
   }
   return platformGoalsFromTurns(turns);
@@ -3438,9 +3438,13 @@ async function persistPlatformGoal(goalId, input, auth) {
     auth && (auth.username || auth.name) || "super_admin"
   );
   const rec = buildPlatformGoalRecord(goal);
-  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
+  if (SUPABASE_ENABLED) {
+    supabaseInsertStrict(rec).catch(function (error) {
+      log("error", "platform_goal_async_persist_failed", { error: String(error && error.message || "").slice(0, 160) });
+    });
+  }
   return goal;
 }
 

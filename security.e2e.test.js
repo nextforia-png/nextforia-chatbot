@@ -48,7 +48,10 @@ function waitForServer(child, port) {
       PORT: String(port),
       NODE_ENV: "test",
       DASHBOARD_KEY: dashboardKey,
-      DASHBOARD_USERS: JSON.stringify([{ username: "platform-owner", email: "owner@example.test", password: "test-platform-password", name: "Platform Owner", role: "super_admin" }]),
+      DASHBOARD_USERS: JSON.stringify([
+        { username: "platform-owner", email: "owner@example.test", password: "test-platform-password", name: "Platform Owner", role: "super_admin" },
+        { username: "client-admin", email: "admin@example.test", password: "test-client-password", name: "Client Admin", role: "admin", tenant_id: "rav-toys" }
+      ]),
       DASHBOARD_SESSION_SECRET: "security-e2e-session-secret-value",
       META_APP_SECRET: appSecret,
       VERIFY_TOKEN: "security-e2e-verify-token",
@@ -98,6 +101,40 @@ function waitForServer(child, port) {
     assert.strictEqual(response.status, 200, "super admin email login should succeed");
     const emailLogin = await response.json();
     assert.strictEqual(emailLogin.user.role, "super_admin");
+    const superAdminCookie = (response.headers.get("set-cookie") || "").split(";")[0];
+
+    response = await fetch(base + "/admin/platform-goals", {
+      headers: { cookie: superAdminCookie }
+    });
+    assert.strictEqual(response.status, 200, "super admin should read platform goals");
+    let goalsBody = await response.json();
+    assert.strictEqual(goalsBody.goals[0].target, 340);
+
+    response = await fetch(base + "/admin/platform-goals/customers", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ label: "Clientes", unit: "clientes", target: 480 })
+    });
+    assert.strictEqual(response.status, 200, "super admin should update platform goals");
+    goalsBody = await response.json();
+    assert.strictEqual(goalsBody.goal.target, 480);
+
+    response = await fetch(base + "/admin/platform-goals/customers", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ label: "Clientes", unit: "clientes", target: 0 })
+    });
+    assert.strictEqual(response.status, 400, "invalid targets should be rejected");
+
+    response = await fetch(base + "/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ username: "admin@example.test", password: "test-client-password" })
+    });
+    assert.strictEqual(response.status, 200);
+    const adminCookie = (response.headers.get("set-cookie") || "").split(";")[0];
+    response = await fetch(base + "/admin/platform-goals", { headers: { cookie: adminCookie } });
+    assert.strictEqual(response.status, 401, "client admin must not read platform goals");
 
     const webhookBody = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
     response = await fetch(base + "/webhook", {

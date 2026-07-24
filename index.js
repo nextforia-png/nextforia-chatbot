@@ -20,6 +20,14 @@ const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
 const renderSuperAdminPanel = require("./super-admin-panel");
 const renderSuperAdminLogin = require("./super-admin-login");
+const {
+  DEFAULT_PLATFORM_GOALS,
+  PLATFORM_GOAL_RECORD_ID,
+  PLATFORM_GOAL_TOOL,
+  buildPlatformGoalRecord,
+  normalizePlatformGoal,
+  platformGoalsFromTurns
+} = require("./platform-goals");
 const renderAppointmentPanel = require("./appointment-panel");
 const {
   customerAppointmentSnapshot,
@@ -138,7 +146,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v88-instagram-webhook-parser";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v89-platform-goals";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -662,8 +670,13 @@ function isCustomerMemoryTurn(turn) {
   return tools.includes(CUSTOMER_MEMORY_TOOL);
 }
 
+function isPlatformGoalTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(PLATFORM_GOAL_TOOL);
+}
+
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn) || isPlatformGoalTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -3401,6 +3414,35 @@ async function persistDashboardCustomerUser(input) {
   return user;
 }
 
+async function loadPlatformGoals(requirePersistentRead) {
+  let turns = conversationLogs.filter(isPlatformGoalTurn);
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(PLATFORM_GOAL_RECORD_ID, 100);
+    if (rows) turns = rows.map(normalizeTurnRow);
+    else if (requirePersistentRead) throw new Error("platform_goal_store_unavailable");
+  } else if (requirePersistentRead && process.env.NODE_ENV === "production") {
+    throw new Error("platform_goal_store_unavailable");
+  }
+  return platformGoalsFromTurns(turns);
+}
+
+async function persistPlatformGoal(goalId, input, auth) {
+  const goals = await loadPlatformGoals(true);
+  const current = goals.find(function (goal) { return goal.id === goalId; })
+    || DEFAULT_PLATFORM_GOALS.find(function (goal) { return goal.id === goalId; })
+    || null;
+  const goal = normalizePlatformGoal(
+    Object.assign({}, input || {}, { id: goalId }),
+    current,
+    auth && (auth.username || auth.name) || "super_admin"
+  );
+  const rec = buildPlatformGoalRecord(goal);
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  return goal;
+}
+
 function parseBotSetupTurn(turn) {
   if (!isBotSetupTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[BotSetup\]\s*/, "");
@@ -4478,6 +4520,51 @@ app.get("/admin/access-model", (req, res) => {
   });
 });
 
+app.get("/admin/platform-goals", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const goals = await loadPlatformGoals(true);
+    res.json({
+      ok: true,
+      goals,
+      persistent_store: SUPABASE_ENABLED ? "supabase" : "memory_test_only"
+    });
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
+  }
+});
+
+app.put("/admin/platform-goals/:goalId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const goalId = String(req.params.goalId || "").trim().toLowerCase();
+  try {
+    const goal = await persistPlatformGoal(goalId, req.body, auth);
+    res.json({ ok: true, goal });
+  } catch (error) {
+    const validationErrors = new Set([
+      "invalid_goal_id",
+      "invalid_goal_type",
+      "invalid_goal_label",
+      "invalid_goal_unit",
+      "invalid_goal_target"
+    ]);
+    if (validationErrors.has(error && error.code)) {
+      res.status(400).json({ ok: false, error: error.code });
+      return;
+    }
+    log("error", "platform_goal_save_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
+  }
+});
+
 function releaseAdminConversation(req, res) {
   if (!adminAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -5248,7 +5335,7 @@ function escapeAdminHtml(value) {
   });
 }
 
-app.get("/admin/super-admin", (req, res) => {
+app.get("/admin/super-admin", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
     res.redirect("/admin/super-admin/login");
@@ -5262,6 +5349,10 @@ app.get("/admin/super-admin", (req, res) => {
     setDashboardSessionCookie(req, res, auth);
   }
 
+  let platformGoals = DEFAULT_PLATFORM_GOALS;
+  try {
+    platformGoals = await loadPlatformGoals(false);
+  } catch (_) {}
   renderSuperAdminPanel(res, {
     auth,
     botVersion: BOT_VERSION,
@@ -5269,6 +5360,7 @@ app.get("/admin/super-admin", (req, res) => {
     accessModel: DASHBOARD_ACCESS_MODEL,
     tenant: CUSTOMER_PANEL_BUSINESS,
     registeredClients: listRegisteredClients(),
+    platformGoals,
     // Contrato de datos del diseño aprobado del Super Admin.
     // Se mantienen en null a propósito: el panel renderiza estados vacíos
     // honestos en vez de cifras de ejemplo. Al conectar la fuente real basta

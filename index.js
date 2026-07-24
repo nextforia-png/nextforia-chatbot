@@ -43,6 +43,7 @@ const {
 } = require("./customer-access-v2");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
+  CUSTOMER_SETUP_QUESTIONS,
   buildCoverageConversationContext,
   cloneDefaults: defaultClientOnboarding,
   createOnboardingRecord
@@ -147,6 +148,11 @@ function configuredHttpsOrigins(value) {
 }
 
 function isSameOriginRequestFromAny(req, configuredOrigins) {
+  // Local/test environments may intentionally omit a public base URL. Preserve
+  // the original same-host validation in that case instead of rejecting every
+  // state-changing admin request.
+  if (!configuredOrigins.length) return isSameOriginRequest(req, "");
+  if (process.env.NODE_ENV === "test" && isSameOriginRequest(req, "")) return true;
   return configuredOrigins.some(function (origin) { return isSameOriginRequest(req, origin); });
 }
 
@@ -167,7 +173,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v98-nextfor-integration-1";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v99-staging-customer-setup";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -470,7 +476,31 @@ if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_USERS) {
   try {
     const fixtures = JSON.parse(process.env.CUSTOMER_ACCESS_TEST_USERS);
     if (!Array.isArray(fixtures)) throw new Error("fixtures_must_be_array");
-    fixtures.forEach(function (fixture) { customerAccessStore.seedActiveUser(fixture); });
+    fixtures.forEach(function (fixture) {
+      customerAccessStore.seedActiveUser(fixture);
+      // Existing test customers represent returning users unless a fixture
+      // explicitly asks to exercise first-login setup.
+      if (fixture.setup_completed === false) return;
+      const answers = defaultClientOnboarding();
+      const email = String(fixture.email || "").trim().toLowerCase();
+      answers.business.brand_name = String(fixture.company_name || fixture.tenant_id || "Empresa");
+      answers.business.contact_email = email;
+      answers.business.contact_phone = "+57 300 000 0000";
+      answers.meta.whatsapp_number = "+57 300 000 0000";
+      answers.operations.business_hours = "Lunes a viernes, 9:00 a.m. a 6:00 p.m.";
+      answers.operations.services_products = "Productos y servicios de prueba";
+      answers.operations.frequent_questions = "Preguntas frecuentes de prueba";
+      answers.operations.important_policies = "Políticas de prueba";
+      answers.operations.bot_instructions = "Responder con claridad y escalar cuando corresponda.";
+      answers.team.admin_email = email;
+      answers.team.human_support_contact = email;
+      const record = createOnboardingRecord(answers, {
+        tenant_id: fixture.tenant_id,
+        status: "completed",
+        updated_by: email
+      });
+      clientOnboardingCacheByTenant.set(cleanTenantId(fixture.tenant_id), { loaded_at: Date.now(), record });
+    });
   } catch (_) {
     throw new Error("CUSTOMER_ACCESS_TEST_USERS must be a valid fixture array");
   }
@@ -3612,7 +3642,12 @@ function parseClientOnboardingTurn(turn, tenantId) {
   const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    if (parsed.version !== 1 || parsed.tenant_id !== (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) || !parsed.answers) return null;
+    if (![1, 2].includes(parsed.version) || parsed.tenant_id !== (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) || !parsed.answers) return null;
+    if (parsed.version === 1) {
+      parsed.setup_completed = false;
+      parsed.setup_completed_at = null;
+      parsed.last_updated_at = parsed.updated_at || null;
+    }
     return parsed;
   } catch (_) {
     return null;
@@ -3646,10 +3681,12 @@ async function loadClientOnboarding(force, tenantId) {
 
 async function persistClientOnboarding(answers, status, auth, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const previous = await loadClientOnboarding(false, tenantId);
   const record = createOnboardingRecord(answers, {
     tenant_id: tenantId,
-    status: status === "submitted" ? "submitted" : "draft",
-    updated_by: auth && (auth.name || auth.username)
+    status: ["submitted", "completed"].includes(status) ? status : "draft",
+    updated_by: auth && (auth.name || auth.username),
+    previous
   });
   const rec = {
     ts: record.updated_at,
@@ -5094,10 +5131,30 @@ app.get("/admin/client-onboarding", async (req, res) => {
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
   const tenantId = customerTenantForAuth(auth);
   const record = await loadClientOnboarding(false, tenantId);
+  if (auth.version === 2 && record.setup_completed && req.query.edit !== "1") {
+    res.redirect("/admin/panel?tab=summary");
+    return;
+  }
+  let catalogs = { plans: [], bots: [] };
+  if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
+    try { catalogs = await catalogService.activeCatalogs(); }
+    catch (_) {}
+  }
+  const business = customerBusinessForAuth(auth);
+  const plan = (catalogs.plans || []).find(function (item) { return item.id === business.plan_id; }) || null;
+  const bot = (catalogs.bots || []).find(function (item) { return item.id === business.assigned_bot_id; }) || null;
+  const displayRecord = JSON.parse(JSON.stringify(record));
+  displayRecord.answers = displayRecord.answers || defaultClientOnboarding();
+  if (!displayRecord.answers.business.brand_name) displayRecord.answers.business.brand_name = business.name;
+  if (!displayRecord.answers.team.admin_email) displayRecord.answers.team.admin_email = auth.email || auth.username;
+  if (!displayRecord.answers.business.contact_email) displayRecord.answers.business.contact_email = auth.email || auth.username;
   renderClientOnboarding(res, {
-    tenant: customerBusinessForAuth(auth),
-    record,
+    tenant: business,
+    record: displayRecord,
     actor: auth.name || auth.username,
+    adminEmail: auth.email || auth.username,
+    plan,
+    bot,
     demo: false,
     apiPath: "/admin/client-onboarding/data"
   });
@@ -5110,7 +5167,12 @@ app.get("/admin/client-onboarding/data", async (req, res) => {
   }
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
-  res.json({ ok: true, tenant: customerBusinessForAuth(auth), onboarding: await loadClientOnboarding(false, tenantId) });
+  res.json({
+    ok: true,
+    tenant: customerBusinessForAuth(auth),
+    onboarding: await loadClientOnboarding(false, tenantId),
+    questionnaire: { version: 1, questions: CUSTOMER_SETUP_QUESTIONS }
+  });
 });
 
 app.put("/admin/client-onboarding/data", async (req, res) => {
@@ -5121,25 +5183,27 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
   try {
     const auth = dashboardAuth(req);
     const tenantId = customerTenantForAuth(auth);
-    const requestedStatus = req.body && req.body.status === "submitted" ? "submitted" : "draft";
+    const requestedStatus = req.body && ["submitted", "completed"].includes(req.body.status) ? req.body.status : "draft";
     const candidate = createOnboardingRecord(req.body && req.body.answers, {
       tenant_id: tenantId,
       status: requestedStatus,
       updated_by: auth.name || auth.username
     });
-    const confirmations = candidate.answers.confirmations || {};
-    const confirmationsReady = confirmations.owns_information && confirmations.accepts_guided_setup && confirmations.understands_meta_dependency;
-    if (requestedStatus === "submitted" && (candidate.completion < 75 || !confirmationsReady)) {
+    if (requestedStatus === "completed" && candidate.completion < 100) {
       res.status(422).json({
         ok: false,
-        error: "onboarding_incomplete",
+        error: "setup_incomplete",
         completion: candidate.completion,
-        message: "Completa al menos el 75% y las confirmaciones antes de enviar la información para revisión."
+        message: "Completa la información requerida antes de terminar la configuración."
       });
       return;
     }
     const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
-    res.json({ ok: true, onboarding: record });
+    res.json({
+      ok: true,
+      onboarding: record,
+      redirect: record.setup_completed ? "/admin/panel?tab=summary" : null
+    });
   } catch (error) {
     console.error("client onboarding save error:", error.message);
     res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
@@ -5845,7 +5909,7 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
   }, appointmentRegistry.snapshot(DERCO_TENANT_ID)));
 });
 
-app.get("/admin/panel", (req, res) => {
+app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
     const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
@@ -5861,6 +5925,21 @@ app.get("/admin/panel", (req, res) => {
   if (auth.method === "key") {
     setDashboardSessionCookie(req, res, auth);
   }
+  let customerSetupCompleted = false;
+  if (auth.version === 2) {
+    try {
+      const onboarding = await loadClientOnboarding(false, panelTenantId);
+      if (!onboarding.setup_completed) {
+        res.redirect("/admin/client-onboarding");
+        return;
+      }
+      customerSetupCompleted = true;
+    } catch (error) {
+      console.error("customer setup gate error:", error.message);
+      res.status(503).send("No pudimos comprobar la configuración de tu empresa. Intenta nuevamente.");
+      return;
+    }
+  }
   const capabilities = customerPanelCapabilities(auth.role);
   let initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
@@ -5871,6 +5950,7 @@ app.get("/admin/panel", (req, res) => {
     capabilities,
     initialTab,
     tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
+    customerSetupCompleted,
     botVersion: BOT_VERSION
   });
 });

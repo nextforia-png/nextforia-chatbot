@@ -27,6 +27,7 @@ function customerPanelContext(options) {
       planName: "Growth",
       assignedBotId: "duo",
       assignedBotName: "Atención al cliente + Agendamiento",
+      customerSetupCompleted: false,
       support: true,
       appointments: true,
       referralCode: "RAVTOYS"
@@ -47,6 +48,7 @@ function customerPanelContext(options) {
     planName: planNames[planId] || planId || "Asignado",
     assignedBotId,
     assignedBotName: botNames[assignedBotId] || assignedBotId || "Bot asignado",
+    customerSetupCompleted: !!options.customerSetupCompleted,
     support: assignedBotId === "atencion-cliente" || assignedBotId === "commerce",
     appointments: assignedBotId === "agendamiento",
     referralCode
@@ -262,6 +264,7 @@ button{cursor:pointer}
 .iaBanner p{font-size:20px;line-height:1.35;color:var(--navy-900);font-weight:500}
 .iaBanner strong{font-weight:900}
 .setupReminder{grid-column:1/-1;border:1px solid #BEE6FB;background:linear-gradient(135deg,#F3FBFF,#E8F7FF);border-radius:20px;padding:18px 22px;display:grid;grid-template-columns:auto minmax(0,1fr) minmax(180px,240px) auto;align-items:center;gap:18px;box-shadow:0 10px 28px rgba(18,168,244,.08)}
+.setupReminder[hidden]{display:none}
 .setupReminderIcon{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;display:grid;place-items:center;box-shadow:0 10px 22px rgba(18,168,244,.22)}
 .setupReminderIcon svg{width:22px;height:22px}
 .setupReminder h3{font-size:16px;font-weight:950;color:var(--navy-900)}
@@ -1023,7 +1026,7 @@ ${customerAppointments.styles}
         <div class="mobilePeriodShell"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div></div>
         <div class="summary">
           <div class="iaBanner"><div class="iaIcon">✧</div><p id="heroLine">Esta semana atendiste a <strong>0 clientes</strong> entre WhatsApp, Instagram y Messenger — tu equipo se ahorró trabajo repetitivo, sin dejar un solo mensaje sin responder.</p></div>
-          <section class="setupReminder" id="setupHomeCard">
+          <section class="setupReminder" id="setupHomeCard"${panelContext.customerSetupCompleted ? " hidden" : ""}>
             <span class="setupReminderIcon">${PANEL_ICONS.settings}</span>
             <div><h3 id="setupHomeTitle">Termina de configurar tu Nextfor IA</h3><p id="setupHomeCopy">Completa la información de tu negocio para que el bot responda con tu voz, políticas y objetivos.</p></div>
             <div class="setupReminderProgress"><span>Progreso</span><strong id="setupHomeProgress">0%</strong><div class="setupReminderTrack"><span id="setupHomeProgressBar"></span></div></div>

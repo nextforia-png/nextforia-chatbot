@@ -46,18 +46,22 @@ const DEFAULT_ONBOARDING = Object.freeze({
     countries_served: "Colombia",
     foreign_number_location_check: true,
     business_hours: "",
+    services_products: "",
     support_hours: "",
     payments: "",
     shipping: "",
     warranties: "",
+    important_policies: "",
     frequent_questions: "",
-    handoff_cases: ""
+    handoff_cases: "",
+    bot_instructions: ""
   },
   team: {
     admin_name: "",
     admin_email: "",
     agents: "",
     notification_phone: "",
+    human_support_contact: "",
     pilot_start: ""
   },
   confirmations: {
@@ -66,6 +70,23 @@ const DEFAULT_ONBOARDING = Object.freeze({
     understands_meta_dependency: false
   }
 });
+
+// Stable, versioned question contract for the first-login setup. Super Admin can
+// later persist and manage these same IDs (label/order/active) without changing
+// the answer paths already stored for each tenant.
+const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
+  { id: "company_name", path: "business.brand_name", section: "business", order: 10, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?" },
+  { id: "administrator_email", path: "team.admin_email", section: "business", order: 20, active: true, required: true, type: "email_readonly", label: "Correo del administrador" },
+  { id: "contact_email", path: "business.contact_email", section: "business", order: 30, active: true, required: true, type: "email", label: "Correo de contacto" },
+  { id: "phone", path: "business.contact_phone", section: "business", order: 40, active: true, required: true, type: "tel", label: "Teléfono" },
+  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 50, active: true, required: true, type: "tel", label: "WhatsApp" },
+  { id: "business_hours", path: "operations.business_hours", section: "business", order: 60, active: true, required: true, type: "textarea", label: "Horarios de atención" },
+  { id: "services_products", path: "operations.services_products", section: "offering", order: 70, active: true, required: true, type: "textarea", label: "Servicios o productos" },
+  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
+  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Políticas importantes" },
+  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 100, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
+  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 110, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" }
+]);
 
 function cloneDefaults() {
   return JSON.parse(JSON.stringify(DEFAULT_ONBOARDING));
@@ -136,18 +157,22 @@ function normalizeOnboarding(input) {
       countries_served: text(operations.countries_served, 1200),
       foreign_number_location_check: operations.foreign_number_location_check !== false,
       business_hours: text(operations.business_hours, 1200),
+      services_products: text(operations.services_products, 5000),
       support_hours: text(operations.support_hours, 1200),
       payments: text(operations.payments, 2500),
       shipping: text(operations.shipping, 2500),
       warranties: text(operations.warranties, 2500),
+      important_policies: text(operations.important_policies, 5000),
       frequent_questions: text(operations.frequent_questions, 4000),
-      handoff_cases: text(operations.handoff_cases, 3000)
+      handoff_cases: text(operations.handoff_cases, 3000),
+      bot_instructions: text(operations.bot_instructions, 5000)
     },
     team: {
       admin_name: text(team.admin_name, 120),
       admin_email: text(team.admin_email, 180).toLowerCase(),
       agents: text(team.agents, 1500),
       notification_phone: text(team.notification_phone, 40),
+      human_support_contact: text(team.human_support_contact, 1000),
       pilot_start: text(team.pilot_start, 20)
     },
     confirmations: {
@@ -162,65 +187,47 @@ function getPath(source, path) {
   return path.split(".").reduce(function (value, key) { return value && value[key]; }, source);
 }
 
-const REQUIRED_PATHS = [
-  "business.brand_name",
-  "business.legal_name",
-  "business.tax_id",
-  "business.contact_name",
-  "business.contact_email",
-  "business.contact_phone",
-  "business.website",
-  "business.privacy_policy_url",
-  "meta.business_portfolio_ready",
-  "meta.admin_available",
-  "meta.whatsapp_number",
-  "meta.number_status",
-  "commerce.platform",
-  "commerce.store_url",
-  "commerce.catalog_ready",
-  "operations.business_hours",
-  "operations.primary_country",
-  "operations.countries_served",
-  "operations.support_hours",
-  "operations.payments",
-  "operations.shipping",
-  "operations.warranties",
-  "operations.frequent_questions",
-  "operations.handoff_cases",
-  "team.admin_name",
-  "team.admin_email",
-  "team.notification_phone",
-  "confirmations.owns_information",
-  "confirmations.accepts_guided_setup",
-  "confirmations.understands_meta_dependency"
-];
+const REQUIRED_PATHS = CUSTOMER_SETUP_QUESTIONS
+  .filter(function (question) { return question.active && question.required; })
+  .sort(function (a, b) { return a.order - b.order; })
+  .map(function (question) { return question.path; });
 
 function onboardingCompletion(input) {
   const answers = normalizeOnboarding(input);
-  const requiredPaths = REQUIRED_PATHS.concat(answers.commerce.platform === "other" ? ["commerce.other_platform"] : []);
-  const complete = requiredPaths.filter(function (path) {
+  const complete = REQUIRED_PATHS.filter(function (path) {
     const value = getPath(answers, path);
     return value !== "" && value !== "unknown" && value !== false && value != null;
   }).length;
-  return Math.round(complete / requiredPaths.length * 100);
+  return Math.round(complete / REQUIRED_PATHS.length * 100);
 }
 
 function createOnboardingRecord(input, meta) {
+  meta = meta || {};
   const answers = normalizeOnboarding(input);
   const now = new Date().toISOString();
+  const status = choice(meta.status, ["draft", "submitted", "completed", "in_review", "ready"], "draft");
+  const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};
+  const setupCompleted = previous.setup_completed === true || status === "completed";
+  const setupCompletedAt = setupCompleted
+    ? (previous.setup_completed_at || meta.setup_completed_at || now)
+    : null;
   return {
-    version: 1,
-    tenant_id: text(meta && meta.tenant_id, 80),
-    status: choice(meta && meta.status, ["draft", "submitted", "in_review", "ready"], "draft"),
+    version: 2,
+    questionnaire_version: 1,
+    tenant_id: text(meta.tenant_id, 80),
+    status,
     completion: onboardingCompletion(answers),
+    setup_completed: setupCompleted,
+    setup_completed_at: setupCompletedAt,
+    last_updated_at: now,
     answers,
     updated_at: now,
-    updated_by: text(meta && meta.updated_by, 120)
+    updated_by: text(meta.updated_by, 120)
   };
 }
 
 function buildCoverageConversationContext(record) {
-  if (!record || !["submitted", "in_review", "ready"].includes(record.status) || !record.answers) return "";
+  if (!record || !["submitted", "completed", "in_review", "ready"].includes(record.status) || !record.answers) return "";
   const operations = record.answers.operations || {};
   const primaryCountry = text(operations.primary_country, 120);
   const countriesServed = text(operations.countries_served, 1200);
@@ -231,6 +238,7 @@ function buildCoverageConversationContext(record) {
 }
 
 module.exports = {
+  CUSTOMER_SETUP_QUESTIONS,
   DEFAULT_ONBOARDING,
   REQUIRED_PATHS,
   buildCoverageConversationContext,

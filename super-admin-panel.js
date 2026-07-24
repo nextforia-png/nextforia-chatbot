@@ -63,6 +63,37 @@ function emptyBlock(iconName, title, body) {
   return '<div class="empty"><div class="empty-icon">' + icon(iconName, 23) + '</div><h2>' + escapeHtml(title) + '</h2><p>' + escapeHtml(body) + '</p></div>';
 }
 
+function getPath(source, path) {
+  return String(path || "").split(".").reduce(function (value, key) {
+    return value && value[key];
+  }, source);
+}
+
+function displayValue(value, fallback) {
+  const clean = String(value == null ? "" : value).trim();
+  return clean || fallback || "Pendiente";
+}
+
+function setupStatusLabel(record) {
+  if (!record) return "Sin iniciar";
+  if (record.setup_completed || record.status === "completed" || record.status === "ready") return "Completado";
+  if (record.status === "submitted" || record.status === "in_review") return "En revisión";
+  return "En progreso";
+}
+
+function setupStatusVariant(record) {
+  if (!record) return "neutral";
+  if (record.setup_completed || record.status === "completed" || record.status === "ready") return "success";
+  if (record.status === "submitted" || record.status === "in_review") return "warning";
+  return "info";
+}
+
+function setupField(label, value, wide) {
+  const clean = displayValue(value);
+  const empty = clean === "Pendiente";
+  return '<div class="setup-item' + (wide ? ' wide' : '') + '"><span>' + escapeHtml(label) + '</span><strong class="' + (empty ? 'empty-value' : '') + '">' + escapeHtml(clean) + '</strong></div>';
+}
+
 function renderSuperAdminPanel(res, options) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.setHeader("Pragma", "no-cache");
@@ -113,6 +144,25 @@ function renderSuperAdminPanel(res, options) {
   const currentClients = registeredClients.length;
   const firstClient = registeredClients.find(function (client) { return client.customer_number === 1; }) || registeredClients[0] || null;
   const goalPercent = Math.max(1, Math.round(currentClients / targetClients * 100));
+  const rawCustomerSetup = options.customerSetup && options.customerSetup.answers ? options.customerSetup : null;
+  const customerSetup = rawCustomerSetup && (rawCustomerSetup.updated_at || rawCustomerSetup.last_updated_at || rawCustomerSetup.setup_completed_at || rawCustomerSetup.setup_completed) ? rawCustomerSetup : null;
+  const setupAnswers = rawCustomerSetup ? rawCustomerSetup.answers : {};
+  const setupCompletion = rawCustomerSetup && isFinite(Number(rawCustomerSetup.completion)) ? Math.max(0, Math.min(100, Math.round(Number(rawCustomerSetup.completion)))) : 0;
+  const setupUpdatedAt = customerSetup && (customerSetup.last_updated_at || customerSetup.updated_at || customerSetup.setup_completed_at);
+  const setupUpdatedDate = setupUpdatedAt ? new Date(setupUpdatedAt) : null;
+  const setupUpdated = setupUpdatedDate && !isNaN(setupUpdatedDate.getTime()) ? setupUpdatedDate.toISOString().slice(0, 10) : "Sin actualizar";
+  const setupFields = [
+    ["Empresa", getPath(setupAnswers, "business.brand_name") || tenant.name],
+    ["Correo administrador", getPath(setupAnswers, "team.admin_email")],
+    ["Correo de contacto", getPath(setupAnswers, "business.contact_email")],
+    ["Teléfono", getPath(setupAnswers, "business.contact_phone")],
+    ["WhatsApp", getPath(setupAnswers, "meta.whatsapp_number")],
+    ["Horario", getPath(setupAnswers, "operations.business_hours"), true],
+    ["Servicios o productos", getPath(setupAnswers, "operations.services_products"), true],
+    ["Preguntas frecuentes", getPath(setupAnswers, "operations.frequent_questions"), true],
+    ["Políticas de la empresa", getPath(setupAnswers, "operations.important_policies"), true],
+    ["Soporte humano", getPath(setupAnswers, "team.human_support_contact"), true]
+  ].map(function (field) { return setupField(field[0], field[1], field[2]); }).join("");
   function goalCopy(count) {
     const remaining = Math.max(0, targetClients - count);
     if (count <= 0) return { headline: "Tu primer cliente", phrase: "Todo empieza con uno. Ese es el que enseña el camino." };
@@ -506,6 +556,15 @@ function renderSuperAdminPanel(res, options) {
 .mini-card strong{display:block;font:700 14px var(--font-display);color:var(--text-strong);margin-top:4px}
 .drawer-section{padding:15px;border:1px solid var(--border-subtle);border-radius:14px}
 .drawer-section h3{font:700 12px var(--font-display);color:var(--text-strong);margin:0 0 11px}
+.setup-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px}
+.setup-head h3{margin:0}
+.setup-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.setup-list{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.setup-item{min-width:0;padding:10px;border-radius:11px;background:var(--slate-50);border:1px solid var(--slate-100)}
+.setup-item.wide{grid-column:1/-1}
+.setup-item span{display:block;font-size:9.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--text-subtle);margin-bottom:5px}
+.setup-item strong{display:block;white-space:pre-wrap;font:700 11.5px/1.55 var(--font-body);color:var(--text-body)}
+.setup-item strong.empty-value{color:var(--text-subtle);font-style:italic}
 .integration{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-top:1px solid var(--slate-100);font-size:11px}
 .integration:first-of-type{border-top:0}
 .drawer-foot{padding:16px 20px;border-top:1px solid var(--border-subtle);display:grid;grid-template-columns:1fr 1fr;gap:9px}
@@ -596,7 +655,7 @@ function renderSuperAdminPanel(res, options) {
 </div></section>
 
 </div></main></div>
-<div class="drawer-layer" id="tenantDrawer" aria-hidden="true"><button class="scrim" type="button" aria-label="Cerrar detalle" onclick="closeTenant()"></button><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="tenantTitle"><div class="drawer-head"><span class="avatar lg">RT</span><div class="drawer-title"><h2 id="tenantTitle">${escapeHtml(tenant.name)}</h2><p>Comercio electrónico · Entorno legado</p><div class="drawer-badges"><span class="badge neutral dot">Legado operativo</span><span class="badge warning dot">Meta pendiente</span></div></div><button class="close-button" id="drawerClose" type="button" onclick="closeTenant()" aria-label="Cerrar">${icon("close", 19)}</button></div><div class="drawer-body"><div class="next-card">${icon("spark", 20)}<div><strong>Siguiente paso</strong><p>Completar la revisión de Meta sin incluir este entorno en el registro comercial.</p></div></div><div class="mini-grid"><div class="mini-card"><span>Tenant ID</span><strong style="font-size:12px">${escapeHtml(tenant.id)}</strong></div><div class="mini-card"><span>Etapas listas</span><strong>${readyCount}/${stages.length}</strong></div><div class="mini-card"><span>Rol operativo</span><strong style="font-size:12px">Admin</strong></div><div class="mini-card"><span>Estado</span><strong style="font-size:12px">Legado activo</strong></div></div><section class="drawer-section"><h3>Integraciones</h3><div class="integration"><span>WhatsApp Cloud API</span><span class="badge warning">Revisión Meta</span></div><div class="integration"><span>Shopify Storefront</span><span class="badge neutral" id="drawerShopify">Verificando</span></div><div class="integration"><span>Supabase</span><span class="badge neutral" id="drawerSupabase">Verificando</span></div></section><section class="drawer-section"><h3>Operación permitida</h3><p style="font-size:10.5px;line-height:1.6;color:var(--text-muted);margin:0">La operación diaria, conversaciones e intervención humana permanecen exclusivamente en el panel Admin del comercio.</p></section></div><div class="drawer-foot"><a class="button" href="/admin/client-onboarding">Ver onboarding</a><a class="button primary" href="/admin/panel?tab=summary">Abrir Admin RAV</a></div></aside></div>
+<div class="drawer-layer" id="tenantDrawer" aria-hidden="true"><button class="scrim" type="button" aria-label="Cerrar detalle" onclick="closeTenant()"></button><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="tenantTitle"><div class="drawer-head"><span class="avatar lg">RT</span><div class="drawer-title"><h2 id="tenantTitle">${escapeHtml(tenant.name)}</h2><p>Comercio electrónico · Entorno legado</p><div class="drawer-badges"><span class="badge neutral dot">Legado operativo</span><span class="badge warning dot">Meta pendiente</span></div></div><button class="close-button" id="drawerClose" type="button" onclick="closeTenant()" aria-label="Cerrar">${icon("close", 19)}</button></div><div class="drawer-body"><div class="next-card">${icon("spark", 20)}<div><strong>Siguiente paso</strong><p>Supervisar el setup del cliente desde esta ficha y completar la revisión de Meta cuando WhatsApp esté listo.</p></div></div><div class="mini-grid"><div class="mini-card"><span>Tenant ID</span><strong style="font-size:12px">${escapeHtml(tenant.id)}</strong></div><div class="mini-card"><span>Setup</span><strong style="font-size:12px">${setupCompletion}%</strong></div><div class="mini-card"><span>Rol operativo</span><strong style="font-size:12px">Admin</strong></div><div class="mini-card"><span>Estado</span><strong style="font-size:12px">${escapeHtml(setupStatusLabel(customerSetup))}</strong></div></div><section class="drawer-section"><div class="setup-head"><h3>Setup del cliente</h3><div class="setup-meta"><span class="badge ${setupStatusVariant(customerSetup)} dot">${escapeHtml(setupStatusLabel(customerSetup))}</span><span class="badge neutral">${escapeHtml(setupUpdated)}</span></div></div><div class="setup-list">${setupFields}</div></section><section class="drawer-section"><h3>Integraciones</h3><div class="integration"><span>WhatsApp Cloud API</span><span class="badge warning">Revisión Meta</span></div><div class="integration"><span>Shopify Storefront</span><span class="badge neutral" id="drawerShopify">Verificando</span></div><div class="integration"><span>Supabase</span><span class="badge neutral" id="drawerSupabase">Verificando</span></div></section><section class="drawer-section"><h3>Operación permitida</h3><p style="font-size:10.5px;line-height:1.6;color:var(--text-muted);margin:0">La operación diaria, conversaciones e intervención humana permanecen exclusivamente en el panel Admin del comercio.</p></section></div><div class="drawer-foot"><a class="button" href="/admin/client-onboarding">Editar setup</a><a class="button primary" href="/admin/panel?tab=summary">Abrir Admin RAV</a></div></aside></div>
 <div class="goal-modal-layer" id="goalModal" aria-hidden="true"><button class="scrim" type="button" aria-label="Cerrar editor de meta" onclick="closeGoalEditor()"></button><section class="goal-modal" role="dialog" aria-modal="true" aria-labelledby="goalEditorTitle"><div class="goal-modal-head"><div><h2 id="goalEditorTitle">Editar meta de Lumen</h2><p>Este cambio se guarda para todo el Super Admin. La estructura ya permite sumar otras metas de tipo contador más adelante.</p></div><button class="close-button" type="button" onclick="closeGoalEditor()" aria-label="Cerrar">${icon("close", 19)}</button></div><form class="goal-form" id="goalEditorForm"><div class="goal-field"><label for="goalTypeInput">Tipo de meta</label><select id="goalTypeInput" disabled><option value="counter">Contador</option></select><small>Clientes es la primera meta. Próximamente se podrán activar otros indicadores.</small></div><div class="goal-field"><label for="goalNameInput">Nombre</label><input id="goalNameInput" maxlength="60" required autocomplete="off"></div><div class="goal-field"><label for="goalTargetInput">Meta</label><input id="goalTargetInput" type="number" min="1" max="1000000000" step="1" inputmode="numeric" required><small>Usa un número entero mayor que cero.</small></div><div class="goal-form-error" id="goalEditorError" role="alert"></div><div class="goal-modal-actions"><button class="button" type="button" onclick="closeGoalEditor()">Cancelar</button><button class="button primary" id="goalSaveButton" type="submit">Guardar meta</button></div></form></section></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>

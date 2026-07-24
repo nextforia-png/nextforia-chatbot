@@ -22,6 +22,34 @@ renderSuperAdminPanel({
     status: "pilot",
     industry: "professional_services"
   }],
+  customerSetup: {
+    version: 2,
+    tenant_id: "rav-toys",
+    status: "completed",
+    completion: 100,
+    setup_completed: true,
+    last_updated_at: "2026-07-24T12:00:00.000Z",
+    answers: {
+      business: {
+        brand_name: "RAV Toys",
+        contact_email: "ventas@ravtoys.com",
+        contact_phone: "+57 300 000 0000"
+      },
+      meta: {
+        whatsapp_number: "+57 300 111 1111"
+      },
+      operations: {
+        business_hours: "Lunes a sábado, 9 a 6.",
+        services_products: "Juguetes, carros montables y regalos infantiles.",
+        frequent_questions: "Disponibilidad, envíos y garantías.",
+        important_policies: "Cambios con factura y producto sin uso."
+      },
+      team: {
+        admin_email: "admin@ravtoys.com",
+        human_support_contact: "Equipo RAV por WhatsApp interno."
+      }
+    }
+  },
   commercialReadiness: {
     version: "test",
     stages: [
@@ -63,6 +91,19 @@ assert.match(html, /rav-toys · entorno legado/);
 assert.doesNotMatch(html, /Cliente #1 · RAV Toys/);
 assert.match(html, /Crear acceso RAV/);
 assert.match(html, /role="dialog" aria-modal="true"/);
+assert.match(html, /Setup del cliente/);
+assert.match(html, /Correo administrador/);
+assert.match(html, /admin@ravtoys\.com/);
+assert.match(html, /Correo de contacto/);
+assert.match(html, /ventas@ravtoys\.com/);
+assert.match(html, /Teléfono/);
+assert.match(html, /WhatsApp/);
+assert.match(html, /Horario/);
+assert.match(html, /Servicios o productos/);
+assert.match(html, /Juguetes, carros montables y regalos infantiles/);
+assert.match(html, /Preguntas frecuentes/);
+assert.match(html, /Políticas de la empresa/);
+assert.match(html, /Soporte humano/);
 assert.match(html, /Meta App Review pendiente/);
 assert.match(html, /No se muestran datos de ejemplo como si fueran producción/);
 assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);

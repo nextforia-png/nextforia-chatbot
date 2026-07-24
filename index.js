@@ -146,7 +146,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v94-platform-goal-save-always";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v90-super-admin-setup-visibility";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3516,7 +3516,7 @@ function parseClientOnboardingTurn(turn) {
   const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    if (parsed.version !== 1 || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id || !parsed.answers) return null;
+    if (![1, 2].includes(parsed.version) || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id || !parsed.answers) return null;
     return parsed;
   } catch (_) {
     return null;
@@ -3540,6 +3540,8 @@ async function loadClientOnboarding(force) {
       updated_by: ""
     });
     record.updated_at = null;
+    record.last_updated_at = null;
+    record.setup_completed_at = null;
   }
   clientOnboardingCache = { loaded_at: now, record };
   return record;
@@ -5358,6 +5360,10 @@ app.get("/admin/super-admin", async (req, res) => {
   try {
     platformGoals = await loadPlatformGoals(false);
   } catch (_) {}
+  let customerSetup = null;
+  try {
+    customerSetup = await loadClientOnboarding(false);
+  } catch (_) {}
   renderSuperAdminPanel(res, {
     auth,
     botVersion: BOT_VERSION,
@@ -5366,6 +5372,7 @@ app.get("/admin/super-admin", async (req, res) => {
     tenant: CUSTOMER_PANEL_BUSINESS,
     registeredClients: listRegisteredClients(),
     platformGoals,
+    customerSetup,
     // Contrato de datos del diseño aprobado del Super Admin.
     // Se mantienen en null a propósito: el panel renderiza estados vacíos
     // honestos en vez de cifras de ejemplo. Al conectar la fuente real basta

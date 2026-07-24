@@ -110,6 +110,14 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   assert.strictEqual(tenants.length, 1);
   assert.strictEqual(tenants[0].status, "activo");
 
+  const selected = await service.selectTenantPlan("panaderia-espiga", "scale", "atencion-cliente", { username: "duenio@espiga.example" });
+  assert.strictEqual(selected.plan_id, "scale", "el cliente puede elegir directamente un plan activo");
+
+  await service.upsertPlan({ id: "solo-agenda", nombre: "Solo agenda", bot_id: "agendamiento" }, actor);
+  await assert.rejects(function () {
+    return service.selectTenantPlan("panaderia-espiga", "solo-agenda", "atencion-cliente", { username: "duenio@espiga.example" });
+  }, /invalid_plan_for_bot/, "no se ofrecen planes de un bot diferente");
+
   await assert.rejects(function () {
     return service.setTenantStatus("panaderia-espiga", "borrado", actor);
   }, /invalid_status/, "solo se aceptan los cuatro estados del contrato");
@@ -158,7 +166,11 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   ["plan_upserted", "plan_toggled", "tenant_status_changed", "tenant_deleted"].forEach(function (action) {
     assert.ok(acciones.indexOf(action) >= 0, "auditoría registra " + action);
   });
-  assert.ok(store.audit.every(function (row) { return row.actor === "santiago"; }), "la auditoría guarda el actor");
+  assert.ok(store.audit.every(function (row) {
+    return row.action === "customer_plan_selected"
+      ? row.actor === "duenio@espiga.example"
+      : row.actor === "santiago";
+  }), "la auditoría guarda el actor de plataforma o cliente según la acción");
 
   await assert.rejects(function () { return service.tenantBackup("no-existe"); }, /tenant_not_found/);
 

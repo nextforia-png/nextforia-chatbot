@@ -127,6 +127,7 @@ function mapStoreError(error) {
   if (/COMPANY_NAME_MISMATCH/.test(message)) return new CatalogError("company_name_mismatch", 400);
   if (/INVALID_STATUS/.test(message)) return new CatalogError("invalid_status", 400);
   if (/INVALID_BOT/.test(message)) return new CatalogError("invalid_bot_id", 400);
+  if (/INVALID_PLAN_FOR_BOT/.test(message)) return new CatalogError("invalid_plan_for_bot", 400);
   if (/PLATFORM_SERVICE_ROLE_REQUIRED/.test(message)) return new CatalogError("catalog_unavailable", 503);
   return new CatalogError("catalog_unavailable", 503);
 }
@@ -208,6 +209,24 @@ class SupabaseCatalogStore {
       p_tenant_id: tenantId, p_status: status, p_actor: actor
     });
     return rows[0] || null;
+  }
+
+  async selectTenantPlan(tenantId, planId) {
+    try {
+      const response = await this.axios.patch(this.url + "/rest/v1/tenants", {
+        plan_id: planId,
+        updated_at: new Date().toISOString()
+      }, {
+        params: { id: "eq." + tenantId, select: "id,company_name,plan_id,assigned_bot_id,status,updated_at" },
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      const tenant = Array.isArray(response.data) ? response.data[0] : null;
+      if (!tenant || tenant.id !== tenantId) throw new CatalogError("tenant_not_found", 404);
+      return tenant;
+    } catch (error) {
+      throw mapStoreError((error && error.response && error.response.data) || error);
+    }
   }
 
   async tenantBackup(tenantId) {
@@ -334,6 +353,15 @@ class InMemoryCatalogStore {
     return tenant;
   }
 
+  async selectTenantPlan(tenantId, planId, actor) {
+    const tenant = this.tenants.find(function (row) { return row.id === tenantId; });
+    if (!tenant) throw new CatalogError("tenant_not_found", 404);
+    tenant.plan_id = planId;
+    tenant.updated_at = new Date().toISOString();
+    this.audit.push({ actor: actor, action: "customer_plan_selected", tenant_id: tenantId, plan_id: planId });
+    return tenant;
+  }
+
   async tenantBackup(tenantId) {
     const tenant = this.tenants.find(function (row) { return row.id === tenantId; });
     if (!tenant) throw new CatalogError("tenant_not_found", 404);
@@ -413,6 +441,20 @@ function createCatalogService(options) {
       const cleanStatus = normalizeStatus(status);
       if (!cleanStatus) throw new CatalogError("invalid_status", 400);
       try { return await store.setTenantStatus(cleanTenant, cleanStatus, actorLabel(actor)); }
+      catch (error) { throw mapStoreError(error); }
+    },
+
+    async selectTenantPlan(tenantId, planId, assignedBotId, actor) {
+      const cleanTenant = text(tenantId, 64).toLowerCase();
+      const cleanPlan = text(planId, 64).toLowerCase();
+      const cleanBot = text(assignedBotId, 64).toLowerCase();
+      if (!cleanTenant) throw new CatalogError("tenant_not_found", 404);
+      if (!ID_PATTERN.test(cleanPlan)) throw new CatalogError("invalid_plan_id", 400);
+      const active = await this.activeCatalogs();
+      const plan = (active.plans || []).find(function (row) { return row.id === cleanPlan; });
+      if (!plan) throw new CatalogError("plan_not_found", 404);
+      if (plan.bot_id && plan.bot_id !== cleanBot) throw new CatalogError("invalid_plan_for_bot", 400);
+      try { return await store.selectTenantPlan(cleanTenant, cleanPlan, actorLabel(actor)); }
       catch (error) { throw mapStoreError(error); }
     },
 

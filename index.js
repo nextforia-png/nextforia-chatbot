@@ -173,7 +173,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v99-staging-customer-setup";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v100-staging-plan-selection";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5141,6 +5141,9 @@ app.get("/admin/client-onboarding", async (req, res) => {
     catch (_) {}
   }
   const business = customerBusinessForAuth(auth);
+  const compatiblePlans = (catalogs.plans || []).filter(function (item) {
+    return !item.bot_id || item.bot_id === business.assigned_bot_id;
+  });
   const plan = (catalogs.plans || []).find(function (item) { return item.id === business.plan_id; }) || null;
   const bot = (catalogs.bots || []).find(function (item) { return item.id === business.assigned_bot_id; }) || null;
   const displayRecord = JSON.parse(JSON.stringify(record));
@@ -5154,6 +5157,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
     actor: auth.name || auth.username,
     adminEmail: auth.email || auth.username,
     plan,
+    plans: compatiblePlans,
     bot,
     demo: false,
     apiPath: "/admin/client-onboarding/data"
@@ -5198,14 +5202,36 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       });
       return;
     }
+    const selectedPlanId = String(req.body && req.body.plan_id || auth.plan_id || "").trim().toLowerCase();
+    let selectedPlan = null;
+    if (auth.version === 2 && selectedPlanId && selectedPlanId !== String(auth.plan_id || "").toLowerCase()) {
+      if (!catalogService) throw new CatalogError("catalog_unavailable", 503);
+      selectedPlan = await catalogService.selectTenantPlan(
+        tenantId,
+        selectedPlanId,
+        String(auth.assigned_bot_id || ""),
+        auth
+      );
+    }
     const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
     res.json({
       ok: true,
       onboarding: record,
+      selected_plan_id: selectedPlan && selectedPlan.plan_id || selectedPlanId || null,
       redirect: record.setup_completed ? "/admin/panel?tab=summary" : null
     });
   } catch (error) {
     console.error("client onboarding save error:", error.message);
+    if (error instanceof CatalogError) {
+      res.status(error.status || 400).json({
+        ok: false,
+        error: error.code,
+        message: error.code === "invalid_plan_for_bot"
+          ? "Este plan no está disponible para el bot asignado a tu empresa."
+          : "El plan elegido ya no está disponible. Selecciona otro plan activo."
+      });
+      return;
+    }
     res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
   }
 });

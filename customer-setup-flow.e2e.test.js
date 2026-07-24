@@ -138,9 +138,10 @@ function completedAnswers(company, email, marker) {
     assert(setupHtml.includes("admin@setup-a.example"));
     assert(setupHtml.includes("Growth"));
     assert(setupHtml.includes("Atención al cliente"));
-    assert(setupHtml.includes("Información comercial de solo lectura"));
+    assert(setupHtml.includes("Elige el plan para tu empresa"));
+    assert(setupHtml.includes("No requiere autorización de Super Admin"));
+    assert(setupHtml.includes('name="selected_plan" value="starter"'));
     assert(!setupHtml.includes("Empresa Returning B"));
-    assert(!setupHtml.includes("$299.900"), "prices must not be hardcoded in setup");
 
     response = await fetch(base + "/admin/client-onboarding/data?tenant_id=tenant-returning-b", {
       headers: { cookie: cookieA }
@@ -156,14 +157,19 @@ function completedAnswers(company, email, marker) {
     response = await fetch(base + "/admin/client-onboarding/data?tenant_id=tenant-returning-b", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: cookieA },
-      body: JSON.stringify({ tenant_id: "tenant-returning-b", status: "draft", answers: draft })
+      body: JSON.stringify({ tenant_id: "tenant-returning-b", status: "draft", plan_id: "starter", answers: draft })
     });
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.onboarding.tenant_id, "tenant-setup-a");
     assert.strictEqual(payload.onboarding.setup_completed, false);
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "Servicios A");
+    assert.strictEqual(payload.selected_plan_id, "starter");
     assert(payload.onboarding.last_updated_at);
+
+    response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.strictEqual(payload.tenant.plan_id, "starter", "the customer selection updates its own central tenant");
 
     response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",
@@ -215,6 +221,7 @@ function completedAnswers(company, email, marker) {
     });
     payload = await response.json();
     assert.strictEqual(payload.tenant.id, "tenant-returning-b");
+    assert.strictEqual(payload.tenant.plan_id, "scale", "tenant B plan must not change when tenant A selects a plan");
     assert(!JSON.stringify(payload).includes("Servicios A"), "tenant B cannot infer tenant A setup");
 
     console.log("customer-setup-flow.e2e.test.js: ok");

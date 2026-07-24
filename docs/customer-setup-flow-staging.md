@@ -40,9 +40,10 @@ Customer Access v2 y todas las lecturas/escrituras usan ese tenant.
 
 ## Plan y bot
 
-El plan contratado y el bot asignado se leen del tenant y de los catálogos activos
-administrados por Super Admin. El cliente no puede editar precios, módulos contratados
-ni la asignación comercial desde este flujo.
+Los planes disponibles y el bot asignado se leen de los catálogos activos administrados
+por Super Admin. El cliente puede elegir directamente un plan compatible con su bot y
+la selección actualiza el `plan_id` de su propio tenant; no requiere autorización de
+Super Admin. Los precios no se escriben ni se editan en el Customer Panel.
 
 ## Contrato de preguntas
 
@@ -56,8 +57,7 @@ respuestas existentes.
 - Exponer una lectura auditada de estos mismos registros para soporte y revisión.
 - Mostrar estado, porcentaje, fecha de finalización y última actualización por tenant.
 - Permitir añadir, editar, ordenar y activar/desactivar preguntas con versionado.
-- Validar cualquier selección comercial futura sin permitir que el Customer Panel
-  cambie precios contratados.
+- Mostrar el plan elegido por el cliente desde el mismo registro central del tenant.
 
 ## Rollback
 

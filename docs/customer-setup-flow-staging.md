@@ -33,6 +33,9 @@ El documento versionado incluye:
 - `setup_completed`
 - `setup_completed_at`
 - `last_updated_at`
+- `meta.whatsapp_number`
+- `meta.whatsapp_integration_intent`
+- `meta.whatsapp_integration_status`
 - respuestas del negocio, operación, equipo y estilo de comunicación
 
 El `tenant_id` nunca se acepta desde URL, query o body: se deriva de la sesión
@@ -50,6 +53,13 @@ actualizada en el `PATCH`, el Customer Panel lee inmediatamente el tenant por `i
 antes de reportar error. Así el botón "Terminar configuración" no queda bloqueado
 por una respuesta sin representación.
 
+Mejora v102: el primer paso del setup pregunta si el cliente quiere integrar su
+WhatsApp con Meta desde Nextfor IA. La respuesta se guarda en
+`meta.whatsapp_integration_intent`; cuando responde "sí", queda como
+`meta.whatsapp_integration_status=requested`. Esto deja el dato listo para el flujo
+automático/guided setup con Meta sin marcar la integración como conectada antes de
+tener permisos reales.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,
@@ -63,6 +73,9 @@ respuestas existentes.
 - Mostrar estado, porcentaje, fecha de finalización y última actualización por tenant.
 - Permitir añadir, editar, ordenar y activar/desactivar preguntas con versionado.
 - Mostrar el plan elegido por el cliente desde el mismo registro central del tenant.
+- Implementar el flujo real de conexión con Meta/WhatsApp Cloud API a partir de
+  `meta.whatsapp_integration_intent=requested`, con estados auditables y manejo de
+  permisos/verificación del dueño.
 
 ## Rollback
 

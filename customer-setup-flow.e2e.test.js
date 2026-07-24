@@ -53,7 +53,7 @@ function completedAnswers(company, email, marker) {
       contact_email: email,
       contact_phone: "+57 300 000 0000"
     },
-    meta: { whatsapp_number: "+57 300 000 0000" },
+    meta: { whatsapp_number: "+57 300 000 0000", whatsapp_integration_intent: "yes" },
     operations: {
       business_hours: "Lunes a viernes",
       services_products: "Servicios " + marker,
@@ -140,6 +140,7 @@ function completedAnswers(company, email, marker) {
     assert(setupHtml.includes("Atención al cliente"));
     assert(setupHtml.includes("Elige el plan para tu empresa"));
     assert(setupHtml.includes("No requiere autorización de Super Admin"));
+    assert(setupHtml.includes("¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?"));
     assert(setupHtml.includes('name="selected_plan" value="starter"'));
     assert(!setupHtml.includes("Empresa Returning B"));
 
@@ -187,6 +188,8 @@ function completedAnswers(company, email, marker) {
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.onboarding.setup_completed, true);
+    assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_intent, "yes");
+    assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_status, "requested");
     assert(payload.onboarding.setup_completed_at);
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
 

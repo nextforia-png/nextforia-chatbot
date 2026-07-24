@@ -20,7 +20,7 @@ assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.acti
 
 const normalized = normalizeOnboarding({
   business: { brand_name: "  Tienda Piloto  ", contact_email: "ADMIN@EXAMPLE.COM" },
-  meta: { number_status: "invalid" },
+  meta: { number_status: "invalid", whatsapp_integration_intent: "yes" },
   channels: { instagram: true, other: true, other_details: "Marketplace" },
   commerce: { platform: "other", other_platform: "Sistema propio", orders_required: false },
   confirmations: { owns_information: true }
@@ -28,6 +28,8 @@ const normalized = normalizeOnboarding({
 assert.strictEqual(normalized.business.brand_name, "Tienda Piloto");
 assert.strictEqual(normalized.business.contact_email, "admin@example.com");
 assert.strictEqual(normalized.meta.number_status, "unknown");
+assert.strictEqual(normalized.meta.whatsapp_integration_intent, "yes");
+assert.strictEqual(normalized.meta.whatsapp_integration_status, "requested");
 assert.strictEqual(normalized.channels.instagram, true);
 assert.strictEqual(normalized.channels.other_details, "Marketplace");
 assert.strictEqual(normalized.commerce.other_platform, "Sistema propio");
@@ -48,6 +50,7 @@ completedAnswers.business.brand_name = "Empresa Completa";
 completedAnswers.business.contact_email = "admin@completa.example";
 completedAnswers.business.contact_phone = "+57 300 000 0000";
 completedAnswers.meta.whatsapp_number = "+57 300 000 0000";
+completedAnswers.meta.whatsapp_integration_intent = "yes";
 completedAnswers.operations.business_hours = "Lunes a viernes";
 completedAnswers.operations.services_products = "Servicios";
 completedAnswers.operations.frequent_questions = "Preguntas y respuestas";

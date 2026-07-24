@@ -15,6 +15,8 @@ const DEFAULT_ONBOARDING = Object.freeze({
     business_portfolio_ready: "unknown",
     admin_available: "unknown",
     whatsapp_number: "",
+    whatsapp_integration_intent: "unknown",
+    whatsapp_integration_status: "not_requested",
     number_status: "unknown",
     desired_number_strategy: "review",
     facebook_page: "",
@@ -80,12 +82,13 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "contact_email", path: "business.contact_email", section: "business", order: 30, active: true, required: true, type: "email", label: "Correo de contacto" },
   { id: "phone", path: "business.contact_phone", section: "business", order: 40, active: true, required: true, type: "tel", label: "Teléfono" },
   { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 50, active: true, required: true, type: "tel", label: "WhatsApp" },
-  { id: "business_hours", path: "operations.business_hours", section: "business", order: 60, active: true, required: true, type: "textarea", label: "Horarios de atención" },
-  { id: "services_products", path: "operations.services_products", section: "offering", order: 70, active: true, required: true, type: "textarea", label: "Servicios o productos" },
-  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
-  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Políticas importantes" },
-  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 100, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
-  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 110, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" }
+  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 60, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?" },
+  { id: "business_hours", path: "operations.business_hours", section: "business", order: 70, active: true, required: true, type: "textarea", label: "Horarios de atención" },
+  { id: "services_products", path: "operations.services_products", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Servicios o productos" },
+  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
+  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Políticas importantes" },
+  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 110, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
+  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 120, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" }
 ]);
 
 function cloneDefaults() {
@@ -111,6 +114,7 @@ function normalizeOnboarding(input) {
   const team = input.team || {};
   const confirmations = input.confirmations || {};
   const yesNoUnknown = ["yes", "no", "unknown"];
+  const whatsappIntent = choice(meta.whatsapp_integration_intent, ["yes", "later", "no", "unknown"], "unknown");
   return {
     business: {
       brand_name: text(business.brand_name, 120),
@@ -126,6 +130,12 @@ function normalizeOnboarding(input) {
       business_portfolio_ready: choice(meta.business_portfolio_ready, yesNoUnknown, "unknown"),
       admin_available: choice(meta.admin_available, yesNoUnknown, "unknown"),
       whatsapp_number: text(meta.whatsapp_number, 40),
+      whatsapp_integration_intent: whatsappIntent,
+      whatsapp_integration_status: choice(
+        meta.whatsapp_integration_status,
+        ["not_requested", "requested", "pending_customer", "connected", "needs_review", "failed"],
+        whatsappIntent === "yes" ? "requested" : whatsappIntent === "later" ? "pending_customer" : "not_requested"
+      ),
       number_status: choice(meta.number_status, ["new", "business_app", "cloud_api", "unknown"], "unknown"),
       desired_number_strategy: choice(meta.desired_number_strategy, ["new", "migrate", "coexistence", "review"], "review"),
       facebook_page: text(meta.facebook_page, 300),

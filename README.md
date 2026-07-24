@@ -102,6 +102,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/super-admin` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/super-admin/login` | Entrada interna y separada para usuarios Super Admin de NexforIA |
+| `GET /admin/platform-goals` | Super admin: consulta las metas configuradas de la plataforma |
+| `PUT /admin/platform-goals/:goalId` | Super admin: actualiza una meta validada y auditada; inicialmente `customers` |
 | `GET /admin/health` | Estado mínimo público; con sesión o `X-Dashboard-Key` incluye Shopify/Meta/Supabase y readiness |
 | `GET /admin/stats` | Snapshot protegido del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N` | Conversaciones recientes protegidas desde Supabase si está disponible |
@@ -392,6 +394,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v73 | Configuración guiada de NexforIA y memoria comercial del cliente |
 | v80 | Super Admin Panel rediseñado desde el handoff NexforIA: navegación de plataforma, clientes registrados, salud, readiness y estados futuros sin datos ficticios |
 | v81 | Entrada Super Admin separada del acceso de clientes, con cambio seguro de sesión y validación estricta del rol de plataforma |
+| v89 | Tarjeta de Lumen editable y metas persistentes de plataforma, con acceso exclusivo para Super Admin |
 | v74 | Ventas asistidas y cierres por confirmar en el resumen del cliente |
 
 ---

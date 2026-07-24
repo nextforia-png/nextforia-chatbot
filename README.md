@@ -45,6 +45,10 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `TENANT_FOREIGN_NUMBER_CHECK_ENABLED` | Confirma el país atendido cuando un número extranjero aún no tiene respuesta; usa `0` para desactivar |
 | `WA_TOKEN` | Token permanente de Meta WhatsApp |
 | `PHONE_NUMBER_ID` | ID del número WhatsApp registrado en Meta |
+| `TENANT_DISPLAY_PHONE` | Número visible que debe quedar conectado al tenant; RAV usa `+57 301 587 2708` |
+| `META_APP_REVIEW_STATUS` | Estado público de App Review para el panel; RAV está en `approved` |
+| `META_APP_REVIEW_APPROVED_AT` | Fecha de aprobación mostrada por la integración, sin consultar secretos |
+| `WA_LIVE_ENABLED` | Gate explícito del número real; mantener `0` hasta completar verificación y prueba end-to-end |
 | `VERIFY_TOKEN` | Token aleatorio de verificación del webhook (requerido en producción, mínimo 24 caracteres) |
 | `IG_ACCESS_TOKEN` | Token del Instagram Professional account autorizado en Meta |
 | `IG_USER_ID` | ID del Instagram Professional account que enviará respuestas |
@@ -111,6 +115,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/super-admin` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/super-admin/login` | Entrada interna y separada para usuarios Super Admin de NexforIA |
+| `GET /admin/integrations/rav/test` | Super admin: prueba segura de la integración #1 sin enviar mensajes reales |
 | `GET /admin/health` | Estado mínimo público; con sesión o `X-Dashboard-Key` incluye Shopify/Meta/Supabase y readiness |
 | `GET /admin/stats` | Snapshot protegido del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N` | Conversaciones recientes protegidas desde Supabase si está disponible |

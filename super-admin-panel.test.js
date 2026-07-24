@@ -34,6 +34,15 @@ renderSuperAdminPanel({
     version: "test",
     roles: [{ role: "super_admin", level: 4, owner: "NexforIA", scope: "platform", purpose: "Opera plataforma." }],
     future_panels: [{ id: "platform_super_admin", label: "Super admin", owner: "NexforIA", roles: ["super_admin"], purpose: "Opera plataforma." }]
+  },
+  integration: {
+    integration_number: 1,
+    status: "activation_pending",
+    label: "Aprobada - falta activar el numero",
+    next_action: "Conectar y verificar +57 301 587 2708.",
+    target_display_phone: "+57 301 587 2708",
+    app_review: { approved: true, status: "approved" },
+    connection: { mode: "test", real_number_active: false, graph_api_ready: true }
   }
 });
 
@@ -57,12 +66,15 @@ assert.doesNotMatch(html, /Margen del mes/);
 assert.match(html, /--gradient-cyan/);
 assert.match(html, /Grupo Jurídico DERCO/);
 assert.match(html, /\/admin\/pilots\/derco/);
-assert.match(html, /Cliente #1 · Grupo Jurídico DERCO/);
-assert.match(html, /rav-toys · entorno legado/);
-assert.doesNotMatch(html, /Cliente #1 · RAV Toys/);
+assert.match(html, /Cliente #1 · RAV Toys/);
+assert.match(html, /rav-toys · Integracion #1/);
+assert.match(html, /Piloto #1/);
 assert.match(html, /Crear acceso RAV/);
 assert.match(html, /role="dialog" aria-modal="true"/);
-assert.match(html, /Meta App Review pendiente/);
+assert.match(html, /Meta aprobada/);
+assert.match(html, /Activacion del numero real pendiente/);
+assert.match(html, /\/admin\/integrations\/rav\/test/);
+assert.match(html, /Ejecutar prueba segura/);
 assert.match(html, /No se muestran datos de ejemplo como si fueran producción/);
 assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
 assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);

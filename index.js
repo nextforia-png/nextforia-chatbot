@@ -79,6 +79,7 @@ const {
   createTenantConfig,
   validateWhatsAppDestination
 } = require("./tenant-config");
+const { buildRavIntegration } = require("./nextfor-integration");
 const {
   buildServiceAreaContext,
   buildServiceAreaQuestion,
@@ -156,7 +157,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v97-staging-sin-loop-401";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v98-nextfor-integration-1";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -193,7 +194,7 @@ const DASHBOARD_ACCESS_MODEL = {
     { role: "viewer", level: 1, scope: "tenant", owner: "Cliente", purpose: "Consulta metricas y conversaciones sin intervenir." }
   ],
   migration_steps: [
-    "Mantener RAV Toys como entorno legado y DERCO como cliente registrado #1.",
+    "Usar RAV Toys como integracion piloto #1 de Atencion al cliente y DERCO como piloto de Agendamiento.",
     "Crear usuarios super_admin para NexforIA y admin/agent/viewer por cliente.",
     "Mantener separado el dashboard Admin del panel Super admin.",
     "Agregar tenant_id a logs, usuarios y configuracion.",
@@ -317,6 +318,10 @@ const CUSTOMER_PANEL_BUSINESS = {
   customer_number: TENANT_CONFIG.customerNumber,
   status: TENANT_CONFIG.status
 };
+
+function currentRavIntegration(metaWhatsappCheck) {
+  return buildRavIntegration(process.env, { metaWhatsappCheck });
+}
 // ─────────────────────────────────────────────────────────────────────────────────
 
 const productionConfigErrors = validateProductionConfig({
@@ -3865,13 +3870,15 @@ function customerPanelCapabilities(role) {
 }
 
 function customerPanelWhatsappSetup() {
-  const stage = (COMMERCIAL_READINESS.stages || []).find(function (item) {
-    return item.id === "meta_whatsapp";
-  });
-  const ready = !!stage && stage.status === "ready";
+  const integration = currentRavIntegration();
+  const ready = integration.connection.real_number_active;
   return {
     status: ready ? "ready" : "pending",
-    label: ready ? "WhatsApp listo" : "Configuracion de WhatsApp pendiente"
+    label: ready ? "WhatsApp en funcionamiento" : "Meta aprobada; falta activar el numero real",
+    app_review_approved: integration.app_review.approved,
+    real_number_active: integration.connection.real_number_active,
+    target_display_phone: integration.target_display_phone,
+    integration_status: integration.status
   };
 }
 
@@ -5744,6 +5751,7 @@ app.get("/admin/super-admin", (req, res) => {
     accessModel: DASHBOARD_ACCESS_MODEL,
     customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
     tenant: CUSTOMER_PANEL_BUSINESS,
+    integration: currentRavIntegration(),
     registeredClients: listRegisteredClients(),
     // Contrato de datos del diseño aprobado del Super Admin.
     // Se mantienen en null a propósito: el panel renderiza estados vacíos
@@ -6409,8 +6417,9 @@ async function buildAdminHealthResult() {
   result.production_readiness = {
     infrastructure_ready: blockers.length === 0,
     blockers,
-    app_review_status: "external_meta_review_not_checked_here"
+    app_review_status: currentRavIntegration(result.checks.meta_whatsapp).app_review.status
   };
+  result.integration = currentRavIntegration(result.checks.meta_whatsapp);
   return result;
 }
 
@@ -6441,12 +6450,54 @@ app.get("/admin/panel/health", async (req, res) => {
       status: ready ? "ok" : "needs_review",
       label: ready ? "Infra OK" : "Needs review"
     },
-    whatsapp_setup: customerPanelWhatsappSetup(),
+    whatsapp_setup: health.integration ? {
+      status: health.integration.connection.real_number_active ? "ready" : "pending",
+      label: health.integration.label,
+      app_review_approved: health.integration.app_review.approved,
+      real_number_active: health.integration.connection.real_number_active,
+      target_display_phone: health.integration.target_display_phone,
+      integration_status: health.integration.status,
+      graph_api_ready: health.integration.connection.graph_api_ready
+    } : customerPanelWhatsappSetup(),
     services: [
       { id: "catalog", label: "Catalogo", status: health.checks.shopify_storefront === "ok" ? "ready" : "needs_review" },
       { id: "messaging", label: "Mensajeria", status: health.checks.meta_whatsapp === "ok" ? "ready" : "needs_review" },
       { id: "history", label: "Historial", status: health.checks.supabase_conversation_logs === "ok" ? "ready" : "needs_review" }
     ]
+  });
+});
+
+app.get("/admin/integrations/rav/test", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(403).json({ ok: false, error: "forbidden" });
+    return;
+  }
+
+  const health = await buildAdminHealthResult();
+  const integration = health.integration || currentRavIntegration(health.checks.meta_whatsapp);
+  const checks = {
+    meta_app_review_approved: integration.app_review.approved,
+    meta_graph_api: health.checks.meta_whatsapp === "ok",
+    shopify_catalog: health.checks.shopify_storefront === "ok",
+    conversation_history: health.checks.supabase_conversation_logs === "ok",
+    customer_panel: integration.capabilities.customer_panel,
+    human_intervention: integration.capabilities.human_intervention
+  };
+  const technicalPassed = Object.keys(checks).every(function (key) { return checks[key] === true; });
+
+  res.json({
+    ok: technicalPassed,
+    tested_at: new Date().toISOString(),
+    integration,
+    checks,
+    technical_passed: technicalPassed,
+    live_ready: technicalPassed && integration.connection.real_number_active,
+    message: technicalPassed
+      ? (integration.connection.real_number_active
+          ? "Integracion lista para una prueba real de WhatsApp."
+          : "Integracion tecnica aprobada. Falta activar el numero real de WhatsApp.")
+      : "La integracion necesita revision tecnica antes de activar el numero real."
   });
 });
 

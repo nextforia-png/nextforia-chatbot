@@ -74,19 +74,24 @@ const DEFAULT_ONBOARDING = Object.freeze({
 });
 
 const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
-  { id: "company_name", path: "business.brand_name", section: "business", order: 10, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?" },
-  { id: "administrator_email", path: "team.admin_email", section: "business", order: 20, active: true, required: true, type: "email_readonly", label: "Correo del administrador" },
-  { id: "contact_email", path: "business.contact_email", section: "business", order: 30, active: true, required: true, type: "email", label: "Correo de contacto" },
-  { id: "phone", path: "business.contact_phone", section: "business", order: 40, active: true, required: true, type: "tel", label: "Teléfono" },
-  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 50, active: true, required: true, type: "tel", label: "WhatsApp" },
-  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 60, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?" },
-  { id: "business_hours", path: "operations.business_hours", section: "business", order: 70, active: true, required: true, type: "textarea", label: "Horarios de atención" },
-  { id: "services_products", path: "operations.services_products", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Servicios o productos" },
-  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
-  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Políticas importantes" },
-  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 110, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
-  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 120, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" }
+  { id: "company_name", path: "business.brand_name", section: "business", order: 10, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?", placeholder: "Ej. RAV Toys" },
+  { id: "administrator_email", path: "team.admin_email", section: "business", order: 20, active: true, required: true, type: "email_readonly", label: "Correo del administrador", placeholder: "admin@empresa.com" },
+  { id: "contact_email", path: "business.contact_email", section: "business", order: 30, active: true, required: true, type: "email", label: "Correo de contacto", placeholder: "contacto@empresa.com" },
+  { id: "phone", path: "business.contact_phone", section: "business", order: 40, active: true, required: true, type: "tel", label: "Teléfono", placeholder: "+57..." },
+  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 50, active: true, required: true, type: "tel", label: "WhatsApp", placeholder: "+57..." },
+  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 60, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?", placeholder: "" },
+  { id: "business_hours", path: "operations.business_hours", section: "business", order: 70, active: true, required: true, type: "textarea", label: "Horarios de atención", placeholder: "Días, horas y festivos" },
+  { id: "services_products", path: "operations.services_products", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Servicios o productos", placeholder: "Qué vende u ofrece el negocio." },
+  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Preguntas frecuentes", placeholder: "Pregunta y respuesta ideal. Una por línea." },
+  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Políticas importantes", placeholder: "Garantías, cambios, privacidad, cancelaciones y excepciones." },
+  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 110, active: true, required: true, type: "text", label: "Contacto de soporte humano", placeholder: "Nombre, teléfono, correo o área." },
+  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 120, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot", placeholder: "Tono, límites y reglas especiales para responder." }
 ]);
+
+const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
+const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:nexforia";
+const CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX = "[CustomerSetupQuestionnaire] ";
+const QUESTION_TYPES = ["text", "email", "email_readonly", "tel", "textarea", "choice"];
 
 function cloneDefaults() {
   return JSON.parse(JSON.stringify(DEFAULT_ONBOARDING));
@@ -199,18 +204,57 @@ const REQUIRED_PATHS = CUSTOMER_SETUP_QUESTIONS
   .sort(function (a, b) { return a.order - b.order; })
   .map(function (question) { return question.path; });
 
-function onboardingCompletion(input) {
+function normalizeCustomerSetupQuestionnaire(input, actor, now) {
+  const incoming = Array.isArray(input && input.questions) ? input.questions : Array.isArray(input) ? input : [];
+  const byId = new Map(incoming.map(function (question) { return [text(question && question.id, 80), question || {}]; }));
+  const questions = CUSTOMER_SETUP_QUESTIONS.map(function (base) {
+    const src = byId.get(base.id) || {};
+    const type = choice(src.type, QUESTION_TYPES, base.type);
+    const label = text(src.label == null ? base.label : src.label, 160) || base.label;
+    const placeholder = text(src.placeholder == null ? base.placeholder : src.placeholder, 280);
+    const order = Math.max(1, Math.min(999, Math.round(Number(src.order == null ? base.order : src.order) || base.order)));
+    return {
+      id: base.id,
+      path: base.path,
+      section: base.section,
+      order,
+      active: src.active == null ? base.active !== false : src.active === true,
+      required: src.required == null ? base.required === true : src.required === true,
+      type,
+      label,
+      placeholder
+    };
+  }).sort(function (a, b) { return a.order - b.order; });
+  return {
+    version: 1,
+    questions,
+    updated_at: now || new Date().toISOString(),
+    updated_by: text(actor || "super_admin", 120)
+  };
+}
+
+function customerSetupRequiredPaths(questionnaire) {
+  const questions = questionnaire && Array.isArray(questionnaire.questions) ? questionnaire.questions : CUSTOMER_SETUP_QUESTIONS;
+  const active = questions.filter(function (question) { return question.active !== false && question.required === true; });
+  return (active.length ? active : CUSTOMER_SETUP_QUESTIONS.filter(function (question) { return question.active && question.required; }))
+    .sort(function (a, b) { return a.order - b.order; })
+    .map(function (question) { return question.path; });
+}
+
+function onboardingCompletion(input, questionnaire) {
   const answers = normalizeOnboarding(input);
-  const complete = REQUIRED_PATHS.filter(function (path) {
+  const requiredPaths = customerSetupRequiredPaths(questionnaire);
+  const complete = requiredPaths.filter(function (path) {
     const value = getPath(answers, path);
     return value !== "" && value !== "unknown" && value !== false && value != null;
   }).length;
-  return Math.round(complete / REQUIRED_PATHS.length * 100);
+  return Math.round(complete / requiredPaths.length * 100);
 }
 
 function createOnboardingRecord(input, meta) {
   meta = meta || {};
   const answers = normalizeOnboarding(input);
+  const questionnaire = normalizeCustomerSetupQuestionnaire(meta.questionnaire || {}, meta.updated_by || "system");
   const now = new Date().toISOString();
   const status = choice(meta.status, ["draft", "submitted", "completed", "in_review", "ready"], "draft");
   const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};
@@ -220,16 +264,57 @@ function createOnboardingRecord(input, meta) {
     : null;
   return {
     version: 2,
-    questionnaire_version: 1,
+    questionnaire_version: questionnaire.version,
     tenant_id: text(meta.tenant_id, 80),
     status,
-    completion: onboardingCompletion(answers),
+    completion: onboardingCompletion(answers, questionnaire),
     setup_completed: setupCompleted,
     setup_completed_at: setupCompletedAt,
     last_updated_at: now,
     answers,
     updated_at: now,
     updated_by: text(meta.updated_by, 120)
+  };
+}
+
+function parseCustomerSetupQuestionnaireTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(CUSTOMER_SETUP_QUESTIONNAIRE_TOOL)) return null;
+  const raw = String(turn.botReply || "");
+  if (!raw.startsWith(CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX.length));
+    if (parsed.version !== 1) return null;
+    return normalizeCustomerSetupQuestionnaire(parsed, parsed.updated_by, parsed.updated_at);
+  } catch (_) {
+    return null;
+  }
+}
+
+function customerSetupQuestionnaireFromTurns(turns) {
+  let current = normalizeCustomerSetupQuestionnaire({}, "system", null);
+  (turns || []).slice().sort(function (a, b) {
+    return new Date(a.ts || 0) - new Date(b.ts || 0);
+  }).forEach(function (turn) {
+    const parsed = parseCustomerSetupQuestionnaireTurn(turn);
+    if (parsed) current = parsed;
+  });
+  return current;
+}
+
+function buildCustomerSetupQuestionnaireRecord(questionnaire) {
+  return {
+    ts: questionnaire.updated_at,
+    userId: CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
+    userMessage: "",
+    botReply: CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX + JSON.stringify(questionnaire),
+    tools: [CUSTOMER_SETUP_QUESTIONNAIRE_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: CUSTOMER_SETUP_QUESTIONNAIRE_TOOL }
   };
 }
 
@@ -245,12 +330,19 @@ function buildCoverageConversationContext(record) {
 }
 
 module.exports = {
+  CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
+  CUSTOMER_SETUP_QUESTIONNAIRE_TOOL,
   CUSTOMER_SETUP_QUESTIONS,
   DEFAULT_ONBOARDING,
   REQUIRED_PATHS,
+  buildCustomerSetupQuestionnaireRecord,
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
+  customerSetupQuestionnaireFromTurns,
+  customerSetupRequiredPaths,
   normalizeOnboarding,
+  normalizeCustomerSetupQuestionnaire,
+  parseCustomerSetupQuestionnaireTurn,
   onboardingCompletion
 };

@@ -36,9 +36,14 @@ const {
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
+  CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
+  CUSTOMER_SETUP_QUESTIONNAIRE_TOOL,
+  buildCustomerSetupQuestionnaireRecord,
   buildCoverageConversationContext,
   cloneDefaults: defaultClientOnboarding,
-  createOnboardingRecord
+  createOnboardingRecord,
+  customerSetupQuestionnaireFromTurns,
+  normalizeCustomerSetupQuestionnaire
 } = require("./client-onboarding");
 const {
   INDUSTRY_PROFILES,
@@ -146,7 +151,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v90-super-admin-setup-visibility";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v91-super-admin-questionnaire-editor";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -400,6 +405,7 @@ const instagramRuntimeState = {
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 let clientOnboardingCache = { loaded_at: 0, record: null };
+let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
 const retargetingAppendLocks = new Map();
@@ -653,6 +659,11 @@ function isBotSetupTurn(turn) {
 function isClientOnboardingTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(CLIENT_ONBOARDING_TOOL);
+}
+
+function isCustomerSetupQuestionnaireTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(CUSTOMER_SETUP_QUESTIONNAIRE_TOOL);
 }
 
 function isRetargetingEventTurn(turn) {
@@ -3547,11 +3558,38 @@ async function loadClientOnboarding(force) {
   return record;
 }
 
+async function loadCustomerSetupQuestionnaire(force) {
+  const now = Date.now();
+  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < 30000) {
+    return customerSetupQuestionnaireCache.questionnaire;
+  }
+  let turns = conversationLogs.filter(isCustomerSetupQuestionnaireTurn);
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID, 50);
+    if (rows) turns = rows.map(normalizeTurnRow).concat(turns);
+  }
+  const questionnaire = customerSetupQuestionnaireFromTurns(turns);
+  customerSetupQuestionnaireCache = { loaded_at: now, questionnaire };
+  return questionnaire;
+}
+
+async function persistCustomerSetupQuestionnaire(input, auth) {
+  const questionnaire = normalizeCustomerSetupQuestionnaire(input, auth && (auth.name || auth.username) || "super_admin");
+  const rec = buildCustomerSetupQuestionnaireRecord(questionnaire);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  customerSetupQuestionnaireCache = { loaded_at: Date.now(), questionnaire };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  return questionnaire;
+}
+
 async function persistClientOnboarding(answers, status, auth) {
+  const questionnaire = await loadCustomerSetupQuestionnaire(false);
   const record = createOnboardingRecord(answers, {
     tenant_id: CUSTOMER_PANEL_BUSINESS.id,
     status: status === "submitted" ? "submitted" : "draft",
-    updated_by: auth && (auth.name || auth.username)
+    updated_by: auth && (auth.name || auth.username),
+    questionnaire
   });
   const rec = {
     ts: record.updated_at,
@@ -4690,10 +4728,12 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
   answers.meta.number_status = "business_app";
   answers.commerce.store_url = "https://tienda-ejemplo.com";
   answers.team.admin_name = "Administrador del cliente";
-  const record = createOnboardingRecord(answers, { tenant_id: "pilot-demo", status: "draft", updated_by: "NexforIA" });
+  const questionnaire = normalizeCustomerSetupQuestionnaire({}, "NexforIA");
+  const record = createOnboardingRecord(answers, { tenant_id: "pilot-demo", status: "draft", updated_by: "NexforIA", questionnaire });
   renderClientOnboarding(res, {
     tenant: { id: "pilot-demo", name: "Comercio piloto" },
     record,
+    questionnaire,
     actor: "NexforIA",
     demo: true,
     apiPath: ""
@@ -4708,9 +4748,11 @@ app.get("/admin/client-onboarding", async (req, res) => {
   }
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
   const record = await loadClientOnboarding(false);
+  const questionnaire = await loadCustomerSetupQuestionnaire(false);
   renderClientOnboarding(res, {
     tenant: CUSTOMER_PANEL_BUSINESS,
     record,
+    questionnaire,
     actor: auth.name || auth.username,
     demo: false,
     apiPath: "/admin/client-onboarding/data"
@@ -4722,7 +4764,12 @@ app.get("/admin/client-onboarding/data", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  res.json({ ok: true, tenant: CUSTOMER_PANEL_BUSINESS, onboarding: await loadClientOnboarding(false) });
+  res.json({
+    ok: true,
+    tenant: CUSTOMER_PANEL_BUSINESS,
+    onboarding: await loadClientOnboarding(false),
+    questionnaire: await loadCustomerSetupQuestionnaire(false)
+  });
 });
 
 app.put("/admin/client-onboarding/data", async (req, res) => {
@@ -4732,11 +4779,13 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
   }
   try {
     const auth = dashboardAuth(req);
+    const questionnaire = await loadCustomerSetupQuestionnaire(false);
     const requestedStatus = req.body && req.body.status === "submitted" ? "submitted" : "draft";
     const candidate = createOnboardingRecord(req.body && req.body.answers, {
       tenant_id: CUSTOMER_PANEL_BUSINESS.id,
       status: requestedStatus,
-      updated_by: auth.name || auth.username
+      updated_by: auth.name || auth.username,
+      questionnaire
     });
     const confirmations = candidate.answers.confirmations || {};
     const confirmationsReady = confirmations.owns_information && confirmations.accepts_guided_setup && confirmations.understands_meta_dependency;
@@ -4754,6 +4803,30 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
   } catch (error) {
     console.error("client onboarding save error:", error.message);
     res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
+  }
+});
+
+app.get("/admin/customer-setup-questionnaire", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  res.json({ ok: true, questionnaire: await loadCustomerSetupQuestionnaire(false) });
+});
+
+app.put("/admin/customer-setup-questionnaire", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const questionnaire = await persistCustomerSetupQuestionnaire(req.body && (req.body.questionnaire || req.body), auth);
+    res.json({ ok: true, questionnaire });
+  } catch (error) {
+    console.error("customer setup questionnaire save error:", error.message);
+    res.status(503).json({ ok: false, error: "questionnaire_store_unavailable", message: "No pudimos guardar el cuestionario. Intenta nuevamente." });
   }
 });
 
@@ -5364,6 +5437,10 @@ app.get("/admin/super-admin", async (req, res) => {
   try {
     customerSetup = await loadClientOnboarding(false);
   } catch (_) {}
+  let customerSetupQuestionnaire = null;
+  try {
+    customerSetupQuestionnaire = await loadCustomerSetupQuestionnaire(false);
+  } catch (_) {}
   renderSuperAdminPanel(res, {
     auth,
     botVersion: BOT_VERSION,
@@ -5373,6 +5450,7 @@ app.get("/admin/super-admin", async (req, res) => {
     registeredClients: listRegisteredClients(),
     platformGoals,
     customerSetup,
+    customerSetupQuestionnaire,
     // Contrato de datos del diseño aprobado del Super Admin.
     // Se mantienen en null a propósito: el panel renderiza estados vacíos
     // honestos en vez de cifras de ejemplo. Al conectar la fuente real basta

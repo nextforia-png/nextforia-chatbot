@@ -3,10 +3,14 @@
 const assert = require("assert");
 const {
   CUSTOMER_SETUP_QUESTIONS,
+  buildCustomerSetupQuestionnaireRecord,
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
+  customerSetupQuestionnaireFromTurns,
+  customerSetupRequiredPaths,
   normalizeOnboarding,
+  normalizeCustomerSetupQuestionnaire,
   onboardingCompletion
 } = require("./client-onboarding");
 
@@ -47,6 +51,35 @@ assert.ok(record.completion > 0 && record.completion < 100);
 const completed = createOnboardingRecord(normalized, { tenant_id: "pilot-2", status: "completed", updated_by: "Admin" });
 assert.strictEqual(completed.setup_completed, true);
 assert.ok(completed.setup_completed_at);
+
+const questionnaire = normalizeCustomerSetupQuestionnaire({
+  questions: [
+    { id: "company_name", label: "Nombre comercial visible", placeholder: "Ej. Mi marca", order: 2, required: true, active: true, type: "text", path: "ignored.path" },
+    { id: "phone", label: "No debería requerirse", order: 1, required: false, active: false, type: "tel" },
+    { id: "unknown_question", label: "No entra al contrato" }
+  ]
+}, "Super Admin", "2026-07-24T18:00:00.000Z");
+assert.strictEqual(questionnaire.questions.length, CUSTOMER_SETUP_QUESTIONS.length);
+assert.strictEqual(questionnaire.questions[0].id, "phone");
+assert.strictEqual(questionnaire.questions.find(function (q) { return q.id === "company_name"; }).path, "business.brand_name");
+assert.strictEqual(questionnaire.questions.find(function (q) { return q.id === "company_name"; }).label, "Nombre comercial visible");
+assert.strictEqual(questionnaire.questions.find(function (q) { return q.id === "phone"; }).active, false);
+assert.ok(!questionnaire.questions.find(function (q) { return q.id === "unknown_question"; }));
+assert.ok(!customerSetupRequiredPaths(questionnaire).includes("business.contact_phone"));
+
+const relaxedAnswers = cloneDefaults();
+relaxedAnswers.business.brand_name = "Cliente";
+const relaxedQuestionnaire = normalizeCustomerSetupQuestionnaire({
+  questions: CUSTOMER_SETUP_QUESTIONS.map(function (question) {
+    return Object.assign({}, question, { required: question.id === "company_name" });
+  })
+}, "Super Admin", "2026-07-24T18:05:00.000Z");
+assert.strictEqual(onboardingCompletion(relaxedAnswers, relaxedQuestionnaire), 100);
+
+const questionnaireRecord = buildCustomerSetupQuestionnaireRecord(questionnaire);
+const restoredQuestionnaire = customerSetupQuestionnaireFromTurns([questionnaireRecord]);
+assert.strictEqual(restoredQuestionnaire.updated_by, "Super Admin");
+assert.strictEqual(restoredQuestionnaire.questions.find(function (q) { return q.id === "company_name"; }).placeholder, "Ej. Mi marca");
 
 const coverageAnswers = cloneDefaults();
 coverageAnswers.operations.primary_country = "Colombia";

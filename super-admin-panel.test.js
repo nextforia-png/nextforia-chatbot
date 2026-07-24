@@ -62,6 +62,13 @@ renderSuperAdminPanel({
     version: "test",
     roles: [{ role: "super_admin", level: 4, owner: "NexforIA", scope: "platform", purpose: "Opera plataforma." }],
     future_panels: [{ id: "platform_super_admin", label: "Super admin", owner: "NexforIA", roles: ["super_admin"], purpose: "Opera plataforma." }]
+  },
+  customerSetupQuestionnaire: {
+    version: 1,
+    questions: [
+      { id: "company_name", path: "business.brand_name", section: "business", order: 10, active: true, required: true, type: "text", label: "Nombre comercial visible", placeholder: "Ej. Mi marca" },
+      { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "FAQs que debe aprender el bot", placeholder: "Pregunta y respuesta" }
+    ]
   }
 });
 
@@ -71,6 +78,7 @@ assert.match(html, /data-view="overview"/);
 assert.match(html, /data-view="clients"/);
 assert.match(html, /data-view="leads"/);
 assert.match(html, /data-view="incidents"/);
+assert.match(html, /data-view="questionnaire"/);
 assert.match(html, /data-view="billing"/);
 assert.match(html, /data-view="agendamiento"/);
 assert.match(html, /data-view="atencion"/);
@@ -81,6 +89,13 @@ assert.match(html, /mobile-goal-shell/);
 assert.match(html, /data-goal-label/);
 assert.match(html, /Editar meta de Lumen/);
 assert.match(html, /\/admin\/platform-goals\/customers/);
+assert.match(html, /Editor del cuestionario de setup/);
+assert.match(html, /\/admin\/customer-setup-questionnaire/);
+assert.match(html, /Nombre comercial visible/);
+assert.match(html, /FAQs que debe aprender el bot/);
+assert.match(html, /data-question-id="company_name"/);
+assert.match(html, /data-question-field="label"/);
+assert.match(html, /Guardar cuestionario/);
 assert.match(html, /id="goalTargetInput"/);
 assert.match(html, /Camino a 340/);
 assert.match(html, /--gradient-cyan/);

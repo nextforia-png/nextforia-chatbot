@@ -146,7 +146,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v89-platform-goals";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v90-fast-platform-goals";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3427,8 +3427,9 @@ async function loadPlatformGoals(requirePersistentRead) {
 }
 
 async function persistPlatformGoal(goalId, input, auth) {
-  const goals = await loadPlatformGoals(true);
-  const current = goals.find(function (goal) { return goal.id === goalId; })
+  const memoryGoal = platformGoalsFromTurns(conversationLogs.filter(isPlatformGoalTurn))
+    .find(function (goal) { return goal.id === goalId; });
+  const current = memoryGoal
     || DEFAULT_PLATFORM_GOALS.find(function (goal) { return goal.id === goalId; })
     || null;
   const goal = normalizePlatformGoal(

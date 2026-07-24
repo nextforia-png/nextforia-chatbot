@@ -64,6 +64,9 @@ function emptyBlock(iconName, title, body) {
 }
 
 function renderSuperAdminPanel(res, options) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   const auth = options.auth || {};
   const readiness = options.commercialReadiness || {};
   const accessModel = options.accessModel || {};

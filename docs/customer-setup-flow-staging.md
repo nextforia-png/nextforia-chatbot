@@ -131,6 +131,11 @@ al Cliente y Agendamiento, muestra los dos bloques necesarios en la página de
 negocio y valida solo datos visibles/esperados por paso. Esto evita que el
 cliente quede bloqueado en la segunda página por campos invisibles.
 
+Mejora v116: cuando falta una casilla o campo obligatorio, el setup muestra un
+mensaje con el nombre exacto de lo pendiente, marca en rojo inputs, radios,
+checkboxes, selección de objetivo y planes, y lleva al cliente al primer campo
+faltante.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

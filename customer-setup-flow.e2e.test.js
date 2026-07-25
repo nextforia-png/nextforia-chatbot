@@ -242,6 +242,10 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("Elige el plan para tu empresa"));
     assert(setupHtml.includes("No requiere autorización de Super Admin"));
     assert(setupHtml.includes("¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?"));
+    assert(setupHtml.includes("Te falta completar: "));
+    assert(setupHtml.includes("missingSummary"));
+    assert(setupHtml.includes(".field.invalid .segment span"));
+    assert(setupHtml.includes(".goalCards.invalid .goalCardBody"));
     assert(setupHtml.includes('name="selected_plan" value="starter"'));
     assert(!setupHtml.includes("Empresa Returning B"));
 

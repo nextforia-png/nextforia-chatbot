@@ -53,9 +53,15 @@ assert.match(html, /data-view="clients"/);
 assert.match(html, /data-view="leads"/);
 assert.match(html, /data-view="incidents"/);
 assert.match(html, /data-view="billing"/);
+assert.match(html, /data-view="questionnaire"/);
 assert.match(html, /data-view="agendamiento"/);
 assert.match(html, /data-view="atencion"/);
 assert.match(html, /Bandeja de operación/);
+assert.match(html, /Editor del Customer Setup/);
+assert.match(html, /id="questionnaireRows"/);
+assert.match(html, /Nueva pregunta/);
+assert.match(html, /Guardar cuestionario/);
+assert.match(html, /\/admin\/customer-setup-questionnaire/);
 assert.match(html, /\/admin\/assets\/lumen\.png/);
 // La tarjeta del sidebar acompaña el camino a los 340 clientes, no el margen.
 assert.match(html, /Camino a 340/);

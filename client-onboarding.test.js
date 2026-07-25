@@ -6,6 +6,7 @@ const {
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
+  normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
   onboardingCompletion
 } = require("./client-onboarding");
@@ -66,6 +67,27 @@ assert.ok(completedRecord.setup_completed_at);
 const editedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "draft", previous: completedRecord });
 assert.strictEqual(editedRecord.setup_completed, true);
 assert.strictEqual(editedRecord.setup_completed_at, completedRecord.setup_completed_at);
+
+const customQuestionnaire = normalizeCustomerSetupQuestionnaire({
+  questions: CUSTOMER_SETUP_QUESTIONS.concat([{
+    id: "custom_como_medir_exito",
+    label: "¿Cómo vamos a medir éxito?",
+    section: "business",
+    order: 85,
+    type: "textarea",
+    required: true,
+    active: true
+  }])
+}, "Root", "2026-07-25T00:00:00.000Z");
+const customQuestion = customQuestionnaire.questions.find(function (question) { return question.id === "custom_como_medir_exito"; });
+assert.strictEqual(customQuestion.path, "custom.como_medir_exito");
+assert.strictEqual(customQuestion.custom, true);
+assert.strictEqual(customQuestionnaire.updated_by, "Root");
+assert.ok(onboardingCompletion(completedAnswers, customQuestionnaire) < 100);
+const completedWithCustom = cloneDefaults();
+Object.assign(completedWithCustom, completedAnswers);
+completedWithCustom.custom.como_medir_exito = "Retención, citas confirmadas y ventas recuperadas.";
+assert.strictEqual(onboardingCompletion(completedWithCustom, customQuestionnaire), 100);
 
 const appointmentAnswers = cloneDefaults();
 appointmentAnswers.setup_goal = "appointments";

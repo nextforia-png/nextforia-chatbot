@@ -118,7 +118,8 @@ const DEFAULT_ONBOARDING = Object.freeze({
     data_consent_version: "",
     data_consent_accepted_at: "",
     setup_status: "draft"
-  }
+  },
+  custom: {}
 });
 
 // Stable, versioned question contract for the first-login setup. Super Admin can
@@ -168,6 +169,124 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "appointment_data_consent", path: "appointment_setup.data_consent", section: "appointments_review", order: 800, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" }
 ]);
 
+const QUESTION_TYPES = Object.freeze(["text", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
+const QUESTION_SECTIONS = Object.freeze([
+  "goal",
+  "business",
+  "offering",
+  "voice",
+  "appointments_business",
+  "appointments_rules",
+  "appointments_knowledge",
+  "appointments_schedule",
+  "appointments_followup",
+  "appointments_channels",
+  "appointments_review"
+]);
+const BASE_QUESTION_BY_ID = CUSTOMER_SETUP_QUESTIONS.reduce(function (acc, question) {
+  acc[question.id] = question;
+  return acc;
+}, {});
+
+function slugifyQuestionId(value) {
+  const clean = text(value, 90).toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return clean || "pregunta";
+}
+
+function normalizeQuestionType(value, fallback) {
+  const clean = text(value, 40).toLowerCase();
+  return QUESTION_TYPES.includes(clean) ? clean : (fallback || "text");
+}
+
+function normalizeQuestionSection(value, fallback) {
+  const clean = text(value, 60).toLowerCase();
+  return QUESTION_SECTIONS.includes(clean) ? clean : (fallback || "business");
+}
+
+function normalizeCustomQuestionId(input, label, used) {
+  const raw = text(input, 80).toLowerCase();
+  const base = raw.indexOf("custom_") === 0 ? raw.slice(7) : raw;
+  let id = "custom_" + slugifyQuestionId(base || label);
+  let suffix = 2;
+  while (used.has(id) || BASE_QUESTION_BY_ID[id]) {
+    id = "custom_" + slugifyQuestionId(base || label) + "_" + suffix;
+    suffix += 1;
+  }
+  used.add(id);
+  return id;
+}
+
+function customQuestionPath(id) {
+  return "custom." + slugifyQuestionId(String(id || "").replace(/^custom_/, ""));
+}
+
+function normalizeCustomerSetupQuestionnaire(input, actor, now) {
+  const source = input && typeof input === "object" ? input : {};
+  const incoming = Array.isArray(source.questions) ? source.questions : [];
+  const incomingById = incoming.reduce(function (acc, question) {
+    if (question && question.id) acc[String(question.id)] = question;
+    return acc;
+  }, {});
+  const normalizedAt = now || new Date().toISOString();
+  const usedCustomIds = new Set();
+  const questions = CUSTOMER_SETUP_QUESTIONS.map(function (base) {
+    const patch = incomingById[base.id] || {};
+    return Object.assign({}, base, {
+      active: patch.active === false ? false : true,
+      required: patch.required === false ? false : true,
+      order: Number.isFinite(Number(patch.order)) ? Number(patch.order) : base.order,
+      type: normalizeQuestionType(patch.type, base.type),
+      label: text(patch.label, 220) || base.label,
+      placeholder: text(patch.placeholder, 500)
+    });
+  });
+  incoming.forEach(function (question) {
+    if (!question || BASE_QUESTION_BY_ID[question.id]) return;
+    const label = text(question.label, 220) || "Nueva pregunta";
+    const id = normalizeCustomQuestionId(question.id, label, usedCustomIds);
+    questions.push({
+      id,
+      path: customQuestionPath(id),
+      section: normalizeQuestionSection(question.section, "business"),
+      order: Number.isFinite(Number(question.order)) ? Number(question.order) : 900 + questions.length,
+      active: question.active !== false,
+      required: question.required === true,
+      type: normalizeQuestionType(question.type, "text"),
+      label,
+      placeholder: text(question.placeholder, 500),
+      custom: true
+    });
+  });
+  questions.sort(function (a, b) {
+    return (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id));
+  });
+  return {
+    version: 1,
+    updated_at: normalizedAt,
+    updated_by: text(actor, 120),
+    questions
+  };
+}
+
+function questionAppliesToAnswers(question, answers) {
+  const goal = answers && answers.setup_goal || "unknown";
+  if (question.path === "setup_goal") return true;
+  if (question.section === "business") return goal === "customer_service" || goal === "both";
+  const appointmentQuestion = String(question.section || "").indexOf("appointments_") === 0 || String(question.path || "").indexOf("appointment_setup.") === 0;
+  if (appointmentQuestion) return goal === "appointments" || goal === "both";
+  return goal === "customer_service" || goal === "both";
+}
+
+function requiredPathsForQuestionnaire(answers, questionnaire) {
+  if (!questionnaire || !Array.isArray(questionnaire.questions)) return null;
+  return questionnaire.questions.filter(function (question) {
+    return question && question.active !== false && question.required === true && question.path && questionAppliesToAnswers(question, answers);
+  }).map(function (question) { return question.path; });
+}
+
 function cloneDefaults() {
   return JSON.parse(JSON.stringify(DEFAULT_ONBOARDING));
 }
@@ -191,6 +310,12 @@ function normalizeOnboarding(input) {
   const team = input.team || {};
   const confirmations = input.confirmations || {};
   const appointmentSetup = input.appointment_setup || {};
+  const custom = input.custom && typeof input.custom === "object" ? input.custom : {};
+  const normalizedCustom = {};
+  Object.keys(custom).slice(0, 120).forEach(function (key) {
+    const cleanKey = slugifyQuestionId(key);
+    if (cleanKey) normalizedCustom[cleanKey] = text(custom[key], 8000);
+  });
   const yesNoUnknown = ["yes", "no", "unknown"];
   const whatsappIntent = choice(meta.whatsapp_integration_intent, ["yes", "later", "no", "unknown"], "unknown");
   const setupGoal = choice(input.setup_goal, ["customer_service", "appointments", "both", "unknown"], "unknown");
@@ -322,7 +447,8 @@ function normalizeOnboarding(input) {
       data_consent_version: text(appointmentSetup.data_consent_version, 80),
       data_consent_accepted_at: text(appointmentSetup.data_consent_accepted_at, 40),
       setup_status: choice(appointmentSetup.setup_status, ["draft", "pending_review", "changes_requested", "approved", "active", "ready"], "draft")
-    }
+    },
+    custom: normalizedCustom
   };
 }
 
@@ -374,17 +500,19 @@ const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
   "appointment_setup.data_consent"
 ];
 
-function requiredPathsForAnswers(input) {
+function requiredPathsForAnswers(input, questionnaire) {
   const answers = normalizeOnboarding(input);
+  const questionnaireRequired = requiredPathsForQuestionnaire(answers, questionnaire);
+  if (questionnaireRequired && questionnaireRequired.length) return questionnaireRequired;
   if (answers.setup_goal === "appointments" || answers.setup_goal === "both") return APPOINTMENT_STAGE1_REQUIRED_PATHS;
   return CUSTOMER_SERVICE_REQUIRED_PATHS;
 }
 
 const REQUIRED_PATHS = CUSTOMER_SERVICE_REQUIRED_PATHS;
 
-function onboardingCompletion(input) {
+function onboardingCompletion(input, questionnaire) {
   const answers = normalizeOnboarding(input);
-  const required = requiredPathsForAnswers(answers);
+  const required = requiredPathsForAnswers(answers, questionnaire);
   const complete = required.filter(function (path) {
     const value = getPath(answers, path);
     return value !== "" && value !== "unknown" && value !== false && value != null;
@@ -416,7 +544,7 @@ function createOnboardingRecord(input, meta) {
     questionnaire_version: 1,
     tenant_id: text(meta.tenant_id, 80),
     status,
-    completion: onboardingCompletion(answers),
+    completion: onboardingCompletion(answers, meta.questionnaire),
     setup_completed: setupCompleted,
     setup_completed_at: setupCompletedAt,
     last_updated_at: now,
@@ -440,12 +568,15 @@ function buildCoverageConversationContext(record) {
 module.exports = {
   CUSTOMER_SETUP_QUESTIONS,
   DEFAULT_ONBOARDING,
+  QUESTION_SECTIONS,
+  QUESTION_TYPES,
   APPOINTMENT_STAGE1_REQUIRED_PATHS,
   CUSTOMER_SERVICE_REQUIRED_PATHS,
   REQUIRED_PATHS,
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
+  normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
   onboardingCompletion
 };

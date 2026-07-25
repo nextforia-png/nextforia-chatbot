@@ -239,6 +239,10 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("admin@setup-a.example"));
     assert(setupHtml.includes("Growth"));
     assert(setupHtml.includes("Atención al cliente"));
+    assert(setupHtml.includes("Revisa y confirma el entrenamiento"));
+    assert(setupHtml.includes('id="setupSummaryGrid"'));
+    assert(setupHtml.includes("autoSaveDraft"));
+    assert(setupHtml.includes("Guardado automático"));
     assert(setupHtml.includes("Elige el plan para tu empresa"));
     assert(setupHtml.includes("No requiere autorización de Super Admin"));
     assert(setupHtml.includes("¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?"));
@@ -268,6 +272,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.onboarding.tenant_id, "tenant-setup-a");
+    assert.strictEqual(payload.onboarding.status, "draft");
     assert.strictEqual(payload.onboarding.setup_completed, false);
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "Servicios A");
     assert.strictEqual(payload.selected_plan_id, "starter");
@@ -293,6 +298,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.onboarding.setup_completed, true);
+    assert.strictEqual(payload.onboarding.status, "completed");
     assert.strictEqual(payload.onboarding.answers.setup_goal, "customer_service");
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.data_consent, true);
@@ -300,6 +306,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_intent, "yes");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_status, "requested");
     assert(payload.onboarding.setup_completed_at);
+    assert(payload.onboarding.last_updated_at);
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
 
     response = await fetch(base + "/admin/panel?tab=summary", {

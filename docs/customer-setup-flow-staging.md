@@ -136,6 +136,12 @@ mensaje con el nombre exacto de lo pendiente, marca en rojo inputs, radios,
 checkboxes, selección de objetivo y planes, y lleva al cliente al primer campo
 faltante.
 
+Mejora v118: el cuestionario autoguarda borradores mientras el cliente escribe o
+avanza, permite salir y continuar luego, muestra un resumen simple antes de
+confirmar y sigue persistiendo estados `draft`/`completed`, `last_updated_at` y
+`setup_completed_at` en el mismo registro compartido `client-onboarding:{tenant}`.
+No activa bots automáticamente ni duplica datos.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

@@ -135,6 +135,16 @@ assert.strictEqual(appointmentRecord.answers.setup_goal, "appointments");
 assert.strictEqual(appointmentRecord.answers.appointment_setup.setup_status, "pending_review");
 assert.strictEqual(appointmentRecord.setup_completed, true);
 
+const bothAnswers = JSON.parse(JSON.stringify(completedAnswers));
+bothAnswers.setup_goal = "both";
+bothAnswers.appointment_setup = JSON.parse(JSON.stringify(appointmentAnswers.appointment_setup));
+assert.strictEqual(onboardingCompletion(bothAnswers), 100, "ambos bots exige y acepta ambos bloques visibles");
+const bothRecord = createOnboardingRecord(bothAnswers, { tenant_id: "ambos-bots", status: "completed" });
+assert.strictEqual(bothRecord.answers.setup_goal, "both");
+assert.strictEqual(bothRecord.answers.customer_service_setup.setup_status, "pending_review");
+assert.strictEqual(bothRecord.answers.appointment_setup.setup_status, "pending_review");
+assert.strictEqual(bothRecord.setup_completed, true);
+
 const coverageAnswers = cloneDefaults();
 coverageAnswers.operations.primary_country = "Colombia";
 coverageAnswers.operations.countries_served = "Colombia y Panamá";

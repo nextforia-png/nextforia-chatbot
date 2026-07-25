@@ -568,6 +568,9 @@ function requiredPathsForAnswers(input, questionnaire) {
   if (answers.setup_goal === "unknown") return ["setup_goal"];
   const questionnaireRequired = requiredPathsForQuestionnaire(answers, questionnaire);
   if (questionnaireRequired && questionnaireRequired.length) return questionnaireRequired;
+  if (answers.setup_goal === "both") {
+    return Array.from(new Set(CUSTOMER_SERVICE_REQUIRED_PATHS.concat(APPOINTMENT_STAGE1_REQUIRED_PATHS)));
+  }
   if (answers.setup_goal === "appointments" || answers.setup_goal === "both") return APPOINTMENT_STAGE1_REQUIRED_PATHS;
   return CUSTOMER_SERVICE_REQUIRED_PATHS;
 }

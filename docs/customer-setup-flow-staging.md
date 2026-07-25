@@ -126,6 +126,11 @@ en un mes y guardan el aproximado en `operations.monthly_customer_volume`. Este
 dato queda listo para recomendación de plan, estimación de capacidad y cálculo
 de consumo de tokens por cliente.
 
+Corrección v115: al elegir `both`, el onboarding recorre las etapas de Atención
+al Cliente y Agendamiento, muestra los dos bloques necesarios en la página de
+negocio y valida solo datos visibles/esperados por paso. Esto evita que el
+cliente quede bloqueado en la segunda página por campos invisibles.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

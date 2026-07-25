@@ -122,6 +122,15 @@ function appointmentStageOneAnswers(company) {
   };
 }
 
+function bothBotAnswers(company, email) {
+  const service = completedAnswers(company, email, "Both");
+  const appointment = appointmentStageOneAnswers(company);
+  service.setup_goal = "both";
+  service.operations.monthly_customer_volume = "420";
+  service.appointment_setup = appointment.appointment_setup;
+  return service;
+}
+
 (async function run() {
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -159,6 +168,17 @@ function appointmentStageOneAnswers(company) {
       plan_id: "scale",
       assigned_bot_id: "agendamiento",
       setup_completed: false
+    },
+    {
+      user_id: "44444444-4444-4444-8444-444444444444",
+      tenant_id: "tenant-both-d",
+      company_name: "Empresa Ambos D",
+      email: "admin@ambos-d.example",
+      password,
+      role: "admin",
+      plan_id: "growth",
+      assigned_bot_id: "atencion-cliente",
+      setup_completed: false
     }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
@@ -187,6 +207,7 @@ function appointmentStageOneAnswers(company) {
     const cookieA = await login(base, fixtures[0].email, password);
     const cookieB = await login(base, fixtures[1].email, password);
     const cookieC = await login(base, fixtures[2].email, password);
+    const cookieD = await login(base, fixtures[3].email, password);
 
     let response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },
@@ -324,6 +345,19 @@ function appointmentStageOneAnswers(company) {
     assert.strictEqual(payload.onboarding.answers.appointment_setup.data_consent, true);
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "180");
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
+
+    response = await fetch(base + "/admin/client-onboarding/data", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: cookieD },
+      body: JSON.stringify({ status: "completed", answers: bothBotAnswers("Empresa Ambos D", fixtures[3].email) })
+    });
+    assert.strictEqual(response.status, 200, "both-bots setup completes with customer-service and appointment answers");
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.answers.setup_goal, "both");
+    assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "pending_review");
+    assert.strictEqual(payload.onboarding.answers.appointment_setup.setup_status, "pending_review");
+    assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "420");
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
 
     console.log("customer-setup-flow.e2e.test.js: ok");

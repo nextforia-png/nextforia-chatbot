@@ -182,7 +182,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v116-staging-setup-field-errors";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v117-staging-questionnaire-no-hard-delete";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3761,7 +3761,19 @@ async function loadCustomerSetupQuestionnaire(force) {
 }
 
 async function persistCustomerSetupQuestionnaire(input, auth) {
-  const questionnaire = normalizeCustomerSetupQuestionnaire(input, auth && (auth.name || auth.username), new Date().toISOString());
+  const current = await loadCustomerSetupQuestionnaire(false);
+  const incoming = input && typeof input === "object" ? input : {};
+  const incomingQuestions = Array.isArray(incoming.questions) ? incoming.questions : [];
+  const incomingIds = new Set(incomingQuestions.map(function (question) { return String(question && question.id || ""); }).filter(Boolean));
+  const preservedQuestions = (current && Array.isArray(current.questions) ? current.questions : [])
+    .filter(function (question) {
+      return question && question.custom && question.id && !incomingIds.has(String(question.id));
+    });
+  const questionnaire = normalizeCustomerSetupQuestionnaire(
+    Object.assign({}, incoming, { questions: incomingQuestions.concat(preservedQuestions) }),
+    auth && (auth.name || auth.username),
+    new Date().toISOString()
+  );
   const rec = {
     ts: questionnaire.updated_at,
     userId: CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,

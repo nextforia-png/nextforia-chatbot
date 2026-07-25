@@ -47,6 +47,7 @@ const DEFAULT_ONBOARDING = Object.freeze({
   operations: {
     primary_country: "Colombia",
     primary_city: "",
+    monthly_customer_volume: "",
     countries_served: "Colombia",
     foreign_number_location_check: true,
     business_hours: "",
@@ -152,6 +153,7 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "business_hours", path: "operations.support_hours", section: "business", order: 80, active: true, required: true, type: "textarea", label: "Horario de atención humana" },
   { id: "primary_country", path: "operations.primary_country", section: "business", order: 82, active: true, required: true, type: "text", label: "País principal" },
   { id: "primary_city", path: "operations.primary_city", section: "business", order: 84, active: true, required: true, type: "text", label: "Ciudad principal" },
+  { id: "monthly_customer_volume", path: "operations.monthly_customer_volume", section: "business", order: 85, active: true, required: true, type: "number", label: "Clientes atendidos al mes" },
   { id: "customer_service_offer_type", path: "customer_service_setup.business_offer_type", section: "business", order: 86, active: true, required: true, type: "choice", label: "¿Qué vende tu empresa?" },
   { id: "customer_service_offer_description", path: "customer_service_setup.business_offer_description", section: "business", order: 88, active: true, required: true, type: "textarea", label: "Qué ofreces" },
   { id: "customer_service_ideal_customer", path: "customer_service_setup.ideal_customer", section: "business", order: 89, active: true, required: true, type: "textarea", label: "Cliente ideal" },
@@ -196,7 +198,7 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "appointment_data_consent", path: "appointment_setup.data_consent", section: "appointments_review", order: 800, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" }
 ]);
 
-const QUESTION_TYPES = Object.freeze(["text", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
+const QUESTION_TYPES = Object.freeze(["text", "number", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
 const QUESTION_SECTIONS = Object.freeze([
   "goal",
   "business",
@@ -301,6 +303,7 @@ function normalizeCustomerSetupQuestionnaire(input, actor, now) {
 function questionAppliesToAnswers(question, answers) {
   const goal = answers && answers.setup_goal || "unknown";
   if (question.path === "setup_goal") return true;
+  if (question.path === "operations.monthly_customer_volume") return goal === "customer_service" || goal === "appointments" || goal === "both";
   if (question.section === "business") return goal === "customer_service" || goal === "both";
   const appointmentQuestion = String(question.section || "").indexOf("appointments_") === 0 || String(question.path || "").indexOf("appointment_setup.") === 0;
   if (appointmentQuestion) return goal === "appointments" || goal === "both";
@@ -398,6 +401,7 @@ function normalizeOnboarding(input) {
     operations: {
       primary_country: text(operations.primary_country, 120) || "Colombia",
       primary_city: text(operations.primary_city, 120),
+      monthly_customer_volume: text(operations.monthly_customer_volume, 80),
       countries_served: text(operations.countries_served, 1200),
       foreign_number_location_check: operations.foreign_number_location_check !== false,
       business_hours: text(operations.business_hours, 1200),
@@ -508,6 +512,7 @@ const CUSTOMER_SERVICE_REQUIRED_PATHS = [
   "business.brand_name",
   "operations.primary_country",
   "operations.primary_city",
+  "operations.monthly_customer_volume",
   "customer_service_setup.business_offer_type",
   "customer_service_setup.business_offer_description",
   "customer_service_setup.ideal_customer",
@@ -533,6 +538,7 @@ const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
   "setup_goal",
   "appointment_setup.business_name",
   "appointment_setup.business_category",
+  "operations.monthly_customer_volume",
   "appointment_setup.target_customer",
   "appointment_setup.business_description",
   "appointment_setup.assistant_tone",

@@ -121,6 +121,11 @@ Nextfor, tono comercial, restricciones de marca, logo con vista previa y
 consentimiento obligatorio antes de terminar. El setup de Agendamiento permanece
 separado y sin regresiones.
 
+Mejora v114: ambos setups preguntan cuántos clientes atiende normalmente la línea
+en un mes y guardan el aproximado en `operations.monthly_customer_volume`. Este
+dato queda listo para recomendación de plan, estimación de capacidad y cálculo
+de consumo de tokens por cliente.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

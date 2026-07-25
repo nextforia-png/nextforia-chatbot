@@ -58,6 +58,7 @@ function completedAnswers(company, email, marker) {
     operations: {
       primary_country: "Colombia",
       primary_city: "Bogotá",
+      monthly_customer_volume: "300",
       support_hours: "Lunes a viernes",
       services_products: "Servicios " + marker,
       frequent_questions: "Preguntas " + marker,
@@ -85,6 +86,9 @@ function completedAnswers(company, email, marker) {
 function appointmentStageOneAnswers(company) {
   return {
     setup_goal: "appointments",
+    operations: {
+      monthly_customer_volume: "180"
+    },
     appointment_setup: {
       business_name: company,
       business_category: "salud_bienestar",
@@ -203,6 +207,8 @@ function appointmentStageOneAnswers(company) {
     assert(setupHtml.includes("TODO GRAN VENDEDOR EMPIEZA CONOCIENDO SU EMPRESA"));
     assert(setupHtml.includes("Enséñale a Nextfor qué hace especial tu negocio"));
     assert(setupHtml.includes("¿Qué vende tu empresa?"));
+    assert(setupHtml.includes("¿Cuántos clientes atiende normalmente tu línea en un mes?"));
+    assert(setupHtml.includes("operations.monthly_customer_volume"));
     assert(setupHtml.includes("customer_service_setup.business_offer_type"));
     assert(setupHtml.includes("Haz que Nextfor se sienta parte de tu equipo"));
     assert(setupHtml.includes("Enséñale qué puede resolver y cuándo debe llamarte"));
@@ -265,6 +271,7 @@ function appointmentStageOneAnswers(company) {
     assert.strictEqual(payload.onboarding.answers.setup_goal, "customer_service");
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.data_consent, true);
+    assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "300");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_intent, "yes");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_status, "requested");
     assert(payload.onboarding.setup_completed_at);
@@ -315,6 +322,7 @@ function appointmentStageOneAnswers(company) {
     assert.strictEqual(payload.onboarding.answers.appointment_setup.business_name, "Empresa Citas C");
     assert.strictEqual(payload.onboarding.answers.appointment_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.appointment_setup.data_consent, true);
+    assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "180");
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
 

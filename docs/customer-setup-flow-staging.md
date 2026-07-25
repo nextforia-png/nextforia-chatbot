@@ -44,6 +44,31 @@ El documento versionado incluye:
 - `appointment_setup.assistant_tone`
 - `appointment_setup.bot_display_name`
 - `appointment_setup.bot_image`
+- `appointment_setup.allowed_topics`
+- `appointment_setup.forbidden_topics`
+- `appointment_setup.escalation_triggers`
+- `appointment_setup.escalation_contact`
+- `appointment_setup.services`
+- `appointment_setup.business_hours`
+- `appointment_setup.payment_methods`
+- `appointment_setup.faqs`
+- `appointment_setup.knowledge_documents`
+- `appointment_setup.staff_mode`
+- `appointment_setup.appointment_locations`
+- `appointment_setup.availability_rules`
+- `appointment_setup.required_booking_fields`
+- `appointment_setup.booking_confirmation_mode`
+- `appointment_setup.cancellation_policy`
+- `appointment_setup.calendar_provider`
+- `appointment_setup.reminder_channel`
+- `appointment_setup.reminder_timing`
+- `appointment_setup.survey_enabled`
+- `appointment_setup.operational_channels`
+- `appointment_setup.social_accounts`
+- `appointment_setup.data_consent`
+- `appointment_setup.data_consent_version`
+- `appointment_setup.data_consent_accepted_at`
+- `appointment_setup.setup_status`
 - respuestas del negocio, operación, equipo y estilo de comunicación
 
 El `tenant_id` nunca se acepta desde URL, query o body: se deriva de la sesión
@@ -68,12 +93,22 @@ WhatsApp con Meta desde Nextfor IA. La respuesta se guarda en
 automático/guided setup con Meta sin marcar la integración como conectada antes de
 tener permisos reales.
 
-Mejora v107: el setup inicia con la pregunta de objetivo `setup_goal`
+Mejora v109: el setup inicia con la pregunta de objetivo `setup_goal`
 (`customer_service`, `appointments`, `both`). Cuando el cliente elige
-`appointments` o `both`, el siguiente paso muestra únicamente el cuestionario real
-de "Tu negocio" para Agendamiento: nombre del negocio, categoría, cliente objetivo,
-descripción de atención, tono, nombre visible de NextforIA e imagen opcional. Este
-camino no exige ni modifica las preguntas del ChatBot de atención al cliente.
+`appointments` o `both`, el recorrido cambia a la narrativa de entrenamiento:
+"estás entrenando a Nextfor como nuevo integrante de tu equipo". Usa el asset
+`/admin/assets/lumen-entrenando.png` como mascota del setup y muestra las etapas
+de Agendamiento: Tu negocio, Sus reglas, Su conocimiento, Tu agenda, Seguimiento,
+Canales, Revisión y Plan. Este camino no exige ni modifica las preguntas del
+ChatBot de atención al cliente.
+
+Al finalizar un setup de Agendamiento, `appointment_setup.setup_status` queda como
+`pending_review` y se registran los datos de consentimiento (`data_consent`,
+`data_consent_version`, `data_consent_accepted_at`) dentro del mismo registro
+central del tenant.
+
+El asset de Lumen Entrenando se publica como `/admin/assets/lumen-entrenando.png`
+optimizado para carga rápida en móvil.
 
 ## Contrato de preguntas
 
@@ -91,8 +126,9 @@ respuestas existentes.
 - Implementar el flujo real de conexión con Meta/WhatsApp Cloud API a partir de
   `meta.whatsapp_integration_intent=requested`, con estados auditables y manejo de
   permisos/verificación del dueño.
-- Continuar las etapas 2-6 de Agendamiento: servicios, agenda, forma de atender,
-  seguimiento y revisión final con `setup_status=pending_review`.
+- Implementar procesamiento real de documentos, conexión real de calendarios y
+  estados de canales controlados desde Super Admin.
+- Exponer revisión/aprobación/activación de `appointment_setup.setup_status`.
 
 ## Rollback
 

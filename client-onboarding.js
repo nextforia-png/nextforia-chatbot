@@ -75,11 +75,48 @@ const DEFAULT_ONBOARDING = Object.freeze({
   appointment_setup: {
     business_name: "",
     business_category: "",
+    business_category_other: "",
     target_customer: "",
     business_description: "",
     assistant_tone: "",
     bot_display_name: "",
     bot_image: "",
+    bot_logo: "",
+    allowed_topics: "",
+    forbidden_topics: "",
+    escalation_triggers: "",
+    escalation_contact: "",
+    human_support_hours: "",
+    services: "",
+    business_hours: "",
+    payment_methods: "",
+    faqs: "",
+    knowledge_documents: "",
+    staff_mode: "",
+    appointment_staff: "",
+    appointment_locations: "",
+    availability_rules: "",
+    required_booking_fields: "",
+    minimum_booking_notice: "",
+    maximum_booking_window: "",
+    booking_confirmation_mode: "",
+    cancellation_policy: "",
+    no_show_policy: "",
+    booking_payment_required: "",
+    booking_payment_details: "",
+    calendar_provider: "",
+    calendar_email: "",
+    reminder_channel: "",
+    reminder_timing: "",
+    survey_enabled: "unknown",
+    survey_scale: "",
+    high_rating_action: "",
+    low_rating_action: "",
+    operational_channels: "",
+    social_accounts: "",
+    data_consent: false,
+    data_consent_version: "",
+    data_consent_accepted_at: "",
     setup_status: "draft"
   }
 });
@@ -107,7 +144,28 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "appointment_business_description", path: "appointment_setup.business_description", section: "appointments_business", order: 230, active: true, required: true, type: "textarea", label: "¿Qué hace especial tu forma de atender?" },
   { id: "appointment_assistant_tone", path: "appointment_setup.assistant_tone", section: "appointments_business", order: 240, active: true, required: true, type: "choice", label: "¿Cómo quieres que NextforIA hable con tus clientes?" },
   { id: "appointment_display_name", path: "appointment_setup.bot_display_name", section: "appointments_business", order: 250, active: true, required: true, type: "text", label: "¿Cómo quieres que NextforIA se presente?" },
-  { id: "appointment_bot_image", path: "appointment_setup.bot_image", section: "appointments_business", order: 260, active: true, required: false, type: "text", label: "Logo o imagen" }
+  { id: "appointment_bot_image", path: "appointment_setup.bot_image", section: "appointments_business", order: 260, active: true, required: false, type: "file", label: "Logo o imagen" },
+  { id: "appointment_allowed_topics", path: "appointment_setup.allowed_topics", section: "appointments_rules", order: 300, active: true, required: true, type: "textarea", label: "Temas que puede responder" },
+  { id: "appointment_forbidden_topics", path: "appointment_setup.forbidden_topics", section: "appointments_rules", order: 310, active: true, required: true, type: "textarea", label: "Temas que debe evitar" },
+  { id: "appointment_escalation_triggers", path: "appointment_setup.escalation_triggers", section: "appointments_rules", order: 320, active: true, required: true, type: "textarea", label: "Cuándo debe pedir ayuda" },
+  { id: "appointment_escalation_contact", path: "appointment_setup.escalation_contact", section: "appointments_rules", order: 330, active: true, required: true, type: "text", label: "Responsable de apoyo humano" },
+  { id: "appointment_services", path: "appointment_setup.services", section: "appointments_knowledge", order: 400, active: true, required: true, type: "textarea", label: "Servicios que se pueden reservar" },
+  { id: "appointment_business_hours", path: "appointment_setup.business_hours", section: "appointments_knowledge", order: 410, active: true, required: true, type: "textarea", label: "Horario general de atención" },
+  { id: "appointment_payment_methods", path: "appointment_setup.payment_methods", section: "appointments_knowledge", order: 420, active: true, required: false, type: "textarea", label: "Métodos de pago" },
+  { id: "appointment_faqs", path: "appointment_setup.faqs", section: "appointments_knowledge", order: 430, active: true, required: false, type: "textarea", label: "Preguntas frecuentes" },
+  { id: "appointment_staff_mode", path: "appointment_setup.staff_mode", section: "appointments_schedule", order: 500, active: true, required: true, type: "choice", label: "Quién atiende las citas" },
+  { id: "appointment_locations", path: "appointment_setup.appointment_locations", section: "appointments_schedule", order: 510, active: true, required: true, type: "textarea", label: "Dónde se realizan las citas" },
+  { id: "appointment_availability_rules", path: "appointment_setup.availability_rules", section: "appointments_schedule", order: 520, active: true, required: true, type: "textarea", label: "Disponibilidad para citas" },
+  { id: "appointment_required_booking_fields", path: "appointment_setup.required_booking_fields", section: "appointments_schedule", order: 530, active: true, required: true, type: "textarea", label: "Datos necesarios para reservar" },
+  { id: "appointment_booking_confirmation_mode", path: "appointment_setup.booking_confirmation_mode", section: "appointments_schedule", order: 540, active: true, required: true, type: "choice", label: "Confirmación de citas" },
+  { id: "appointment_cancellation_policy", path: "appointment_setup.cancellation_policy", section: "appointments_schedule", order: 550, active: true, required: true, type: "textarea", label: "Cancelaciones y cambios" },
+  { id: "appointment_calendar_provider", path: "appointment_setup.calendar_provider", section: "appointments_schedule", order: 560, active: true, required: true, type: "choice", label: "Calendario actual" },
+  { id: "appointment_reminder_channel", path: "appointment_setup.reminder_channel", section: "appointments_followup", order: 600, active: true, required: true, type: "choice", label: "Canal de recordatorios" },
+  { id: "appointment_reminder_timing", path: "appointment_setup.reminder_timing", section: "appointments_followup", order: 610, active: true, required: true, type: "choice", label: "Momento de recordatorio" },
+  { id: "appointment_survey_enabled", path: "appointment_setup.survey_enabled", section: "appointments_followup", order: 620, active: true, required: true, type: "choice", label: "Encuesta posterior" },
+  { id: "appointment_operational_channels", path: "appointment_setup.operational_channels", section: "appointments_channels", order: 700, active: true, required: true, type: "textarea", label: "Canales operativos" },
+  { id: "appointment_social_accounts", path: "appointment_setup.social_accounts", section: "appointments_channels", order: 710, active: true, required: false, type: "textarea", label: "Redes del negocio" },
+  { id: "appointment_data_consent", path: "appointment_setup.data_consent", section: "appointments_review", order: 800, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" }
 ]);
 
 function cloneDefaults() {
@@ -218,6 +276,7 @@ function normalizeOnboarding(input) {
         "salud_bienestar", "belleza_estetica", "servicios_profesionales", "legal",
         "inmobiliaria", "restaurantes", "educacion", "automotriz", "otro"
       ], ""),
+      business_category_other: text(appointmentSetup.business_category_other, 160),
       target_customer: text(appointmentSetup.target_customer, 1200),
       business_description: text(appointmentSetup.business_description, 1800),
       assistant_tone: choice(appointmentSetup.assistant_tone, [
@@ -225,8 +284,44 @@ function normalizeOnboarding(input) {
         "directo_sencillo", "alegre_casual"
       ], ""),
       bot_display_name: text(appointmentSetup.bot_display_name, 120),
-      bot_image: text(appointmentSetup.bot_image, 500),
-      setup_status: choice(appointmentSetup.setup_status, ["draft", "pending_review", "ready"], "draft")
+      bot_image: text(appointmentSetup.bot_image, 800000),
+      bot_logo: text(appointmentSetup.bot_logo, 800000),
+      allowed_topics: text(appointmentSetup.allowed_topics, 2500),
+      forbidden_topics: text(appointmentSetup.forbidden_topics, 2500),
+      escalation_triggers: text(appointmentSetup.escalation_triggers, 2500),
+      escalation_contact: text(appointmentSetup.escalation_contact, 1000),
+      human_support_hours: text(appointmentSetup.human_support_hours, 1200),
+      services: text(appointmentSetup.services, 7000),
+      business_hours: text(appointmentSetup.business_hours, 2000),
+      payment_methods: text(appointmentSetup.payment_methods, 2000),
+      faqs: text(appointmentSetup.faqs, 5000),
+      knowledge_documents: text(appointmentSetup.knowledge_documents, 5000),
+      staff_mode: choice(appointmentSetup.staff_mode, ["one", "multiple", "depends", ""], ""),
+      appointment_staff: text(appointmentSetup.appointment_staff, 5000),
+      appointment_locations: text(appointmentSetup.appointment_locations, 5000),
+      availability_rules: text(appointmentSetup.availability_rules, 5000),
+      required_booking_fields: text(appointmentSetup.required_booking_fields, 2500),
+      minimum_booking_notice: text(appointmentSetup.minimum_booking_notice, 500),
+      maximum_booking_window: text(appointmentSetup.maximum_booking_window, 500),
+      booking_confirmation_mode: choice(appointmentSetup.booking_confirmation_mode, ["automatic", "manual_approval", "depends", ""], ""),
+      cancellation_policy: text(appointmentSetup.cancellation_policy, 3000),
+      no_show_policy: text(appointmentSetup.no_show_policy, 2500),
+      booking_payment_required: choice(appointmentSetup.booking_payment_required, ["no", "full", "deposit", "depends", ""], ""),
+      booking_payment_details: text(appointmentSetup.booking_payment_details, 2500),
+      calendar_provider: choice(appointmentSetup.calendar_provider, ["google", "outlook", "calendly", "other", "none", ""], ""),
+      calendar_email: text(appointmentSetup.calendar_email, 180).toLowerCase(),
+      reminder_channel: choice(appointmentSetup.reminder_channel, ["whatsapp", "email", "sms", "none", ""], ""),
+      reminder_timing: choice(appointmentSetup.reminder_timing, ["24h", "2h", "both", "custom", "none", ""], ""),
+      survey_enabled: choice(appointmentSetup.survey_enabled, ["yes", "no", "unknown"], "unknown"),
+      survey_scale: choice(appointmentSetup.survey_scale, ["1_5", "1_10", "nps", ""], ""),
+      high_rating_action: text(appointmentSetup.high_rating_action, 2000),
+      low_rating_action: text(appointmentSetup.low_rating_action, 2000),
+      operational_channels: text(appointmentSetup.operational_channels, 2500),
+      social_accounts: text(appointmentSetup.social_accounts, 2500),
+      data_consent: !!appointmentSetup.data_consent,
+      data_consent_version: text(appointmentSetup.data_consent_version, 80),
+      data_consent_accepted_at: text(appointmentSetup.data_consent_accepted_at, 40),
+      setup_status: choice(appointmentSetup.setup_status, ["draft", "pending_review", "changes_requested", "approved", "active", "ready"], "draft")
     }
   };
 }
@@ -258,7 +353,25 @@ const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
   "appointment_setup.target_customer",
   "appointment_setup.business_description",
   "appointment_setup.assistant_tone",
-  "appointment_setup.bot_display_name"
+  "appointment_setup.bot_display_name",
+  "appointment_setup.allowed_topics",
+  "appointment_setup.forbidden_topics",
+  "appointment_setup.escalation_triggers",
+  "appointment_setup.escalation_contact",
+  "appointment_setup.services",
+  "appointment_setup.business_hours",
+  "appointment_setup.staff_mode",
+  "appointment_setup.appointment_locations",
+  "appointment_setup.availability_rules",
+  "appointment_setup.required_booking_fields",
+  "appointment_setup.booking_confirmation_mode",
+  "appointment_setup.cancellation_policy",
+  "appointment_setup.calendar_provider",
+  "appointment_setup.reminder_channel",
+  "appointment_setup.reminder_timing",
+  "appointment_setup.survey_enabled",
+  "appointment_setup.operational_channels",
+  "appointment_setup.data_consent"
 ];
 
 function requiredPathsForAnswers(input) {
@@ -284,6 +397,15 @@ function createOnboardingRecord(input, meta) {
   const answers = normalizeOnboarding(input);
   const now = new Date().toISOString();
   const status = choice(meta.status, ["draft", "submitted", "completed", "in_review", "ready"], "draft");
+  if (status === "completed" && (answers.setup_goal === "appointments" || answers.setup_goal === "both")) {
+    answers.appointment_setup.setup_status = "pending_review";
+    if (answers.appointment_setup.data_consent && !answers.appointment_setup.data_consent_accepted_at) {
+      answers.appointment_setup.data_consent_accepted_at = now;
+    }
+    if (answers.appointment_setup.data_consent && !answers.appointment_setup.data_consent_version) {
+      answers.appointment_setup.data_consent_version = "nextforia-customer-setup-2026-07";
+    }
+  }
   const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};
   const setupCompleted = previous.setup_completed === true || status === "completed";
   const setupCompletedAt = setupCompleted

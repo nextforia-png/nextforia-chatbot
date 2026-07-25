@@ -79,7 +79,29 @@ function appointmentStageOneAnswers(company) {
       target_customer: "Pacientes que quieren reservar consulta",
       business_description: "Atendemos de forma cercana y explicamos cada procedimiento antes de reservar.",
       assistant_tone: "calido_empatico",
-      bot_display_name: "NextforIA de " + company
+      bot_display_name: "Nextfor de " + company,
+      allowed_topics: "Servicios, precios, horarios y disponibilidad",
+      forbidden_topics: "Diagnósticos, recomendaciones médicas y promesas de resultado",
+      escalation_triggers: "Urgencias, quejas o cuando no pueda responder con seguridad",
+      escalation_contact: "Recepción +57 300 000 0000",
+      human_support_hours: "Lunes a viernes",
+      services: "Consulta inicial · 45 minutos · precio por confirmar",
+      business_hours: "Lunes a viernes de 8 a 6",
+      payment_methods: "Efectivo, transferencia y tarjeta",
+      faqs: "¿Cuánto dura? 45 minutos.",
+      staff_mode: "one",
+      appointment_locations: "Sede principal y virtual",
+      availability_rules: "Lunes a viernes de 9 a 5",
+      required_booking_fields: "Nombre completo, teléfono, servicio deseado y horario preferido",
+      booking_confirmation_mode: "manual_approval",
+      cancellation_policy: "Cancelar mínimo 12 horas antes",
+      calendar_provider: "google",
+      reminder_channel: "whatsapp",
+      reminder_timing: "24h",
+      survey_enabled: "yes",
+      operational_channels: "WhatsApp activo",
+      social_accounts: "Instagram @empresa",
+      data_consent: true
     }
   };
 }
@@ -160,11 +182,16 @@ function appointmentStageOneAnswers(company) {
     response = await fetch(base + "/admin/client-onboarding", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);
     const setupHtml = await response.text();
-    assert(setupHtml.includes("Configurar mi asistente"));
+    assert(setupHtml.includes("Comenzar el entrenamiento"));
+    assert(setupHtml.includes("Entrena a Nextfor para gestionar tus"));
+    assert(setupHtml.includes("citas por ti."));
     assert(setupHtml.includes("¿Qué quieres que NextforIA impulse primero?"));
     assert(setupHtml.includes('name="setupGoal"'));
     assert(setupHtml.includes('value="appointments"'));
-    assert(setupHtml.includes("Haz que NextforIA atienda como parte de tu equipo"));
+    assert(setupHtml.includes("Haz que Nextfor se sienta parte de tu equipo"));
+    assert(setupHtml.includes("Enséñale qué puede resolver y cuándo debe llamarte"));
+    assert(setupHtml.includes("Terminar el entrenamiento de Nextfor"));
+    assert(setupHtml.includes("lumen-entrenando.png"));
     assert(setupHtml.includes("Empresa Setup A"));
     assert(setupHtml.includes("admin@setup-a.example"));
     assert(setupHtml.includes("Growth"));
@@ -268,6 +295,8 @@ function appointmentStageOneAnswers(company) {
     payload = await response.json();
     assert.strictEqual(payload.onboarding.answers.setup_goal, "appointments");
     assert.strictEqual(payload.onboarding.answers.appointment_setup.business_name, "Empresa Citas C");
+    assert.strictEqual(payload.onboarding.answers.appointment_setup.setup_status, "pending_review");
+    assert.strictEqual(payload.onboarding.answers.appointment_setup.data_consent, true);
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
 

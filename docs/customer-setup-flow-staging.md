@@ -1,6 +1,6 @@
 # Customer Setup Flow — Staging
 
-Fecha: 2026-07-24
+Fecha: 2026-07-25
 Alcance: Customer Panel de Nextfor IA, únicamente en Staging.
 
 ## Fuente de diseño
@@ -33,9 +33,17 @@ El documento versionado incluye:
 - `setup_completed`
 - `setup_completed_at`
 - `last_updated_at`
+- `setup_goal`
 - `meta.whatsapp_number`
 - `meta.whatsapp_integration_intent`
 - `meta.whatsapp_integration_status`
+- `appointment_setup.business_name`
+- `appointment_setup.business_category`
+- `appointment_setup.target_customer`
+- `appointment_setup.business_description`
+- `appointment_setup.assistant_tone`
+- `appointment_setup.bot_display_name`
+- `appointment_setup.bot_image`
 - respuestas del negocio, operación, equipo y estilo de comunicación
 
 El `tenant_id` nunca se acepta desde URL, query o body: se deriva de la sesión
@@ -60,6 +68,13 @@ WhatsApp con Meta desde Nextfor IA. La respuesta se guarda en
 automático/guided setup con Meta sin marcar la integración como conectada antes de
 tener permisos reales.
 
+Mejora v107: el setup inicia con la pregunta de objetivo `setup_goal`
+(`customer_service`, `appointments`, `both`). Cuando el cliente elige
+`appointments` o `both`, el siguiente paso muestra únicamente el cuestionario real
+de "Tu negocio" para Agendamiento: nombre del negocio, categoría, cliente objetivo,
+descripción de atención, tono, nombre visible de NextforIA e imagen opcional. Este
+camino no exige ni modifica las preguntas del ChatBot de atención al cliente.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,
@@ -76,6 +91,8 @@ respuestas existentes.
 - Implementar el flujo real de conexión con Meta/WhatsApp Cloud API a partir de
   `meta.whatsapp_integration_intent=requested`, con estados auditables y manejo de
   permisos/verificación del dueño.
+- Continuar las etapas 2-6 de Agendamiento: servicios, agenda, forma de atender,
+  seguimiento y revisión final con `setup_status=pending_review`.
 
 ## Rollback
 

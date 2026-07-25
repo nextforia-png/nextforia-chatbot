@@ -1,6 +1,7 @@
 "use strict";
 
 const DEFAULT_ONBOARDING = Object.freeze({
+  setup_goal: "unknown",
   business: {
     brand_name: "",
     legal_name: "",
@@ -70,6 +71,16 @@ const DEFAULT_ONBOARDING = Object.freeze({
     owns_information: false,
     accepts_guided_setup: false,
     understands_meta_dependency: false
+  },
+  appointment_setup: {
+    business_name: "",
+    business_category: "",
+    target_customer: "",
+    business_description: "",
+    assistant_tone: "",
+    bot_display_name: "",
+    bot_image: "",
+    setup_status: "draft"
   }
 });
 
@@ -77,18 +88,26 @@ const DEFAULT_ONBOARDING = Object.freeze({
 // later persist and manage these same IDs (label/order/active) without changing
 // the answer paths already stored for each tenant.
 const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
-  { id: "company_name", path: "business.brand_name", section: "business", order: 10, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?" },
-  { id: "administrator_email", path: "team.admin_email", section: "business", order: 20, active: true, required: true, type: "email_readonly", label: "Correo del administrador" },
-  { id: "contact_email", path: "business.contact_email", section: "business", order: 30, active: true, required: true, type: "email", label: "Correo de contacto" },
-  { id: "phone", path: "business.contact_phone", section: "business", order: 40, active: true, required: true, type: "tel", label: "Teléfono" },
-  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 50, active: true, required: true, type: "tel", label: "WhatsApp" },
-  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 60, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?" },
-  { id: "business_hours", path: "operations.business_hours", section: "business", order: 70, active: true, required: true, type: "textarea", label: "Horarios de atención" },
-  { id: "services_products", path: "operations.services_products", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Servicios o productos" },
-  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
-  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Políticas importantes" },
-  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 110, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
-  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 120, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" }
+  { id: "setup_goal", path: "setup_goal", section: "goal", order: 10, active: true, required: true, type: "choice", label: "¿Qué quieres que NextforIA impulse primero?" },
+  { id: "company_name", path: "business.brand_name", section: "business", order: 20, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?" },
+  { id: "administrator_email", path: "team.admin_email", section: "business", order: 30, active: true, required: true, type: "email_readonly", label: "Correo del administrador" },
+  { id: "contact_email", path: "business.contact_email", section: "business", order: 40, active: true, required: true, type: "email", label: "Correo de contacto" },
+  { id: "phone", path: "business.contact_phone", section: "business", order: 50, active: true, required: true, type: "tel", label: "Teléfono" },
+  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 60, active: true, required: true, type: "tel", label: "WhatsApp" },
+  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 70, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?" },
+  { id: "business_hours", path: "operations.business_hours", section: "business", order: 80, active: true, required: true, type: "textarea", label: "Horarios de atención" },
+  { id: "services_products", path: "operations.services_products", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Servicios o productos" },
+  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
+  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 110, active: true, required: true, type: "textarea", label: "Políticas importantes" },
+  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 120, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
+  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 130, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" },
+  { id: "appointment_business_name", path: "appointment_setup.business_name", section: "appointments_business", order: 200, active: true, required: true, type: "text", label: "¿Cómo se llama tu negocio?" },
+  { id: "appointment_business_category", path: "appointment_setup.business_category", section: "appointments_business", order: 210, active: true, required: true, type: "choice", label: "¿A qué se dedica?" },
+  { id: "appointment_target_customer", path: "appointment_setup.target_customer", section: "appointments_business", order: 220, active: true, required: true, type: "textarea", label: "¿A quién atiendes principalmente?" },
+  { id: "appointment_business_description", path: "appointment_setup.business_description", section: "appointments_business", order: 230, active: true, required: true, type: "textarea", label: "¿Qué hace especial tu forma de atender?" },
+  { id: "appointment_assistant_tone", path: "appointment_setup.assistant_tone", section: "appointments_business", order: 240, active: true, required: true, type: "choice", label: "¿Cómo quieres que NextforIA hable con tus clientes?" },
+  { id: "appointment_display_name", path: "appointment_setup.bot_display_name", section: "appointments_business", order: 250, active: true, required: true, type: "text", label: "¿Cómo quieres que NextforIA se presente?" },
+  { id: "appointment_bot_image", path: "appointment_setup.bot_image", section: "appointments_business", order: 260, active: true, required: false, type: "text", label: "Logo o imagen" }
 ]);
 
 function cloneDefaults() {
@@ -113,9 +132,12 @@ function normalizeOnboarding(input) {
   const operations = input.operations || {};
   const team = input.team || {};
   const confirmations = input.confirmations || {};
+  const appointmentSetup = input.appointment_setup || {};
   const yesNoUnknown = ["yes", "no", "unknown"];
   const whatsappIntent = choice(meta.whatsapp_integration_intent, ["yes", "later", "no", "unknown"], "unknown");
+  const setupGoal = choice(input.setup_goal, ["customer_service", "appointments", "both", "unknown"], "unknown");
   return {
+    setup_goal: setupGoal,
     business: {
       brand_name: text(business.brand_name, 120),
       legal_name: text(business.legal_name, 180),
@@ -189,6 +211,22 @@ function normalizeOnboarding(input) {
       owns_information: !!confirmations.owns_information,
       accepts_guided_setup: !!confirmations.accepts_guided_setup,
       understands_meta_dependency: !!confirmations.understands_meta_dependency
+    },
+    appointment_setup: {
+      business_name: text(appointmentSetup.business_name, 120),
+      business_category: choice(appointmentSetup.business_category, [
+        "salud_bienestar", "belleza_estetica", "servicios_profesionales", "legal",
+        "inmobiliaria", "restaurantes", "educacion", "automotriz", "otro"
+      ], ""),
+      target_customer: text(appointmentSetup.target_customer, 1200),
+      business_description: text(appointmentSetup.business_description, 1800),
+      assistant_tone: choice(appointmentSetup.assistant_tone, [
+        "cercano_profesional", "formal_corporativo", "calido_empatico",
+        "directo_sencillo", "alegre_casual"
+      ], ""),
+      bot_display_name: text(appointmentSetup.bot_display_name, 120),
+      bot_image: text(appointmentSetup.bot_image, 500),
+      setup_status: choice(appointmentSetup.setup_status, ["draft", "pending_review", "ready"], "draft")
     }
   };
 }
@@ -197,18 +235,48 @@ function getPath(source, path) {
   return path.split(".").reduce(function (value, key) { return value && value[key]; }, source);
 }
 
-const REQUIRED_PATHS = CUSTOMER_SETUP_QUESTIONS
-  .filter(function (question) { return question.active && question.required; })
-  .sort(function (a, b) { return a.order - b.order; })
-  .map(function (question) { return question.path; });
+const CUSTOMER_SERVICE_REQUIRED_PATHS = [
+  "setup_goal",
+  "business.brand_name",
+  "team.admin_email",
+  "business.contact_email",
+  "business.contact_phone",
+  "meta.whatsapp_number",
+  "meta.whatsapp_integration_intent",
+  "operations.business_hours",
+  "operations.services_products",
+  "operations.frequent_questions",
+  "operations.important_policies",
+  "team.human_support_contact",
+  "operations.bot_instructions"
+];
+
+const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
+  "setup_goal",
+  "appointment_setup.business_name",
+  "appointment_setup.business_category",
+  "appointment_setup.target_customer",
+  "appointment_setup.business_description",
+  "appointment_setup.assistant_tone",
+  "appointment_setup.bot_display_name"
+];
+
+function requiredPathsForAnswers(input) {
+  const answers = normalizeOnboarding(input);
+  if (answers.setup_goal === "appointments" || answers.setup_goal === "both") return APPOINTMENT_STAGE1_REQUIRED_PATHS;
+  return CUSTOMER_SERVICE_REQUIRED_PATHS;
+}
+
+const REQUIRED_PATHS = CUSTOMER_SERVICE_REQUIRED_PATHS;
 
 function onboardingCompletion(input) {
   const answers = normalizeOnboarding(input);
-  const complete = REQUIRED_PATHS.filter(function (path) {
+  const required = requiredPathsForAnswers(answers);
+  const complete = required.filter(function (path) {
     const value = getPath(answers, path);
     return value !== "" && value !== "unknown" && value !== false && value != null;
   }).length;
-  return Math.round(complete / REQUIRED_PATHS.length * 100);
+  return Math.round(complete / required.length * 100);
 }
 
 function createOnboardingRecord(input, meta) {
@@ -250,6 +318,8 @@ function buildCoverageConversationContext(record) {
 module.exports = {
   CUSTOMER_SETUP_QUESTIONS,
   DEFAULT_ONBOARDING,
+  APPOINTMENT_STAGE1_REQUIRED_PATHS,
+  CUSTOMER_SERVICE_REQUIRED_PATHS,
   REQUIRED_PATHS,
   buildCoverageConversationContext,
   cloneDefaults,

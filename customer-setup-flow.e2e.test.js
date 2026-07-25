@@ -48,6 +48,7 @@ async function login(base, email, password) {
 
 function completedAnswers(company, email, marker) {
   return {
+    setup_goal: "customer_service",
     business: {
       brand_name: company,
       contact_email: email,
@@ -66,6 +67,20 @@ function completedAnswers(company, email, marker) {
       human_support_contact: "Soporte " + marker
     },
     voice: { formality: "cercano", emojis: "moderados" }
+  };
+}
+
+function appointmentStageOneAnswers(company) {
+  return {
+    setup_goal: "appointments",
+    appointment_setup: {
+      business_name: company,
+      business_category: "salud_bienestar",
+      target_customer: "Pacientes que quieren reservar consulta",
+      business_description: "Atendemos de forma cercana y explicamos cada procedimiento antes de reservar.",
+      assistant_tone: "calido_empatico",
+      bot_display_name: "NextforIA de " + company
+    }
   };
 }
 
@@ -95,6 +110,17 @@ function completedAnswers(company, email, marker) {
       plan_id: "scale",
       assigned_bot_id: "agendamiento",
       setup_completed: true
+    },
+    {
+      user_id: "33333333-3333-4333-8333-333333333333",
+      tenant_id: "tenant-appointments-c",
+      company_name: "Empresa Citas C",
+      email: "admin@citas-c.example",
+      password,
+      role: "admin",
+      plan_id: "scale",
+      assigned_bot_id: "agendamiento",
+      setup_completed: false
     }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
@@ -122,6 +148,7 @@ function completedAnswers(company, email, marker) {
     await waitForServer(child, port);
     const cookieA = await login(base, fixtures[0].email, password);
     const cookieB = await login(base, fixtures[1].email, password);
+    const cookieC = await login(base, fixtures[2].email, password);
 
     let response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },
@@ -134,6 +161,10 @@ function completedAnswers(company, email, marker) {
     assert.strictEqual(response.status, 200);
     const setupHtml = await response.text();
     assert(setupHtml.includes("Configurar mi asistente"));
+    assert(setupHtml.includes("¿Qué quieres que NextforIA impulse primero?"));
+    assert(setupHtml.includes('name="setupGoal"'));
+    assert(setupHtml.includes('value="appointments"'));
+    assert(setupHtml.includes("Haz que NextforIA atienda como parte de tu equipo"));
     assert(setupHtml.includes("Empresa Setup A"));
     assert(setupHtml.includes("admin@setup-a.example"));
     assert(setupHtml.includes("Growth"));
@@ -188,6 +219,7 @@ function completedAnswers(company, email, marker) {
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.onboarding.setup_completed, true);
+    assert.strictEqual(payload.onboarding.answers.setup_goal, "customer_service");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_intent, "yes");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_status, "requested");
     assert(payload.onboarding.setup_completed_at);
@@ -226,6 +258,18 @@ function completedAnswers(company, email, marker) {
     assert.strictEqual(payload.tenant.id, "tenant-returning-b");
     assert.strictEqual(payload.tenant.plan_id, "scale", "tenant B plan must not change when tenant A selects a plan");
     assert(!JSON.stringify(payload).includes("Servicios A"), "tenant B cannot infer tenant A setup");
+
+    response = await fetch(base + "/admin/client-onboarding/data", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: cookieC },
+      body: JSON.stringify({ status: "completed", answers: appointmentStageOneAnswers("Empresa Citas C") })
+    });
+    assert.strictEqual(response.status, 200, "appointments setup step 1 completes without customer-service answers");
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.answers.setup_goal, "appointments");
+    assert.strictEqual(payload.onboarding.answers.appointment_setup.business_name, "Empresa Citas C");
+    assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
 
     console.log("customer-setup-flow.e2e.test.js: ok");
   } finally {

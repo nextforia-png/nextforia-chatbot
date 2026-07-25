@@ -47,6 +47,7 @@ assert.ok(record.last_updated_at);
 
 const completedAnswers = cloneDefaults();
 completedAnswers.business.brand_name = "Empresa Completa";
+completedAnswers.setup_goal = "customer_service";
 completedAnswers.business.contact_email = "admin@completa.example";
 completedAnswers.business.contact_phone = "+57 300 000 0000";
 completedAnswers.meta.whatsapp_number = "+57 300 000 0000";
@@ -65,6 +66,20 @@ assert.ok(completedRecord.setup_completed_at);
 const editedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "draft", previous: completedRecord });
 assert.strictEqual(editedRecord.setup_completed, true);
 assert.strictEqual(editedRecord.setup_completed_at, completedRecord.setup_completed_at);
+
+const appointmentAnswers = cloneDefaults();
+appointmentAnswers.setup_goal = "appointments";
+appointmentAnswers.appointment_setup.business_name = "Clínica Agenda";
+appointmentAnswers.appointment_setup.business_category = "salud_bienestar";
+appointmentAnswers.appointment_setup.target_customer = "Pacientes que quieren reservar consulta";
+appointmentAnswers.appointment_setup.business_description = "Atención clara antes de confirmar cada cita";
+appointmentAnswers.appointment_setup.assistant_tone = "calido_empatico";
+appointmentAnswers.appointment_setup.bot_display_name = "NextforIA de Clínica Agenda";
+assert.strictEqual(onboardingCompletion(appointmentAnswers), 100, "agendamiento no exige preguntas del ChatBot de atención");
+const appointmentRecord = createOnboardingRecord(appointmentAnswers, { tenant_id: "clinica-agenda", status: "completed" });
+assert.strictEqual(appointmentRecord.answers.setup_goal, "appointments");
+assert.strictEqual(appointmentRecord.answers.appointment_setup.setup_status, "draft");
+assert.strictEqual(appointmentRecord.setup_completed, true);
 
 const coverageAnswers = cloneDefaults();
 coverageAnswers.operations.primary_country = "Colombia";

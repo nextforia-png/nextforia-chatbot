@@ -20,6 +20,7 @@ assert.strictEqual(new Set(CUSTOMER_SETUP_QUESTIONS.map(function (question) { re
 assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.active && question.path && question.type; }));
 
 const normalized = normalizeOnboarding({
+  setup_goal: "customer_service",
   business: { brand_name: "  Tienda Piloto  ", contact_email: "ADMIN@EXAMPLE.COM" },
   meta: { number_status: "invalid", whatsapp_integration_intent: "yes" },
   channels: { instagram: true, other: true, other_details: "Marketplace" },
@@ -49,11 +50,21 @@ assert.ok(record.last_updated_at);
 const completedAnswers = cloneDefaults();
 completedAnswers.business.brand_name = "Empresa Completa";
 completedAnswers.setup_goal = "customer_service";
+completedAnswers.operations.primary_country = "Colombia";
+completedAnswers.operations.primary_city = "Bogotá";
 completedAnswers.business.contact_email = "admin@completa.example";
 completedAnswers.business.contact_phone = "+57 300 000 0000";
 completedAnswers.meta.whatsapp_number = "+57 300 000 0000";
 completedAnswers.meta.whatsapp_integration_intent = "yes";
-completedAnswers.operations.business_hours = "Lunes a viernes";
+completedAnswers.operations.support_hours = "Lunes a viernes";
+completedAnswers.customer_service_setup.business_offer_type = "products";
+completedAnswers.customer_service_setup.business_offer_description = "Juguetes educativos y regalos";
+completedAnswers.customer_service_setup.ideal_customer = "Familias que buscan regalos";
+completedAnswers.customer_service_setup.value_proposition = "Curaduría y asesoría rápida";
+completedAnswers.customer_service_setup.bot_display_name = "Nextfor de Empresa Completa";
+completedAnswers.customer_service_setup.tone = "vendedor_dinamico";
+completedAnswers.customer_service_setup.brand_restrictions = "No inventar precios ni descuentos";
+completedAnswers.customer_service_setup.data_consent = true;
 completedAnswers.operations.services_products = "Servicios";
 completedAnswers.operations.frequent_questions = "Preguntas y respuestas";
 completedAnswers.operations.important_policies = "Políticas";
@@ -63,6 +74,7 @@ completedAnswers.team.human_support_contact = "Soporte +57 300 000 0000";
 assert.strictEqual(onboardingCompletion(completedAnswers), 100);
 const completedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "completed" });
 assert.strictEqual(completedRecord.setup_completed, true);
+assert.strictEqual(completedRecord.answers.customer_service_setup.setup_status, "pending_review");
 assert.ok(completedRecord.setup_completed_at);
 const editedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "draft", previous: completedRecord });
 assert.strictEqual(editedRecord.setup_completed, true);

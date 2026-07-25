@@ -46,6 +46,7 @@ const DEFAULT_ONBOARDING = Object.freeze({
   },
   operations: {
     primary_country: "Colombia",
+    primary_city: "",
     countries_served: "Colombia",
     foreign_number_location_check: true,
     business_hours: "",
@@ -71,6 +72,21 @@ const DEFAULT_ONBOARDING = Object.freeze({
     owns_information: false,
     accepts_guided_setup: false,
     understands_meta_dependency: false
+  },
+  customer_service_setup: {
+    business_offer_type: "",
+    business_offer_description: "",
+    ideal_customer: "",
+    value_proposition: "",
+    bot_display_name: "",
+    tone: "",
+    custom_tone_description: "",
+    brand_restrictions: "",
+    company_logo: "",
+    data_consent: false,
+    data_consent_version: "",
+    data_consent_accepted_at: "",
+    setup_status: "draft"
   },
   appointment_setup: {
     business_name: "",
@@ -133,12 +149,23 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "phone", path: "business.contact_phone", section: "business", order: 50, active: true, required: true, type: "tel", label: "Teléfono" },
   { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 60, active: true, required: true, type: "tel", label: "WhatsApp" },
   { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 70, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?" },
-  { id: "business_hours", path: "operations.business_hours", section: "business", order: 80, active: true, required: true, type: "textarea", label: "Horarios de atención" },
-  { id: "services_products", path: "operations.services_products", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Servicios o productos" },
+  { id: "business_hours", path: "operations.support_hours", section: "business", order: 80, active: true, required: true, type: "textarea", label: "Horario de atención humana" },
+  { id: "primary_country", path: "operations.primary_country", section: "business", order: 82, active: true, required: true, type: "text", label: "País principal" },
+  { id: "primary_city", path: "operations.primary_city", section: "business", order: 84, active: true, required: true, type: "text", label: "Ciudad principal" },
+  { id: "customer_service_offer_type", path: "customer_service_setup.business_offer_type", section: "business", order: 86, active: true, required: true, type: "choice", label: "¿Qué vende tu empresa?" },
+  { id: "customer_service_offer_description", path: "customer_service_setup.business_offer_description", section: "business", order: 88, active: true, required: true, type: "textarea", label: "Qué ofreces" },
+  { id: "customer_service_ideal_customer", path: "customer_service_setup.ideal_customer", section: "business", order: 89, active: true, required: true, type: "textarea", label: "Cliente ideal" },
+  { id: "customer_service_value_proposition", path: "customer_service_setup.value_proposition", section: "business", order: 90, active: true, required: true, type: "textarea", label: "Por qué deberían comprarte" },
+  { id: "customer_service_bot_name", path: "customer_service_setup.bot_display_name", section: "business", order: 91, active: true, required: true, type: "text", label: "Nombre de Nextfor" },
+  { id: "customer_service_tone", path: "customer_service_setup.tone", section: "business", order: 92, active: true, required: true, type: "choice", label: "Tono comercial" },
+  { id: "customer_service_brand_restrictions", path: "customer_service_setup.brand_restrictions", section: "business", order: 93, active: true, required: true, type: "textarea", label: "Restricciones de marca" },
+  { id: "customer_service_company_logo", path: "customer_service_setup.company_logo", section: "business", order: 94, active: true, required: false, type: "file", label: "Logo de la empresa" },
+  { id: "services_products", path: "operations.services_products", section: "offering", order: 95, active: true, required: true, type: "textarea", label: "Servicios o productos" },
   { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
   { id: "important_policies", path: "operations.important_policies", section: "offering", order: 110, active: true, required: true, type: "textarea", label: "Políticas importantes" },
   { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 120, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
   { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 130, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" },
+  { id: "customer_service_data_consent", path: "customer_service_setup.data_consent", section: "voice", order: 140, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" },
   { id: "appointment_business_name", path: "appointment_setup.business_name", section: "appointments_business", order: 200, active: true, required: true, type: "text", label: "¿Cómo se llama tu negocio?" },
   { id: "appointment_business_category", path: "appointment_setup.business_category", section: "appointments_business", order: 210, active: true, required: true, type: "choice", label: "¿A qué se dedica?" },
   { id: "appointment_target_customer", path: "appointment_setup.target_customer", section: "appointments_business", order: 220, active: true, required: true, type: "textarea", label: "¿A quién atiendes principalmente?" },
@@ -309,6 +336,7 @@ function normalizeOnboarding(input) {
   const operations = input.operations || {};
   const team = input.team || {};
   const confirmations = input.confirmations || {};
+  const customerServiceSetup = input.customer_service_setup || {};
   const appointmentSetup = input.appointment_setup || {};
   const custom = input.custom && typeof input.custom === "object" ? input.custom : {};
   const normalizedCustom = {};
@@ -369,6 +397,7 @@ function normalizeOnboarding(input) {
     },
     operations: {
       primary_country: text(operations.primary_country, 120) || "Colombia",
+      primary_city: text(operations.primary_city, 120),
       countries_served: text(operations.countries_served, 1200),
       foreign_number_location_check: operations.foreign_number_location_check !== false,
       business_hours: text(operations.business_hours, 1200),
@@ -394,6 +423,24 @@ function normalizeOnboarding(input) {
       owns_information: !!confirmations.owns_information,
       accepts_guided_setup: !!confirmations.accepts_guided_setup,
       understands_meta_dependency: !!confirmations.understands_meta_dependency
+    },
+    customer_service_setup: {
+      business_offer_type: choice(customerServiceSetup.business_offer_type, ["products", "services", "both", ""], ""),
+      business_offer_description: text(customerServiceSetup.business_offer_description, 1800),
+      ideal_customer: text(customerServiceSetup.ideal_customer, 1800),
+      value_proposition: text(customerServiceSetup.value_proposition, 1800),
+      bot_display_name: text(customerServiceSetup.bot_display_name, 120),
+      tone: choice(customerServiceSetup.tone, [
+        "cercano_profesional", "vendedor_dinamico", "calido_empatico",
+        "formal_corporativo", "premium", "juvenil_casual", "personalizado", ""
+      ], ""),
+      custom_tone_description: text(customerServiceSetup.custom_tone_description, 1200),
+      brand_restrictions: text(customerServiceSetup.brand_restrictions, 3000),
+      company_logo: text(customerServiceSetup.company_logo, 800000),
+      data_consent: !!customerServiceSetup.data_consent,
+      data_consent_version: text(customerServiceSetup.data_consent_version, 80),
+      data_consent_accepted_at: text(customerServiceSetup.data_consent_accepted_at, 40),
+      setup_status: choice(customerServiceSetup.setup_status, ["draft", "pending_review", "changes_requested", "approved", "active", "ready"], "draft")
     },
     appointment_setup: {
       business_name: text(appointmentSetup.business_name, 120),
@@ -459,17 +506,27 @@ function getPath(source, path) {
 const CUSTOMER_SERVICE_REQUIRED_PATHS = [
   "setup_goal",
   "business.brand_name",
+  "operations.primary_country",
+  "operations.primary_city",
+  "customer_service_setup.business_offer_type",
+  "customer_service_setup.business_offer_description",
+  "customer_service_setup.ideal_customer",
+  "customer_service_setup.value_proposition",
+  "customer_service_setup.bot_display_name",
+  "customer_service_setup.tone",
+  "customer_service_setup.brand_restrictions",
   "team.admin_email",
   "business.contact_email",
   "business.contact_phone",
   "meta.whatsapp_number",
   "meta.whatsapp_integration_intent",
-  "operations.business_hours",
+  "operations.support_hours",
   "operations.services_products",
   "operations.frequent_questions",
   "operations.important_policies",
   "team.human_support_contact",
-  "operations.bot_instructions"
+  "operations.bot_instructions",
+  "customer_service_setup.data_consent"
 ];
 
 const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
@@ -502,6 +559,7 @@ const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
 
 function requiredPathsForAnswers(input, questionnaire) {
   const answers = normalizeOnboarding(input);
+  if (answers.setup_goal === "unknown") return ["setup_goal"];
   const questionnaireRequired = requiredPathsForQuestionnaire(answers, questionnaire);
   if (questionnaireRequired && questionnaireRequired.length) return questionnaireRequired;
   if (answers.setup_goal === "appointments" || answers.setup_goal === "both") return APPOINTMENT_STAGE1_REQUIRED_PATHS;
@@ -532,6 +590,15 @@ function createOnboardingRecord(input, meta) {
     }
     if (answers.appointment_setup.data_consent && !answers.appointment_setup.data_consent_version) {
       answers.appointment_setup.data_consent_version = "nextforia-customer-setup-2026-07";
+    }
+  }
+  if (status === "completed" && (answers.setup_goal === "customer_service" || answers.setup_goal === "both")) {
+    answers.customer_service_setup.setup_status = "pending_review";
+    if (answers.customer_service_setup.data_consent && !answers.customer_service_setup.data_consent_accepted_at) {
+      answers.customer_service_setup.data_consent_accepted_at = now;
+    }
+    if (answers.customer_service_setup.data_consent && !answers.customer_service_setup.data_consent_version) {
+      answers.customer_service_setup.data_consent_version = "nextforia-customer-setup-2026-07";
     }
   }
   const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};

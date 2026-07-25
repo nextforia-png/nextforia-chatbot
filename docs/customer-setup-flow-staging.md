@@ -114,6 +114,13 @@ Corrección v110: la pantalla de bienvenida usa narrativa general de entrenamien
 ("trabajar por tu negocio") y no presenta el setup como si fuera únicamente para
 Agendamiento de Citas.
 
+Mejora v113: el camino `customer_service` incorpora la etapa 1 real de Atención al
+Cliente: narrativa de vendedor, nombre comercial, país/ciudad principal, tipo de
+oferta, descripción corta, cliente ideal, propuesta de valor, nombre visible de
+Nextfor, tono comercial, restricciones de marca, logo con vista previa y
+consentimiento obligatorio antes de terminar. El setup de Agendamiento permanece
+separado y sin regresiones.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

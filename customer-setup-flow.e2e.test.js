@@ -56,11 +56,23 @@ function completedAnswers(company, email, marker) {
     },
     meta: { whatsapp_number: "+57 300 000 0000", whatsapp_integration_intent: "yes" },
     operations: {
-      business_hours: "Lunes a viernes",
+      primary_country: "Colombia",
+      primary_city: "Bogotá",
+      support_hours: "Lunes a viernes",
       services_products: "Servicios " + marker,
       frequent_questions: "Preguntas " + marker,
       important_policies: "Políticas " + marker,
       bot_instructions: "Responder como " + marker
+    },
+    customer_service_setup: {
+      business_offer_type: "products",
+      business_offer_description: "Productos " + marker,
+      ideal_customer: "Cliente ideal " + marker,
+      value_proposition: "Diferencial " + marker,
+      bot_display_name: "Nextfor de " + company,
+      tone: "vendedor_dinamico",
+      brand_restrictions: "No inventar precios ni descuentos",
+      data_consent: true
     },
     team: {
       admin_email: email,
@@ -188,6 +200,10 @@ function appointmentStageOneAnswers(company) {
     assert(setupHtml.includes("¿Qué quieres que NextforIA impulse primero?"));
     assert(setupHtml.includes('name="setupGoal"'));
     assert(setupHtml.includes('value="appointments"'));
+    assert(setupHtml.includes("TODO GRAN VENDEDOR EMPIEZA CONOCIENDO SU EMPRESA"));
+    assert(setupHtml.includes("Enséñale a Nextfor qué hace especial tu negocio"));
+    assert(setupHtml.includes("¿Qué vende tu empresa?"));
+    assert(setupHtml.includes("customer_service_setup.business_offer_type"));
     assert(setupHtml.includes("Haz que Nextfor se sienta parte de tu equipo"));
     assert(setupHtml.includes("Enséñale qué puede resolver y cuándo debe llamarte"));
     assert(setupHtml.includes("Terminar el entrenamiento de Nextfor"));
@@ -247,6 +263,8 @@ function appointmentStageOneAnswers(company) {
     payload = await response.json();
     assert.strictEqual(payload.onboarding.setup_completed, true);
     assert.strictEqual(payload.onboarding.answers.setup_goal, "customer_service");
+    assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "pending_review");
+    assert.strictEqual(payload.onboarding.answers.customer_service_setup.data_consent, true);
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_intent, "yes");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_status, "requested");
     assert(payload.onboarding.setup_completed_at);

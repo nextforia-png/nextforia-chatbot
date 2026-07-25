@@ -630,6 +630,12 @@ function renderSuperAdminPanel(res, options) {
 .status-pill.setup{background:var(--cyan-50);color:var(--cyan-700)}
 .question-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
 .question-toolbar p{margin:0;color:var(--text-muted);font-size:11.5px;line-height:1.55}
+.question-bot-picker{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.question-bot-card{border:1.5px solid var(--border-subtle);background:#fff;border-radius:18px;padding:16px;text-align:left;color:var(--text-body);transition:.16s}
+.question-bot-card strong{display:block;color:var(--text-strong);font:700 15px var(--font-display);margin-bottom:5px}
+.question-bot-card span{display:block;color:var(--text-muted);font-size:11.5px;line-height:1.5}
+.question-bot-card.active{border-color:var(--cyan-500);background:linear-gradient(180deg,#F1FAFF,#fff);box-shadow:0 0 0 3px rgba(0,160,240,.1)}
+.question-simple-note{padding:13px 14px;border:1px solid #BEE6FB;background:var(--cyan-50);border-radius:14px;color:#075985;font-size:11.5px;line-height:1.55;margin-bottom:14px}
 .question-list{display:grid;gap:10px}
 .question-row{display:grid;grid-template-columns:70px minmax(180px,1.2fr) minmax(130px,.75fr) minmax(120px,.7fr) 88px 88px 92px;gap:9px;align-items:end;padding:12px;border:1px solid var(--border-subtle);border-radius:16px;background:#fff}
 .question-row.inactive{opacity:.62;background:var(--slate-50)}
@@ -642,6 +648,7 @@ function renderSuperAdminPanel(res, options) {
 .question-actions{display:flex;gap:6px;justify-content:flex-end}
 .question-empty{padding:18px;border:1px dashed var(--border-default);border-radius:15px;color:var(--text-muted);font-size:12px;text-align:center}
 @media(max-width:1160px){.question-row{grid-template-columns:70px 1fr 1fr}.question-actions{justify-content:flex-start}.question-field.checkbox{justify-items:start}}
+@media(max-width:760px){.question-bot-picker{grid-template-columns:1fr}}
 .goal-modal-layer{position:fixed;inset:0;z-index:75;display:none;align-items:center;justify-content:center;padding:20px}
 .goal-modal-layer.open{display:flex}
 .goal-modal{position:relative;width:min(460px,100%);background:var(--surface-card);border-radius:var(--radius-xl);box-shadow:var(--shadow-lg);animation:rise .22s var(--ease);overflow:hidden}
@@ -726,8 +733,16 @@ function renderSuperAdminPanel(res, options) {
 </div></section>
 
 <section class="view" data-panel="questionnaire"><div class="stack">
-  <div class="callout info-callout" style="margin-top:0"><div><strong>Editor del Customer Setup</strong><p>Edita, reordena, activa, desactiva, elimina o agrega preguntas. El Customer Admin verá estos cambios al abrir su setup. Las preguntas nuevas se guardan como respuestas personalizadas y no cambian rutas existentes.</p></div><span class="badge info">Staging</span></div>
-  <section class="card"><div class="question-toolbar"><div><h2 style="margin:0;color:var(--text-strong);font:700 17px var(--font-display)">Preguntas del cuestionario</h2><p>Para quitar una pregunta base, desactívala. Para preguntas nuevas, puedes eliminarlas de la lista.</p></div><div class="question-actions"><button class="button" type="button" onclick="loadQuestionnaire()">${icon("refresh", 15)} Actualizar</button><button class="button" type="button" onclick="addQuestion()">Nueva pregunta</button><button class="button primary" id="questionnaireSaveButton" type="button" onclick="saveQuestionnaire()">Guardar cuestionario</button></div></div><div id="questionnaireRows" class="question-list"><div class="invite-loading">Cargando cuestionario…</div></div></section>
+  <div class="callout info-callout" style="margin-top:0"><div><strong>Editor simple del Customer Setup</strong><p>Primero eliges el bot. Luego editas solo las preguntas de ese bot. El cliente también empieza eligiendo Atención, Agendamiento o ambos; si elige ambos, completa los dos cuestionarios.</p></div><span class="badge info">Staging</span></div>
+  <section class="card">
+    <div class="question-simple-note"><strong>Paso 1 del cliente:</strong> elegir qué bot quiere configurar. Esta pregunta siempre va primero para decidir si verá el cuestionario de Atención, el de Agendamiento o ambos.</div>
+    <div class="question-bot-picker" aria-label="Elegir cuestionario por bot">
+      <button class="question-bot-card active" type="button" data-question-bot="customer_service"><strong>Bot Atención / Ventas 24/7</strong><span>Preguntas sobre empresa, WhatsApp, productos, políticas y soporte humano.</span></button>
+      <button class="question-bot-card" type="button" data-question-bot="appointments"><strong>Bot Agendamiento</strong><span>Preguntas sobre negocio, reglas, servicios, disponibilidad, recordatorios y consentimiento.</span></button>
+    </div>
+    <div class="question-toolbar"><div><h2 id="questionnaireBotTitle" style="margin:0;color:var(--text-strong);font:700 17px var(--font-display)">Bot Atención / Ventas 24/7</h2><p id="questionnaireBotHelp">Edita este cuestionario como lo leería un cliente. Sin rutas técnicas ni campos raros.</p></div><div class="question-actions"><button class="button" type="button" onclick="loadQuestionnaire()">${icon("refresh", 15)} Actualizar</button><button class="button" type="button" onclick="addQuestion()">Nueva pregunta</button><button class="button primary" id="questionnaireSaveButton" type="button" onclick="saveQuestionnaire()">Guardar cuestionario</button></div></div>
+    <div id="questionnaireRows" class="question-list"><div class="invite-loading">Cargando cuestionario…</div></div>
+  </section>
 </div></section>
 
 ${catalogView}
@@ -859,39 +874,36 @@ function openModal(id,focusId){var layer=document.getElementById(id);if(!layer)r
 function closeModal(id){var layer=document.getElementById(id);if(!layer)return;layer.classList.remove("open");layer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)lastFocus.focus();}
 function postJson(url,payload){return fetch(url,{method:"POST",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});});}
 /* ── Cuestionario de Customer Setup ─────────────────────────────────── */
-var questionnaireCache={version:1,questions:[]};
-var QUESTION_TYPES=["text","email","email_readonly","tel","textarea","choice","checkbox","file"];
-var QUESTION_SECTIONS=[
-  ["business","Negocio"],
-  ["offering","Servicios / productos"],
-  ["voice","Atención y tono"],
-  ["appointments_business","Citas · negocio"],
-  ["appointments_rules","Citas · reglas"],
-  ["appointments_knowledge","Citas · conocimiento"],
-  ["appointments_schedule","Citas · agenda"],
-  ["appointments_followup","Citas · seguimiento"],
-  ["appointments_channels","Citas · canales"],
-  ["appointments_review","Citas · revisión"]
-];
+var questionnaireCache={version:1,questions:[]},currentQuestionBot="customer_service";
+var QUESTION_TYPES=[["text","Respuesta corta"],["email","Correo"],["tel","Teléfono"],["textarea","Respuesta larga"],["choice","Sí / No / No sé"],["checkbox","Casilla"]];
+var BOT_QUESTIONNAIRES={
+  customer_service:{title:"Bot Atención / Ventas 24/7",help:"Preguntas para que el bot entienda la empresa, productos, políticas y soporte humano.",defaultSection:"offering",sections:[["business","Datos del negocio"],["offering","Productos y políticas"],["voice","Atención humana y tono"]]},
+  appointments:{title:"Bot Agendamiento",help:"Preguntas para que el bot pueda explicar servicios, ofrecer horarios, confirmar citas y escalar casos.",defaultSection:"appointments_business",sections:[["appointments_business","Negocio"],["appointments_rules","Reglas de conversación"],["appointments_knowledge","Servicios y conocimiento"],["appointments_schedule","Agenda y disponibilidad"],["appointments_followup","Recordatorios"],["appointments_channels","Canales"],["appointments_review","Consentimiento"]]}
+};
 function optionList(items,current){return items.map(function(item){var value=Array.isArray(item)?item[0]:item,label=Array.isArray(item)?item[1]:item;return '<option value="'+value+'" '+(value===current?"selected":"")+'>'+label+'</option>';}).join("");}
-function questionInput(row,name,value,type){var wrap=el("div","question-field");var label=el("label",null,name);var input=document.createElement("input");input.value=value==null?"":String(value);input.dataset.q=name.toLowerCase();if(type)input.type=type;wrap.appendChild(label);wrap.appendChild(input);row.appendChild(wrap);return input;}
-function questionSelect(row,name,value,items){var wrap=el("div","question-field");var label=el("label",null,name);var select=document.createElement("select");select.dataset.q=name.toLowerCase();select.innerHTML=optionList(items,value);wrap.appendChild(label);wrap.appendChild(select);row.appendChild(wrap);return select;}
-function questionCheckbox(row,name,checked){var wrap=el("div","question-field checkbox");var label=el("label",null,name);var input=document.createElement("input");input.type="checkbox";input.checked=!!checked;input.dataset.q=name.toLowerCase();wrap.appendChild(label);wrap.appendChild(input);row.appendChild(wrap);return input;}
-function renderQuestionnaire(){var root=document.getElementById("questionnaireRows");if(!root)return;root.textContent="";var questions=(questionnaireCache.questions||[]).slice().sort(function(a,b){return (Number(a.order)||0)-(Number(b.order)||0);});if(!questions.length){root.appendChild(el("div","question-empty","No hay preguntas configuradas."));return;}
+function questionBot(question){var section=String(question&&question.section||""),path=String(question&&question.path||"");if(path==="setup_goal"||section==="goal")return"selector";if(section.indexOf("appointments_")===0||path.indexOf("appointment_setup.")===0)return"appointments";return"customer_service";}
+function currentBotConfig(){return BOT_QUESTIONNAIRES[currentQuestionBot]||BOT_QUESTIONNAIRES.customer_service;}
+function questionInput(row,key,labelText,value,type){var wrap=el("div","question-field");var label=el("label",null,labelText);var input=document.createElement("input");input.value=value==null?"":String(value);input.dataset.q=key;if(type)input.type=type;wrap.appendChild(label);wrap.appendChild(input);row.appendChild(wrap);return input;}
+function questionSelect(row,key,labelText,value,items){var wrap=el("div","question-field");var label=el("label",null,labelText);var select=document.createElement("select");select.dataset.q=key;select.innerHTML=optionList(items,value);wrap.appendChild(label);wrap.appendChild(select);row.appendChild(wrap);return select;}
+function questionCheckbox(row,key,labelText,checked){var wrap=el("div","question-field checkbox");var label=el("label",null,labelText);var input=document.createElement("input");input.type="checkbox";input.checked=!!checked;input.dataset.q=key;wrap.appendChild(label);wrap.appendChild(input);row.appendChild(wrap);return input;}
+function setQuestionBot(bot){if(!BOT_QUESTIONNAIRES[bot])return;currentQuestionBot=bot;document.querySelectorAll("[data-question-bot]").forEach(function(button){button.classList.toggle("active",button.dataset.questionBot===bot);});renderQuestionnaire();}
+function renderQuestionnaire(){var root=document.getElementById("questionnaireRows");if(!root)return;var config=currentBotConfig();document.getElementById("questionnaireBotTitle").textContent=config.title;document.getElementById("questionnaireBotHelp").textContent=config.help;root.textContent="";var questions=(questionnaireCache.questions||[]).filter(function(q){return questionBot(q)===currentQuestionBot;}).sort(function(a,b){return (Number(a.order)||0)-(Number(b.order)||0);});if(!questions.length){root.appendChild(el("div","question-empty","Este bot todavía no tiene preguntas configuradas."));return;}
 questions.forEach(function(question,index){var row=el("div","question-row"+(question.active===false?" inactive":""));row.dataset.id=question.id;row.dataset.path=question.path||"";row.dataset.custom=question.custom||String(question.id||"").indexOf("custom_")===0?"1":"";
-questionInput(row,"Orden",question.order==null?(index+1)*10:question.order,"number");
-var labelInput=questionInput(row,"Pregunta",question.label||"","text");labelInput.maxLength=220;
-var placeholderInput=questionInput(row,"Placeholder",question.placeholder||"","text");placeholderInput.maxLength=500;
-questionSelect(row,"Sección",question.section||"business",QUESTION_SECTIONS);
-questionSelect(row,"Tipo",question.type||"text",QUESTION_TYPES);
-questionCheckbox(row,"Requerida",question.required!==false);
-questionCheckbox(row,"Activa",question.active!==false).addEventListener("change",function(event){row.classList.toggle("inactive",!event.target.checked);});
-var actions=el("div","question-actions");var remove=el("button","button danger",row.dataset.custom==="1"?"Eliminar":"Desactivar");remove.type="button";remove.addEventListener("click",function(){if(row.dataset.custom==="1")row.remove();else{var active=row.querySelector('[data-q="activa"]');if(active)active.checked=false;row.classList.add("inactive");showToast("Pregunta base desactivada. Guarda para aplicar el cambio.");}});actions.appendChild(remove);row.appendChild(actions);
-var meta=el("div","question-meta",(question.custom?"Nueva · ":"Base · ")+(question.path||"sin ruta"));meta.style.gridColumn="1 / -1";row.appendChild(meta);root.appendChild(row);});}
+questionInput(row,"order","Orden",question.order==null?(index+1)*10:question.order,"number");
+var labelInput=questionInput(row,"label","Pregunta",question.label||"","text");labelInput.maxLength=220;
+var placeholderInput=questionInput(row,"placeholder","Texto de ayuda",question.placeholder||"","text");placeholderInput.maxLength=500;
+questionSelect(row,"section","Bloque",question.section||config.defaultSection,config.sections);
+questionSelect(row,"type","Tipo",question.type||"text",QUESTION_TYPES);
+questionCheckbox(row,"required","Obligatoria",question.required!==false);
+questionCheckbox(row,"active","Visible",question.active!==false).addEventListener("change",function(event){row.classList.toggle("inactive",!event.target.checked);});
+var actions=el("div","question-actions");var remove=el("button","button danger",row.dataset.custom==="1"?"Eliminar":"Ocultar");remove.type="button";remove.addEventListener("click",function(){if(row.dataset.custom==="1"){questionnaireCache.questions=(questionnaireCache.questions||[]).filter(function(item){return item.id!==row.dataset.id;});renderQuestionnaire();showToast("Pregunta eliminada. Guarda para aplicar el cambio.");}else{var active=row.querySelector('[data-q="active"]');if(active)active.checked=false;row.classList.add("inactive");showToast("Pregunta oculta. Guarda para aplicar el cambio.");}});actions.appendChild(remove);row.appendChild(actions);
+var meta=el("div","question-meta",row.dataset.custom==="1"?"Pregunta nueva creada por Super Admin":"Pregunta base del sistema; puedes ocultarla sin borrar respuestas anteriores.");meta.style.gridColumn="1 / -1";row.appendChild(meta);root.appendChild(row);});}
 function loadQuestionnaire(){var root=document.getElementById("questionnaireRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading","Cargando cuestionario…"));}return fetch("/admin/customer-setup-questionnaire",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"questionnaire_unavailable");return b;});}).then(function(body){questionnaireCache=body.questionnaire||{version:1,questions:[]};renderQuestionnaire();}).catch(function(){if(root){root.textContent="";root.appendChild(el("div","question-empty","No se pudo cargar el cuestionario."));}showToast("No se pudo cargar el cuestionario.");});}
-function addQuestion(){var maxOrder=(questionnaireCache.questions||[]).reduce(function(max,q){return Math.max(max,Number(q.order)||0);},0);questionnaireCache.questions=(questionnaireCache.questions||[]).concat([{id:"custom_"+Date.now(),path:"",section:"business",order:maxOrder+10,active:true,required:false,type:"text",label:"Nueva pregunta",placeholder:"",custom:true}]);renderQuestionnaire();showToast("Pregunta nueva agregada. Edita el texto y guarda.");}
-function collectQuestionnaire(){var rows=document.querySelectorAll("#questionnaireRows .question-row"),questions=[];rows.forEach(function(row){function value(name){var field=row.querySelector('[data-q="'+name+'"]');return field&&field.type==="checkbox"?field.checked:field?field.value:"";}questions.push({id:row.dataset.id,path:row.dataset.path,custom:row.dataset.custom==="1",order:value("orden"),label:value("pregunta"),placeholder:value("placeholder"),section:value("sección"),type:value("tipo"),required:value("requerida"),active:value("activa")});});return{version:1,questions:questions};}
-function saveQuestionnaire(){var button=document.getElementById("questionnaireSaveButton");if(button){button.disabled=true;button.textContent="Guardando…";}fetch("/admin/customer-setup-questionnaire",{method:"PUT",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify({questionnaire:collectQuestionnaire()})}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"questionnaire_unavailable");return b;});}).then(function(body){questionnaireCache=body.questionnaire;renderQuestionnaire();showToast("Cuestionario guardado. El Customer Admin verá estos cambios al abrir el setup.");}).catch(function(){showToast("No se pudo guardar el cuestionario.");}).finally(function(){if(button){button.disabled=false;button.textContent="Guardar cuestionario";}});}
+function addQuestion(){var config=currentBotConfig();var sameBot=(questionnaireCache.questions||[]).filter(function(q){return questionBot(q)===currentQuestionBot;});var maxOrder=sameBot.reduce(function(max,q){return Math.max(max,Number(q.order)||0);},currentQuestionBot==="appointments"?200:80);questionnaireCache.questions=(questionnaireCache.questions||[]).concat([{id:"custom_"+currentQuestionBot+"_"+Date.now(),path:"",section:config.defaultSection,order:maxOrder+10,active:true,required:false,type:"text",label:"Nueva pregunta para "+config.title,placeholder:"",custom:true}]);renderQuestionnaire();showToast("Pregunta nueva agregada en "+config.title+".");}
+function collectVisibleQuestionUpdates(){var updates={};document.querySelectorAll("#questionnaireRows .question-row").forEach(function(row){function value(name){var field=row.querySelector('[data-q="'+name+'"]');return field&&field.type==="checkbox"?field.checked:field?field.value:"";}updates[row.dataset.id]={id:row.dataset.id,path:row.dataset.path,custom:row.dataset.custom==="1",order:value("order"),label:value("label"),placeholder:value("placeholder"),section:value("section"),type:value("type"),required:value("required"),active:value("active")};});return updates;}
+function collectQuestionnaire(){var updates=collectVisibleQuestionUpdates(),seen={};var questions=(questionnaireCache.questions||[]).map(function(question){if(updates[question.id]){seen[question.id]=true;return updates[question.id];}return question;}).filter(function(question){return !(question.custom&&questionBot(question)===currentQuestionBot&&!seen[question.id]);});Object.keys(updates).forEach(function(id){if(!seen[id])questions.push(updates[id]);});return{version:1,questions:questions};}
+function saveQuestionnaire(){var button=document.getElementById("questionnaireSaveButton"),config=currentBotConfig();if(button){button.disabled=true;button.textContent="Guardando…";}fetch("/admin/customer-setup-questionnaire",{method:"PUT",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify({questionnaire:collectQuestionnaire()})}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"questionnaire_unavailable");return b;});}).then(function(body){questionnaireCache=body.questionnaire;renderQuestionnaire();showToast("Cuestionario de "+config.title+" guardado.");}).catch(function(){showToast("No se pudo guardar el cuestionario.");}).finally(function(){if(button){button.disabled=false;button.textContent="Guardar cuestionario";}});}
+document.querySelectorAll("[data-question-bot]").forEach(function(button){button.addEventListener("click",function(){setQuestionBot(button.dataset.questionBot);});});
 function togglePlan(id,activo){postJson("/admin/catalogs/plans/"+encodeURIComponent(id)+"/toggle",{activo:activo}).then(function(){showToast(activo?"Plan activado.":"Plan desactivado. Los clientes que ya lo tienen no se ven afectados.");return loadCatalog();}).catch(function(error){showToast(catalogErrorLabel(error.message));});}
 function bindCatalogForms(){var planForm=document.getElementById("planEditorForm");
 if(planForm)planForm.addEventListener("submit",function(event){event.preventDefault();var button=document.getElementById("planEditorSubmit"),errorBox=document.getElementById("planEditorError");errorBox.textContent="";button.disabled=true;button.textContent="Guardando…";

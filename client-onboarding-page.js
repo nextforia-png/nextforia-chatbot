@@ -99,7 +99,7 @@ module.exports = function renderClientOnboarding(res, options) {
       <div class="formTop"><div class="stepMeta"><span id="stepLabel">Paso 1 de 4 · Tu negocio</span><div class="stepDots" id="stepDots"></div></div><div class="progress"><span id="progressBar"></span></div></div>
       <form id="setupForm" novalidate>
         <section class="panel active" data-step="0">
-          <h2>Empecemos por lo que quieres lograr</h2><p><strong>¿Qué quieres que NextforIA impulse primero?</strong><br>Cada conversación puede convertirse en una venta, una cita o un cliente que regresa. Elige por dónde comenzamos.</p>
+          <h2>Primero elige qué bot quieres entrenar</h2><p><strong>¿Cuál necesita tu negocio ahora?</strong><br>Si eliges los dos, completaremos primero el cuestionario de Atención/Ventas y después el de Agendamiento.</p>
           <div class="goalCards">
             <label class="goalCard"><input type="radio" name="setupGoal" data-field="setup_goal" value="customer_service"><span class="goalCardBody"><b class="goalIcon">💬</b><strong>Atender y vender 24/7</strong><span>Responde, recomienda, ayuda a cerrar ventas y acompaña al cliente antes y después de comprar.</span></span></label>
             <label class="goalCard"><input type="radio" name="setupGoal" data-field="setup_goal" value="appointments"><span class="goalCardBody"><b class="goalIcon">📅</b><strong>Gestionar mi agenda</strong><span>Se adapta a tus horarios, ofrece espacios, confirma citas y ayuda a reducir ausencias.</span></span></label>

@@ -183,8 +183,8 @@ function appointmentStageOneAnswers(company) {
     assert.strictEqual(response.status, 200);
     const setupHtml = await response.text();
     assert(setupHtml.includes("Comenzar el entrenamiento"));
-    assert(setupHtml.includes("Entrena a Nextfor para gestionar tus"));
-    assert(setupHtml.includes("citas por ti."));
+    assert(setupHtml.includes("Entrena a Nextfor para trabajar por"));
+    assert(setupHtml.includes("tu negocio."));
     assert(setupHtml.includes("¿Qué quieres que NextforIA impulse primero?"));
     assert(setupHtml.includes('name="setupGoal"'));
     assert(setupHtml.includes('value="appointments"'));

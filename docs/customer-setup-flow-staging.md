@@ -110,6 +110,10 @@ central del tenant.
 El asset de Lumen Entrenando se publica como `/admin/assets/lumen-entrenando.png`
 optimizado para carga rápida en móvil.
 
+Corrección v110: la pantalla de bienvenida usa narrativa general de entrenamiento
+("trabajar por tu negocio") y no presenta el setup como si fuera únicamente para
+Agendamiento de Citas.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,

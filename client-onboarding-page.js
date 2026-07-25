@@ -82,7 +82,7 @@ module.exports = function renderClientOnboarding(res, options) {
   <div class="welcomeInner">
     <div class="lumenWrap"><img src="/admin/assets/lumen-entrenando.png" alt="Lumen entrenando, la mascota de Nextfor IA"><span class="hello">¡Listo para entrenar!</span><span class="online">aprendiendo · 24/7</span></div>
     <div class="overline">✧ TU NUEVO INTEGRANTE ESTÁ LISTO PARA APRENDER</div>
-    <h1>Entrena a Nextfor para gestionar tus <em>citas por ti.</em></h1>
+    <h1>Entrena a Nextfor para trabajar por <em>tu negocio.</em></h1>
     <p>Enséñale cómo funciona tu negocio, qué puede hacer y cómo debe atender. Nextfor seguirá las reglas que tú le des.</p>
     <p><strong>Dale reglas claras y conviértelo en el empleado del mes.</strong></p>
     <button class="startBtn" type="button" id="startSetup">Comenzar el entrenamiento →</button>

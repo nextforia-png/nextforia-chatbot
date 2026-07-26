@@ -184,7 +184,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v121-staging-public-customer-setup";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v122-staging-simple-public-setup";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4142,6 +4142,29 @@ async function customerPanelEntryRedirect(user) {
   return record && record.setup_completed ? "/admin/panel?tab=summary" : "/admin/client-onboarding";
 }
 
+function publicSignupDefaults(catalogs) {
+  const active = function (item) { return item && item.activo !== false && item.active !== false; };
+  const id = function (value) { return String(value || "").trim().toLowerCase(); };
+  const bots = (catalogs && catalogs.bots || []).filter(active).filter(function (item) { return id(item.id); });
+  const plans = (catalogs && catalogs.plans || []).filter(active).filter(function (item) { return id(item.id); });
+  const preferredBot = bots.find(function (item) { return id(item.id) === "atencion-cliente"; }) || bots[0] || null;
+  if (!preferredBot || !plans.length) throw new CustomerAccessError("customer_access_unavailable", 503);
+  const preferredBotId = id(preferredBot.id);
+  const compatiblePlans = plans.filter(function (item) {
+    const botId = id(item.bot_id);
+    return !botId || botId === preferredBotId;
+  });
+  const plan = compatiblePlans.find(function (item) { return id(item.id) === "starter"; })
+    || compatiblePlans.find(function (item) { return id(item.id) === "growth"; })
+    || compatiblePlans[0]
+    || plans[0];
+  const planBotId = id(plan && plan.bot_id);
+  return {
+    plan_id: id(plan && plan.id),
+    assigned_bot_id: planBotId || preferredBotId
+  };
+}
+
 function adminKeyOk(req) {
   return adminAuthOk(req, "viewer");
 }
@@ -5097,10 +5120,7 @@ app.get("/admin/create-account", async (req, res) => {
     return;
   }
   try {
-    const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
     renderCustomerPublicSignup(res, {
-      plans: catalogs.plans || [],
-      bots: catalogs.bots || [],
       businessHint: req.query.business || req.query.q || ""
     });
   } catch (error) {
@@ -5114,13 +5134,15 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
     return;
   }
   const keys = Object.keys(req.body || {});
-  const allowed = ["company_name", "admin_email", "plan_id", "assigned_bot_id", "password", "password_confirmation"];
+  const allowed = ["company_name", "admin_email", "password", "password_confirmation"];
   if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
     res.status(400).json({ ok: false, error: "invalid_request" });
     return;
   }
   try {
-    const user = await customerAccessService.createPublicSignup(req.body);
+    const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
+    const defaults = publicSignupDefaults(catalogs);
+    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, defaults));
     const redirect = await customerPanelEntryRedirect(user);
     setDashboardSessionCookie(req, res, user);
     res.status(201).json({

@@ -117,6 +117,10 @@ function signedSessionCookie(secret, user) {
     assert(publicSignupHtml.includes("Clínica Demo"));
     assert(publicSignupHtml.includes("/admin/create-account"));
     assert(!publicSignupHtml.includes('id="username"'));
+    assert(!publicSignupHtml.includes('id="bot"'), "public account creation must not ask for bot type");
+    assert(!publicSignupHtml.includes('id="plan"'), "public account creation must not ask for plan");
+    assert(publicSignupHtml.includes("Estoy listo para que me entrenes"));
+    assert(publicSignupHtml.includes("/admin/assets/lumen-entrenando.png"));
 
     response = await fetch(base + "/admin/create-account", {
       method: "POST",
@@ -124,8 +128,6 @@ function signedSessionCookie(secret, user) {
       body: JSON.stringify({
         company_name: "Empresa Pública",
         admin_email: "publica@example.com",
-        assigned_bot_id: "agendamiento",
-        plan_id: "starter",
         password: "PublicPassword2026",
         password_confirmation: "PublicPassword2026"
       })
@@ -134,7 +136,7 @@ function signedSessionCookie(secret, user) {
     const publicSignup = await response.json();
     assert.strictEqual(publicSignup.user.email, "publica@example.com");
     assert.strictEqual(publicSignup.tenant.plan_id, "starter");
-    assert.strictEqual(publicSignup.tenant.assigned_bot_id, "agendamiento");
+    assert.strictEqual(publicSignup.tenant.assigned_bot_id, "atencion-cliente");
     assert.strictEqual(publicSignup.redirect, "/admin/client-onboarding");
     const publicCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
     assert.match(publicCookie, /^rav_dashboard_session=/);
@@ -149,8 +151,6 @@ function signedSessionCookie(secret, user) {
       body: JSON.stringify({
         company_name: "Empresa Pública Duplicada",
         admin_email: "publica@example.com",
-        assigned_bot_id: "agendamiento",
-        plan_id: "starter",
         password: "PublicPassword2026",
         password_confirmation: "PublicPassword2026"
       })

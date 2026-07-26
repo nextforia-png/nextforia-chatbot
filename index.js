@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v135-staging-whatsapp-first-channel-connect";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v136-staging-channel-preview-whatsapp-first";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -279,6 +279,17 @@ const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24,
 const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
 const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
 const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL, CUSTOMER_PANEL_FALLBACK_BASE_URLS).filter(Boolean);
+const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
+  || process.env.CHANNEL_CONNECTIONS_V1_PREVIEW === "1"
+  || (
+    process.env.CHANNEL_CONNECTIONS_V1_PREVIEW !== "0"
+    && process.env.NODE_ENV === "production"
+    && [CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL].filter(Boolean).some(function (origin) {
+      try { return new URL(origin).hostname === "staging.nextforia.com"; }
+      catch (_) { return false; }
+    })
+  );
+const CHANNEL_CONNECTIONS_V1_VISIBLE = CHANNEL_CONNECTIONS_V1_ENABLED || CHANNEL_CONNECTIONS_STAGING_PREVIEW;
 const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
@@ -411,7 +422,7 @@ if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLE
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
-if (CHANNEL_CONNECTIONS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_VISIBLE && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when channel connections are visible");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");
@@ -598,12 +609,13 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
       inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
     })
   : null;
-const channelConnectionStore = CHANNEL_CONNECTIONS_V1_ENABLED
-  ? (CHANNEL_CONNECTIONS_TEST_MODE
+const channelConnectionsPreviewOnly = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHANNEL_CONNECTIONS_V1_ENABLED;
+const channelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE
+  ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsPreviewOnly
       ? new InMemoryChannelConnectionStore()
       : new SupabaseChannelConnectionStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
   : null;
-const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_ENABLED
+const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? new MetaChannelProvider({
       appId: META_APP_ID,
       appSecret: META_APP_SECRET,
@@ -634,7 +646,7 @@ const protectedLegacyChannelConnections = createLegacyConnections({
     webhookStatus: MESSENGER_VERIFY_TOKEN ? "configured" : "needs_attention"
   }
 });
-const channelConnectionService = CHANNEL_CONNECTIONS_V1_ENABLED
+const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? createChannelConnectionService({
       store: channelConnectionStore,
       provider: channelConnectionProvider,
@@ -6759,7 +6771,7 @@ function channelConnectionErrorResponse(res, error) {
 }
 
 app.get("/admin/panel/channel-connections", async (req, res) => {
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6785,7 +6797,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
 });
 
 app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) => {
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6812,7 +6824,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
 });
 
 app.get("/admin/channel-connections/meta/callback", async (req, res) => {
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.redirect("/admin/panel?tab=channels&connection=error");
     return;
   }
@@ -6848,7 +6860,7 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
 });
 
 app.post("/admin/panel/channel-connections/:channel/select", async (req, res) => {
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6872,7 +6884,7 @@ app.post("/admin/panel/channel-connections/:channel/select", async (req, res) =>
 });
 
 app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res) => {
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6896,7 +6908,7 @@ app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res
 
 app.get("/admin/channel-connections", async (req, res) => {
   const auth = dashboardAuth(req);
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6915,7 +6927,7 @@ app.get("/admin/channel-connections", async (req, res) => {
 
 app.post("/admin/channel-connections/:tenantId/:channel/verify", async (req, res) => {
   const auth = dashboardAuth(req);
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6936,7 +6948,7 @@ app.post("/admin/channel-connections/:tenantId/:channel/verify", async (req, res
 
 app.post("/admin/channel-connections/:tenantId/:channel/help-reconnect", async (req, res) => {
   const auth = dashboardAuth(req);
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -6957,7 +6969,7 @@ app.post("/admin/channel-connections/:tenantId/:channel/help-reconnect", async (
 
 app.post("/admin/channel-connections/:tenantId/:channel/disconnect", async (req, res) => {
   const auth = dashboardAuth(req);
-  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -7337,7 +7349,7 @@ app.get("/admin/super-admin", async (req, res) => {
     accessModel: DASHBOARD_ACCESS_MODEL,
     customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
-    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_ENABLED,
+    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_VISIBLE,
     platformGoals,
     tenant: CUSTOMER_PANEL_BUSINESS,
     integration: currentRavIntegration(),
@@ -7500,7 +7512,7 @@ app.get("/admin/panel", async (req, res) => {
   }
   const capabilities = customerPanelCapabilities(auth.role);
   let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-  if (initialTab === "channels" && !CHANNEL_CONNECTIONS_V1_ENABLED) initialTab = "summary";
+  if (initialTab === "channels" && !CHANNEL_CONNECTIONS_V1_VISIBLE) initialTab = "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -7511,7 +7523,7 @@ app.get("/admin/panel", async (req, res) => {
     tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
-    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_ENABLED,
+    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_VISIBLE,
     botVersion: BOT_VERSION
   });
 });

@@ -7,7 +7,7 @@ Feature gate: `CHANNEL_CONNECTIONS_V1_ENABLED=1`
 ## Estado de Staging al entregar
 
 - Código desplegado en `https://staging.nextforia.com`.
-- Versión visible esperada después de este ajuste: `v135-staging-whatsapp-first-channel-connect`.
+- Versión visible esperada después de este ajuste: `v136-staging-channel-preview-whatsapp-first`.
 - El gate permanece apagado de forma segura.
 - La migración de canales todavía no se aplicó.
 - El servicio Staging ya tiene `DATA_ENCRYPTION_KEY`, Supabase y Customer Access v2, pero no tiene `META_APP_ID`, `META_APP_SECRET` ni `META_WHATSAPP_CONFIG_ID`.
@@ -123,7 +123,7 @@ La matriz específica cubre:
 4. Crear o confirmar el Embedded Signup Configuration ID.
 5. Confirmar App Review/Advanced Access de los permisos anteriores.
 6. Añadir las variables solo al servicio Render `nextforia-staging`.
-7. Activar el gate sobre `v135-staging-whatsapp-first-channel-connect`, que debe estar desplegada.
+7. Activar el gate sobre `v136-staging-channel-preview-whatsapp-first`, que debe estar desplegada.
 8. Probar un activo de prueba de WhatsApp y, si aplica, uno de Instagram.
 9. Confirmar en Super Admin cuenta, estado, fecha, actor y ausencia de secretos.
 10. Confirmar que RAV sigue visible como conexión protegida y que sus health checks no cambian.

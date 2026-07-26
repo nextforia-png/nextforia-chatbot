@@ -5091,8 +5091,8 @@ app.post("/admin/panel/billing/checkout", async (req, res) => {
       tenant_id: business.id,
       customer: business.name,
       customer_email: auth.email || auth.username,
-      plan_id: req.body && req.body.plan_id || business.plan_id,
-      bot_id: req.body && req.body.bot_id || business.assigned_bot_id,
+      plan_id: business.plan_id,
+      bot_id: business.assigned_bot_id,
       actor: auth.email || auth.username || "customer"
     });
     res.json({ ok: true, checkout });

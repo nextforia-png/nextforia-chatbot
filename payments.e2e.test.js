@@ -192,12 +192,18 @@ function transactionEvent(input) {
     response = await fetch(base + "/admin/panel/billing/checkout", {
       method: "POST",
       headers: { cookie: cookieA, origin: base, "content-type": "application/json" },
-      body: JSON.stringify({ plan_id: "growth", bot_id: "atencion-cliente" })
+      body: JSON.stringify({
+        plan_id: "scale",
+        bot_id: "agendamiento",
+        tenant_id: "payments-b"
+      })
     });
     assert.strictEqual(response.status, 200);
     let payload = await response.json();
     const checkoutA = payload.checkout;
     assert.strictEqual(checkoutA.amount_charged, 480000);
+    assert.strictEqual(checkoutA.reference.includes("payments-a"), true,
+      "checkout must remain bound to the authenticated tenant and its catalog selection");
     assert(checkoutA.checkout_url.startsWith("https://checkout.wompi.co/p/?"));
 
     response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieA } });

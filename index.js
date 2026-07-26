@@ -35,6 +35,12 @@ const {
   createCatalogService
 } = require("./platform-catalogs");
 const {
+  InMemoryPaymentStore,
+  PaymentError,
+  SupabasePaymentStore,
+  createPaymentService
+} = require("./payments");
+const {
   CustomerAccessError,
   InMemoryCustomerAccessStore,
   SupabaseCustomerAccessStore,
@@ -184,7 +190,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v122-staging-simple-public-setup";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v123-staging-payments-v1";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -245,6 +251,15 @@ const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
 const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
+const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
+const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
+const PAYMENTS_ENV = String(process.env.PAYMENTS_ENV || "").trim().toLowerCase();
+const WOMPI_PUBLIC_KEY = String(process.env.WOMPI_PUBLIC_KEY || "").trim();
+const WOMPI_INTEGRITY_SECRET = String(process.env.WOMPI_INTEGRITY_SECRET || "").trim();
+const WOMPI_EVENT_SECRET = String(process.env.WOMPI_EVENT_SECRET || "").trim();
+const WOMPI_ESTIMATED_FEE_RATE = Number(process.env.WOMPI_ESTIMATED_FEE_RATE || 0);
+const WOMPI_ESTIMATED_FIXED_FEE = Number(process.env.WOMPI_ESTIMATED_FIXED_FEE || 0);
+const WOMPI_ESTIMATED_FEE_TAX_RATE = Number(process.env.WOMPI_ESTIMATED_FEE_TAX_RATE || 0);
 const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24, 1, 168);
 const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
 const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
@@ -376,6 +391,22 @@ if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLE
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");
+if (PAYMENTS_V1_ENABLED && PAYMENTS_ENV !== "staging") productionConfigErrors.push("PAYMENTS_ENV=staging is required for Payments v1");
+if (PAYMENTS_V1_ENABLED && !PAYMENTS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required for Payments v1 outside test mode");
+if (PAYMENTS_V1_ENABLED && !PUBLIC_BASE_URL) productionConfigErrors.push("PUBLIC_BASE_URL must be a valid HTTPS origin for Wompi checkout and webhook redirects");
+if (PAYMENTS_V1_ENABLED && (!/^pub_test_/.test(WOMPI_PUBLIC_KEY) || !/^test_integrity_/.test(WOMPI_INTEGRITY_SECRET) || !/^test_events_/.test(WOMPI_EVENT_SECRET))) {
+  productionConfigErrors.push("Wompi Sandbox public, integrity and event credentials are required for Payments v1");
+}
+if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_RATE) || WOMPI_ESTIMATED_FEE_RATE < 0 || WOMPI_ESTIMATED_FEE_RATE > 1)) {
+  productionConfigErrors.push("WOMPI_ESTIMATED_FEE_RATE must be a decimal between 0 and 1");
+}
+if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FIXED_FEE) || WOMPI_ESTIMATED_FIXED_FEE < 0)) {
+  productionConfigErrors.push("WOMPI_ESTIMATED_FIXED_FEE must be a non-negative COP amount");
+}
+if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_TAX_RATE) || WOMPI_ESTIMATED_FEE_TAX_RATE < 0 || WOMPI_ESTIMATED_FEE_TAX_RATE > 1)) {
+  productionConfigErrors.push("WOMPI_ESTIMATED_FEE_TAX_RATE must be a decimal between 0 and 1");
+}
 if (productionConfigErrors.length) {
   console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
   process.exit(1);
@@ -387,6 +418,7 @@ if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
 if (!ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY missing"); process.exit(1); }
 
 const adminRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 600 });
+const wompiWebhookRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 300 });
 const loginRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 12,
@@ -550,6 +582,22 @@ const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
       : new SupabaseCatalogStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
   : null;
 const catalogService = CUSTOMER_ACCESS_V2_ENABLED ? createCatalogService({ store: catalogStore }) : null;
+const paymentStore = PAYMENTS_V1_ENABLED
+  ? (PAYMENTS_TEST_MODE
+      ? new InMemoryPaymentStore()
+      : new SupabasePaymentStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
+  store: paymentStore,
+  catalogService,
+  publicKey: WOMPI_PUBLIC_KEY,
+  integritySecret: WOMPI_INTEGRITY_SECRET,
+  eventSecret: WOMPI_EVENT_SECRET,
+  estimatedFeeRate: WOMPI_ESTIMATED_FEE_RATE,
+  estimatedFixedFee: WOMPI_ESTIMATED_FIXED_FEE,
+  estimatedTaxRate: WOMPI_ESTIMATED_FEE_TAX_RATE,
+  publicBaseUrl: PUBLIC_BASE_URL
+}) : null;
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -5003,6 +5051,115 @@ app.get("/admin/panel/catalogs", async (req, res) => {
   }
 });
 
+// ─── Payments v1 · Wompi Sandbox ─────────────────────────────────────────
+
+function sendPaymentError(res, error) {
+  const problem = error instanceof PaymentError ? error : new PaymentError("billing_unavailable", 503);
+  res.status(problem.status).json({ ok: false, error: problem.code });
+}
+
+app.get("/admin/panel/billing", async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenantId = customerTenantForAuth(dashboardAuth(req));
+    res.json({ ok: true, billing: await paymentService.tenantBilling(tenantId) });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/admin/panel/billing/checkout", async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const business = customerBusinessForAuth(auth);
+  try {
+    const checkout = await paymentService.startCheckout({
+      tenant_id: business.id,
+      customer: business.name,
+      customer_email: auth.email || auth.username,
+      plan_id: req.body && req.body.plan_id || business.plan_id,
+      bot_id: req.body && req.body.bot_id || business.assigned_bot_id,
+      actor: auth.email || auth.username || "customer"
+    });
+    res.json({ ok: true, checkout });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.get("/admin/billing", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    res.json({ ok: true, billing: await paymentService.adminBilling() });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/admin/billing/:tenantId/bypass", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    const tenantId = cleanTenantId(req.params.tenantId);
+    const tenants = await catalogService.listTenants();
+    const tenant = tenants.find(function (row) { return row.id === tenantId; });
+    if (!tenant) throw new PaymentError("tenant_not_found", 404);
+    await paymentService.prepareContract({
+      tenant_id: tenant.id,
+      customer: tenant.company_name || tenant.id,
+      plan_id: req.body && req.body.plan_id || tenant.plan_id,
+      bot_id: req.body && req.body.bot_id || tenant.assigned_bot_id
+    });
+    const contract = await paymentService.approveBypass({
+      tenant_id: tenant.id,
+      subscription_status: req.body && req.body.subscription_status,
+      trial_start: req.body && req.body.trial_start,
+      trial_end: req.body && req.body.trial_end,
+      reason: req.body && req.body.reason,
+      actor: auth.email || auth.username || "super_admin"
+    });
+    res.json({ ok: true, billing: contract });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/webhooks/wompi", wompiWebhookRateLimiter, async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    const result = await paymentService.processWebhook(req.body, req.get("x-event-checksum"));
+    res.status(200).json({ ok: true, duplicate: !!(result && result.duplicate) });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
 // ─── Ciclo de vida del cliente ────────────────────────────────────────────
 
 app.get("/admin/tenants", async (req, res) => {
@@ -5480,7 +5637,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
   const reviewStatus = record.setup_review && record.setup_review.status || "";
   if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
-    res.redirect("/admin/panel?tab=summary");
+    res.redirect(PAYMENTS_V1_ENABLED ? "/admin/panel?tab=plan" : "/admin/panel?tab=summary");
     return;
   }
   let catalogs = { plans: [], bots: [] };
@@ -5489,11 +5646,13 @@ app.get("/admin/client-onboarding", async (req, res) => {
     catch (_) {}
   }
   const business = customerBusinessForAuth(auth);
-  const compatiblePlans = (catalogs.plans || []).filter(function (item) {
-    return !item.bot_id || item.bot_id === business.assigned_bot_id;
-  });
   const plan = (catalogs.plans || []).find(function (item) { return item.id === business.plan_id; }) || null;
   const bot = (catalogs.bots || []).find(function (item) { return item.id === business.assigned_bot_id; }) || null;
+  let billing = null;
+  if (PAYMENTS_V1_ENABLED && paymentService) {
+    try { billing = await paymentService.tenantBilling(tenantId); }
+    catch (_) {}
+  }
   const displayRecord = JSON.parse(JSON.stringify(record));
   displayRecord.answers = displayRecord.answers || defaultClientOnboarding();
   if (!displayRecord.answers.business.brand_name) displayRecord.answers.business.brand_name = business.name;
@@ -5505,8 +5664,11 @@ app.get("/admin/client-onboarding", async (req, res) => {
     actor: auth.name || auth.username,
     adminEmail: auth.email || auth.username,
     plan,
-    plans: compatiblePlans,
+    plans: catalogs.plans || [],
     bot,
+    bots: catalogs.bots || [],
+    billing,
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     demo: false,
     apiPath: "/admin/client-onboarding/data",
     questionnaire
@@ -5660,23 +5822,69 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       });
       return;
     }
+    const paymentChoice = requestedStatus === "completed" && PAYMENTS_V1_ENABLED
+      ? String(req.body && req.body.payment_choice || "").trim().toLowerCase()
+      : "";
+    if (requestedStatus === "completed" && PAYMENTS_V1_ENABLED &&
+        !["pay", "trial", "pilot"].includes(paymentChoice)) {
+      throw new PaymentError("payment_choice_required", 400);
+    }
     const selectedPlanId = String(req.body && req.body.plan_id || auth.plan_id || "").trim().toLowerCase();
+    const selectedBotId = String(req.body && req.body.bot_id || auth.assigned_bot_id || "").trim().toLowerCase();
+    if (PAYMENTS_V1_ENABLED && requestedStatus === "completed" && (!selectedPlanId || !selectedBotId)) {
+      throw new PaymentError("plan_and_bot_required", 400);
+    }
     let selectedPlan = null;
-    if (auth.version === 2 && selectedPlanId && selectedPlanId !== String(auth.plan_id || "").toLowerCase()) {
+    if (auth.version === 2 && selectedPlanId && selectedBotId &&
+        (selectedPlanId !== String(auth.plan_id || "").toLowerCase() ||
+         selectedBotId !== String(auth.assigned_bot_id || "").toLowerCase())) {
       if (!catalogService) throw new CatalogError("catalog_unavailable", 503);
       selectedPlan = await catalogService.selectTenantPlan(
         tenantId,
         selectedPlanId,
-        String(auth.assigned_bot_id || ""),
+        selectedBotId,
         auth
       );
     }
+    let billing = null;
+    let checkout = null;
+    if (PAYMENTS_V1_ENABLED && paymentService && selectedPlanId && selectedBotId) {
+      const business = customerBusinessForAuth(auth);
+      billing = await paymentService.prepareContract({
+        tenant_id: tenantId,
+        customer: business.name,
+        customer_email: auth.email || auth.username,
+        plan_id: selectedPlanId,
+        bot_id: selectedBotId
+      });
+      if (requestedStatus === "completed") {
+        if (paymentChoice !== "pay" &&
+            (!billing || billing.subscription_status !== paymentChoice || !billing.ready_for_bot_creation)) {
+          throw new PaymentError("bypass_not_approved", 403);
+        }
+      }
+    }
     const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
+    if (requestedStatus === "completed" && paymentChoice === "pay") {
+      const business = customerBusinessForAuth(auth);
+      checkout = await paymentService.startCheckout({
+        tenant_id: tenantId,
+        customer: business.name,
+        customer_email: auth.email || auth.username,
+        plan_id: selectedPlanId,
+        bot_id: selectedBotId,
+        actor: auth.email || auth.username || "customer"
+      });
+    }
     res.json({
       ok: true,
       onboarding: record,
       selected_plan_id: selectedPlan && selectedPlan.plan_id || selectedPlanId || null,
-      redirect: record.setup_completed ? "/admin/panel?tab=summary" : null
+      selected_bot_id: selectedPlan && selectedPlan.assigned_bot_id || selectedBotId || null,
+      billing,
+      checkout,
+      redirect: checkout && checkout.checkout_url ||
+        (record.setup_completed ? (PAYMENTS_V1_ENABLED ? "/admin/panel?tab=plan" : "/admin/panel?tab=summary") : null)
     });
   } catch (error) {
     console.error("client onboarding save error:", error.message);
@@ -5687,6 +5895,18 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
         message: error.code === "invalid_plan_for_bot"
           ? "Este plan no está disponible para el bot asignado a tu empresa."
           : "El plan elegido ya no está disponible. Selecciona otro plan activo."
+      });
+      return;
+    }
+    if (error instanceof PaymentError) {
+      res.status(error.status || 400).json({
+        ok: false,
+        error: error.code,
+        message: ({
+          payment_choice_required: "Elige pagar o usa un trial/piloto previamente aprobado.",
+          bypass_not_approved: "Este trial o piloto todavía no está aprobado por Super Admin.",
+          wompi_staging_not_configured: "Wompi Sandbox todavía no está configurado en Staging."
+        })[error.code] || "No pudimos preparar la facturación de tu plan."
       });
       return;
     }
@@ -6317,6 +6537,7 @@ app.get("/admin/super-admin", async (req, res) => {
     commercialReadiness: COMMERCIAL_READINESS,
     accessModel: DASHBOARD_ACCESS_MODEL,
     customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     platformGoals,
     tenant: CUSTOMER_PANEL_BUSINESS,
     integration: currentRavIntegration(),
@@ -6487,6 +6708,7 @@ app.get("/admin/panel", async (req, res) => {
     initialTab,
     tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
     customerSetupCompleted,
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     botVersion: BOT_VERSION
   });
 });

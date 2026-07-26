@@ -211,10 +211,11 @@ class SupabaseCatalogStore {
     return rows[0] || null;
   }
 
-  async selectTenantPlan(tenantId, planId) {
+  async selectTenantPlan(tenantId, planId, assignedBotId) {
     try {
       const response = await this.axios.patch(this.url + "/rest/v1/tenants", {
         plan_id: planId,
+        assigned_bot_id: assignedBotId,
         updated_at: new Date().toISOString()
       }, {
         params: { id: "eq." + tenantId, select: "id,company_name,plan_id,assigned_bot_id,status,updated_at" },
@@ -371,12 +372,19 @@ class InMemoryCatalogStore {
     return tenant;
   }
 
-  async selectTenantPlan(tenantId, planId, actor) {
+  async selectTenantPlan(tenantId, planId, assignedBotId, actor) {
     const tenant = this.tenants.find(function (row) { return row.id === tenantId; });
     if (!tenant) throw new CatalogError("tenant_not_found", 404);
     tenant.plan_id = planId;
+    tenant.assigned_bot_id = assignedBotId;
     tenant.updated_at = new Date().toISOString();
-    this.audit.push({ actor: actor, action: "customer_plan_selected", tenant_id: tenantId, plan_id: planId });
+    this.audit.push({
+      actor: actor,
+      action: "customer_plan_selected",
+      tenant_id: tenantId,
+      plan_id: planId,
+      assigned_bot_id: assignedBotId
+    });
     return tenant;
   }
 
@@ -468,11 +476,14 @@ function createCatalogService(options) {
       const cleanBot = text(assignedBotId, 64).toLowerCase();
       if (!cleanTenant) throw new CatalogError("tenant_not_found", 404);
       if (!ID_PATTERN.test(cleanPlan)) throw new CatalogError("invalid_plan_id", 400);
+      if (!ID_PATTERN.test(cleanBot)) throw new CatalogError("invalid_bot_id", 400);
       const active = await this.activeCatalogs();
       const plan = (active.plans || []).find(function (row) { return row.id === cleanPlan; });
+      const bot = (active.bots || []).find(function (row) { return row.id === cleanBot; });
       if (!plan) throw new CatalogError("plan_not_found", 404);
+      if (!bot) throw new CatalogError("bot_not_found", 404);
       if (plan.bot_id && plan.bot_id !== cleanBot) throw new CatalogError("invalid_plan_for_bot", 400);
-      try { return await store.selectTenantPlan(cleanTenant, cleanPlan, actorLabel(actor)); }
+      try { return await store.selectTenantPlan(cleanTenant, cleanPlan, cleanBot, actorLabel(actor)); }
       catch (error) { throw mapStoreError(error); }
     },
 

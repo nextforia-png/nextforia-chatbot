@@ -123,6 +123,12 @@ assert.match(html, /Ejecutar prueba segura/);
 assert.match(html, /No se muestran datos de ejemplo como si fueran producción/);
 assert.match(html, /Lead = cuenta creada/);
 assert.match(html, /id="leadPipelineRows"/);
+assert.match(html, /id="leadSearchInput"/);
+assert.match(html, /applyLeadSearch/);
+assert.match(html, /id="leadSortOrder"/);
+assert.match(html, /Más recientes primero/);
+assert.match(html, /Más antiguos primero/);
+assert.match(html, /<span>Fecha<\/span>/);
 assert.match(html, /\/admin\/leads/);
 assert.match(html, /email y clave/);
 assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
@@ -169,7 +175,8 @@ renderSuperAdminPanel({
       next_action: "Acompañar para que empiece el setup.",
       completion: 0,
       plan_id: "starter",
-      assigned_bot_id: "atencion-cliente"
+      assigned_bot_id: "atencion-cliente",
+      updated_at: "2026-07-26T13:00:00.000Z"
     }]
   }
 });
@@ -178,6 +185,7 @@ assert.match(richHtml, /Pareto de ingresos/);
 assert.match(richHtml, /Meta Ads/);
 assert.match(richHtml, /Lead Demo S\.A\.S\./);
 assert.match(richHtml, /Cuenta creada/);
+assert.match(richHtml, /2026-07-26/);
 assert.match(richHtml, /Acompañar para que empiece el setup/);
 assert.doesNotMatch(richHtml, /sin fuente financiera conectada/);
 

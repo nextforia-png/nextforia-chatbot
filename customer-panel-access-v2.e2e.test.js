@@ -110,7 +110,55 @@ function signedSessionCookie(secret, user) {
 
   try {
     await waitForServer(child, port);
-    let response = await fetch(base + "/admin/setup/setup-tenant?invite=" + validInviteToken);
+    let response = await fetch(base + "/admin/create-account?business=Cl%C3%ADnica%20Demo");
+    assert.strictEqual(response.status, 200);
+    const publicSignupHtml = await response.text();
+    assert(publicSignupHtml.includes("Crea tu cuenta"));
+    assert(publicSignupHtml.includes("Clínica Demo"));
+    assert(publicSignupHtml.includes("/admin/create-account"));
+    assert(!publicSignupHtml.includes('id="username"'));
+
+    response = await fetch(base + "/admin/create-account", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({
+        company_name: "Empresa Pública",
+        admin_email: "publica@example.com",
+        assigned_bot_id: "agendamiento",
+        plan_id: "starter",
+        password: "PublicPassword2026",
+        password_confirmation: "PublicPassword2026"
+      })
+    });
+    assert.strictEqual(response.status, 201);
+    const publicSignup = await response.json();
+    assert.strictEqual(publicSignup.user.email, "publica@example.com");
+    assert.strictEqual(publicSignup.tenant.plan_id, "starter");
+    assert.strictEqual(publicSignup.tenant.assigned_bot_id, "agendamiento");
+    assert.strictEqual(publicSignup.redirect, "/admin/client-onboarding");
+    const publicCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
+    assert.match(publicCookie, /^rav_dashboard_session=/);
+
+    const publicLogin = await login(base, { email: "publica@example.com", password: "PublicPassword2026" });
+    assert.strictEqual(publicLogin.body.redirect, "/admin/client-onboarding");
+    assert.strictEqual(publicLogin.body.user.tenant_id, publicSignup.tenant.id);
+
+    response = await fetch(base + "/admin/create-account", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({
+        company_name: "Empresa Pública Duplicada",
+        admin_email: "publica@example.com",
+        assigned_bot_id: "agendamiento",
+        plan_id: "starter",
+        password: "PublicPassword2026",
+        password_confirmation: "PublicPassword2026"
+      })
+    });
+    assert.strictEqual(response.status, 409);
+    assert.strictEqual((await response.json()).error, "customer_already_exists");
+
+    response = await fetch(base + "/admin/setup/setup-tenant?invite=" + validInviteToken);
     assert.strictEqual(response.status, 200);
     const setupHtml = await response.text();
     assert(setupHtml.includes("invited@example.com"));

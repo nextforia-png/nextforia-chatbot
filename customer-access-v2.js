@@ -570,6 +570,54 @@ function createCustomerAccessService(options) {
       }
     },
 
+    async createPublicSignup(input) {
+      const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+      const clean = validateCreateInput({
+        company_name: body.company_name,
+        admin_email: body.admin_email,
+        plan_id: body.plan_id,
+        assigned_bot_id: body.assigned_bot_id
+      });
+      const password = validatePassword(body.password, body.password_confirmation);
+      const token = crypto.randomBytes(32).toString("base64url");
+      const createdAt = now();
+      const expiresAt = new Date(createdAt.getTime() + ttlHours * 60 * 60 * 1000).toISOString();
+      let created;
+      try {
+        created = await store.createInvitation(Object.assign({}, clean, {
+          token_hash: hashInvitationToken(token),
+          expires_at: expiresAt,
+          created_by: "public_signup"
+        }));
+      } catch (error) {
+        throw mapStoreError(error);
+      }
+      const salt = crypto.randomBytes(16);
+      let user;
+      try {
+        user = await store.consumeInvitation({
+          tenant_id: created.tenant_id,
+          token_hash: hashInvitationToken(token),
+          password_hash: hashPassword(password, salt),
+          password_salt: salt.toString("base64url")
+        });
+      } catch (error) {
+        throw mapStoreError(error);
+      }
+      return {
+        user_id: user.user_id,
+        email: user.email_normalized,
+        username: user.email_normalized,
+        name: user.email_normalized,
+        role: user.role || "admin",
+        tenant_id: user.tenant_id,
+        company_name: user.company_name || clean.company_name,
+        plan_id: clean.plan_id,
+        assigned_bot_id: clean.assigned_bot_id,
+        tenant_status: "setup"
+      };
+    },
+
     inspectInvitation: inspectInvitation,
 
     async consumeInvitation(input) {

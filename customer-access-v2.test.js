@@ -107,6 +107,28 @@ async function expectError(promise, code, status) {
     password: "SecurePassword2026"
   }), "invalid_invitation", 403);
   assert.strictEqual(await service.authenticate("admin@empresa.example", "wrong-password"), null);
+  const outboxBeforePublicSignup = email.outbox.length;
+  const publicUser = await service.createPublicSignup({
+    company_name: "Empresa Pública",
+    admin_email: "publica@empresa.example",
+    plan_id: "starter",
+    assigned_bot_id: "agendamiento",
+    password: "PublicPassword2026",
+    password_confirmation: "PublicPassword2026"
+  });
+  assert.strictEqual(publicUser.email, "publica@empresa.example");
+  assert.strictEqual(publicUser.plan_id, "starter");
+  assert.strictEqual(publicUser.assigned_bot_id, "agendamiento");
+  assert.strictEqual(email.outbox.length, outboxBeforePublicSignup, "public signup must not send an invitation email");
+  assert(await service.authenticate("publica@empresa.example", "PublicPassword2026"));
+  await expectError(service.createPublicSignup({
+    company_name: "Empresa Pública 2",
+    admin_email: "publica@empresa.example",
+    plan_id: "starter",
+    assigned_bot_id: "agendamiento",
+    password: "PublicPassword2026",
+    password_confirmation: "PublicPassword2026"
+  }), "customer_already_exists", 409);
   const validSession = await service.validateSession({
     user_id: user.user_id,
     email: "ADMIN@EMPRESA.EXAMPLE",

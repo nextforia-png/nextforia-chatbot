@@ -27,6 +27,7 @@ const {
 } = require("./customer-appointments");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
+const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
   CatalogError,
   InMemoryCatalogStore,
@@ -183,7 +184,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v120-staging-customer-panel-access";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v121-staging-public-customer-setup";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5082,6 +5083,55 @@ app.post("/admin/customer-invite", async (req, res) => {
     expires_at: new Date(inviteData.exp).toISOString(),
     note: "Comparte este enlace solo con el administrador de RAV Toys. Deja de servir cuando se crea la cuenta."
   });
+});
+
+app.get("/admin/create-account", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService) {
+    res.status(404).send("Not found");
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (auth.ok && auth.version === 2) {
+    try { res.redirect(await customerPanelEntryRedirect(auth)); }
+    catch (_) { res.redirect("/admin/panel?tab=summary"); }
+    return;
+  }
+  try {
+    const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
+    renderCustomerPublicSignup(res, {
+      plans: catalogs.plans || [],
+      bots: catalogs.bots || [],
+      businessHint: req.query.business || req.query.q || ""
+    });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService || !customerAccessService.createPublicSignup) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const keys = Object.keys(req.body || {});
+  const allowed = ["company_name", "admin_email", "plan_id", "assigned_bot_id", "password", "password_confirmation"];
+  if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
+    res.status(400).json({ ok: false, error: "invalid_request" });
+    return;
+  }
+  try {
+    const user = await customerAccessService.createPublicSignup(req.body);
+    const redirect = await customerPanelEntryRedirect(user);
+    setDashboardSessionCookie(req, res, user);
+    res.status(201).json({
+      ok: true,
+      tenant: { id: user.tenant_id, company_name: user.company_name, plan_id: user.plan_id, assigned_bot_id: user.assigned_bot_id },
+      user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+      redirect
+    });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
 });
 
 app.get("/admin/setup/:tenantId", async (req, res) => {

@@ -3,33 +3,20 @@
 const crypto = require("crypto");
 const { decryptStoredText, encryptStoredText, safeEqualText } = require("./security");
 
-const SUPPORTED_CHANNELS = ["whatsapp", "instagram", "messenger"];
+const SUPPORTED_CHANNELS = ["whatsapp", "instagram"];
 const CONNECTION_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
 const CHANNEL_CATALOG = Object.freeze([
   {
     id: "whatsapp",
     name: "WhatsApp",
-    description: "Conecta tu número de WhatsApp Business para atender conversaciones desde NextforIA.",
+    description: "Recomendado. Conecta el número de WhatsApp Business donde tus clientes ya te escriben.",
     available: true
   },
   {
     id: "instagram",
     name: "Instagram",
-    description: "Conecta una cuenta profesional de Instagram vinculada a tu negocio.",
+    description: "Opcional. Conecta tu cuenta profesional si también atiendes mensajes por Instagram.",
     available: true
-  },
-  {
-    id: "messenger",
-    name: "Facebook Messenger",
-    description: "Conecta la página de Facebook donde tus clientes te escriben.",
-    available: true
-  },
-  {
-    id: "telegram",
-    name: "Telegram",
-    description: "Estará disponible en una próxima versión.",
-    available: false,
-    coming_soon: true
   }
 ]);
 

@@ -1,23 +1,23 @@
 # Channel Connection Flow v1 · Staging
 
 Fecha: 26 de julio de 2026  
-Alcance: WhatsApp, Instagram y Facebook Messenger  
+Alcance: WhatsApp primero, Instagram opcional. Facebook Messenger queda fuera de este pase simple.
 Feature gate: `CHANNEL_CONNECTIONS_V1_ENABLED=1`
 
 ## Estado de Staging al entregar
 
 - Código desplegado en `https://staging.nextforia.com`.
-- Versión visible: `v131-staging-channel-connections-v1`.
+- Versión visible esperada después de este ajuste: `v134-staging-whatsapp-channel-connect`.
 - El gate permanece apagado de forma segura.
 - La migración de canales todavía no se aplicó.
 - El servicio Staging ya tiene `DATA_ENCRYPTION_KEY`, Supabase y Customer Access v2, pero no tiene `META_APP_ID`, `META_APP_SECRET` ni `META_WHATSAPP_CONFIG_ID`.
-- Por lo anterior, la UI y los flujos Meta se verificaron localmente con el modo de prueba aislado; la autorización real de los tres canales queda bloqueada hasta completar la configuración Meta.
+- Por lo anterior, la UI y los flujos Meta se verifican localmente con el modo de prueba aislado; la autorización real queda bloqueada hasta completar la configuración Meta.
 
 ## Guardas de alcance
 
 - Staging únicamente. Producción requiere aprobación explícita de Santiago.
 - No modifica Payments, Shopify, bot logic, preguntas del cuestionario, Financials ni Statistics.
-- Telegram aparece únicamente como “Próximamente”.
+- Messenger, Telegram y otros canales quedan fuera de la pantalla simple del cliente por ahora.
 - Las integraciones runtime existentes de RAV Toys siguen usando sus variables de entorno y quedan protegidas contra desconexión desde el flujo nuevo.
 
 ## Lo que ya existía y se reutiliza
@@ -31,7 +31,7 @@ Feature gate: `CHANNEL_CONNECTIONS_V1_ENABLED=1`
 
 ## Lo construido
 
-- Pantalla “Conecta donde tus clientes te contactan” en Customer Panel.
+- Pantalla “Conecta donde tus clientes te contactan” en Customer Panel, con WhatsApp como acción principal e Instagram como opción secundaria.
 - Estados `not_connected`, `connecting`, `connected`, `needs_attention` y `disconnected`.
 - Autorización oficial Meta sin solicitar tokens ni credenciales técnicas.
 - Selección explícita cuando Meta devuelve varias páginas, cuentas profesionales o números.
@@ -92,7 +92,6 @@ Permisos que deben tener Advanced Access/App Review para clientes externos:
 
 - WhatsApp: `business_management`, `whatsapp_business_management`, `whatsapp_business_messaging`.
 - Instagram: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `instagram_basic`, `instagram_manage_messages`.
-- Messenger: `pages_show_list`, `pages_manage_metadata`, `pages_messaging`.
 
 WhatsApp requiere que la app esté configurada como Tech Provider/Solution Partner y que el `META_WHATSAPP_CONFIG_ID` corresponda al Embedded Signup aprobado.
 
@@ -124,8 +123,8 @@ La matriz específica cubre:
 4. Crear o confirmar el Embedded Signup Configuration ID.
 5. Confirmar App Review/Advanced Access de los permisos anteriores.
 6. Añadir las variables solo al servicio Render `nextforia-staging`.
-7. Activar el gate sobre `v131-staging-channel-connections-v1`, que ya está desplegada.
-8. Probar un activo de prueba por canal.
+7. Activar el gate sobre `v134-staging-whatsapp-channel-connect`, que debe estar desplegada.
+8. Probar un activo de prueba de WhatsApp y, si aplica, uno de Instagram.
 9. Confirmar en Super Admin cuenta, estado, fecha, actor y ausencia de secretos.
 10. Confirmar que RAV sigue visible como conexión protegida y que sus health checks no cambian.
 

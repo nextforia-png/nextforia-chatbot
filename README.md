@@ -83,7 +83,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
 | `SUPABASE_TENANT_COLUMNS_ENABLED` | Activa escritura y filtrado por tenant después de aplicar la migración Phase A |
 | `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
-| `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de conexiones WhatsApp, Instagram y Messenger; solo Staging hasta aprobación explícita |
+| `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de la pantalla simple de conexiones: WhatsApp primero, Instagram opcional; solo Staging hasta aprobación explícita |
 | `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
 | `CUSTOMER_INVITE_TTL_HOURS` | Vigencia de la invitación privada (default `24`, máximo `168`) |
 | `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |

@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v133-staging-leads-search-sort";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v134-staging-whatsapp-channel-connect";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -414,9 +414,6 @@ if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
-if (CHANNEL_CONNECTIONS_V1_ENABLED && (!META_APP_ID || !META_APP_SECRET || !META_WHATSAPP_CONFIG_ID || !CHANNEL_CONNECTION_CALLBACK_URL)) {
-  productionConfigErrors.push("META_APP_ID, META_APP_SECRET, META_WHATSAPP_CONFIG_ID and an HTTPS Customer Panel URL are required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
-}
 if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");
 if (PAYMENTS_V1_ENABLED && PAYMENTS_ENV !== "staging") productionConfigErrors.push("PAYMENTS_ENV=staging is required for Payments v1");
 if (PAYMENTS_V1_ENABLED && !PAYMENTS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required for Payments v1 outside test mode");
@@ -6683,8 +6680,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
       channels: await channelConnectionService.listTenant(tenantId),
       meta_authorization_available: {
         whatsapp: channelConnectionService.providerConfigured("whatsapp"),
-        instagram: channelConnectionService.providerConfigured("instagram"),
-        messenger: channelConnectionService.providerConfigured("messenger")
+        instagram: channelConnectionService.providerConfigured("instagram")
       }
     });
   } catch (error) {

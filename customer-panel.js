@@ -65,6 +65,7 @@ const PANEL_ICONS = {
   plan: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>',
   package: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="M3.3 7 12 12l8.7-5"></path><path d="M12 22V12"></path></svg>',
   gift: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"></rect><path d="M12 8v13"></path><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"></path><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"></path></svg>',
+  logout: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" x2="9" y1="12" y2="12"></line></svg>',
   check: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
   sparkles: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"></path></svg>',
   settings: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88L4.2 6.56a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.37.72.68 1 .3.26.7.4 1.1.4H21a2 2 0 1 1 0 4h-.09c-.4 0-.8.14-1.1.4-.2.18-.34.38-.41.6Z"></path></svg>',
@@ -214,6 +215,8 @@ button{cursor:pointer}
 .navItem{height:46px;border:0;border-radius:14px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:15px}
 .navItem:hover{background:rgba(255,255,255,.06);color:#fff}
 .navItem.active{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;box-shadow:0 10px 22px rgba(18,168,244,.22)}
+.navItem.logoutItem{color:#DDE8F8}
+.navItem.logoutItem:hover{background:rgba(239,78,78,.12);color:#fff}
 .navIcon{font-size:22px;line-height:1;opacity:.92;display:inline-flex;align-items:center;justify-content:center}
 .navIcon svg{width:20px;height:20px;display:block}
 .navBadge{min-width:26px;height:22px;border-radius:999px;background:rgba(148,163,184,.35);color:#fff;display:grid;place-items:center;font-size:12px;padding:0 7px}
@@ -551,8 +554,10 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .sidebar{display:none}
   .main{min-width:0}
   .topbar{display:none}
-  .mobileTop{display:flex;position:sticky;top:0;z-index:8;background:linear-gradient(135deg,var(--navy-950),var(--navy-800));border-bottom:1px solid rgba(255,255,255,.08);padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;color:#fff}
-  .mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
+.mobileTop{display:flex;position:sticky;top:0;z-index:8;background:linear-gradient(135deg,var(--navy-950),var(--navy-800));border-bottom:1px solid rgba(255,255,255,.08);padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;color:#fff}
+.mobileTopActions{display:flex;align-items:center;gap:10px}
+.mobileLogout{height:34px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(255,255,255,.08);color:#fff;padding:0 12px;font-size:12px;font-weight:900}
+.mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
   .mobileBrand .ravLogo{width:42px;height:42px;border-radius:13px;font-size:17px}
   .mobileBrand h1{font-family:var(--font-display);font-size:17px;line-height:1;font-weight:800;letter-spacing:-.03em;color:#fff}
   .mobileBrand p{font-size:12px;color:#9FB0CA;font-weight:700;margin-top:3px}
@@ -978,7 +983,7 @@ ${customerAppointments.styles}
 <div class="app">
   <header class="mobileTop">
     <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1>${escapeHtml(panelContext.businessName)}</h1><p>con Nextfor <span>IA</span></p></div></div>
-    <div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div>
+    <div class="mobileTopActions"><button class="mobileLogout" type="button" onclick="logoutCustomerPanel()">Salir</button><div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
   </header>
   <div class="mobileBotSwitch" aria-label="Tus bots">
     ${mobileSupportBotButton}
@@ -1009,6 +1014,7 @@ ${customerAppointments.styles}
       <div class="footTitle">Cuenta</div>
       ${planNav}
       <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
+      <button class="navItem logoutItem" id="nav-logout" type="button" onclick="logoutCustomerPanel()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></button>
       <div class="whatsappCard">
         <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>
         <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">${panelContext.v2 ? "Bot conectado" : "Bot de atención conectado"}</span></strong>
@@ -1540,6 +1546,7 @@ function markSetupDirty(){if(!state.setup||!state.setup.can_edit)return;state.se
 function setSetupBusy(busy,action){var save=document.getElementById("saveSetupBtn"),publish=document.getElementById("publishSetupBtn"),back=document.getElementById("setupBackBtn");if(save){save.disabled=busy;save.textContent=busy&&action==="save"?"Guardando…":"Guardar avance";}if(publish){publish.disabled=busy;if(busy&&action==="publish")publish.textContent="Activando…";}if(back)back.disabled=busy;if(!busy)renderSetupWizard();}
 function saveBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),save=document.getElementById("saveSetupBtn"),feedback="";setSetupBusy(true,"save");text("setupMessage","Guardando tu avance…");api("/admin/bot-setup",{method:"PUT",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setupDirty=false;fillSetupForm();feedback="✓ Avance guardado. El bot activo todavía no cambió.";}).catch(function(error){feedback="No se pudo guardar: "+error.message;}).finally(function(){setSetupBusy(false,"save");text("setupMessage",feedback||"Completa la información a tu ritmo.");if(feedback.indexOf("✓")===0&&save){save.textContent="Avance guardado ✓";setTimeout(function(){save.textContent="Guardar avance";},2000);}});}
 function publishBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),feedback="";setSetupBusy(true,"publish");text("setupMessage","Validando y personalizando tu bot…");api("/admin/bot-setup/publish",{method:"POST",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setup.published={status:"published",completion:result.setup.completion,updated_at:result.setup.updated_at,published_at:result.setup.published_at};state.setupDirty=false;state.setupActivated=true;fillSetupForm();feedback="✓ Configuración activa. Se aplicará a los mensajes nuevos.";}).catch(function(error){var detail=error.body&&error.body.completion!=null?" Vas en "+error.body.completion+"%.":"";feedback=(error.body&&error.body.message||"No se pudo activar la configuración.")+detail;}).finally(function(){setSetupBusy(false,"publish");text("setupMessage",feedback||"Revisa la configuración e intenta nuevamente.");});}
+function logoutCustomerPanel(){fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin/panel";});}
 ${customerAppointments.clientScript}
 var reply=document.getElementById("replyText");if(reply)reply.addEventListener("keydown",function(event){if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();sendReply();}});document.addEventListener("click",function(event){if(!event.target.closest(".emojiControl"))closeEmojiPickers();});document.addEventListener("keydown",function(event){if(event.key==="Escape")closeEmojiPickers();});var searchForm=document.getElementById("searchTestForm");if(searchForm)searchForm.addEventListener("submit",runProductTest);var orderForm=document.getElementById("orderTestForm");if(orderForm)orderForm.addEventListener("submit",runOrderTest);
 try{var initialView=new URL(location.href).searchParams.get("view");if(["agenda","chats","reminders"].includes(initialView))state.appointmentSection=initialView;}catch(e){}

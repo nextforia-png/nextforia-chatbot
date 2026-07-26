@@ -501,6 +501,33 @@ function createCustomerAccessService(options) {
     return { id: row.id, tenant_id: row.tenant_id, company_name: row.company_name, email: row.email_normalized, role: row.role || "admin", expires_at: row.expires_at };
   }
 
+  async function authenticateCustomer(email, password) {
+    const normalized = normalizeEmail(email);
+    if (!validEmail(normalized) || !password) return null;
+    let user;
+    try { user = await store.activeUserByEmail(normalized); }
+    catch (error) { throw mapStoreError(error); }
+    if (!user || !user.password_hash || !user.password_salt || !user.tenant_id || !user.active) return null;
+    let candidate;
+    try { candidate = hashPassword(password, Buffer.from(user.password_salt, "base64url")); }
+    catch (_) { return null; }
+    const stored = Buffer.from(String(user.password_hash));
+    const supplied = Buffer.from(String(candidate));
+    if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
+    return {
+      user_id: user.user_id,
+      email: normalized,
+      username: normalized,
+      name: normalized,
+      role: user.role || "admin",
+      tenant_id: user.tenant_id,
+      company_name: user.company_name || null,
+      plan_id: user.plan_id || null,
+      assigned_bot_id: user.assigned_bot_id || null,
+      tenant_status: user.tenant_status || null
+    };
+  }
+
   return {
     async catalogs() {
       try { return await store.catalogs(); }
@@ -571,32 +598,24 @@ function createCustomerAccessService(options) {
       };
     },
 
-    async authenticate(email, password) {
-      const normalized = normalizeEmail(email);
-      if (!validEmail(normalized) || !password) return null;
+    async confirmExistingAccess(input) {
+      const cleanTenant = String(input && input.tenant_id || "").trim().toLowerCase();
+      const cleanToken = String(input && input.token || "");
+      if (!/^[A-Za-z0-9_-]{43}$/.test(cleanToken)) throw new CustomerAccessError("invalid_invitation", 403);
       let user;
-      try { user = await store.activeUserByEmail(normalized); }
+      let row;
+      try { row = await store.getInvitation({ tenant_id: cleanTenant, token_hash: hashInvitationToken(cleanToken) }); }
       catch (error) { throw mapStoreError(error); }
-      if (!user || !user.password_hash || !user.password_salt || !user.tenant_id || !user.active) return null;
-      let candidate;
-      try { candidate = hashPassword(password, Buffer.from(user.password_salt, "base64url")); }
-      catch (_) { return null; }
-      const stored = Buffer.from(String(user.password_hash));
-      const supplied = Buffer.from(String(candidate));
-      if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
-      return {
-        user_id: user.user_id,
-        email: normalized,
-        username: normalized,
-        name: normalized,
-        role: user.role || "admin",
-        tenant_id: user.tenant_id,
-        company_name: user.company_name || null,
-        plan_id: user.plan_id || null,
-        assigned_bot_id: user.assigned_bot_id || null,
-        tenant_status: user.tenant_status || null
-      };
+      const status = invitationStatus(row, now());
+      if (status === "revoked") throw new CustomerAccessError("invitation_revoked", 409);
+      if (status === "expired") throw new CustomerAccessError("invitation_expired", 410);
+      if (status !== "used") throw new CustomerAccessError("invalid_invitation", 403);
+      user = await authenticateCustomer(row.email_normalized, input && input.password);
+      if (!user || String(user.tenant_id) !== cleanTenant) throw new CustomerAccessError("invalid_credentials", 401);
+      return user;
     },
+
+    authenticate: authenticateCustomer,
 
     async validateSession(session) {
       const email = normalizeEmail(session && session.email);

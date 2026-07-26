@@ -89,6 +89,23 @@ async function expectError(promise, code, status) {
   assert.strictEqual(authenticated.company_name, "Empresa A");
   assert.strictEqual(authenticated.plan_id, "growth");
   assert.strictEqual(authenticated.assigned_bot_id, "atencion-cliente");
+  const confirmedExisting = await service.confirmExistingAccess({
+    tenant_id: created.tenant.id,
+    token: token,
+    password: "SecurePassword2026"
+  });
+  assert.strictEqual(confirmedExisting.user_id, user.user_id);
+  assert.strictEqual(confirmedExisting.tenant_id, created.tenant.id);
+  await expectError(service.confirmExistingAccess({
+    tenant_id: created.tenant.id,
+    token: token,
+    password: "wrong-password"
+  }), "invalid_credentials", 401);
+  await expectError(service.confirmExistingAccess({
+    tenant_id: "otro-tenant",
+    token: token,
+    password: "SecurePassword2026"
+  }), "invalid_invitation", 403);
   assert.strictEqual(await service.authenticate("admin@empresa.example", "wrong-password"), null);
   const validSession = await service.validateSession({
     user_id: user.user_id,

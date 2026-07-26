@@ -183,7 +183,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v119-staging-super-admin-setup-review";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v120-staging-customer-panel-access";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4135,6 +4135,12 @@ function customerBusinessForAuth(auth) {
   return CUSTOMER_PANEL_BUSINESS;
 }
 
+async function customerPanelEntryRedirect(user) {
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !user || !user.user_id || !user.tenant_id) return "/admin/panel?tab=summary";
+  const record = await loadClientOnboarding(false, user.tenant_id);
+  return record && record.setup_completed ? "/admin/panel?tab=summary" : "/admin/client-onboarding";
+}
+
 function adminKeyOk(req) {
   return adminAuthOk(req, "viewer");
 }
@@ -4792,6 +4798,9 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
     res.status(401).json({ ok: false, error: "invalid_credentials" });
     return;
   }
+  let redirect = "/admin/panel?tab=summary";
+  try { redirect = await customerPanelEntryRedirect(user); }
+  catch (_) {}
   setDashboardSessionCookie(req, res, user);
   res.json({
     ok: true,
@@ -4804,7 +4813,7 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
       tenant_id: user.tenant_id || null,
       method: "session"
     },
-    redirect: "/admin/panel?tab=summary"
+    redirect
   });
 });
 
@@ -5136,14 +5145,40 @@ app.post("/admin/setup/:tenantId", async (req, res) => {
         password: req.body.password,
         password_confirmation: req.body.password_confirmation
       });
+      const redirect = await customerPanelEntryRedirect(user);
       setDashboardSessionCookie(req, res, user);
       res.status(201).json({
         ok: true,
         tenant: { id: user.tenant_id, company_name: user.company_name },
         user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
-        redirect: "/admin/panel?tab=summary"
+        redirect
       });
     } catch (error) {
+      if (error instanceof CustomerAccessError && error.code === "invitation_already_used" && customerAccessService.confirmExistingAccess) {
+        if (req.body.password !== req.body.password_confirmation) {
+          res.status(400).json({ ok: false, error: "password_mismatch" });
+          return;
+        }
+        try {
+          const user = await customerAccessService.confirmExistingAccess({
+            tenant_id: tenantId,
+            token: invite,
+            password: req.body.password
+          });
+          const redirect = await customerPanelEntryRedirect(user);
+          setDashboardSessionCookie(req, res, user);
+          res.status(200).json({
+            ok: true,
+            existing_access: true,
+            tenant: { id: user.tenant_id, company_name: user.company_name },
+            user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+            redirect
+          });
+        } catch (confirmError) {
+          sendCustomerAccessError(res, confirmError);
+        }
+        return;
+      }
       sendCustomerAccessError(res, error);
     }
     return;

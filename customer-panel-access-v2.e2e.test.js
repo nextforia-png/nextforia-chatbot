@@ -121,6 +121,13 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(response.status, 403);
     response = await fetch(base + "/admin/setup/expired-tenant?invite=" + expiredInviteToken);
     assert.strictEqual(response.status, 410);
+    response = await fetch(base + "/admin/setup/expired-tenant", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ invite: expiredInviteToken, password: "SetupPassword2026", password_confirmation: "SetupPassword2026" })
+    });
+    assert.strictEqual(response.status, 410);
+    assert.strictEqual((await response.json()).error, "invitation_expired");
     response = await fetch(base + "/admin/setup/revoked-tenant?invite=" + revokedInviteToken);
     assert.strictEqual(response.status, 409);
     response = await fetch(base + "/admin/setup/used-tenant?invite=" + usedInviteToken);
@@ -143,16 +150,31 @@ function signedSessionCookie(secret, user) {
     const activated = await response.json();
     assert.strictEqual(activated.user.email, "invited@example.com");
     assert.strictEqual(activated.user.tenant_id, "setup-tenant");
+    assert.strictEqual(activated.redirect, "/admin/client-onboarding");
 
     response = await fetch(base + "/admin/setup/setup-tenant", {
       method: "POST",
       headers: { "content-type": "application/json", origin: base },
       body: JSON.stringify({ invite: validInviteToken, password: "SetupPassword2026", password_confirmation: "SetupPassword2026" })
     });
-    assert.strictEqual(response.status, 409);
-    assert.strictEqual((await response.json()).error, "invitation_already_used");
+    assert.strictEqual(response.status, 200);
+    const existingAccess = await response.json();
+    assert.strictEqual(existingAccess.existing_access, true);
+    assert.strictEqual(existingAccess.user.email, "invited@example.com");
+    assert.strictEqual(existingAccess.user.tenant_id, "setup-tenant");
+    assert.strictEqual(existingAccess.redirect, "/admin/client-onboarding");
+
+    response = await fetch(base + "/admin/setup/setup-tenant", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ invite: validInviteToken, password: "WrongPassword2026", password_confirmation: "WrongPassword2026" })
+    });
+    assert.strictEqual(response.status, 401);
+    assert.strictEqual((await response.json()).error, "invalid_credentials");
+
     const activatedLogin = await login(base, { email: "invited@example.com", password: "SetupPassword2026" });
     assert.strictEqual(activatedLogin.body.user.tenant_id, "setup-tenant");
+    assert.strictEqual(activatedLogin.body.redirect, "/admin/client-onboarding");
 
     const userA = await login(base, { email: "ADMIN@A.EXAMPLE", password: fixturePassword });
     const userB = await login(base, { email: "admin@b.example", password: fixturePassword });
@@ -169,8 +191,17 @@ function signedSessionCookie(secret, user) {
     assert(shellA.includes('id="bot-support"'));
     assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
     assert(shellA.includes("1 bot activo"));
+    assert(shellA.includes('id="nav-logout"'));
+    assert(shellA.includes("Cerrar Sesión"));
     assert(!shellA.includes(">RAV Toys<"));
     assert(!shellA.includes(">Empresa B<"));
+
+    response = await fetch(base + "/admin/logout", {
+      method: "POST",
+      headers: { origin: base, cookie: userA.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    assert.match(String(response.headers.get("set-cookie") || ""), /Max-Age=0/);
 
     response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: userB.cookie } });
     assert.strictEqual(response.status, 200);

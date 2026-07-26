@@ -52,6 +52,7 @@ const {
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
   CUSTOMER_SETUP_QUESTIONS,
+  SETUP_REVIEW_STATUSES,
   buildCoverageConversationContext,
   cloneDefaults: defaultClientOnboarding,
   createOnboardingRecord,
@@ -182,7 +183,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v118-staging-setup-autosave-summary";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v119-staging-super-admin-setup-review";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -330,6 +331,7 @@ const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":publi
 const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:global";
+const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
 const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
@@ -3728,6 +3730,121 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
   return record;
 }
 
+async function appendClientOnboardingRecord(record, tenantId) {
+  tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const rec = {
+    ts: record.updated_at || new Date().toISOString(),
+    userId: clientOnboardingRecordId(tenantId),
+    tenantId,
+    userMessage: "",
+    botReply: "[ClientOnboarding] " + JSON.stringify(record),
+    tools: [CLIENT_ONBOARDING_TOOL, SUPER_ADMIN_SETUP_REVIEW_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 2,
+    status: "ok",
+    eval: { skip: true, reason: SUPER_ADMIN_SETUP_REVIEW_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  clientOnboardingCacheByTenant.set(tenantId, { loaded_at: Date.now(), record });
+  return record;
+}
+
+function setupReviewSummary(record) {
+  const review = record && record.setup_review || {};
+  const rawStatus = String(review.status || (record && record.setup_completed ? "ready" : "incomplete")).toLowerCase();
+  const status = SETUP_REVIEW_STATUSES.includes(rawStatus) ? rawStatus : "incomplete";
+  return {
+    status,
+    label: {
+      incomplete: "Incomplete",
+      ready: "Ready",
+      building: "Building",
+      testing: "Testing",
+      live: "Live"
+    }[status],
+    updated_at: review.updated_at || record && (record.last_updated_at || record.updated_at) || null,
+    updated_by: review.updated_by || record && record.updated_by || null,
+    note: review.note || "",
+    requested_changes: review.requested_changes || "",
+    history: Array.isArray(review.history) ? review.history.slice(-20) : []
+  };
+}
+
+async function listSetupReviewTenants() {
+  const tenants = [];
+  const seen = new Set();
+  function add(tenant) {
+    if (!tenant || !tenant.id || seen.has(tenant.id)) return;
+    seen.add(tenant.id);
+    tenants.push(tenant);
+  }
+  add({
+    id: CUSTOMER_PANEL_BUSINESS.id,
+    company_name: CUSTOMER_PANEL_BUSINESS.name,
+    name: CUSTOMER_PANEL_BUSINESS.name,
+    plan_id: "legacy",
+    assigned_bot_id: "atencion-cliente",
+    status: CUSTOMER_PANEL_BUSINESS.status || "active"
+  });
+  if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
+    const rows = await catalogService.listTenants();
+    rows.forEach(function (tenant) {
+      add({
+        id: cleanTenantId(tenant.id),
+        company_name: tenant.company_name || tenant.name || tenant.id,
+        name: tenant.company_name || tenant.name || tenant.id,
+        plan_id: tenant.plan_id || null,
+        assigned_bot_id: tenant.assigned_bot_id || null,
+        status: tenant.status || "setup",
+        admin_email: tenant.admin_email || null
+      });
+    });
+  }
+  return tenants;
+}
+
+async function setupReviewTenant(tenantId) {
+  const clean = cleanTenantId(tenantId);
+  const tenants = await listSetupReviewTenants();
+  return tenants.find(function (tenant) { return tenant.id === clean; }) || null;
+}
+
+async function persistSetupReview(tenantId, input, auth) {
+  const tenant = await setupReviewTenant(tenantId);
+  if (!tenant) {
+    const error = new Error("tenant_not_found");
+    error.status = 404;
+    throw error;
+  }
+  const previous = await loadClientOnboarding(false, tenant.id);
+  const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const reviewStatus = String(input && input.review_status || previous.setup_review && previous.setup_review.status || "").toLowerCase();
+  const fallbackStatus = previous.setup_review && previous.setup_review.status || (previous.setup_completed ? "ready" : "incomplete");
+  const cleanStatus = SETUP_REVIEW_STATUSES.includes(reviewStatus) ? reviewStatus : fallbackStatus;
+  const action = String(input && input.action || "update").slice(0, 80);
+  const answers = input && input.answers && typeof input.answers === "object" ? input.answers : previous.answers;
+  const record = createOnboardingRecord(answers, {
+    tenant_id: tenant.id,
+    status: previous.status || "draft",
+    updated_by: auth && (auth.name || auth.username || auth.email),
+    previous,
+    questionnaire,
+    review_status: cleanStatus,
+    review_note: input && input.review_note,
+    requested_changes: input && input.requested_changes,
+    review_actor: auth && (auth.name || auth.username || auth.email),
+    review_event: {
+      action,
+      note: input && (input.requested_changes || input.review_note) || ""
+    }
+  });
+  return appendClientOnboardingRecord(record, tenant.id);
+}
+
 function parseCustomerSetupQuestionnaireTurn(turn) {
   if (!isCustomerSetupQuestionnaireTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[CustomerSetupQuestionnaire\]\s*/, "");
@@ -5254,7 +5371,8 @@ app.get("/admin/client-onboarding", async (req, res) => {
   const tenantId = customerTenantForAuth(auth);
   const record = await loadClientOnboarding(false, tenantId);
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
-  if (auth.version === 2 && record.setup_completed && req.query.edit !== "1") {
+  const reviewStatus = record.setup_review && record.setup_review.status || "";
+  if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
     res.redirect("/admin/panel?tab=summary");
     return;
   }
@@ -5333,6 +5451,81 @@ app.put("/admin/customer-setup-questionnaire", async (req, res) => {
   } catch (error) {
     console.error("customer setup questionnaire error:", error.message);
     res.status(503).json({ ok: false, error: "questionnaire_store_unavailable" });
+  }
+});
+
+app.get("/admin/customer-setups", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenants = await listSetupReviewTenants();
+    const setups = await Promise.all(tenants.map(async function (tenant) {
+      const onboarding = await loadClientOnboarding(false, tenant.id);
+      const review = setupReviewSummary(onboarding);
+      return {
+        tenant,
+        tenant_id: tenant.id,
+        company_name: tenant.company_name || tenant.name || tenant.id,
+        setup_goal: onboarding.answers && onboarding.answers.setup_goal || "unknown",
+        completion: onboarding.completion || 0,
+        setup_completed: !!onboarding.setup_completed,
+        review,
+        updated_at: onboarding.last_updated_at || onboarding.updated_at || null
+      };
+    }));
+    res.json({ ok: true, statuses: SETUP_REVIEW_STATUSES, setups });
+  } catch (error) {
+    console.error("customer setups list error:", error.message);
+    res.status(503).json({ ok: false, error: "setup_review_unavailable" });
+  }
+});
+
+app.get("/admin/customer-setups/:tenantId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenant = await setupReviewTenant(req.params.tenantId);
+    if (!tenant) {
+      res.status(404).json({ ok: false, error: "tenant_not_found" });
+      return;
+    }
+    const onboarding = await loadClientOnboarding(false, tenant.id);
+    res.json({
+      ok: true,
+      tenant,
+      onboarding,
+      review: setupReviewSummary(onboarding),
+      questionnaire: await loadCustomerSetupQuestionnaire(false),
+      statuses: SETUP_REVIEW_STATUSES
+    });
+  } catch (error) {
+    console.error("customer setup detail error:", error.message);
+    res.status(error.status || 503).json({ ok: false, error: error.message === "tenant_not_found" ? "tenant_not_found" : "setup_review_unavailable" });
+  }
+});
+
+app.put("/admin/customer-setups/:tenantId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const record = await persistSetupReview(req.params.tenantId, req.body || {}, auth);
+    res.json({
+      ok: true,
+      onboarding: record,
+      review: setupReviewSummary(record)
+    });
+  } catch (error) {
+    console.error("customer setup review save error:", error.message);
+    res.status(error.status || 503).json({ ok: false, error: error.message === "tenant_not_found" ? "tenant_not_found" : "setup_review_unavailable" });
   }
 });
 

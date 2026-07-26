@@ -199,6 +199,7 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
 ]);
 
 const QUESTION_TYPES = Object.freeze(["text", "number", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
+const SETUP_REVIEW_STATUSES = Object.freeze(["incomplete", "ready", "building", "testing", "live"]);
 const QUESTION_SECTIONS = Object.freeze([
   "goal",
   "business",
@@ -507,6 +508,29 @@ function getPath(source, path) {
   return path.split(".").reduce(function (value, key) { return value && value[key]; }, source);
 }
 
+function normalizeSetupReview(input, fallbackStatus) {
+  const source = input && typeof input === "object" ? input : {};
+  const status = choice(source.status, SETUP_REVIEW_STATUSES, fallbackStatus || "incomplete");
+  const history = Array.isArray(source.history) ? source.history.slice(-50).map(function (event) {
+    event = event && typeof event === "object" ? event : {};
+    return {
+      status: choice(event.status, SETUP_REVIEW_STATUSES, status),
+      action: text(event.action, 80),
+      note: text(event.note, 1200),
+      actor: text(event.actor, 160),
+      at: text(event.at, 40)
+    };
+  }) : [];
+  return {
+    status,
+    note: text(source.note, 1200),
+    requested_changes: text(source.requested_changes, 2000),
+    updated_by: text(source.updated_by, 160),
+    updated_at: text(source.updated_at, 40),
+    history
+  };
+}
+
 const CUSTOMER_SERVICE_REQUIRED_PATHS = [
   "setup_goal",
   "business.brand_name",
@@ -592,8 +616,14 @@ function createOnboardingRecord(input, meta) {
   const answers = normalizeOnboarding(input);
   const now = new Date().toISOString();
   const status = choice(meta.status, ["draft", "submitted", "completed", "in_review", "ready"], "draft");
+  const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};
+  const previousReview = normalizeSetupReview(previous.setup_review, previous.setup_completed ? "ready" : "incomplete");
+  const reviewStatus = choice(meta.review_status, SETUP_REVIEW_STATUSES, status === "completed" ? "ready" : previousReview.status || "incomplete");
   if (status === "completed" && (answers.setup_goal === "appointments" || answers.setup_goal === "both")) {
-    answers.appointment_setup.setup_status = "pending_review";
+    const previousAppointmentStatus = previous.answers && previous.answers.appointment_setup && previous.answers.appointment_setup.setup_status;
+    if (!previous.setup_completed || previousAppointmentStatus === "draft" || previousAppointmentStatus === "changes_requested") {
+      answers.appointment_setup.setup_status = "pending_review";
+    }
     if (answers.appointment_setup.data_consent && !answers.appointment_setup.data_consent_accepted_at) {
       answers.appointment_setup.data_consent_accepted_at = now;
     }
@@ -602,7 +632,10 @@ function createOnboardingRecord(input, meta) {
     }
   }
   if (status === "completed" && (answers.setup_goal === "customer_service" || answers.setup_goal === "both")) {
-    answers.customer_service_setup.setup_status = "pending_review";
+    const previousCustomerServiceStatus = previous.answers && previous.answers.customer_service_setup && previous.answers.customer_service_setup.setup_status;
+    if (!previous.setup_completed || previousCustomerServiceStatus === "draft" || previousCustomerServiceStatus === "changes_requested") {
+      answers.customer_service_setup.setup_status = "pending_review";
+    }
     if (answers.customer_service_setup.data_consent && !answers.customer_service_setup.data_consent_accepted_at) {
       answers.customer_service_setup.data_consent_accepted_at = now;
     }
@@ -610,11 +643,32 @@ function createOnboardingRecord(input, meta) {
       answers.customer_service_setup.data_consent_version = "nextforia-customer-setup-2026-07";
     }
   }
-  const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};
   const setupCompleted = previous.setup_completed === true || status === "completed";
   const setupCompletedAt = setupCompleted
     ? (previous.setup_completed_at || meta.setup_completed_at || now)
     : null;
+  if (meta.review_status === "incomplete") {
+    if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "changes_requested";
+    if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "changes_requested";
+  } else if (meta.review_status === "ready") {
+    if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "approved";
+    if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "approved";
+  } else if (meta.review_status === "live") {
+    if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "active";
+    if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "active";
+  }
+  const setupReview = normalizeSetupReview(Object.assign({}, previousReview, {
+    status: reviewStatus,
+    note: meta.review_note != null ? meta.review_note : previousReview.note,
+    requested_changes: meta.requested_changes != null ? meta.requested_changes : previousReview.requested_changes,
+    updated_by: meta.review_actor || previousReview.updated_by,
+    updated_at: meta.review_actor || meta.review_status ? now : previousReview.updated_at,
+    history: previousReview.history.concat(meta.review_event ? [Object.assign({}, meta.review_event, {
+      status: reviewStatus,
+      actor: meta.review_actor || meta.updated_by,
+      at: now
+    })] : [])
+  }), setupCompleted ? "ready" : "incomplete");
   return {
     version: 2,
     questionnaire_version: 1,
@@ -623,6 +677,7 @@ function createOnboardingRecord(input, meta) {
     completion: onboardingCompletion(answers, meta.questionnaire),
     setup_completed: setupCompleted,
     setup_completed_at: setupCompletedAt,
+    setup_review: setupReview,
     last_updated_at: now,
     answers,
     updated_at: now,
@@ -646,6 +701,7 @@ module.exports = {
   DEFAULT_ONBOARDING,
   QUESTION_SECTIONS,
   QUESTION_TYPES,
+  SETUP_REVIEW_STATUSES,
   APPOINTMENT_STAGE1_REQUIRED_PATHS,
   CUSTOMER_SERVICE_REQUIRED_PATHS,
   REQUIRED_PATHS,
@@ -654,5 +710,6 @@ module.exports = {
   createOnboardingRecord,
   normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
+  normalizeSetupReview,
   onboardingCompletion
 };

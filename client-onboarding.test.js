@@ -3,6 +3,7 @@
 const assert = require("assert");
 const {
   CUSTOMER_SETUP_QUESTIONS,
+  SETUP_REVIEW_STATUSES,
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
@@ -18,6 +19,7 @@ assert.deepStrictEqual(
 );
 assert.strictEqual(new Set(CUSTOMER_SETUP_QUESTIONS.map(function (question) { return question.id; })).size, CUSTOMER_SETUP_QUESTIONS.length);
 assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.active && question.path && question.type; }));
+assert.deepStrictEqual(SETUP_REVIEW_STATUSES, ["incomplete", "ready", "building", "testing", "live"]);
 
 const normalized = normalizeOnboarding({
   setup_goal: "customer_service",
@@ -75,8 +77,45 @@ completedAnswers.team.human_support_contact = "Soporte +57 300 000 0000";
 assert.strictEqual(onboardingCompletion(completedAnswers), 100);
 const completedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "completed" });
 assert.strictEqual(completedRecord.setup_completed, true);
+assert.strictEqual(completedRecord.setup_review.status, "ready");
 assert.strictEqual(completedRecord.answers.customer_service_setup.setup_status, "pending_review");
 assert.ok(completedRecord.setup_completed_at);
+const changesRequestedRecord = createOnboardingRecord(completedAnswers, {
+  tenant_id: "completa",
+  status: "completed",
+  previous: completedRecord,
+  review_status: "incomplete",
+  requested_changes: "Completar políticas de garantía y horario de soporte.",
+  review_actor: "ventas@ravtoys.com",
+  review_event: { action: "request_changes", note: "Faltan políticas." }
+});
+assert.strictEqual(changesRequestedRecord.setup_review.status, "incomplete");
+assert.strictEqual(changesRequestedRecord.setup_review.requested_changes, "Completar políticas de garantía y horario de soporte.");
+assert.strictEqual(changesRequestedRecord.setup_review.updated_by, "ventas@ravtoys.com");
+assert.strictEqual(changesRequestedRecord.setup_review.history.length, 1);
+assert.strictEqual(changesRequestedRecord.setup_review.history[0].action, "request_changes");
+assert.strictEqual(changesRequestedRecord.answers.customer_service_setup.setup_status, "changes_requested");
+const approvedRecord = createOnboardingRecord(changesRequestedRecord.answers, {
+  tenant_id: "completa",
+  status: "completed",
+  previous: changesRequestedRecord,
+  review_status: "ready",
+  review_actor: "ventas@ravtoys.com",
+  review_event: { action: "approve", note: "Setup aprobado." }
+});
+assert.strictEqual(approvedRecord.setup_review.status, "ready");
+assert.strictEqual(approvedRecord.setup_review.history.length, 2);
+assert.strictEqual(approvedRecord.answers.customer_service_setup.setup_status, "approved");
+const liveRecord = createOnboardingRecord(approvedRecord.answers, {
+  tenant_id: "completa",
+  status: "completed",
+  previous: approvedRecord,
+  review_status: "live",
+  review_actor: "ventas@ravtoys.com",
+  review_event: { action: "mark_live", note: "Bot activo." }
+});
+assert.strictEqual(liveRecord.setup_review.status, "live");
+assert.strictEqual(liveRecord.answers.customer_service_setup.setup_status, "active");
 const editedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "draft", previous: completedRecord });
 assert.strictEqual(editedRecord.setup_completed, true);
 assert.strictEqual(editedRecord.setup_completed_at, completedRecord.setup_completed_at);

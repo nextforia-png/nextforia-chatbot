@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v139-staging-chatbot-only-channel-setup";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v140-staging-channel-demo";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -7553,10 +7553,10 @@ app.get("/admin/panel", async (req, res) => {
 });
 
 app.get("/admin/panel-demo", (req, res) => {
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "agent", method: "demo" };
-  const capabilities = customerPanelCapabilities("agent");
+  const auth = { username: "demo", name: "Demo RAV Toys", role: "admin", method: "demo" };
+  const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities,
@@ -7568,6 +7568,29 @@ app.get("/admin/panel-demo", (req, res) => {
     retargetingPath: "/admin/panel/demo-retargeting",
     healthPath: null,
     loginPath: null,
+    channelConnectionsV1Enabled: true,
+    channelConnectionsDemo: {
+      ok: true,
+      meta_authorization_available: { whatsapp: true, instagram: true },
+      channels: [
+        {
+          id: "whatsapp",
+          channel: "whatsapp",
+          name: "WhatsApp",
+          description: "Recomendado. Conecta el número de WhatsApp Business donde tus clientes ya te escriben.",
+          status: "not_connected",
+          connect_available: true
+        },
+        {
+          id: "instagram",
+          channel: "instagram",
+          name: "Instagram",
+          description: "Opcional. Conecta tu cuenta profesional si también atiendes mensajes por Instagram.",
+          status: "not_connected",
+          connect_available: true
+        }
+      ]
+    },
     botVersion: BOT_VERSION
   });
 });

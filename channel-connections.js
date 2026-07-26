@@ -3,7 +3,7 @@
 const crypto = require("crypto");
 const { decryptStoredText, encryptStoredText, safeEqualText } = require("./security");
 
-const SUPPORTED_CHANNELS = ["whatsapp", "instagram"];
+const SUPPORTED_CHANNELS = ["whatsapp", "instagram", "messenger"];
 const CONNECTION_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
 const CHANNEL_CATALOG = Object.freeze([
   {
@@ -16,6 +16,12 @@ const CHANNEL_CATALOG = Object.freeze([
     id: "instagram",
     name: "Instagram",
     description: "Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",
+    available: true
+  },
+  {
+    id: "messenger",
+    name: "Facebook Messenger",
+    description: "Opcional. Súmalo si tus clientes también te escriben por Facebook.",
     available: true
   }
 ]);

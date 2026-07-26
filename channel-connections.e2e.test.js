@@ -120,7 +120,7 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     let body = await response.json();
     assert.deepStrictEqual(body.channels.map(function (row) { return row.name; }), [
-      "WhatsApp", "Instagram"
+      "WhatsApp", "Instagram", "Facebook Messenger"
     ]);
     assert(body.channels.every(function (row) { return row.tenant_id === "tenant-a"; }));
     assert(!JSON.stringify(body).includes("tenant-b"));

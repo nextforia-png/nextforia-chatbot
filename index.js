@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v141-staging-training-finale-copy";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v142-staging-meta-messenger-initial";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6798,7 +6798,8 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
       channels: await channelConnectionService.listTenant(tenantId),
       meta_authorization_available: {
         whatsapp: channelConnectionService.providerConfigured("whatsapp"),
-        instagram: channelConnectionService.providerConfigured("instagram")
+        instagram: channelConnectionService.providerConfigured("instagram"),
+        messenger: channelConnectionService.providerConfigured("messenger")
       }
     });
   } catch (error) {
@@ -7571,7 +7572,7 @@ app.get("/admin/panel-demo", (req, res) => {
     channelConnectionsV1Enabled: true,
     channelConnectionsDemo: {
       ok: true,
-      meta_authorization_available: { whatsapp: true, instagram: true },
+      meta_authorization_available: { whatsapp: true, instagram: true, messenger: true },
       channels: [
         {
           id: "whatsapp",
@@ -7586,6 +7587,14 @@ app.get("/admin/panel-demo", (req, res) => {
           channel: "instagram",
           name: "Instagram",
           description: "Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",
+          status: "not_connected",
+          connect_available: true
+        },
+        {
+          id: "messenger",
+          channel: "messenger",
+          name: "Facebook Messenger",
+          description: "Opcional. Súmalo si tus clientes también te escriben por Facebook.",
           status: "not_connected",
           connect_available: true
         }

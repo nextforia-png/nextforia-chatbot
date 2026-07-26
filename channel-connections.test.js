@@ -179,9 +179,11 @@ function expectCode(promise, code) {
     channel: "messenger",
     actor: "admin@a.example",
     code: "bad-code"
-  }), "invalid_channel_request");
+  }), "invalid_authorization");
   const all = await service.listAll([{ id: "tenant-a", company_name: "Empresa A" }, { id: "tenant-b", company_name: "Empresa B" }]);
-  assert(!all.some(function (row) { return row.channel === "messenger"; }));
+  const failedMessenger = all.find(function (row) { return row.tenant_id === "tenant-a" && row.channel === "messenger"; });
+  assert.strictEqual(failedMessenger.status, "needs_attention");
+  assert.strictEqual(failedMessenger.last_error, "OAuth code invalid");
   assert(!JSON.stringify(all).includes("secret-page-token"));
 
   const legacyStore = new InMemoryChannelConnectionStore();

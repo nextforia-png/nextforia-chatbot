@@ -101,7 +101,7 @@ async function login(base, body) {
     let response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
     const panel = await response.text();
-    assert(panel.includes("Conecta donde tus clientes te contactan"));
+    assert(panel.includes("Finaliza el entrenamiento de tu Nextfor"));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
@@ -110,7 +110,7 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     const appointmentPanel = await response.text();
     assert(!appointmentPanel.includes("Conectar canales"));
-    assert(!appointmentPanel.includes("Conecta donde tus clientes te contactan"));
+    assert(!appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentUser.cookie } });
     assert.strictEqual(response.status, 404);
 

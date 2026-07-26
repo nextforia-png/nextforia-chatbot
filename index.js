@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v140-staging-channel-demo";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v141-staging-training-finale-copy";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6770,10 +6770,10 @@ function channelConnectionErrorResponse(res, error) {
     ok: false,
     error: customerCodes.includes(problem.code) ? problem.code : "channel_connection_failed",
     message: problem.code === "channel_oauth_not_configured"
-      ? "Esta conexión todavía no está disponible. Contacta a NextforIA."
+      ? "Aún estamos preparando este paso. Habla con NextforIA."
       : problem.code === "legacy_connection_protected"
-        ? "Esta conexión está protegida para no interrumpir el servicio actual."
-        : "No pudimos terminar la conexión. Intenta de nuevo o contacta a NextforIA."
+        ? "No se puede cambiar esta conexión desde aquí."
+        : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."
   });
 }
 
@@ -7577,7 +7577,7 @@ app.get("/admin/panel-demo", (req, res) => {
           id: "whatsapp",
           channel: "whatsapp",
           name: "WhatsApp",
-          description: "Recomendado. Conecta el número de WhatsApp Business donde tus clientes ya te escriben.",
+          description: "Recomendado. Aquí es donde tu Nextfor empezará a atender primero.",
           status: "not_connected",
           connect_available: true
         },
@@ -7585,7 +7585,7 @@ app.get("/admin/panel-demo", (req, res) => {
           id: "instagram",
           channel: "instagram",
           name: "Instagram",
-          description: "Opcional. Conecta tu cuenta profesional si también atiendes mensajes por Instagram.",
+          description: "Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",
           status: "not_connected",
           connect_available: true
         }

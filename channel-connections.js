@@ -9,13 +9,13 @@ const CHANNEL_CATALOG = Object.freeze([
   {
     id: "whatsapp",
     name: "WhatsApp",
-    description: "Recomendado. Conecta el número de WhatsApp Business donde tus clientes ya te escriben.",
+    description: "Recomendado. Aquí es donde tu Nextfor empezará a atender primero.",
     available: true
   },
   {
     id: "instagram",
     name: "Instagram",
-    description: "Opcional. Conecta tu cuenta profesional si también atiendes mensajes por Instagram.",
+    description: "Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",
     available: true
   }
 ]);

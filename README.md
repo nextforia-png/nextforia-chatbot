@@ -59,6 +59,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `MESSENGER_PAGE_ID` | ID de la Página de Facebook que enviará las respuestas |
 | `MESSENGER_VERIFY_TOKEN` | Token para verificar `/messenger/webhook`; usa `VERIFY_TOKEN` si se omite |
 | `META_APP_SECRET` | App Secret de Meta para validar la firma `X-Hub-Signature-256` de WhatsApp, Instagram y Messenger |
+| `META_APP_ID` | App ID usada por los flujos oficiales de autorización Meta del Customer Panel |
+| `META_WHATSAPP_CONFIG_ID` | Configuration ID de WhatsApp Embedded Signup creado para NextforIA |
 | `MESSENGER_APP_SECRET` | Alias heredado de `META_APP_SECRET` |
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
 | `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
@@ -81,6 +83,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
 | `SUPABASE_TENANT_COLUMNS_ENABLED` | Activa escritura y filtrado por tenant después de aplicar la migración Phase A |
 | `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
+| `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de conexiones WhatsApp, Instagram y Messenger; solo Staging hasta aprobación explícita |
 | `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
 | `CUSTOMER_INVITE_TTL_HOURS` | Vigencia de la invitación privada (default `24`, máximo `168`) |
 | `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |

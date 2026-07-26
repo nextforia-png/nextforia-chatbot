@@ -101,6 +101,17 @@ const {
 } = require("./tenant-config");
 const { buildRavIntegration } = require("./nextfor-integration");
 const {
+  ChannelConnectionError,
+  InMemoryChannelConnectionStore,
+  MetaChannelProvider,
+  SupabaseChannelConnectionStore,
+  cleanChannel,
+  createChannelConnectionService,
+  createLegacyConnections,
+  createOAuthState,
+  readOAuthState
+} = require("./channel-connections");
+const {
   buildServiceAreaContext,
   buildServiceAreaQuestion,
   classifyServiceAreaReply,
@@ -192,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v130-staging-onboarding-config-flow";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v131-staging-channel-connections-v1";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -253,6 +264,8 @@ const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
 const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
+const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
+const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
 const PAYMENTS_ENV = String(process.env.PAYMENTS_ENV || "").trim().toLowerCase();
@@ -286,6 +299,8 @@ const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
+const META_APP_ID = String(process.env.META_APP_ID || "").trim();
+const META_WHATSAPP_CONFIG_ID = String(process.env.META_WHATSAPP_CONFIG_ID || "").trim();
 const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
   ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
   : "";
@@ -302,6 +317,9 @@ const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_I
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.MESSENGER_APP_SECRET || "";
 const MESSENGER_APP_SECRET = META_APP_SECRET;
+const CHANNEL_CONNECTION_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
+  ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/channel-connections/meta/callback"
+  : "";
 const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
 const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -393,6 +411,12 @@ if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLE
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_ENABLED && (!META_APP_ID || !META_APP_SECRET || !META_WHATSAPP_CONFIG_ID || !CHANNEL_CONNECTION_CALLBACK_URL)) {
+  productionConfigErrors.push("META_APP_ID, META_APP_SECRET, META_WHATSAPP_CONFIG_ID and an HTTPS Customer Panel URL are required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+}
 if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");
 if (PAYMENTS_V1_ENABLED && PAYMENTS_ENV !== "staging") productionConfigErrors.push("PAYMENTS_ENV=staging is required for Payments v1");
 if (PAYMENTS_V1_ENABLED && !PAYMENTS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required for Payments v1 outside test mode");
@@ -577,6 +601,51 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
       inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
     })
   : null;
+const channelConnectionStore = CHANNEL_CONNECTIONS_V1_ENABLED
+  ? (CHANNEL_CONNECTIONS_TEST_MODE
+      ? new InMemoryChannelConnectionStore()
+      : new SupabaseChannelConnectionStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_ENABLED
+  ? new MetaChannelProvider({
+      appId: META_APP_ID,
+      appSecret: META_APP_SECRET,
+      whatsappConfigId: META_WHATSAPP_CONFIG_ID,
+      graphVersion: META_GRAPH_VERSION,
+      redirectUri: CHANNEL_CONNECTION_CALLBACK_URL,
+      axiosClient: axios
+    })
+  : null;
+const protectedLegacyChannelConnections = createLegacyConnections({
+  tenantId: DEFAULT_TENANT_ID,
+  whatsapp: {
+    configured: !!(WA_TOKEN && PHONE_NUMBER_ID),
+    phoneNumberId: PHONE_NUMBER_ID,
+    displayPhone: process.env.TENANT_DISPLAY_PHONE || "",
+    webhookStatus: VERIFY_TOKEN ? "configured" : "needs_attention"
+  },
+  instagram: {
+    configured: !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID),
+    userId: IG_USER_ID,
+    label: process.env.IG_USERNAME || "",
+    webhookStatus: IG_VERIFY_TOKEN ? "configured" : "needs_attention"
+  },
+  messenger: {
+    configured: !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID),
+    pageId: MESSENGER_PAGE_ID,
+    label: process.env.MESSENGER_PAGE_NAME || "",
+    webhookStatus: MESSENGER_VERIFY_TOKEN ? "configured" : "needs_attention"
+  }
+});
+const channelConnectionService = CHANNEL_CONNECTIONS_V1_ENABLED
+  ? createChannelConnectionService({
+      store: channelConnectionStore,
+      provider: channelConnectionProvider,
+      encryptionKey: DATA_ENCRYPTION_KEY,
+      legacyConnections: protectedLegacyChannelConnections
+    })
+  : null;
+const usedChannelOAuthNonces = new Set();
 // Catálogo editable de planes y bots. Comparte el gate de customer access v2.
 const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
   ? (CUSTOMER_ACCESS_TEST_MODE
@@ -3271,6 +3340,16 @@ function instagramEventsFromEntry(entry) {
   return events;
 }
 
+function instagramEntryMatchesLegacyRuntime(entry, events) {
+  const expected = [IG_USER_ID, IG_SEND_ID].filter(Boolean).map(String);
+  if (!expected.length) return false;
+  const destinations = [entry && entry.id];
+  (events || []).forEach(function (event) {
+    destinations.push(event && event.recipient && event.recipient.id);
+  });
+  return destinations.filter(Boolean).map(String).some(function (id) { return expected.includes(id); });
+}
+
 app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.webhook_requests++;
   instagramRuntimeState.last_webhook_at = new Date().toISOString();
@@ -3288,6 +3367,11 @@ app.post("/instagram/webhook", async (req, res) => {
     }
     for (const entry of req.body?.entry || []) {
       const events = instagramEventsFromEntry(entry);
+      if (!instagramEntryMatchesLegacyRuntime(entry, events)) {
+        instagramRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
+        log("info", "instagram_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
+        continue;
+      }
       instagramRuntimeState.last_entry_shape = Array.isArray(entry?.messaging)
         ? "messaging"
         : Array.isArray(entry?.changes) ? "changes" : "unknown";
@@ -3351,6 +3435,10 @@ app.post("/messenger/webhook", async (req, res) => {
   try {
     if (req.body?.object !== "page") return;
     for (const entry of req.body?.entry || []) {
+      if (!MESSENGER_PAGE_ID || String(entry && entry.id || "") !== String(MESSENGER_PAGE_ID)) {
+        log("info", "messenger_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
+        continue;
+      }
       for (const event of entry.messaging || []) {
         if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
         const userId = `ms:${event.sender.id}`;
@@ -6535,6 +6623,252 @@ app.post("/admin/retargeting/worker", async (req, res) => {
   });
 });
 
+function channelConnectionActor(auth) {
+  return auth && (auth.email || auth.username || auth.user_id || auth.name) || "system";
+}
+
+function channelConnectionErrorResponse(res, error) {
+  const problem = error instanceof ChannelConnectionError
+    ? error
+    : new ChannelConnectionError("channel_connection_unavailable", 503, error && error.message);
+  const customerCodes = [
+    "invalid_channel_request",
+    "channel_oauth_not_configured",
+    "connection_selection_expired",
+    "invalid_asset_selection",
+    "connection_not_found",
+    "legacy_connection_protected"
+  ];
+  res.status(problem.status || 503).json({
+    ok: false,
+    error: customerCodes.includes(problem.code) ? problem.code : "channel_connection_failed",
+    message: problem.code === "channel_oauth_not_configured"
+      ? "Esta conexión todavía no está disponible. Contacta a NextforIA."
+      : problem.code === "legacy_connection_protected"
+        ? "Esta conexión está protegida para no interrumpir el servicio actual."
+        : "No pudimos terminar la conexión. Intenta de nuevo o contacta a NextforIA."
+  });
+}
+
+app.get("/admin/panel/channel-connections", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    res.json({
+      ok: true,
+      channels: await channelConnectionService.listTenant(tenantId),
+      meta_authorization_available: {
+        whatsapp: channelConnectionService.providerConfigured("whatsapp"),
+        instagram: channelConnectionService.providerConfigured("instagram"),
+        messenger: channelConnectionService.providerConfigured("messenger")
+      }
+    });
+  } catch (error) {
+    console.error("customer channel list error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const channel = cleanChannel(req.params.channel);
+  const tenantId = customerTenantForAuth(auth);
+  try {
+    const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
+      tenant_id: tenantId,
+      channel,
+      actor_id: auth.user_id || auth.username,
+      actor: channelConnectionActor(auth)
+    });
+    const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state);
+    res.json({ ok: true, authorization_url: authorizationUrl });
+  } catch (error) {
+    console.error("customer channel connect start error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.get("/admin/channel-connections/meta/callback", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.redirect("/admin/panel?tab=channels&connection=error");
+    return;
+  }
+  const state = readOAuthState(DASHBOARD_SESSION_SECRET, req.query.state);
+  if (!state || usedChannelOAuthNonces.has(state.nonce)) {
+    res.redirect("/admin/panel?tab=channels&connection=error");
+    return;
+  }
+  const session = dashboardAuth(req);
+  if (session.ok && session.version === 2 &&
+      (customerTenantForAuth(session) !== state.tenant_id ||
+       String(session.user_id || session.username) !== String(state.actor_id))) {
+    res.redirect("/admin/panel?tab=channels&connection=error");
+    return;
+  }
+  usedChannelOAuthNonces.add(state.nonce);
+  if (usedChannelOAuthNonces.size > 10000) {
+    usedChannelOAuthNonces.delete(usedChannelOAuthNonces.values().next().value);
+  }
+  try {
+    const result = await channelConnectionService.completeAuthorization({
+      tenant_id: state.tenant_id,
+      channel: state.channel,
+      actor: state.actor,
+      code: req.query.error ? "" : req.query.code
+    });
+    res.redirect("/admin/panel?tab=channels&connection=" +
+      (result.status === "selection_required" ? "select" : "success"));
+  } catch (error) {
+    console.error("Meta channel authorization failed:", state.channel, error.internalMessage || error.message);
+    res.redirect("/admin/panel?tab=channels&connection=error");
+  }
+});
+
+app.post("/admin/panel/channel-connections/:channel/select", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const connection = await channelConnectionService.selectAsset(
+      customerTenantForAuth(auth),
+      req.params.channel,
+      req.body && req.body.asset_id,
+      auth
+    );
+    res.json({ ok: true, message: "Connected successfully.", connection });
+  } catch (error) {
+    console.error("customer channel asset selection error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const connection = await channelConnectionService.disconnect(
+      customerTenantForAuth(auth),
+      req.params.channel,
+      auth
+    );
+    res.json({ ok: true, message: "Canal desconectado.", connection });
+  } catch (error) {
+    console.error("customer channel disconnect error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.get("/admin/channel-connections", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenants = await listSetupReviewTenants();
+    res.json({ ok: true, channels: await channelConnectionService.listAll(tenants) });
+  } catch (error) {
+    console.error("super admin channel list error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/verify", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await channelConnectionService.verify(req.params.tenantId, req.params.channel, auth)
+    });
+  } catch (error) {
+    console.error("super admin channel verify error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/help-reconnect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await channelConnectionService.requestReconnect(req.params.tenantId, req.params.channel, auth)
+    });
+  } catch (error) {
+    console.error("super admin channel reconnect request error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/disconnect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_ENABLED || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await channelConnectionService.disconnect(req.params.tenantId, req.params.channel, auth)
+    });
+  } catch (error) {
+    console.error("super admin channel disconnect error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
 app.get("/admin/panel/data", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -6896,6 +7230,7 @@ app.get("/admin/super-admin", async (req, res) => {
     accessModel: DASHBOARD_ACCESS_MODEL,
     customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
+    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_ENABLED,
     platformGoals,
     tenant: CUSTOMER_PANEL_BUSINESS,
     integration: currentRavIntegration(),
@@ -7028,7 +7363,7 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
 app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
     if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/panel?tab=" + requestedTab });
     else renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
@@ -7057,7 +7392,8 @@ app.get("/admin/panel", async (req, res) => {
     }
   }
   const capabilities = customerPanelCapabilities(auth.role);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  if (initialTab === "channels" && !CHANNEL_CONNECTIONS_V1_ENABLED) initialTab = "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -7068,6 +7404,7 @@ app.get("/admin/panel", async (req, res) => {
     tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
+    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_ENABLED,
     botVersion: BOT_VERSION
   });
 });

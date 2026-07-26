@@ -56,7 +56,8 @@ async function login(base, body) {
   const encryptionKey = crypto.randomBytes(32).toString("base64url");
   const fixtures = [
     { user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: "TenantPassword2026", role: "admin" },
-    { user_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: "TenantPassword2026", role: "admin" }
+    { user_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: "TenantPassword2026", role: "admin" },
+    { user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tenant_id: "tenant-c", company_name: "Agenda C", email: "admin@c.example", password: "TenantPassword2026", role: "admin", assigned_bot_id: "agendamiento" }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
     cwd: __dirname,
@@ -94,6 +95,7 @@ async function login(base, body) {
     await waitForServer(child, port);
     const userA = await login(base, { email: "admin@a.example", password: "TenantPassword2026" });
     const userB = await login(base, { email: "admin@b.example", password: "TenantPassword2026" });
+    const appointmentUser = await login(base, { email: "admin@c.example", password: "TenantPassword2026" });
     const superAdmin = await login(base, { username: "owner@nextforia.test", password: "OwnerPassword2026" });
 
     let response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: userA.cookie } });
@@ -103,6 +105,14 @@ async function login(base, body) {
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
+
+    response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: appointmentUser.cookie } });
+    assert.strictEqual(response.status, 200);
+    const appointmentPanel = await response.text();
+    assert(!appointmentPanel.includes("Conectar canales"));
+    assert(!appointmentPanel.includes("Conecta donde tus clientes te contactan"));
+    response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentUser.cookie } });
+    assert.strictEqual(response.status, 404);
 
     response = await fetch(base + "/admin/panel/channel-connections?tenant_id=tenant-b", {
       headers: { cookie: userA.cookie }

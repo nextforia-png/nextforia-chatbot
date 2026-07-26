@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v138-staging-meta-connection-steps";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v139-staging-chatbot-only-channel-setup";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4506,6 +4506,13 @@ function customerBusinessForAuth(auth) {
   return CUSTOMER_PANEL_BUSINESS;
 }
 
+function customerChannelConnectionsVisibleForAuth(auth) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
+  if (!auth || auth.version !== 2) return true;
+  const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
+  return assignedBotId === "atencion-cliente" || assignedBotId === "commerce";
+}
+
 async function customerPanelEntryRedirect(user) {
   if (!CUSTOMER_ACCESS_V2_ENABLED || !user || !user.user_id || !user.tenant_id) return "/admin/panel?tab=summary";
   const record = await loadClientOnboarding(false, user.tenant_id);
@@ -6779,8 +6786,12 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
   try {
-    const auth = dashboardAuth(req);
     const tenantId = customerTenantForAuth(auth);
     res.json({
       ok: true,
@@ -6806,6 +6817,10 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
     return;
   }
   const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
   const channel = cleanChannel(req.params.channel);
   const tenantId = customerTenantForAuth(auth);
   try {
@@ -6868,8 +6883,12 @@ app.post("/admin/panel/channel-connections/:channel/select", async (req, res) =>
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
   try {
-    const auth = dashboardAuth(req);
     const connection = await channelConnectionService.selectAsset(
       customerTenantForAuth(auth),
       req.params.channel,
@@ -6892,8 +6911,12 @@ app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
   try {
-    const auth = dashboardAuth(req);
     const connection = await channelConnectionService.disconnect(
       customerTenantForAuth(auth),
       req.params.channel,
@@ -7511,8 +7534,9 @@ app.get("/admin/panel", async (req, res) => {
     }
   }
   const capabilities = customerPanelCapabilities(auth.role);
+  const channelConnectionsVisibleForCustomer = customerChannelConnectionsVisibleForAuth(auth);
   let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-  if (initialTab === "channels" && !CHANNEL_CONNECTIONS_V1_VISIBLE) initialTab = "summary";
+  if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -7523,7 +7547,7 @@ app.get("/admin/panel", async (req, res) => {
     tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
-    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_VISIBLE,
+    channelConnectionsV1Enabled: channelConnectionsVisibleForCustomer,
     botVersion: BOT_VERSION
   });
 });

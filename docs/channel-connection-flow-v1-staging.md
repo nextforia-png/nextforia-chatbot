@@ -4,6 +4,15 @@ Fecha: 26 de julio de 2026
 Alcance: WhatsApp, Instagram y Facebook Messenger  
 Feature gate: `CHANNEL_CONNECTIONS_V1_ENABLED=1`
 
+## Estado de Staging al entregar
+
+- Código desplegado en `https://staging.nextforia.com`.
+- Versión visible: `v131-staging-channel-connections-v1`.
+- El gate permanece apagado de forma segura.
+- La migración de canales todavía no se aplicó.
+- El servicio Staging ya tiene `DATA_ENCRYPTION_KEY`, Supabase y Customer Access v2, pero no tiene `META_APP_ID`, `META_APP_SECRET` ni `META_WHATSAPP_CONFIG_ID`.
+- Por lo anterior, la UI y los flujos Meta se verificaron localmente con el modo de prueba aislado; la autorización real de los tres canales queda bloqueada hasta completar la configuración Meta.
+
 ## Guardas de alcance
 
 - Staging únicamente. Producción requiere aprobación explícita de Santiago.
@@ -115,7 +124,7 @@ La matriz específica cubre:
 4. Crear o confirmar el Embedded Signup Configuration ID.
 5. Confirmar App Review/Advanced Access de los permisos anteriores.
 6. Añadir las variables solo al servicio Render `nextforia-staging`.
-7. Desplegar `v129-staging-channel-connections-v1`.
+7. Activar el gate sobre `v131-staging-channel-connections-v1`, que ya está desplegada.
 8. Probar un activo de prueba por canal.
 9. Confirmar en Super Admin cuenta, estado, fecha, actor y ausencia de secretos.
 10. Confirmar que RAV sigue visible como conexión protegida y que sus health checks no cambian.

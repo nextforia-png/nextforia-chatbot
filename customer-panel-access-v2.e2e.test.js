@@ -120,7 +120,8 @@ function signedSessionCookie(secret, user) {
     assert(!publicSignupHtml.includes('id="bot"'), "public account creation must not ask for bot type");
     assert(!publicSignupHtml.includes('id="plan"'), "public account creation must not ask for plan");
     assert(publicSignupHtml.includes('id="contactPhone"'));
-    assert(publicSignupHtml.includes("Teléfono o WhatsApp"));
+    assert(publicSignupHtml.includes("Tu teléfono o WhatsApp"));
+    assert(publicSignupHtml.includes("El WhatsApp del negocio lo configuramos después."));
     assert(publicSignupHtml.includes("Estoy listo para que me entrenes"));
     assert(publicSignupHtml.includes("/admin/assets/lumen-entrenando.png"));
 

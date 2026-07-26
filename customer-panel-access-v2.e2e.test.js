@@ -119,6 +119,8 @@ function signedSessionCookie(secret, user) {
     assert(!publicSignupHtml.includes('id="username"'));
     assert(!publicSignupHtml.includes('id="bot"'), "public account creation must not ask for bot type");
     assert(!publicSignupHtml.includes('id="plan"'), "public account creation must not ask for plan");
+    assert(publicSignupHtml.includes('id="contactPhone"'));
+    assert(publicSignupHtml.includes("Teléfono o WhatsApp"));
     assert(publicSignupHtml.includes("Estoy listo para que me entrenes"));
     assert(publicSignupHtml.includes("/admin/assets/lumen-entrenando.png"));
 
@@ -128,6 +130,7 @@ function signedSessionCookie(secret, user) {
       body: JSON.stringify({
         company_name: "Empresa Pública",
         admin_email: "publica@example.com",
+        contact_phone: "+57 311 222 3333",
         password: "PublicPassword2026",
         password_confirmation: "PublicPassword2026"
       })
@@ -137,9 +140,20 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(publicSignup.user.email, "publica@example.com");
     assert.strictEqual(publicSignup.tenant.plan_id, "starter");
     assert.strictEqual(publicSignup.tenant.assigned_bot_id, "atencion-cliente");
+    assert.strictEqual(publicSignup.lead.contact_phone, "+57 311 222 3333");
+    assert.strictEqual(publicSignup.lead.onboarding_draft_saved, true);
     assert.strictEqual(publicSignup.redirect, "/admin/client-onboarding");
     const publicCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
     assert.match(publicCookie, /^rav_dashboard_session=/);
+
+    response = await fetch(base + "/admin/client-onboarding/data", {
+      headers: { cookie: publicCookie }
+    });
+    assert.strictEqual(response.status, 200);
+    const publicOnboarding = await response.json();
+    assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_email, "publica@example.com");
+    assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_phone, "+57 311 222 3333");
+    assert.strictEqual(publicOnboarding.onboarding.answers.meta.whatsapp_number, "+57 311 222 3333");
 
     const publicLogin = await login(base, { email: "publica@example.com", password: "PublicPassword2026" });
     assert.strictEqual(publicLogin.body.redirect, "/admin/client-onboarding");
@@ -151,6 +165,7 @@ function signedSessionCookie(secret, user) {
       body: JSON.stringify({
         company_name: "Empresa Pública Duplicada",
         admin_email: "publica@example.com",
+        contact_phone: "+57 311 222 3333",
         password: "PublicPassword2026",
         password_confirmation: "PublicPassword2026"
       })

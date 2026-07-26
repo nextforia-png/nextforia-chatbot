@@ -192,7 +192,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v124-staging-customer-service-build";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v126-staging-public-lead-phone";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -683,10 +683,10 @@ async function supabaseFetchRecent(limit) {
     return r.data;
   } catch (e) { console.error("supabaseFetchRecent error:", e.message); return null; }
 }
-async function supabaseFetchUserRecent(userId, limit) {
+async function supabaseFetchUserRecent(userId, limit, tenantId) {
   if (!SUPABASE_ENABLED) return null;
   try {
-    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(DEFAULT_TENANT_ID) : "";
+    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(cleanTenantId(tenantId) || DEFAULT_TENANT_ID) : "";
     const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&user_id=eq." + encodeURIComponent(userId) + tenantFilter + "&order=ts.desc&limit=" + (limit || 20);
     const r = await axios.get(url, { headers: SB_HEADERS, timeout: 8000 });
     return r.data;
@@ -3724,6 +3724,62 @@ function parseClientOnboardingTurn(turn, tenantId) {
   }
 }
 
+function isMissingConversationLogsError(error) {
+  const data = error && error.response && error.response.data;
+  const text = JSON.stringify(data || {}) + " " + String(error && error.message || "");
+  return text.includes("PGRST205") || text.includes("conversation_logs");
+}
+
+async function appendClientOnboardingAuditFallback(record, tenantId, actor) {
+  if (!SUPABASE_ENABLED || !record) return null;
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const payload = {
+    tenant_id: cleanTenant,
+    invitation_id: null,
+    actor: String(actor || "customer").slice(0, 160),
+    action: "tenant_user_login",
+    metadata: {
+      source: CLIENT_ONBOARDING_TOOL,
+      storage_fallback: "tenant_access_audit",
+      record
+    }
+  };
+  await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", payload, {
+    headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS),
+    timeout: 8000
+  });
+  return record;
+}
+
+async function fetchClientOnboardingAuditFallback(tenantId) {
+  if (!SUPABASE_ENABLED) return null;
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+      headers: SB_HEADERS,
+      params: {
+        select: "metadata,created_at",
+        tenant_id: "eq." + cleanTenant,
+        order: "created_at.desc",
+        limit: 50
+      },
+      timeout: 8000
+    });
+    const rows = Array.isArray(response.data) ? response.data : [];
+    return rows.map(function (row) {
+      const metadata = row && row.metadata || {};
+      return metadata.source === CLIENT_ONBOARDING_TOOL && metadata.record
+        ? metadata.record
+        : null;
+    }).find(function (record) {
+      return record && record.tenant_id === cleanTenant && record.answers;
+    }) || null;
+  } catch (error) {
+    console.error("client onboarding audit fallback fetch error:", error.message);
+    return null;
+  }
+}
+
 async function loadClientOnboarding(force, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
@@ -3732,8 +3788,9 @@ async function loadClientOnboarding(force, tenantId) {
   let record = cached.record;
   const recordId = clientOnboardingRecordId(tenantId);
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(recordId, 1);
+    const rows = await supabaseFetchUserRecent(recordId, 1, tenantId);
     if (rows) record = rows.map(normalizeTurnRow).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
+    if (!record) record = await fetchClientOnboardingAuditFallback(tenantId) || record;
   } else {
     record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === recordId; }).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
   }
@@ -3774,7 +3831,14 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
     status: "ok",
     eval: { skip: true, reason: CLIENT_ONBOARDING_TOOL }
   };
-  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  if (SUPABASE_ENABLED) {
+    try {
+      await supabaseInsertStrict(rec);
+    } catch (error) {
+      if (!isMissingConversationLogsError(error)) throw error;
+      await appendClientOnboardingAuditFallback(record, tenantId, auth && (auth.name || auth.username || auth.email) || "customer");
+    }
+  }
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
   clientOnboardingCacheByTenant.set(tenantId, { loaded_at: Date.now(), record });
@@ -3797,7 +3861,14 @@ async function appendClientOnboardingRecord(record, tenantId) {
     status: "ok",
     eval: { skip: true, reason: SUPER_ADMIN_SETUP_REVIEW_TOOL }
   };
-  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  if (SUPABASE_ENABLED) {
+    try {
+      await supabaseInsertStrict(rec);
+    } catch (error) {
+      if (!isMissingConversationLogsError(error)) throw error;
+      await appendClientOnboardingAuditFallback(record, tenantId, "super_admin_setup_review");
+    }
+  }
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
   clientOnboardingCacheByTenant.set(tenantId, { loaded_at: Date.now(), record });
@@ -4278,6 +4349,30 @@ function publicSignupDefaults(catalogs) {
     plan_id: id(plan && plan.id),
     assigned_bot_id: planBotId || preferredBotId
   };
+}
+
+function cleanPublicSignupPhone(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^\d+()\-\s.]/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 40);
+}
+
+async function persistPublicSignupLeadDraft(user, input) {
+  const phone = cleanPublicSignupPhone(input && input.contact_phone);
+  if (!user || !user.tenant_id || !phone) return null;
+  const answers = defaultClientOnboarding();
+  answers.business.brand_name = String(user.company_name || input.company_name || "").trim().slice(0, 160);
+  answers.business.contact_email = String(user.email || input.admin_email || "").trim().toLowerCase().slice(0, 160);
+  answers.business.contact_phone = phone;
+  answers.meta.whatsapp_number = phone;
+  answers.team.admin_email = answers.business.contact_email;
+  answers.team.notification_phone = phone;
+  return persistClientOnboarding(answers, "draft", Object.assign({}, user, {
+    name: user.email,
+    username: user.email
+  }), user.tenant_id);
 }
 
 function adminKeyOk(req) {
@@ -5358,21 +5453,33 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
     return;
   }
   const keys = Object.keys(req.body || {});
-  const allowed = ["company_name", "admin_email", "password", "password_confirmation"];
+  const allowed = ["company_name", "admin_email", "contact_phone", "password", "password_confirmation"];
   if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
     res.status(400).json({ ok: false, error: "invalid_request" });
+    return;
+  }
+  const contactPhone = cleanPublicSignupPhone(req.body && req.body.contact_phone);
+  if (!contactPhone || contactPhone.replace(/\D/g, "").length < 7) {
+    res.status(400).json({ ok: false, error: "invalid_contact_phone" });
     return;
   }
   try {
     const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
     const defaults = publicSignupDefaults(catalogs);
-    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, defaults));
+    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, { contact_phone: contactPhone }, defaults));
+    let onboardingDraft = null;
+    try {
+      onboardingDraft = await persistPublicSignupLeadDraft(user, Object.assign({}, req.body, { contact_phone: contactPhone }));
+    } catch (draftError) {
+      console.error("public signup lead draft save error:", draftError.message);
+    }
     const redirect = await customerPanelEntryRedirect(user);
     setDashboardSessionCookie(req, res, user);
     res.status(201).json({
       ok: true,
       tenant: { id: user.tenant_id, company_name: user.company_name, plan_id: user.plan_id, assigned_bot_id: user.assigned_bot_id },
       user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+      lead: { contact_phone: contactPhone, onboarding_draft_saved: !!onboardingDraft },
       redirect
     });
   } catch (error) {

@@ -125,6 +125,20 @@ function signedSessionCookie(secret, user) {
     assert(publicSignupHtml.includes("Estoy listo para que me entrenes"));
     assert(publicSignupHtml.includes("/admin/assets/lumen-entrenando.png"));
 
+    response = await fetch(base + "/admin/client-onboarding-demo");
+    assert.strictEqual(response.status, 200);
+    const demoAccountHtml = await response.text();
+    assert(demoAccountHtml.includes("Crea tu cuenta"));
+    assert(demoAccountHtml.includes("Modo demo"));
+    assert(demoAccountHtml.includes("/admin/client-onboarding-demo?step=setup"));
+    assert(!demoAccountHtml.includes("Enséñale a Nextfor lo esencial de tu negocio"), "demo starts with account creation, not questionnaire");
+
+    response = await fetch(base + "/admin/client-onboarding-demo?step=setup");
+    assert.strictEqual(response.status, 200);
+    const demoSetupHtml = await response.text();
+    assert(demoSetupHtml.includes("Comenzar el entrenamiento"));
+    assert(demoSetupHtml.includes("Enséñale a Nextfor lo esencial de tu negocio"));
+
     response = await fetch(base + "/admin/create-account", {
       method: "POST",
       headers: { "content-type": "application/json", origin: base },

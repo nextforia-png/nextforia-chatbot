@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v131-staging-channel-connections-v1";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v132-staging-demo-account-first";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6010,6 +6010,14 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
 });
 
 app.get("/admin/client-onboarding-demo", (req, res) => {
+  if (String(req.query.step || "") !== "setup") {
+    renderCustomerPublicSignup(res, {
+      businessHint: req.query.business || "Comercio piloto",
+      demoMode: true,
+      demoNextPath: "/admin/client-onboarding-demo?step=setup"
+    });
+    return;
+  }
   const answers = defaultClientOnboarding();
   answers.business.brand_name = "Comercio piloto";
   answers.business.contact_name = "Responsable del proyecto";
@@ -6027,6 +6035,14 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     demo: true,
     apiPath: "",
     questionnaire
+  });
+});
+
+app.get("/admin/create-account-demo", (req, res) => {
+  renderCustomerPublicSignup(res, {
+    businessHint: req.query.business || "Comercio piloto",
+    demoMode: true,
+    demoNextPath: "/admin/client-onboarding-demo?step=setup"
   });
 });
 

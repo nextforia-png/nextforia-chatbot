@@ -110,7 +110,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const canRunTests = !!capabilities.run_tests;
   const planNav = "<button class=\"navItem\" id=\"nav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"navIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
   const planMobileNav = "<button id=\"mnav-plan\" data-bot=\"account\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"mobileNavIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
-  const channelsNav = channelConnectionsV1Enabled ? "<button class=\"navItem\" id=\"nav-channels\" type=\"button\" onclick=\"showTab('channels')\"><span class=\"navIcon\">" + PANEL_ICONS.channels + "</span><span>Conectar WhatsApp</span></button>" : "";
+  const channelsNav = channelConnectionsV1Enabled ? "<button class=\"navItem\" id=\"nav-channels\" type=\"button\" onclick=\"showTab('channels')\"><span class=\"navIcon\">" + PANEL_ICONS.channels + "</span><span>Conectar canales</span></button>" : "";
   const channelsMobileNav = channelConnectionsV1Enabled ? "<button id=\"mnav-channels\" data-bot=\"account\" type=\"button\" onclick=\"showTab('channels')\"><span class=\"mobileNavIcon\">" + PANEL_ICONS.channels + "</span><span>Canales</span></button>" : "";
   const emojiButtons = ["😀", "😂", "🥰", "😍", "😊", "😉", "😄", "🙌", "👍", "👌", "👏", "🙏", "🎉", "❤️", "💙", "💚", "🔥", "✨", "⭐", "✅", "🤝", "💬", "🛍️", "🎁", "📦", "🚚", "💳", "💰", "📍", "⏰", "☎️", "👋"].map(function (emoji) {
     return '<button type="button" data-emoji="' + emoji + '" onclick="insertEmoji(this.dataset.emoji)" aria-label="Insertar ' + emoji + '">' + emoji + '</button>';

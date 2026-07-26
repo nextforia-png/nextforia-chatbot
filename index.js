@@ -192,7 +192,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v128-staging-personal-phone-copy";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v129-staging-super-admin-fresh-setups";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3926,6 +3926,26 @@ async function listSetupReviewTenants() {
       });
     });
   }
+  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && customerAccessService.listInvitations) {
+    try {
+      const invitations = await customerAccessService.listInvitations();
+      invitations.filter(function (invitation) {
+        return invitation && invitation.status === "used" && invitation.tenant_id;
+      }).forEach(function (invitation) {
+        add({
+          id: cleanTenantId(invitation.tenant_id),
+          company_name: invitation.company_name || invitation.tenant_id,
+          name: invitation.company_name || invitation.tenant_id,
+          plan_id: invitation.plan_id || null,
+          assigned_bot_id: invitation.assigned_bot_id || null,
+          status: "setup",
+          admin_email: invitation.admin_email || invitation.email_normalized || null
+        });
+      });
+    } catch (error) {
+      console.error("setup review invitation fallback error:", error.message);
+    }
+  }
   return tenants;
 }
 
@@ -6030,7 +6050,7 @@ app.get("/admin/customer-setups", async (req, res) => {
   try {
     const tenants = await listSetupReviewTenants();
     const setups = await Promise.all(tenants.map(async function (tenant) {
-      const onboarding = await loadClientOnboarding(false, tenant.id);
+      const onboarding = await loadClientOnboarding(true, tenant.id);
       const review = setupReviewSummary(onboarding);
       return {
         tenant,
@@ -6048,6 +6068,9 @@ app.get("/admin/customer-setups", async (req, res) => {
         updated_at: onboarding.last_updated_at || onboarding.updated_at || null
       };
     }));
+    setups.sort(function (a, b) {
+      return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+    });
     res.json({ ok: true, statuses: SETUP_REVIEW_STATUSES, setups });
   } catch (error) {
     console.error("customer setups list error:", error.message);
@@ -6081,7 +6104,7 @@ app.get("/admin/customer-setups/:tenantId", async (req, res) => {
       res.status(404).json({ ok: false, error: "tenant_not_found" });
       return;
     }
-    const onboarding = await loadClientOnboarding(false, tenant.id);
+    const onboarding = await loadClientOnboarding(true, tenant.id);
     res.json({
       ok: true,
       tenant,

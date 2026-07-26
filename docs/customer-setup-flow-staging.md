@@ -142,6 +142,45 @@ confirmar y sigue persistiendo estados `draft`/`completed`, `last_updated_at` y
 `setup_completed_at` en el mismo registro compartido `client-onboarding:{tenant}`.
 No activa bots automáticamente ni duplica datos.
 
+## Borrador de configuración de Customer Service
+
+Después de aprobar el setup, Super Admin puede generar
+`customer_service_configuration` dentro del mismo registro
+`client-onboarding:{tenant}`. No se crea otra tabla, otro identificador de
+persistencia ni otro sistema de configuración.
+
+La transición es deliberada:
+
+1. `Ready`: respuestas completas; Super Admin debe ejecutar `Aprobar setup` para
+   cambiar `customer_service_setup.setup_status` de `pending_review` a `approved`.
+2. `Building`: después de esa aprobación explícita, se genera un borrador
+   estructurado únicamente con respuestas generales
+   y de `customer_service_setup`.
+3. `Testing`: Super Admin revisó, editó y aprobó la configuración para pruebas
+   internas.
+
+`appointment_setup` nunca entra al borrador de Customer Service. Los cambios a una
+configuración que ya estaba en `Testing` la devuelven a `Building` y exigen otra
+aprobación. Este flujo no ofrece acción `Live` ni publica instrucciones en
+conversaciones reales.
+
+## Integración comercial en el setup
+
+Customer Service pregunta si el negocio usa Shopify, WordPress + WooCommerce,
+WordPress sin tienda, otra plataforma o no tiene tienda. El mismo registro guarda:
+
+- plataforma y URL pública;
+- intención y estado de conexión;
+- estado del catálogo;
+- necesidad de consultar pedidos;
+- responsable que autorizará la conexión.
+
+El setup nunca solicita ni almacena contraseñas, tokens o claves privadas. Una
+respuesta `integration_intent=yes` queda como `integration_status=requested` para
+que Super Admin continúe después mediante el flujo autorizado de la plataforma.
+WordPress sin WooCommerce puede servir como fuente de contenido, pero la consulta
+transaccional de pedidos requiere WooCommerce u otra integración de pedidos.
+
 ## Contrato de preguntas
 
 `CUSTOMER_SETUP_QUESTIONS` mantiene identificador estable, ruta de respuesta, sección,
@@ -151,10 +190,6 @@ respuestas existentes.
 
 ## Próximo trabajo de Super Admin
 
-- Exponer una lectura auditada de estos mismos registros para soporte y revisión.
-- Mostrar estado, porcentaje, fecha de finalización y última actualización por tenant.
-- Permitir añadir, editar, ordenar y activar/desactivar preguntas con versionado.
-- Mostrar el plan elegido por el cliente desde el mismo registro central del tenant.
 - Implementar el flujo real de conexión con Meta/WhatsApp Cloud API a partir de
   `meta.whatsapp_integration_intent=requested`, con estados auditables y manejo de
   permisos/verificación del dueño.

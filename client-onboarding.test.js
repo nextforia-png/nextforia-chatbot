@@ -4,9 +4,12 @@ const assert = require("assert");
 const {
   CUSTOMER_SETUP_QUESTIONS,
   SETUP_REVIEW_STATUSES,
+  buildCustomerServiceSystemPrompt,
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
+  generateCustomerServiceConfiguration,
+  normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
   onboardingCompletion
@@ -68,6 +71,12 @@ completedAnswers.customer_service_setup.bot_display_name = "Nextfor de Empresa C
 completedAnswers.customer_service_setup.tone = "vendedor_dinamico";
 completedAnswers.customer_service_setup.brand_restrictions = "No inventar precios ni descuentos";
 completedAnswers.customer_service_setup.data_consent = true;
+completedAnswers.commerce.platform = "shopify";
+completedAnswers.commerce.store_url = "https://empresa-completa.myshopify.com";
+completedAnswers.commerce.catalog_ready = "yes";
+completedAnswers.commerce.orders_required = true;
+completedAnswers.commerce.access_owner = "admin@completa.example";
+completedAnswers.commerce.integration_intent = "yes";
 completedAnswers.operations.services_products = "Servicios";
 completedAnswers.operations.frequent_questions = "Preguntas y respuestas";
 completedAnswers.operations.important_policies = "Políticas";
@@ -75,6 +84,15 @@ completedAnswers.operations.bot_instructions = "Responder con claridad";
 completedAnswers.team.admin_email = "admin@completa.example";
 completedAnswers.team.human_support_contact = "Soporte +57 300 000 0000";
 assert.strictEqual(onboardingCompletion(completedAnswers), 100);
+const missingCommerceUrl = JSON.parse(JSON.stringify(completedAnswers));
+missingCommerceUrl.commerce.store_url = "";
+assert(onboardingCompletion(missingCommerceUrl) < 100, "Shopify requiere URL de tienda");
+const noStoreAnswers = JSON.parse(JSON.stringify(completedAnswers));
+noStoreAnswers.commerce.platform = "none";
+noStoreAnswers.commerce.store_url = "";
+noStoreAnswers.commerce.integration_intent = "no";
+noStoreAnswers.commerce.orders_required = false;
+assert.strictEqual(onboardingCompletion(noStoreAnswers), 100, "un negocio sin tienda puede completar Customer Service");
 const completedRecord = createOnboardingRecord(completedAnswers, { tenant_id: "completa", status: "completed" });
 assert.strictEqual(completedRecord.setup_completed, true);
 assert.strictEqual(completedRecord.setup_review.status, "ready");
@@ -100,12 +118,66 @@ const approvedRecord = createOnboardingRecord(changesRequestedRecord.answers, {
   status: "completed",
   previous: changesRequestedRecord,
   review_status: "ready",
+  approve_setup: true,
   review_actor: "ventas@ravtoys.com",
   review_event: { action: "approve", note: "Setup aprobado." }
 });
 assert.strictEqual(approvedRecord.setup_review.status, "ready");
 assert.strictEqual(approvedRecord.setup_review.history.length, 2);
 assert.strictEqual(approvedRecord.answers.customer_service_setup.setup_status, "approved");
+const mixedAnswers = JSON.parse(JSON.stringify(completedAnswers));
+mixedAnswers.setup_goal = "both";
+mixedAnswers.appointment_setup.business_name = "APPOINTMENT-SECRET-MARKER";
+mixedAnswers.appointment_setup.allowed_topics = "APPOINTMENT-ONLY-RULE";
+const generatedConfiguration = generateCustomerServiceConfiguration(mixedAnswers, {
+  actor: "root@nextforia.com",
+  source_setup_updated_at: approvedRecord.updated_at,
+  now: "2026-07-25T12:00:00.000Z"
+});
+assert.strictEqual(generatedConfiguration.bot_type, "customer_service");
+assert.strictEqual(generatedConfiguration.lifecycle, "draft");
+assert.strictEqual(generatedConfiguration.source_record, "client-onboarding");
+assert.strictEqual(generatedConfiguration.commerce_platform, "shopify");
+assert.strictEqual(generatedConfiguration.commerce_integration_status, "requested");
+assert.match(generatedConfiguration.system_prompt, /empresa-completa\.myshopify\.com/);
+assert.match(generatedConfiguration.system_prompt, /No gestiones citas/);
+assert.match(generatedConfiguration.system_prompt, /Empresa Completa/);
+assert.doesNotMatch(JSON.stringify(generatedConfiguration), /APPOINTMENT-SECRET-MARKER/);
+assert.doesNotMatch(JSON.stringify(generatedConfiguration), /APPOINTMENT-ONLY-RULE/);
+const editedConfiguration = normalizeCustomerServiceConfiguration(Object.assign({}, generatedConfiguration, {
+  objective: "Resolver dudas y convertir oportunidades calificadas."
+}), {
+  actor: "root@nextforia.com",
+  lifecycle: "approved_for_testing",
+  now: "2026-07-25T12:30:00.000Z"
+});
+assert.strictEqual(editedConfiguration.lifecycle, "approved_for_testing");
+assert.strictEqual(editedConfiguration.approved_for_testing_by, "root@nextforia.com");
+assert.match(buildCustomerServiceSystemPrompt(editedConfiguration), /Resolver dudas y convertir oportunidades calificadas/);
+const buildingRecord = createOnboardingRecord(approvedRecord.answers, {
+  tenant_id: "completa",
+  status: "completed",
+  previous: approvedRecord,
+  review_status: "building",
+  review_actor: "root@nextforia.com",
+  customer_service_configuration: generatedConfiguration,
+  configuration_lifecycle: "draft"
+});
+assert.strictEqual(buildingRecord.setup_review.status, "building");
+assert.strictEqual(buildingRecord.customer_service_configuration.bot_type, "customer_service");
+assert.strictEqual(buildingRecord.customer_service_configuration.lifecycle, "draft");
+const wordpressAnswers = JSON.parse(JSON.stringify(completedAnswers));
+wordpressAnswers.commerce.platform = "woocommerce";
+wordpressAnswers.commerce.store_url = "https://tienda-wordpress.example";
+wordpressAnswers.commerce.integration_intent = "later";
+assert.strictEqual(onboardingCompletion(wordpressAnswers), 100);
+const wordpressConfiguration = generateCustomerServiceConfiguration(wordpressAnswers, {
+  actor: "root@nextforia.com",
+  now: "2026-07-25T12:45:00.000Z"
+});
+assert.strictEqual(wordpressConfiguration.commerce_platform, "woocommerce");
+assert.strictEqual(wordpressConfiguration.commerce_integration_status, "pending_customer");
+assert.match(wordpressConfiguration.system_prompt, /tienda-wordpress\.example/);
 const liveRecord = createOnboardingRecord(approvedRecord.answers, {
   tenant_id: "completa",
   status: "completed",

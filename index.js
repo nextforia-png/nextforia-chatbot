@@ -63,6 +63,8 @@ const {
   buildCoverageConversationContext,
   cloneDefaults: defaultClientOnboarding,
   createOnboardingRecord,
+  generateCustomerServiceConfiguration,
+  normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire
 } = require("./client-onboarding");
 const {
@@ -190,7 +192,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v123-staging-payments-v1";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v124-staging-customer-service-build";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3862,6 +3864,12 @@ async function setupReviewTenant(tenantId) {
   return tenants.find(function (tenant) { return tenant.id === clean; }) || null;
 }
 
+function setupReviewFailure(code, status) {
+  const error = new Error(code);
+  error.status = status || 422;
+  return error;
+}
+
 async function persistSetupReview(tenantId, input, auth) {
   const tenant = await setupReviewTenant(tenantId);
   if (!tenant) {
@@ -3871,21 +3879,80 @@ async function persistSetupReview(tenantId, input, auth) {
   }
   const previous = await loadClientOnboarding(false, tenant.id);
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
-  const reviewStatus = String(input && input.review_status || previous.setup_review && previous.setup_review.status || "").toLowerCase();
   const fallbackStatus = previous.setup_review && previous.setup_review.status || (previous.setup_completed ? "ready" : "incomplete");
-  const cleanStatus = SETUP_REVIEW_STATUSES.includes(reviewStatus) ? reviewStatus : fallbackStatus;
   const action = String(input && input.action || "update").slice(0, 80);
   const answers = input && input.answers && typeof input.answers === "object" ? input.answers : previous.answers;
+  const actor = auth && (auth.name || auth.username || auth.email);
+  let cleanStatus = fallbackStatus;
+  let configuration = previous.customer_service_configuration || null;
+  let configurationLifecycle = configuration && configuration.lifecycle || "draft";
+
+  if (action === "request_changes") {
+    cleanStatus = "incomplete";
+    configuration = null;
+  } else if (action === "approve") {
+    if (!previous.setup_completed) throw setupReviewFailure("setup_not_completed");
+    cleanStatus = "ready";
+    configuration = null;
+  } else if (action === "build_configuration") {
+    const setupGoal = previous.answers && previous.answers.setup_goal;
+    if (setupGoal !== "customer_service" && setupGoal !== "both") {
+      throw setupReviewFailure("customer_service_not_selected");
+    }
+    const customerServiceSetupStatus = previous.answers && previous.answers.customer_service_setup &&
+      previous.answers.customer_service_setup.setup_status;
+    if (!previous.setup_completed || fallbackStatus !== "ready" ||
+        !["approved", "active"].includes(customerServiceSetupStatus)) {
+      throw setupReviewFailure("setup_must_be_approved");
+    }
+    configuration = generateCustomerServiceConfiguration(answers, {
+      actor,
+      source_setup_updated_at: previous.last_updated_at || previous.updated_at
+    });
+    if (!configuration) throw setupReviewFailure("customer_service_not_selected");
+    cleanStatus = "building";
+    configurationLifecycle = "draft";
+  } else if (action === "save_configuration") {
+    if (!["building", "testing"].includes(fallbackStatus) || !configuration) {
+      throw setupReviewFailure("configuration_not_building");
+    }
+    if (!input.customer_service_configuration || typeof input.customer_service_configuration !== "object") {
+      throw setupReviewFailure("configuration_required");
+    }
+    configuration = normalizeCustomerServiceConfiguration(input.customer_service_configuration, {
+      actor,
+      lifecycle: "draft"
+    });
+    cleanStatus = "building";
+    configurationLifecycle = "draft";
+  } else if (action === "approve_configuration") {
+    if (fallbackStatus !== "building" || !configuration) {
+      throw setupReviewFailure("configuration_not_building");
+    }
+    configuration = normalizeCustomerServiceConfiguration(
+      input.customer_service_configuration && typeof input.customer_service_configuration === "object"
+        ? input.customer_service_configuration
+        : configuration,
+      { actor, lifecycle: "approved_for_testing" }
+    );
+    cleanStatus = "testing";
+    configurationLifecycle = "approved_for_testing";
+  } else if (action === "mark_live" || String(input && input.review_status || "").toLowerCase() === "live") {
+    throw setupReviewFailure("public_activation_requires_separate_approval", 403);
+  }
   const record = createOnboardingRecord(answers, {
     tenant_id: tenant.id,
     status: previous.status || "draft",
-    updated_by: auth && (auth.name || auth.username || auth.email),
+    updated_by: actor,
     previous,
     questionnaire,
     review_status: cleanStatus,
+    approve_setup: action === "approve",
     review_note: input && input.review_note,
     requested_changes: input && input.requested_changes,
-    review_actor: auth && (auth.name || auth.username || auth.email),
+    review_actor: actor,
+    customer_service_configuration: configuration,
+    configuration_lifecycle: configurationLifecycle,
     review_event: {
       action,
       note: input && (input.requested_changes || input.review_note) || ""
@@ -5741,6 +5808,11 @@ app.get("/admin/customer-setups", async (req, res) => {
         setup_goal: onboarding.answers && onboarding.answers.setup_goal || "unknown",
         completion: onboarding.completion || 0,
         setup_completed: !!onboarding.setup_completed,
+        customer_service_configuration: onboarding.customer_service_configuration ? {
+          lifecycle: onboarding.customer_service_configuration.lifecycle,
+          updated_at: onboarding.customer_service_configuration.updated_at,
+          updated_by: onboarding.customer_service_configuration.updated_by
+        } : null,
         review,
         updated_at: onboarding.last_updated_at || onboarding.updated_at || null
       };
@@ -5794,7 +5866,19 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
     });
   } catch (error) {
     console.error("customer setup review save error:", error.message);
-    res.status(error.status || 503).json({ ok: false, error: error.message === "tenant_not_found" ? "tenant_not_found" : "setup_review_unavailable" });
+    const expectedErrors = [
+      "tenant_not_found",
+      "setup_not_completed",
+      "setup_must_be_approved",
+      "customer_service_not_selected",
+      "configuration_not_building",
+      "configuration_required",
+      "public_activation_requires_separate_approval"
+    ];
+    res.status(error.status || 503).json({
+      ok: false,
+      error: expectedErrors.includes(error.message) ? error.message : "setup_review_unavailable"
+    });
   }
 });
 

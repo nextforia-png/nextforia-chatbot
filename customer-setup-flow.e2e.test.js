@@ -75,6 +75,14 @@ function completedAnswers(company, email, marker) {
       brand_restrictions: "No inventar precios ni descuentos",
       data_consent: true
     },
+    commerce: {
+      platform: "shopify",
+      store_url: "https://store-" + String(marker).toLowerCase() + ".myshopify.com",
+      catalog_ready: "yes",
+      orders_required: true,
+      access_owner: email,
+      integration_intent: "yes"
+    },
     team: {
       admin_email: email,
       human_support_contact: "Soporte " + marker
@@ -188,7 +196,15 @@ function bothBotAnswers(company, email) {
       NODE_ENV: "test",
       DASHBOARD_KEY: "customer-setup-key",
       DASHBOARD_SESSION_SECRET: "customer-setup-session-secret",
-      DASHBOARD_USERS: "[]",
+      DASHBOARD_USERS: JSON.stringify([
+        {
+          username: "platform-owner",
+          email: "owner@nextforia.example",
+          password: "SuperAdminPassword2026",
+          name: "Platform Owner",
+          role: "super_admin"
+        }
+      ]),
       VERIFY_TOKEN: "customer-setup-verify",
       WA_TOKEN: "customer-setup-wa-dummy",
       ANTHROPIC_API_KEY: "customer-setup-anthropic-dummy",
@@ -208,6 +224,7 @@ function bothBotAnswers(company, email) {
     const cookieB = await login(base, fixtures[1].email, password);
     const cookieC = await login(base, fixtures[2].email, password);
     const cookieD = await login(base, fixtures[3].email, password);
+    const superAdminCookie = await login(base, "owner@nextforia.example", "SuperAdminPassword2026");
 
     let response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },
@@ -228,6 +245,11 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("TODO GRAN VENDEDOR EMPIEZA CONOCIENDO SU EMPRESA"));
     assert(setupHtml.includes("Enséñale a Nextfor qué hace especial tu negocio"));
     assert(setupHtml.includes("¿Qué vende tu empresa?"));
+    assert(setupHtml.includes("WordPress + WooCommerce"));
+    assert(setupHtml.includes("WordPress sin tienda"));
+    assert(setupHtml.includes("¿Quieres conectar esta tienda con NextforIA?"));
+    assert(setupHtml.includes("No escribas contraseñas, tokens ni claves privadas aquí"));
+    assert(setupHtml.includes("commerce.integration_intent"));
     assert(setupHtml.includes("¿Cuántos clientes atiende normalmente tu línea en un mes?"));
     assert(setupHtml.includes("operations.monthly_customer_volume"));
     assert(setupHtml.includes("customer_service_setup.business_offer_type"));
@@ -305,9 +327,99 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "300");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_intent, "yes");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_integration_status, "requested");
+    assert.strictEqual(payload.onboarding.answers.commerce.platform, "shopify");
+    assert.strictEqual(payload.onboarding.answers.commerce.integration_status, "requested");
+    assert.strictEqual(payload.onboarding.answers.commerce.store_url, "https://store-a.myshopify.com");
     assert(payload.onboarding.setup_completed_at);
     assert(payload.onboarding.last_updated_at);
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      headers: { cookie: superAdminCookie }
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "ready");
+    assert.strictEqual(payload.onboarding.customer_service_configuration, null);
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ action: "update", review_status: "testing" })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "ready", "a manual status value cannot skip Building");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ action: "build_configuration" })
+    });
+    assert.strictEqual(response.status, 422);
+    assert.strictEqual((await response.json()).error, "setup_must_be_approved");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ action: "approve" })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "ready");
+    assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "approved");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ action: "build_configuration" })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "building");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.bot_type, "customer_service");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "draft");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.source_record, "client-onboarding");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.commerce_platform, "shopify");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.commerce_integration_status, "requested");
+    assert.match(payload.onboarding.customer_service_configuration.system_prompt, /No gestiones citas/);
+
+    const editedConfiguration = payload.onboarding.customer_service_configuration;
+    editedConfiguration.objective = "Atender y convertir oportunidades calificadas.";
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({
+        action: "save_configuration",
+        customer_service_configuration: editedConfiguration
+      })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "building");
+    assert.match(payload.onboarding.customer_service_configuration.system_prompt, /Atender y convertir oportunidades calificadas/);
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({
+        action: "approve_configuration",
+        customer_service_configuration: payload.onboarding.customer_service_configuration
+      })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "testing");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "approved_for_testing");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.approved_for_testing_by, "Platform Owner");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ action: "mark_live", review_status: "live" })
+    });
+    assert.strictEqual(response.status, 403);
+    assert.strictEqual((await response.json()).error, "public_activation_requires_separate_approval");
 
     response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },
@@ -357,6 +469,14 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "180");
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
     assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-appointments-c", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ action: "build_configuration" })
+    });
+    assert.strictEqual(response.status, 422);
+    assert.strictEqual((await response.json()).error, "customer_service_not_selected");
 
     response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",

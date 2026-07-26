@@ -6148,7 +6148,7 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     actor: "NexforIA",
     demo: true,
     apiPath: "",
-    completionPath: "/admin/panel-demo?tab=setup&from=onboarding",
+    completionPath: "/admin/panel-demo?tab=channels&from=onboarding",
     questionnaire
   });
 });

@@ -30,7 +30,7 @@ module.exports = function renderClientOnboarding(res, options) {
   const bots = Array.isArray(options.bots) ? options.bots : (bot ? [bot] : []);
   const billing = options.billing || null;
   const paymentsV1Enabled = !!options.paymentsV1Enabled;
-  const completionPath = options.completionPath || (demo ? "/admin/panel-demo?tab=setup&from=onboarding" : "/admin/panel?tab=setup&from=onboarding");
+  const completionPath = options.completionPath || (demo ? "/admin/panel-demo?tab=channels&from=onboarding" : "/admin/panel?tab=setup&from=onboarding");
   const selectedPlanId = String(tenant.plan_id || plan && plan.id || "");
   const selectedBotId = String(tenant.assigned_bot_id || bot && bot.id || "");
   const planName = plan && (plan.nombre || plan.name) || tenant.plan_id || "Plan asignado";

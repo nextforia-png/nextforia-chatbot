@@ -48,9 +48,12 @@ renderSuperAdminPanel({
 
 assert.match(contentType, /text\/html/);
 assert.match(html, /Panel Super Admin/);
+assert.match(html, /Versión del panel/);
+assert.match(html, /v-test/);
 assert.match(html, /data-view="overview"/);
 assert.match(html, /data-view="clients"/);
 assert.match(html, /data-view="leads"/);
+assert.match(html, /id="leadNavCount"/);
 assert.match(html, /data-view="incidents"/);
 assert.match(html, /data-view="billing"/);
 assert.match(html, /data-view="questionnaire"/);
@@ -118,6 +121,10 @@ assert.match(html, /Activacion del numero real pendiente/);
 assert.match(html, /\/admin\/integrations\/rav\/test/);
 assert.match(html, /Ejecutar prueba segura/);
 assert.match(html, /No se muestran datos de ejemplo como si fueran producción/);
+assert.match(html, /Lead = cuenta creada/);
+assert.match(html, /id="leadPipelineRows"/);
+assert.match(html, /\/admin\/leads/);
+assert.match(html, /email y clave/);
 assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
 assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
 
@@ -149,11 +156,29 @@ renderSuperAdminPanel({
     ],
     attention: { webhooks: 2, pendingAppointments: 7, queues: 1, overdue: 0 }
   },
-  leads: { kpis: { active: 12, won: 3, demos: 5, conversion: 25 }, sources: [{ name: "Meta Ads", paid: true, leads: 8, won: 2 }] }
+  leads: {
+    kpis: { active: 12, won: 3, demos: 5, conversion: 25 },
+    sources: [{ name: "Meta Ads", paid: true, leads: 8, won: 2 }],
+    rows: [{
+      tenant_id: "lead-demo",
+      company_name: "Lead Demo S.A.S.",
+      admin_email: "lead@example.com",
+      contact_phone: "+57 300 111 2222",
+      stage: "account_created",
+      stage_label: "Cuenta creada",
+      next_action: "Acompañar para que empiece el setup.",
+      completion: 0,
+      plan_id: "starter",
+      assigned_bot_id: "atencion-cliente"
+    }]
+  }
 });
 assert.match(richHtml, /Consolidado/);
 assert.match(richHtml, /Pareto de ingresos/);
 assert.match(richHtml, /Meta Ads/);
+assert.match(richHtml, /Lead Demo S\.A\.S\./);
+assert.match(richHtml, /Cuenta creada/);
+assert.match(richHtml, /Acompañar para que empiece el setup/);
 assert.doesNotMatch(richHtml, /sin fuente financiera conectada/);
 
 let accessV2Html = "";

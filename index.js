@@ -192,7 +192,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v126-staging-public-lead-phone";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v127-staging-leads-pipeline-version";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4375,6 +4375,130 @@ async function persistPublicSignupLeadDraft(user, input) {
   }), user.tenant_id);
 }
 
+function leadDateLabel(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function billingMakesCustomer(billing) {
+  if (!billing) return false;
+  const paymentStatus = String(billing.payment_status || "").toLowerCase();
+  const subscriptionStatus = String(billing.subscription_status || "").toLowerCase();
+  return billing.ready_for_bot_creation === true ||
+    paymentStatus === "paid" ||
+    ["active", "trial", "pilot"].includes(subscriptionStatus);
+}
+
+function leadStageFor(record, billing) {
+  if (record && record.setup_completed) {
+    return billingMakesCustomer(billing) ? "customer" : "setup_completed";
+  }
+  const completion = Number(record && record.completion) || 0;
+  if (completion > 0) return "setup_started";
+  return "account_created";
+}
+
+function leadStageLabel(stage) {
+  return ({
+    account_created: "Cuenta creada",
+    setup_started: "Setup iniciado",
+    setup_completed: "Setup completo · falta pago/trial",
+    customer: "Cliente"
+  })[stage] || "Lead";
+}
+
+function leadNextAction(stage) {
+  return ({
+    account_created: "Acompañar para que empiece el setup.",
+    setup_started: "Revisar avance y ayudar a terminar el setup.",
+    setup_completed: "Activar pago, trial o piloto aprobado.",
+    customer: "Ya puede moverse a Cliente."
+  })[stage] || "Revisar lead.";
+}
+
+async function buildSuperAdminLeadsPipeline() {
+  const empty = { kpis: { active: 0, won: 0, demos: 0, conversion: 0 }, sources: [], rows: [], customers: [] };
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !catalogService) return empty;
+  let tenants = [];
+  try {
+    tenants = await catalogService.listTenants();
+  } catch (error) {
+    console.error("lead pipeline tenants error:", error.message);
+    return empty;
+  }
+  let invitations = [];
+  if (customerAccessService && customerAccessService.listInvitations) {
+    try { invitations = await customerAccessService.listInvitations(); }
+    catch (error) { console.error("lead pipeline invitations error:", error.message); }
+  }
+  const usedInvitationByTenant = new Set((invitations || []).filter(function (row) {
+    return row && row.status === "used" && row.tenant_id;
+  }).map(function (row) { return cleanTenantId(row.tenant_id); }));
+  let billingByTenant = new Map();
+  if (PAYMENTS_V1_ENABLED && paymentService) {
+    try {
+      const billingRows = await paymentService.adminBilling();
+      billingByTenant = new Map((billingRows || []).map(function (row) { return [cleanTenantId(row.tenant_id), row]; }));
+    } catch (error) {
+      console.error("lead pipeline billing error:", error.message);
+    }
+  }
+  const rows = [];
+  const customers = [];
+  for (const tenant of tenants || []) {
+    const tenantId = cleanTenantId(tenant && tenant.id);
+    if (!tenantId || tenant.status === "archivado") continue;
+    const activeUsers = Number(tenant.usuarios_activos);
+    const accountCreated = activeUsers > 0 || usedInvitationByTenant.has(tenantId);
+    if (!accountCreated) continue;
+    let onboarding = null;
+    try { onboarding = await loadClientOnboarding(false, tenantId); }
+    catch (error) { console.error("lead pipeline onboarding error:", tenantId, error.message); }
+    const billing = billingByTenant.get(tenantId) || null;
+    const stage = leadStageFor(onboarding, billing);
+    const row = {
+      tenant_id: tenantId,
+      company_name: tenant.company_name || tenant.name || tenantId,
+      admin_email: tenant.admin_email || onboarding && onboarding.answers && onboarding.answers.team && onboarding.answers.team.admin_email || null,
+      contact_phone: onboarding && onboarding.answers && (
+        onboarding.answers.business && onboarding.answers.business.contact_phone ||
+        onboarding.answers.meta && onboarding.answers.meta.whatsapp_number ||
+        onboarding.answers.team && onboarding.answers.team.notification_phone
+      ) || null,
+      plan_id: tenant.plan_id || billing && billing.plan_id || null,
+      assigned_bot_id: tenant.assigned_bot_id || billing && billing.bot_id || null,
+      stage,
+      stage_label: leadStageLabel(stage),
+      next_action: leadNextAction(stage),
+      completion: Number(onboarding && onboarding.completion) || 0,
+      setup_completed: !!(onboarding && onboarding.setup_completed),
+      payment_status: billing && billing.payment_status || null,
+      subscription_status: billing && billing.subscription_status || null,
+      created_at: leadDateLabel(tenant.created_at),
+      updated_at: leadDateLabel(onboarding && (onboarding.last_updated_at || onboarding.updated_at) || tenant.updated_at)
+    };
+    if (stage === "customer") customers.push(row);
+    else rows.push(row);
+  }
+  rows.sort(function (a, b) { return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")); });
+  customers.sort(function (a, b) { return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")); });
+  const created = rows.length + customers.length;
+  const won = customers.length;
+  return {
+    kpis: {
+      active: rows.length,
+      won,
+      demos: 0,
+      conversion: created > 0 ? Math.round(won / created * 100) : 0
+    },
+    sources: created ? [{ name: "Cuenta creada", paid: false, leads: created, won }] : [],
+    rows,
+    customers
+  };
+}
+
 function adminKeyOk(req) {
   return adminAuthOk(req, "viewer");
 }
@@ -5931,6 +6055,20 @@ app.get("/admin/customer-setups", async (req, res) => {
   }
 });
 
+app.get("/admin/leads", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, leads: await buildSuperAdminLeadsPipeline() });
+  } catch (error) {
+    console.error("super admin leads error:", error.message);
+    res.status(503).json({ ok: false, error: "leads_unavailable" });
+  }
+});
+
 app.get("/admin/customer-setups/:tenantId", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok || auth.role !== "super_admin") {
@@ -6721,6 +6859,12 @@ app.get("/admin/super-admin", async (req, res) => {
   } catch (_) {
     platformGoals = DEFAULT_PLATFORM_GOALS;
   }
+  let leadsPipeline = null;
+  try {
+    leadsPipeline = await buildSuperAdminLeadsPipeline();
+  } catch (error) {
+    console.error("super admin leads pipeline render error:", error.message);
+  }
 
   renderSuperAdminPanel(res, {
     auth,
@@ -6747,9 +6891,10 @@ app.get("/admin/super-admin", async (req, res) => {
     finance: null,
     // leads: {
     //   kpis: { active, won, demos, conversion },
-    //   sources: [{ name, paid: true|false, leads, won }]
+    //   sources: [{ name, paid: true|false, leads, won }],
+    //   rows: [{ tenant_id, company_name, admin_email, contact_phone, stage, completion }]
     // }
-    leads: null
+    leads: leadsPipeline
   });
 });
 

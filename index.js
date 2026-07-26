@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v142-staging-meta-messenger-initial";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v143-staging-onboarding-connection-hub";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -265,6 +265,9 @@ const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_A
 const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
+const CUSTOMER_SETUP_COMPLETION_PATH = CHANNEL_CONNECTIONS_V1_ENABLED
+  ? "/admin/panel?tab=channels&from=onboarding"
+  : "/admin/panel?tab=setup&from=onboarding";
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
@@ -6145,6 +6148,7 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     actor: "NexforIA",
     demo: true,
     apiPath: "",
+    completionPath: "/admin/panel-demo?tab=setup&from=onboarding",
     questionnaire
   });
 });
@@ -6204,6 +6208,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     demo: false,
     apiPath: "/admin/client-onboarding/data",
+    completionPath: CUSTOMER_SETUP_COMPLETION_PATH,
     questionnaire
   });
 });
@@ -6451,7 +6456,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       billing,
       checkout,
       redirect: checkout && checkout.checkout_url ||
-        (record.setup_completed ? "/admin/panel?tab=setup" : null)
+        (record.setup_completed ? CUSTOMER_SETUP_COMPLETION_PATH : null)
     });
   } catch (error) {
     console.error("client onboarding save error:", error.message);

@@ -102,7 +102,10 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     const panel = await response.text();
     assert(panel.includes("Finaliza el entrenamiento de tu Nextfor"));
+    assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
+    assert(panel.includes('id="commerceConnectorCards"'));
+    assert(panel.includes("Conectores opcionales de comercio"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
 

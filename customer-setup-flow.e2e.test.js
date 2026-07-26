@@ -341,7 +341,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.commerce.store_url, "https://store-a.myshopify.com");
     assert(payload.onboarding.setup_completed_at);
     assert(payload.onboarding.last_updated_at);
-    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup&from=onboarding");
 
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
       headers: { cookie: superAdminCookie }
@@ -477,7 +477,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.appointment_setup.data_consent, true);
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "180");
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
-    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup&from=onboarding");
 
     response = await fetch(base + "/admin/customer-setups/tenant-appointments-c", {
       method: "PUT",
@@ -498,7 +498,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.appointment_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "420");
-    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup&from=onboarding");
 
     console.log("customer-setup-flow.e2e.test.js: ok");
   } finally {

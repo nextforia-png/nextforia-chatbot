@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v133-staging-leads-search-sort";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v134-staging-setup-search-lead-fallback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -779,6 +779,23 @@ async function supabaseFetchUserToolRecent(userId, toolName, limit) {
     });
     return r.data;
   } catch (e) { console.error("supabaseFetchUserToolRecent error:", e.message); return null; }
+}
+async function supabaseFetchToolRecent(toolName, limit) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE;
+    const r = await axios.get(url, {
+      params: {
+        select: "*",
+        tools: "cs." + JSON.stringify([toolName]),
+        order: "ts.desc",
+        limit: limit || 100
+      },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    return r.data;
+  } catch (e) { console.error("supabaseFetchToolRecent error:", e.message); return null; }
 }
 async function supabaseFetchPending(limit) {
   if (!SUPABASE_ENABLED) return null;
@@ -3812,6 +3829,18 @@ function parseClientOnboardingTurn(turn, tenantId) {
   }
 }
 
+function parseAnyClientOnboardingTurn(turn) {
+  if (!isClientOnboardingTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (![1, 2].includes(parsed.version) || !parsed.tenant_id || !parsed.answers) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
 function isMissingConversationLogsError(error) {
   const data = error && error.response && error.response.data;
   const text = JSON.stringify(data || {}) + " " + String(error && error.message || "");
@@ -3892,6 +3921,27 @@ async function loadClientOnboarding(force, tenantId) {
   }
   clientOnboardingCacheByTenant.set(tenantId, { loaded_at: now, record });
   return record;
+}
+
+async function listRecentClientOnboardingRecords(limit) {
+  const seen = new Set();
+  const records = [];
+  function collect(turn) {
+    const fallbackRecord = parseAnyClientOnboardingTurn(turn);
+    const tenantId = cleanTenantId(turn && turn.tenantId) || cleanTenantId(fallbackRecord && fallbackRecord.tenant_id);
+    if (!tenantId || seen.has(tenantId)) return;
+    const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
+    if (!record || !record.answers) return;
+    seen.add(tenantId);
+    records.push(record);
+  }
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200);
+    (rows || []).map(normalizeTurnRow).forEach(collect);
+  } else {
+    conversationLogs.slice().reverse().filter(isClientOnboardingTurn).forEach(collect);
+  }
+  return records;
 }
 
 async function persistClientOnboarding(answers, status, auth, tenantId) {
@@ -4033,6 +4083,23 @@ async function listSetupReviewTenants() {
     } catch (error) {
       console.error("setup review invitation fallback error:", error.message);
     }
+  }
+  try {
+    const onboardingRecords = await listRecentClientOnboardingRecords(200);
+    onboardingRecords.forEach(function (record) {
+      const answers = record.answers || {};
+      add({
+        id: cleanTenantId(record.tenant_id),
+        company_name: answers.business && answers.business.brand_name || record.tenant_id,
+        name: answers.business && answers.business.brand_name || record.tenant_id,
+        plan_id: null,
+        assigned_bot_id: null,
+        status: "setup",
+        admin_email: answers.team && answers.team.admin_email || answers.business && answers.business.contact_email || null
+      });
+    });
+  } catch (error) {
+    console.error("setup review onboarding fallback error:", error.message);
   }
   return tenants;
 }
@@ -4553,16 +4620,44 @@ async function buildSuperAdminLeadsPipeline() {
       console.error("lead pipeline billing error:", error.message);
     }
   }
+  let onboardingRecordByTenant = new Map();
+  try {
+    const onboardingRecords = await listRecentClientOnboardingRecords(200);
+    onboardingRecordByTenant = new Map(onboardingRecords.map(function (record) {
+      return [cleanTenantId(record.tenant_id), record];
+    }).filter(function (entry) { return !!entry[0]; }));
+    const existingTenantIds = new Set((tenants || []).map(function (tenant) { return cleanTenantId(tenant && tenant.id); }));
+    onboardingRecords.forEach(function (record) {
+      const tenantId = cleanTenantId(record.tenant_id);
+      if (!tenantId || existingTenantIds.has(tenantId)) return;
+      const answers = record.answers || {};
+      tenants.push({
+        id: tenantId,
+        company_name: answers.business && answers.business.brand_name || tenantId,
+        name: answers.business && answers.business.brand_name || tenantId,
+        plan_id: null,
+        assigned_bot_id: null,
+        status: "setup",
+        admin_email: answers.team && answers.team.admin_email || answers.business && answers.business.contact_email || null,
+        created_at: record.setup_completed_at || record.updated_at || record.last_updated_at || null,
+        updated_at: record.last_updated_at || record.updated_at || null
+      });
+      existingTenantIds.add(tenantId);
+    });
+  } catch (error) {
+    console.error("lead pipeline onboarding scan error:", error.message);
+  }
   const rows = [];
   const customers = [];
   for (const tenant of tenants || []) {
     const tenantId = cleanTenantId(tenant && tenant.id);
     if (!tenantId || tenant.status === "archivado") continue;
     const activeUsers = Number(tenant.usuarios_activos);
-    const accountCreated = activeUsers > 0 || usedInvitationByTenant.has(tenantId);
+    const onboardingFromScan = onboardingRecordByTenant.get(tenantId) || null;
+    const accountCreated = activeUsers > 0 || usedInvitationByTenant.has(tenantId) || !!(onboardingFromScan && onboardingFromScan.updated_at);
     if (!accountCreated) continue;
-    let onboarding = null;
-    try { onboarding = await loadClientOnboarding(false, tenantId); }
+    let onboarding = onboardingFromScan;
+    try { onboarding = onboarding || await loadClientOnboarding(false, tenantId); }
     catch (error) { console.error("lead pipeline onboarding error:", tenantId, error.message); }
     const billing = billingByTenant.get(tenantId) || null;
     const stage = leadStageFor(onboarding, billing);

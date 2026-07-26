@@ -94,6 +94,9 @@ function completedAnswers(company, email, marker) {
 function appointmentStageOneAnswers(company) {
   return {
     setup_goal: "appointments",
+    meta: {
+      whatsapp_number: "+57 300 222 3333"
+    },
     operations: {
       monthly_customer_volume: "180"
     },
@@ -124,6 +127,9 @@ function appointmentStageOneAnswers(company) {
       reminder_timing: "24h",
       survey_enabled: "yes",
       operational_channels: "WhatsApp activo",
+      instagram_username: "@empresa",
+      channel_email: "agenda@example.com",
+      other_channels: "Messenger",
       social_accounts: "Instagram @empresa",
       data_consent: true
     }
@@ -243,14 +249,14 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes('name="setupGoal"'));
     assert(setupHtml.includes('value="appointments"'));
     assert(setupHtml.includes("TODO GRAN VENDEDOR EMPIEZA CONOCIENDO SU EMPRESA"));
-    assert(setupHtml.includes("Enséñale a Nextfor qué hace especial tu negocio"));
+    assert(setupHtml.includes("Enséñale a Nextfor lo esencial de tu negocio"));
     assert(setupHtml.includes("¿Qué vende tu empresa?"));
     assert(setupHtml.includes("WordPress + WooCommerce"));
     assert(setupHtml.includes("WordPress sin tienda"));
     assert(setupHtml.includes("¿Quieres conectar esta tienda con NextforIA?"));
     assert(setupHtml.includes("No escribas contraseñas, tokens ni claves privadas aquí"));
     assert(setupHtml.includes("commerce.integration_intent"));
-    assert(setupHtml.includes("¿Cuántos clientes atiende normalmente tu línea en un mes?"));
+    assert(setupHtml.includes("Atención al cliente: clientes atendidos al mes"));
     assert(setupHtml.includes("operations.monthly_customer_volume"));
     assert(setupHtml.includes("customer_service_setup.business_offer_type"));
     assert(setupHtml.includes("Haz que Nextfor se sienta parte de tu equipo"));
@@ -267,7 +273,10 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("Guardado automático"));
     assert(setupHtml.includes("Elige el plan para tu empresa"));
     assert(setupHtml.includes("No requiere autorización de Super Admin"));
-    assert(setupHtml.includes("¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?"));
+    assert(!setupHtml.includes("¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?"));
+    assert(setupHtml.includes("La conexión técnica se hará más adelante"));
+    assert(setupHtml.includes("WhatsApp + número"));
+    assert(setupHtml.includes("Instagram + usuario"));
     assert(setupHtml.includes("Te falta completar: "));
     assert(setupHtml.includes("missingSummary"));
     assert(setupHtml.includes(".field.invalid .segment span"));
@@ -332,7 +341,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.commerce.store_url, "https://store-a.myshopify.com");
     assert(payload.onboarding.setup_completed_at);
     assert(payload.onboarding.last_updated_at);
-    assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup");
 
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
       headers: { cookie: superAdminCookie }
@@ -468,7 +477,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.appointment_setup.data_consent, true);
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "180");
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "");
-    assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup");
 
     response = await fetch(base + "/admin/customer-setups/tenant-appointments-c", {
       method: "PUT",
@@ -489,7 +498,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.appointment_setup.setup_status, "pending_review");
     assert.strictEqual(payload.onboarding.answers.operations.monthly_customer_volume, "420");
-    assert.strictEqual(payload.redirect, "/admin/panel?tab=summary");
+    assert.strictEqual(payload.redirect, "/admin/panel?tab=setup");
 
     console.log("customer-setup-flow.e2e.test.js: ok");
   } finally {

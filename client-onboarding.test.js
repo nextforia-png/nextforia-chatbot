@@ -21,7 +21,8 @@ assert.deepStrictEqual(
   CUSTOMER_SETUP_QUESTIONS.map(function (question) { return question.order; }).slice().sort(function (a, b) { return a - b; })
 );
 assert.strictEqual(new Set(CUSTOMER_SETUP_QUESTIONS.map(function (question) { return question.id; })).size, CUSTOMER_SETUP_QUESTIONS.length);
-assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.active && question.path && question.type; }));
+assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.path && question.type; }));
+assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) { return question.id === "whatsapp_integration_intent" && question.active === false && question.required === false; }));
 assert.deepStrictEqual(SETUP_REVIEW_STATUSES, ["incomplete", "ready", "building", "testing", "live"]);
 
 const normalized = normalizeOnboarding({
@@ -238,6 +239,7 @@ appointmentAnswers.appointment_setup.calendar_provider = "google";
 appointmentAnswers.appointment_setup.reminder_channel = "whatsapp";
 appointmentAnswers.appointment_setup.reminder_timing = "24h";
 appointmentAnswers.appointment_setup.survey_enabled = "yes";
+appointmentAnswers.meta.whatsapp_number = "+57 300 111 2222";
 appointmentAnswers.appointment_setup.operational_channels = "WhatsApp";
 appointmentAnswers.appointment_setup.data_consent = true;
 assert.strictEqual(onboardingCompletion(appointmentAnswers), 100, "agendamiento no exige preguntas del ChatBot de atención");

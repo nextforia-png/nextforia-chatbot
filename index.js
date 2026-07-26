@@ -192,7 +192,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v129-staging-super-admin-fresh-setups";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v130-staging-onboarding-config-flow";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6236,7 +6236,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       billing,
       checkout,
       redirect: checkout && checkout.checkout_url ||
-        (record.setup_completed ? (PAYMENTS_V1_ENABLED ? "/admin/panel?tab=plan" : "/admin/panel?tab=summary") : null)
+        (record.setup_completed ? "/admin/panel?tab=setup" : null)
     });
   } catch (error) {
     console.error("client onboarding save error:", error.message);

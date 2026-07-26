@@ -12,7 +12,7 @@ function render(options) {
     setHeader: function (name, value) { if (name.toLowerCase() === "content-type") contentType = value; return this; },
     send: function (value) { html = String(value); return this; }
   };
-  renderCustomerPanel(res, Object.assign({ auth: { name: "Admin", role: "admin" }, capabilities: {}, initialTab: "summary" }, options || {}));
+  renderCustomerPanel(res, Object.assign({ auth: { name: "Admin", role: "admin" }, capabilities: {}, initialTab: "summary", botVersion: "v-test-panel" }, options || {}));
   assert.strictEqual(status, 200);
   assert(contentType.includes("text/html"));
   return html;
@@ -35,6 +35,9 @@ assert(tenantA.includes('id="bot-support"'));
 assert(!tenantA.includes('id="bot-appointments"'));
 assert(tenantA.includes("1 bot activo"));
 assert(tenantA.includes("Atención al cliente · Plan Growth"));
+assert(tenantA.includes("Versión v-test-panel"));
+assert(tenantA.includes("Configuración de tu bot"));
+assert(tenantA.includes("Ver cuestionario completo"));
 assert(!tenantA.includes(">Empresa B<"));
 assert(!tenantA.includes(">RAV Toys<"));
 

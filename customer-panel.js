@@ -84,6 +84,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
   const demoMode = !!options.demoMode;
   const panelContext = customerPanelContext(options);
+  const botVersion = options.botVersion || "dev";
   const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(options.initialTab)
     ? options.initialTab
     : "summary";
@@ -224,6 +225,8 @@ button{cursor:pointer}
 .sidebarFoot{margin-top:auto;display:flex;flex-direction:column;gap:6px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
 .footTitle{padding-bottom:4px}
 .sidebarFoot .whatsappCard{margin-top:10px}
+.panelVersion{margin-top:8px;color:rgba(221,232,248,.54);font-size:10.5px;font-weight:850;letter-spacing:.08em;text-transform:uppercase;text-align:center}
+.panelVersionFixed{position:fixed;right:18px;bottom:10px;z-index:30;border:1px solid rgba(220,229,241,.8);border-radius:999px;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);color:#74839C;font-size:10px;font-weight:850;letter-spacing:.05em;padding:6px 10px;box-shadow:0 8px 18px rgba(8,22,52,.08)}
 .botsActive{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;color:#9DF0C8;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.08)}
 .whatsappCard{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.06);border-radius:16px;padding:18px 16px;color:#EAF2FF}
 .whatsappCard strong{display:flex;align-items:center;gap:9px;font-size:15px}
@@ -811,6 +814,31 @@ body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;
 .noteCard button{margin-top:9px;width:100%}
 .noteCard p{font-size:11px;color:var(--slate-500);margin-top:6px}
 .setupView{display:flex;flex-direction:column;gap:20px;max-width:1120px;margin:0 auto}
+.setupSummaryPanel{background:#fff;border:1px solid var(--line);border-radius:22px;padding:24px;box-shadow:var(--shadow-soft);display:grid;gap:18px}
+.setupSummaryHead{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}
+.setupSummaryHead h3{font-size:23px;font-weight:950;letter-spacing:-.04em;color:var(--navy-900)}
+.setupSummaryHead p{margin-top:5px;color:var(--slate-500);font-size:13.5px;line-height:1.5;font-weight:650;max-width:680px}
+.setupFlowSteps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.setupFlowStep{border:1px solid var(--line);border-radius:16px;background:#F8FAFC;padding:14px;display:grid;gap:6px}
+.setupFlowStep b{width:28px;height:28px;border-radius:10px;background:var(--cyan-100);color:#057BB6;display:grid;place-items:center;font-size:12px}
+.setupFlowStep strong{font-size:13px;color:var(--navy-900)}
+.setupFlowStep span{font-size:11px;color:var(--slate-500);font-weight:650;line-height:1.35}
+.setupFlowStep.next{border-color:#9DDCF8;background:linear-gradient(135deg,#F3FBFF,#E7F7FF)}
+.setupConfigGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.setupConfigCard{border:1px solid var(--line);border-radius:16px;background:#fff;padding:16px}
+.setupConfigCard small{display:block;color:#057BB6;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase}
+.setupConfigCard strong{display:block;margin-top:7px;color:var(--navy-900);font-size:17px;font-weight:950;line-height:1.2}
+.setupConfigCard p{margin-top:7px;color:var(--slate-500);font-size:12.5px;line-height:1.45;font-weight:650}
+.channelPlan{border-top:1px solid var(--line);padding-top:18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+.channelPlan h4{font-size:17px;font-weight:950;color:var(--navy-900)}
+.channelPlan p{margin-top:4px;color:var(--slate-500);font-size:13px;font-weight:650;line-height:1.45}
+.setupDetailsToggle{min-height:42px;border:1px solid var(--line);background:#fff;border-radius:12px;color:var(--navy-900);font-size:13px;font-weight:900;padding:0 14px}
+.onboardingDetails{display:none;border:1px solid var(--line);border-radius:18px;background:#F8FAFC;padding:16px}
+.onboardingDetails.open{display:grid;gap:10px}
+.questionnaireList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.questionnaireItem{border:1px solid var(--line);border-radius:14px;background:#fff;padding:12px}
+.questionnaireItem small{display:block;color:#74839C;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.08em}
+.questionnaireItem strong{display:block;margin-top:5px;color:var(--navy-900);font-size:13px;line-height:1.35}
 .setupProgressPanel{flex:0 0 auto;position:relative;overflow:hidden;border-radius:20px;padding:26px 30px;background:radial-gradient(circle at 86% 12%,rgba(0,160,240,.30),transparent 34%),linear-gradient(145deg,var(--navy-950),var(--navy-700));color:#fff;box-shadow:var(--shadow)}
 .setupProgressBody{position:relative;display:flex;align-items:center;gap:26px}
 .setupProgressCopy{flex:1;min-width:0}
@@ -944,7 +972,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   body.conversations-view.chat-open .chatColumn{display:flex;height:100%}
 }
 @media(max-width:760px){
-  .setupView{gap:14px}.setupProgressPanel{padding:18px 16px;border-radius:17px}.setupProgressBody{gap:12px;align-items:flex-start}.setupStory{font-size:15px;line-height:1.42;padding-right:2px}.setupEyebrow{font-size:9.5px;margin-bottom:6px}.setupStatus{position:static;width:max-content;margin-bottom:8px;padding:5px 9px}.setupProgressRing{width:72px;height:72px;padding:5px}.setupProgressRing strong{font-size:18px}.setupProgressRing span{font-size:6.5px;letter-spacing:.08em}.setupStepper{grid-column:1/-1;margin-top:15px;max-width:none}.setupStepLine{min-width:4px;margin:0 2px}.setupStepDot{width:26px;height:26px;font-size:10.5px}.setupNotice{padding:12px 14px;font-size:12px}.setupGrid,.industryQuestions,.setupAccountsGrid{grid-template-columns:1fr}.setupGrid .wide,.setupAccounts{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px 16px;border-radius:16px}.setupStepHead{grid-template-columns:38px 1fr;gap:11px;margin-bottom:18px}.setupStepNumber{width:38px;height:38px;font-size:16px}.setupStepHead h4{font-size:17px}.setupStepHead p{font-size:12px}.setupAccounts{padding:15px}.setupActions{display:grid;grid-template-columns:auto 1fr;bottom:76px;padding:12px}.setupActions p{grid-column:1/-1;order:-1;margin:0}.setupActions .setupSaveBtn{display:none}.setupActions .primaryBtn{width:100%}.setupActions.firstStep .primaryBtn{grid-column:1/-1}.setupActions .setupBackBtn{width:44px;padding:0}.retargetingPolicy{grid-column:auto}.policyGuardrails{grid-template-columns:1fr}.rtgHero,.rtgMainGrid{grid-template-columns:1fr}.rtgHero{padding:22px}.rtgSafetyCard{padding:16px}.rtgMetrics{grid-template-columns:1fr 1fr}.rtgJob{grid-template-columns:1fr}.rtgJobActions{justify-content:flex-start}
+  .panelVersionFixed{left:12px;right:auto;bottom:78px;font-size:9px;padding:5px 8px}.setupView{gap:14px}.setupSummaryPanel{padding:18px 16px;border-radius:17px}.setupSummaryHead{display:grid}.setupFlowSteps,.setupConfigGrid,.questionnaireList{grid-template-columns:1fr}.channelPlan{grid-template-columns:1fr}.setupDetailsToggle{width:100%}.setupProgressPanel{padding:18px 16px;border-radius:17px}.setupProgressBody{gap:12px;align-items:flex-start}.setupStory{font-size:15px;line-height:1.42;padding-right:2px}.setupEyebrow{font-size:9.5px;margin-bottom:6px}.setupStatus{position:static;width:max-content;margin-bottom:8px;padding:5px 9px}.setupProgressRing{width:72px;height:72px;padding:5px}.setupProgressRing strong{font-size:18px}.setupProgressRing span{font-size:6.5px;letter-spacing:.08em}.setupStepper{grid-column:1/-1;margin-top:15px;max-width:none}.setupStepLine{min-width:4px;margin:0 2px}.setupStepDot{width:26px;height:26px;font-size:10.5px}.setupNotice{padding:12px 14px;font-size:12px}.setupGrid,.industryQuestions,.setupAccountsGrid{grid-template-columns:1fr}.setupGrid .wide,.setupAccounts{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px 16px;border-radius:16px}.setupStepHead{grid-template-columns:38px 1fr;gap:11px;margin-bottom:18px}.setupStepNumber{width:38px;height:38px;font-size:16px}.setupStepHead h4{font-size:17px}.setupStepHead p{font-size:12px}.setupAccounts{padding:15px}.setupActions{display:grid;grid-template-columns:auto 1fr;bottom:76px;padding:12px}.setupActions p{grid-column:1/-1;order:-1;margin:0}.setupActions .setupSaveBtn{display:none}.setupActions .primaryBtn{width:100%}.setupActions.firstStep .primaryBtn{grid-column:1/-1}.setupActions .setupBackBtn{width:44px;padding:0}.retargetingPolicy{grid-column:auto}.policyGuardrails{grid-template-columns:1fr}.rtgHero,.rtgMainGrid{grid-template-columns:1fr}.rtgHero{padding:22px}.rtgSafetyCard{padding:16px}.rtgMetrics{grid-template-columns:1fr 1fr}.rtgJob{grid-template-columns:1fr}.rtgJobActions{justify-content:flex-start}
   body.conversations-view .content{padding:0}
   body.conversations-view .inboxShell{height:auto;min-height:calc(100vh - 174px);display:block}
   body.conversations-view .listColumn,body.conversations-view .chatColumn{border-radius:0;box-shadow:none;min-height:calc(100vh - 174px)}
@@ -1021,6 +1049,7 @@ ${customerAppointments.styles}
         <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">${panelContext.v2 ? "Bot conectado" : "Bot de atención conectado"}</span></strong>
         <p id="channelStatusDetail">${panelContext.v2 ? escapeHtml(panelContext.assignedBotName) + " · Plan " + escapeHtml(panelContext.planName) : "Atención al cliente · Plan Growth"}</p>
       </div>
+      <div class="panelVersion">Versión ${escapeHtml(botVersion)}</div>
     </div>
   </aside>
   <main class="main">
@@ -1153,6 +1182,22 @@ ${customerAppointments.styles}
 
       <section class="${viewClass('panel-setup')}" id="panel-setup">
         <div class="setupView">
+          <section class="setupSummaryPanel">
+            <div class="setupSummaryHead">
+              <div><h3>Configuración de tu bot</h3><p>Este es el resumen práctico de lo que entrenaste. Los detalles completos quedan guardados en el mismo registro de tu empresa para el Customer Panel y Super Admin.</p></div>
+              <button class="setupDetailsToggle" id="setupDetailsToggle" type="button" onclick="toggleSetupDetails()">Ver cuestionario completo</button>
+            </div>
+            <div class="setupFlowSteps">
+              <article class="setupFlowStep"><b>1</b><strong>Cuestionario</strong><span>Información guardada por empresa.</span></article>
+              <article class="setupFlowStep"><b>2</b><strong>Resumen</strong><span>Revisión rápida de negocio, bot y reglas.</span></article>
+              <article class="setupFlowStep next"><b>3</b><strong>Conectar canales</strong><span>WhatsApp, Instagram u otros se conectan después.</span></article>
+              <article class="setupFlowStep"><b>4</b><strong>Administrar</strong><span>Todo queda visible desde este panel.</span></article>
+            </div>
+            <div class="setupConfigGrid" id="setupConfigSummary"><article class="setupConfigCard"><small>Estado</small><strong>Cargando…</strong><p>Estamos leyendo la configuración guardada.</p></article></div>
+            <div class="channelPlan"><div><h4>Próximo paso: conectar canales y bot</h4><p id="channelConnectionSummary">Cuando el agente 🔌 Channels & Integrations esté listo, aquí se abrirá el flujo para conectar WhatsApp, Instagram y el bot correspondiente. Por ahora solo recopilamos la información.</p></div><button class="primaryBtn" type="button" disabled>Conexión pendiente</button></div>
+            <div class="onboardingDetails" id="onboardingDetails"><div class="questionnaireList" id="onboardingQuestionnaireList"><article class="questionnaireItem"><small>Cuestionario</small><strong>Cargando respuestas…</strong></article></div></div>
+          </section>
+          <div class="setupDetailsPanel" id="setupDetailsPanel" hidden>
           <section class="setupProgressPanel">
             <div class="setupProgressBody">
               <div class="setupProgressCopy">
@@ -1256,6 +1301,7 @@ ${customerAppointments.styles}
           </form>
 
           <div class="setupActions"><button class="ghostBtn setupBackBtn hidden" id="setupBackBtn" type="button" onclick="backSetupStep()">← Atrás</button><p id="setupMessage">Guarda cuando quieras. “Activar en el bot” aplica los cambios a los mensajes nuevos.</p><button class="ghostBtn setupSaveBtn" id="saveSetupBtn" type="button" onclick="saveBotSetup()">Guardar avance</button><button class="primaryBtn" id="publishSetupBtn" type="button" onclick="setupPrimaryAction()">Continuar →</button></div>
+          </div>
         </div>
       </section>
 
@@ -1334,10 +1380,11 @@ ${customerAppointments.styles}
     </div>
   </div>
 </div>
+<div class="panelVersionFixed" aria-label="Versión del Customer Panel">Versión ${escapeHtml(botVersion)}</div>
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"};
 var PLAN_DATA=${safeJson(planData)};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,onboarding:null,onboardingLoading:false,setupDetailsOpen:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
@@ -1533,6 +1580,12 @@ function toggleRetargetingPause(){if(!state.retargeting||!state.retargeting.can_
 function setupPathGet(source,path){return String(path||"").split(".").reduce(function(value,key){return value&&value[key]!=null?value[key]:undefined;},source);}
 function setupPathSet(target,path,value){var parts=String(path||"").split("."),cursor=target;parts.forEach(function(key,index){if(index===parts.length-1)cursor[key]=value;else{if(!cursor[key]||typeof cursor[key]!=="object")cursor[key]={};cursor=cursor[key];}});}
 function cloneSetup(value){return JSON.parse(JSON.stringify(value||{}));}
+function readableSetupValue(value){if(value===true)return "Sí";if(value===false)return "No";if(Array.isArray(value))return value.join(", ");if(value&&typeof value==="object")return Object.keys(value).map(function(key){return key+": "+value[key];}).join(" · ");return String(value==null?"":value).replace(/\\s+/g," ").trim();}
+function setupShort(value,fallback){var textValue=readableSetupValue(value);return textValue?textValue.slice(0,220)+(textValue.length>220?"…":""):(fallback||"Pendiente");}
+function setupGoalLabel(goal){goal=String(goal||"unknown");if(goal==="both")return "Atención al cliente + Agendamiento";if(goal==="appointments")return "Agendamiento";if(goal==="customer_service")return "Atención al cliente";return "Por definir";}
+function renderOnboardingSummary(payload){var box=document.getElementById("setupConfigSummary"),details=document.getElementById("onboardingQuestionnaireList");if(!box)return;var onboarding=payload&&payload.onboarding||{},answers=onboarding.answers||{},appt=answers.appointment_setup||{},svc=answers.customer_service_setup||{},goal=answers.setup_goal,business=setupPathGet(answers,"business.brand_name")||appt.business_name||PANEL_CONTEXT.businessName,clients=setupPathGet(answers,"operations.monthly_customer_volume"),tone=svc.tone||appt.assistant_tone||setupPathGet(answers,"voice.formality"),whatsapp=setupPathGet(answers,"meta.whatsapp_number"),instagram=appt.instagram_username||setupPathGet(answers,"meta.instagram_account"),email=appt.channel_email||setupPathGet(answers,"business.contact_email"),other=appt.other_channels,channels=[whatsapp?("WhatsApp "+whatsapp):"",instagram?("Instagram "+instagram):"",email?("Correo "+email):"",other].filter(Boolean).join(" · "),updated=onboarding.last_updated_at||onboarding.updated_at||"",status=onboarding.setup_completed?"Cuestionario completo":"En progreso";var cards=[["Empresa",business,"Marca y cuenta asociada al tenant."],["Bot contratado",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,"Plan: "+(PANEL_CONTEXT.planName||"Asignado")],["Clientes al mes",clients,"Aproximado para dimensionar plan y consumo."],["Cómo debe hablar",tone,"Voz base para responder como tu equipo."],["Canales recopilados",channels,"Datos guardados; conexión técnica pendiente."],["Estado",status,updated?("Última actualización: "+when(updated)):"Se actualizará al guardar."]];box.innerHTML=cards.map(function(item){return '<article class="setupConfigCard"><small>'+esc(item[0])+'</small><strong>'+esc(setupShort(item[1]))+'</strong><p>'+esc(item[2])+'</p></article>';}).join("");text("channelConnectionSummary","Siguiente paso: conectar "+(channels||"los canales elegidos")+" y activar el bot correspondiente desde Channels & Integrations. Aquí todavía no se realiza ninguna conexión técnica.");if(details){var questions=payload&&payload.questionnaire&&payload.questionnaire.questions||[],rows=[];questions.filter(function(question){return question&&question.active!==false&&question.path;}).sort(function(a,b){return(Number(a.order)||0)-(Number(b.order)||0);}).forEach(function(question){var value=setupPathGet(answers,question.path);var readable=readableSetupValue(value);if(!readable||readable==="unknown")return;rows.push([question.section||"general",question.label||question.path,readable]);});["meta.whatsapp_number","appointment_setup.instagram_username","appointment_setup.channel_email","appointment_setup.other_channels"].forEach(function(path){var exists=rows.some(function(row){return row[1]===path;}),value=setupPathGet(answers,path);if(!exists&&readableSetupValue(value))rows.push(["canales",path,readableSetupValue(value)]);});details.innerHTML=rows.length?rows.map(function(row){return '<article class="questionnaireItem"><small>'+esc(row[0])+'</small><strong>'+esc(row[1])+'</strong><p>'+esc(setupShort(row[2]))+'</p></article>';}).join(""):'<article class="questionnaireItem"><small>Cuestionario</small><strong>Aún no hay respuestas guardadas.</strong></article>';}}
+function loadClientOnboardingSummary(){if(state.onboardingLoading)return;state.onboardingLoading=true;api(PANEL_ONBOARDING_PATH).then(function(payload){state.onboarding=payload;renderOnboardingSummary(payload);}).catch(function(error){var box=document.getElementById("setupConfigSummary");if(box)box.innerHTML='<article class="setupConfigCard"><small>Configuración</small><strong>No se pudo cargar</strong><p>'+esc(error.message||"Intenta de nuevo en unos minutos.")+'</p></article>';}).finally(function(){state.onboardingLoading=false;});}
+function toggleSetupDetails(){state.setupDetailsOpen=!state.setupDetailsOpen;var panel=document.getElementById("setupDetailsPanel"),details=document.getElementById("onboardingDetails"),button=document.getElementById("setupDetailsToggle");if(panel)panel.hidden=!state.setupDetailsOpen;if(details)details.classList.toggle("open",state.setupDetailsOpen);if(button)button.textContent=state.setupDetailsOpen?"Ocultar detalles":"Ver cuestionario completo";}
 var SETUP_STEP_TITLES=["Tu negocio","Sedes y horarios","Oferta y condiciones","Tu industria","Personalidad y canales","Autonomía del bot","Resultados"];
 var SETUP_DEFAULT_BOT_NAME=PANEL_CONTEXT.v2?"tu bot":"RAV-Bot";
 var SETUP_STEP_MESSAGES=[
@@ -1563,7 +1616,7 @@ function logoutCustomerPanel(){fetch("/admin/logout",{method:"POST"}).finally(fu
 ${customerAppointments.clientScript}
 var reply=document.getElementById("replyText");if(reply)reply.addEventListener("keydown",function(event){if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();sendReply();}});document.addEventListener("click",function(event){if(!event.target.closest(".emojiControl"))closeEmojiPickers();});document.addEventListener("keydown",function(event){if(event.key==="Escape")closeEmojiPickers();});var searchForm=document.getElementById("searchTestForm");if(searchForm)searchForm.addEventListener("submit",runProductTest);var orderForm=document.getElementById("orderTestForm");if(orderForm)orderForm.addEventListener("submit",runOrderTest);
 try{var initialView=new URL(location.href).searchParams.get("view");if(["agenda","chats","reminders"].includes(initialView))state.appointmentSection=initialView;}catch(e){}
-renderChannelStrips();showTab(INITIAL_TAB);loadBotSetup();loadPanelData(false);loadPanelHealth();if(INITIAL_TAB==="plan")loadBilling(false);setInterval(function(){if(!DEMO_MODE&&!state.metaDirty)loadPanelData(false);},30000);setInterval(loadPanelHealth,120000);
+renderChannelStrips();showTab(INITIAL_TAB);loadBotSetup();loadClientOnboardingSummary();loadPanelData(false);loadPanelHealth();if(INITIAL_TAB==="plan")loadBilling(false);setInterval(function(){if(!DEMO_MODE&&!state.metaDirty)loadPanelData(false);},30000);setInterval(loadPanelHealth,120000);
 </script>
 </body>
 </html>`);

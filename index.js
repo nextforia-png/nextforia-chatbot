@@ -203,7 +203,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v144-staging-onboarding-connection-hub";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v145-staging-prelive-setup-checklist";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6149,6 +6149,7 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     demo: true,
     apiPath: "",
     completionPath: "/admin/panel-demo?tab=channels&from=onboarding",
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     questionnaire
   });
 });

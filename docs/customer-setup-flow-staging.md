@@ -78,8 +78,16 @@ Customer Access v2 y todas las lecturas/escrituras usan ese tenant.
 
 Los planes disponibles y el bot asignado se leen de los catálogos activos administrados
 por Super Admin. El cliente puede elegir directamente un plan compatible con su bot y
-la selección actualiza el `plan_id` de su propio tenant; no requiere autorización de
-Super Admin. Los precios no se escriben ni se editan en el Customer Panel.
+continúa al pago/configuración correspondiente sin autorización manual de Super Admin.
+
+Mejora v147: la pantalla final de selección de plan implementa el diseño
+`Selección de planes Nextfor` en Staging. Muestra Aura, Tempo y Atlas en cards
+responsive con Lumen por plan, recomendación visual según el objetivo del setup,
+detalle expandible de lo que incluye/no incluye, banner secundario de Nextfor Uno
+y bloque Signature. Los IDs, precios y compatibilidad siguen viniendo del catálogo
+central del ambiente; el diseño solo aporta presentación y copy.
+La selección actualiza el `plan_id` de su propio tenant; no requiere autorización
+de Super Admin. Los precios no se escriben ni se editan en el Customer Panel.
 
 Corrección v101: si Supabase aplica el cambio de plan pero no devuelve la fila
 actualizada en el `PATCH`, el Customer Panel lee inmediatamente el tenant por `id`

@@ -140,7 +140,7 @@ function securityHeaders(req, res, next) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https:",
-    "connect-src 'self'",
+    "connect-src 'self' https://sandbox.wompi.co",
     "upgrade-insecure-requests"
   ].join("; "));
   if (req.secure || firstForwardedValue(req.get("x-forwarded-proto")) === "https") {

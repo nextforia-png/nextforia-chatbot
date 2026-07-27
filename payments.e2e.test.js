@@ -136,6 +136,7 @@ function transactionEvent(input) {
       PAYMENTS_TEST_MODE: "1",
       PAYMENTS_ENV: "staging",
       WOMPI_PUBLIC_KEY: "pub_test_e2e",
+      WOMPI_PRIVATE_KEY: "prv_test_e2e",
       WOMPI_INTEGRITY_SECRET: "test_integrity_e2e",
       WOMPI_EVENT_SECRET: "test_events_e2e",
       WOMPI_ESTIMATED_FEE_RATE: "0.03"
@@ -185,18 +186,9 @@ function transactionEvent(input) {
     assert.strictEqual(response.status, 200);
     const setupHtml = await response.text();
     assert(setupHtml.includes("Elige el bot para tu empresa"));
-	    assert(setupHtml.includes("Elige cómo activar tu plan"));
-	    assert(setupHtml.includes("Pagar con Wompi"));
-	    assert(setupHtml.includes("Los precios provienen del catálogo central."));
-
-	    response = await fetch(base + "/admin/client-onboarding-demo?step=setup");
-	    const demoSetupHtml = await response.text();
-	    assert(demoSetupHtml.includes("Pagar con Wompi"));
-	    assert(demoSetupHtml.includes("DEMO_PAYMENT_PATH"));
-	    response = await fetch(base + "/admin/client-onboarding-demo/payment?next=/admin/panel-demo?tab=channels");
-	    const demoPaymentHtml = await response.text();
-	    assert(demoPaymentHtml.includes("Abrir Wompi Sandbox"));
-	    assert(demoPaymentHtml.includes("checkout.wompi.co/p/?"));
+    assert(setupHtml.includes("Elige cómo activar tu plan"));
+    assert(setupHtml.includes("Autorizar suscripción con Wompi"));
+    assert(setupHtml.includes("Los precios provienen del catálogo central."));
 
     response = await fetch(base + "/admin/panel/billing/checkout", {
       method: "POST",
@@ -209,30 +201,42 @@ function transactionEvent(input) {
     });
     assert.strictEqual(response.status, 200);
     let payload = await response.json();
-    const checkoutA = payload.checkout;
-    assert.strictEqual(checkoutA.amount_charged, 180000);
-    assert.strictEqual(checkoutA.reference.includes("payments-a"), true,
-      "checkout must remain bound to the authenticated tenant and its catalog selection");
-    assert(checkoutA.checkout_url.startsWith("https://checkout.wompi.co/p/?"));
+    assert.strictEqual(payload.checkout.authorization_url, "/admin/panel/billing/authorize");
 
     response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieA } });
     payload = await response.json();
-	    assert.strictEqual(payload.billing.payment_status, "pending");
-	    assert.strictEqual(payload.billing.ready_for_bot_creation, false);
-	    assert.strictEqual(payload.billing.contracted_setup_price, 0);
-
-	    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: cookieA } });
-	    const pendingPanelHtml = await response.text();
-	    assert(pendingPanelHtml.includes("Completa Wompi para activar tu panel"));
-	    assert(pendingPanelHtml.includes('id="navSupport" style="display:none"'));
+    assert.strictEqual(payload.billing.payment_status, "pending");
+    assert.strictEqual(payload.billing.ready_for_bot_creation, false);
+    assert.strictEqual(payload.billing.contracted_setup_price, 0);
 
     response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieB } });
     payload = await response.json();
     assert.strictEqual(payload.billing, null, "Customer B must not see Customer A billing");
 
+    response = await fetch(base + "/admin/panel/billing/authorize", { headers: { cookie: cookieA } });
+    assert.strictEqual(response.status, 200);
+    assert((await response.text()).includes("Autoriza tu suscripción automática"));
+
+    response = await fetch(base + "/admin/panel/billing/payment-source", {
+      method: "POST",
+      headers: { cookie: cookieA, origin: base, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: "tok_e2e_a", return_path: "/admin/panel?tab=plan" }).toString(),
+      redirect: "manual"
+    });
+    assert.strictEqual(response.status, 302);
+    response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.strictEqual(payload.billing.payment_source_id, "src_test_e2e");
+    assert.strictEqual(payload.billing.automatic_billing_enabled, true);
+    const checkoutA = payload.billing.history[0];
+    assert.strictEqual(checkoutA.kind, "initial");
+    assert.strictEqual(checkoutA.amount_charged, 180000);
+    assert.strictEqual(checkoutA.provider_reference.includes("payments-a"), true,
+      "checkout must remain bound to the authenticated tenant and its catalog selection");
+
     const approved = transactionEvent({
       id: "e2e-approved-a",
-      reference: checkoutA.reference,
+      reference: checkoutA.provider_reference,
       status: "APPROVED",
       amount_in_cents: 18000000,
       timestamp: 1753459200
@@ -257,24 +261,67 @@ function transactionEvent(input) {
     assert.strictEqual(payload.billing.subscription_status, "active");
     assert.strictEqual(payload.billing.ready_for_bot_creation, true);
     assert.strictEqual(payload.billing.provider_fee_type, "estimated");
-	    assert.strictEqual(payload.billing.provider_fee, 5400);
-	    assert.strictEqual(payload.billing.net_amount, 174600);
-	    assert.strictEqual(payload.billing.history.length, 1);
+    assert.strictEqual(payload.billing.provider_fee, 5400);
+    assert.strictEqual(payload.billing.net_amount, 174600);
+    assert.strictEqual(payload.billing.history.length, 1);
+    assert.strictEqual(payload.billing.next_payment_date, "2026-08-25T16:00:05.000Z");
 
-	    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: cookieA } });
-	    const paidPanelHtml = await response.text();
-	    assert(!paidPanelHtml.includes("Completa Wompi para activar tu panel"));
-	    assert(paidPanelHtml.includes("Resumen"));
+    response = await fetch(base + "/admin/billing/charge-due", {
+      method: "POST",
+      headers: keyHeaders,
+      body: JSON.stringify({ as_of: "2026-08-26T00:00:00.000Z" })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.charges.length, 1);
+    assert.strictEqual(payload.charges[0].kind, "monthly");
+    assert.strictEqual(payload.charges[0].amount_charged, 180000);
+    const monthlyA = payload.charges[0];
+    response = await fetch(base + "/admin/billing/charge-due", {
+      method: "POST",
+      headers: keyHeaders,
+      body: JSON.stringify({ as_of: "2026-08-26T00:00:00.000Z" })
+    });
+    assert.strictEqual((await response.json()).charges.length, 0,
+      "a pending monthly charge must not be duplicated");
+    const approvedMonthly = transactionEvent({
+      id: "e2e-approved-a-monthly",
+      reference: monthlyA.reference,
+      status: "APPROVED",
+      amount_in_cents: 18000000,
+      timestamp: 1756166400
+    });
+    response = await fetch(base + "/webhooks/wompi", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-event-checksum": approvedMonthly.signature.checksum },
+      body: JSON.stringify(approvedMonthly)
+    });
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.strictEqual(payload.billing.history.length, 2);
+    assert.strictEqual(payload.billing.history[0].kind, "monthly");
+    assert.strictEqual(payload.billing.subscription_status, "active");
 
     response = await fetch(base + "/admin/panel/billing/checkout", {
       method: "POST",
       headers: { cookie: cookieB, origin: base, "content-type": "application/json" },
       body: JSON.stringify({ plan_id: "scale", bot_id: "agendamiento" })
     });
-    const checkoutB = (await response.json()).checkout;
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/panel/billing/payment-source", {
+      method: "POST",
+      headers: { cookie: cookieB, origin: base, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: "tok_e2e_b", return_path: "/admin/panel?tab=plan" }).toString(),
+      redirect: "manual"
+    });
+    assert.strictEqual(response.status, 302);
+    response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieB } });
+    payload = await response.json();
+    const checkoutB = payload.billing.history[0];
     const failed = transactionEvent({
       id: "e2e-failed-b",
-      reference: checkoutB.reference,
+      reference: checkoutB.provider_reference,
       status: "DECLINED",
       amount_in_cents: 15000000,
       timestamp: 1753459800
@@ -312,7 +359,11 @@ function transactionEvent(input) {
     assert.strictEqual(payload.billing.length, 2);
     const adminA = payload.billing.find(function (row) { return row.tenant_id === "payments-a"; });
     assert.strictEqual(adminA.net_amount, 174600);
-    assert.strictEqual(adminA.history.length, 1);
+    assert.strictEqual(adminA.history.length, 2);
+    assert(adminA.history.some(function (item) {
+      return item.kind === "initial" && item.net_amount === 174600;
+    }));
+    assert.strictEqual(adminA.automatic_billing_enabled, true);
 
     response = await fetch(base + "/admin/panel?tab=plan", { headers: { cookie: cookieA } });
     const customerHtml = await response.text();

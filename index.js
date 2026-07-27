@@ -202,6 +202,7 @@ app.use(express.json({
     req.rawBody = buffer;
   }
 }));
+app.use(express.urlencoded({ extended: false, limit: process.env.FORM_BODY_LIMIT || "64kb" }));
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
@@ -277,6 +278,7 @@ const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
 const PAYMENTS_ENV = String(process.env.PAYMENTS_ENV || "").trim().toLowerCase();
 const WOMPI_PUBLIC_KEY = String(process.env.WOMPI_PUBLIC_KEY || "").trim();
+const WOMPI_PRIVATE_KEY = String(process.env.WOMPI_PRIVATE_KEY || "").trim();
 const WOMPI_INTEGRITY_SECRET = String(process.env.WOMPI_INTEGRITY_SECRET || "").trim();
 const WOMPI_EVENT_SECRET = String(process.env.WOMPI_EVENT_SECRET || "").trim();
 const WOMPI_ESTIMATED_FEE_RATE = Number(process.env.WOMPI_ESTIMATED_FEE_RATE || 0);
@@ -436,8 +438,8 @@ if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.p
 if (PAYMENTS_V1_ENABLED && PAYMENTS_ENV !== "staging") productionConfigErrors.push("PAYMENTS_ENV=staging is required for Payments v1");
 if (PAYMENTS_V1_ENABLED && !PAYMENTS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required for Payments v1 outside test mode");
 if (PAYMENTS_V1_ENABLED && !PUBLIC_BASE_URL) productionConfigErrors.push("PUBLIC_BASE_URL must be a valid HTTPS origin for Wompi checkout and webhook redirects");
-if (PAYMENTS_V1_ENABLED && (!/^pub_test_/.test(WOMPI_PUBLIC_KEY) || !/^test_integrity_/.test(WOMPI_INTEGRITY_SECRET) || !/^test_events_/.test(WOMPI_EVENT_SECRET))) {
-  productionConfigErrors.push("Wompi Sandbox public, integrity and event credentials are required for Payments v1");
+if (PAYMENTS_V1_ENABLED && (!/^pub_test_/.test(WOMPI_PUBLIC_KEY) || !/^prv_test_/.test(WOMPI_PRIVATE_KEY) || !/^test_integrity_/.test(WOMPI_INTEGRITY_SECRET) || !/^test_events_/.test(WOMPI_EVENT_SECRET))) {
+  productionConfigErrors.push("Wompi Sandbox public, private, integrity and event credentials are required for automatic Payments v1");
 }
 if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_RATE) || WOMPI_ESTIMATED_FEE_RATE < 0 || WOMPI_ESTIMATED_FEE_RATE > 1)) {
   productionConfigErrors.push("WOMPI_ESTIMATED_FEE_RATE must be a decimal between 0 and 1");
@@ -678,12 +680,35 @@ const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
   store: paymentStore,
   catalogService,
   publicKey: WOMPI_PUBLIC_KEY,
+  privateKey: WOMPI_PRIVATE_KEY,
   integritySecret: WOMPI_INTEGRITY_SECRET,
   eventSecret: WOMPI_EVENT_SECRET,
   estimatedFeeRate: WOMPI_ESTIMATED_FEE_RATE,
   estimatedFixedFee: WOMPI_ESTIMATED_FIXED_FEE,
   estimatedTaxRate: WOMPI_ESTIMATED_FEE_TAX_RATE,
-  publicBaseUrl: PUBLIC_BASE_URL
+  publicBaseUrl: PUBLIC_BASE_URL,
+  axiosClient: axios,
+  wompiClient: PAYMENTS_TEST_MODE ? {
+    async acceptanceTokens() {
+      return {
+        acceptance_token: "acceptance-test",
+        acceptance_permalink: "https://wompi.test/terms",
+        personal_auth_token: "personal-test",
+        personal_auth_permalink: "https://wompi.test/data"
+      };
+    },
+    async createPaymentSource() {
+      return {
+        id: "src_test_e2e",
+        type: "CARD",
+        status: "AVAILABLE",
+        public_data: { last_four: "4242", payment_method_type: "CARD" }
+      };
+    },
+    async createTransaction() {
+      return { id: "tx-test", status: "PENDING" };
+    }
+  } : null
 }) : null;
 
 async function syncNextforPricingJuly2026() {
@@ -5615,6 +5640,38 @@ function sendPaymentError(res, error) {
   res.status(problem.status).json({ ok: false, error: problem.code });
 }
 
+function renderWompiSubscriptionAuthorization(res, options) {
+  const authorization = options.authorization || {};
+  const contract = authorization.contract || {};
+  const acceptance = authorization.acceptance || {};
+  const publicKey = authorization.public_key || "";
+  const returnPath = options.returnPath || "/admin/panel?tab=plan";
+  const amount = Number(contract.contracted_setup_price || 0) + Number(contract.contracted_monthly_price || 0);
+  const payload = {
+    publicKey,
+    tokenizeUrl: "https://sandbox.wompi.co/v1/tokens/cards",
+    submitUrl: "/admin/panel/billing/payment-source",
+    returnPath
+  };
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Autorizar suscripción · Nextfor IA</title><style>
+body{margin:0;background:#F6F8FB;color:#172033;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:760px;margin:0 auto;padding:42px 20px}.card{background:#fff;border:1px solid #DDE6F2;border-radius:18px;box-shadow:0 18px 50px rgba(20,33,61,.1);padding:26px}h1{margin:0;color:#0A1836;font:800 28px/1.15 ui-sans-serif,system-ui}p{line-height:1.55;color:#526176}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:20px 0}.metric{border:1px solid #E3EBF5;border-radius:12px;padding:14px}.metric small{display:block;color:#6B7890;font-weight:800;font-size:11px;text-transform:uppercase}.metric strong{display:block;margin-top:6px;color:#0A1836}.field{display:grid;gap:7px;margin-top:12px}.field span,.check span{font-weight:800;font-size:12px;color:#303B50}.field input{height:44px;border:1px solid #CBD6E4;border-radius:11px;padding:0 12px;font-size:14px}.row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.check{display:flex;gap:10px;margin-top:12px;align-items:flex-start}.check input{margin-top:3px}.btn{margin-top:18px;height:46px;border:0;border-radius:12px;background:#00A0F0;color:#fff;font-weight:900;padding:0 18px;cursor:pointer}.btn:disabled{opacity:.55;cursor:not-allowed}.notice{border:1px solid #BFE7D5;background:#F1FFF7;color:#0F6741;border-radius:12px;padding:13px;margin:18px 0}.error{border-color:#F6B5B5;background:#FFF4F4;color:#A13333}.fine{font-size:12px;color:#6B7890}.links a{color:#0074B8;font-weight:800}</style></head><body><main class="wrap"><section class="card">
+<h1>Autoriza tu suscripción automática</h1>
+<p>El primer cobro incluye setup + primer mes. Después, NextforIA cobrará automáticamente el valor mensual contratado usando la fuente de pago segura de Wompi. No volverás a digitar la tarjeta cada mes.</p>
+<div class="grid"><div class="metric"><small>Bot y plan</small><strong>${escapeHtml((contract.bot_name || contract.bot_id || "Bot") + " · " + (contract.plan_name || contract.plan_id || "Plan"))}</strong></div><div class="metric"><small>Primer cobro</small><strong>${escapeHtml(formatCOP(amount))}</strong></div><div class="metric"><small>Mensual automático</small><strong>${escapeHtml(formatCOP(contract.contracted_monthly_price || 0))}</strong></div><div class="metric"><small>Proveedor</small><strong>Wompi Sandbox</strong></div></div>
+<div class="notice">Ambiente de pruebas. Para aprobar usa tarjeta Sandbox de Wompi. NextforIA no recibe ni almacena datos de tarjeta.</div>
+<form id="cardForm" autocomplete="off">
+<label class="field"><span>Número de tarjeta</span><input id="cardNumber" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" required></label>
+<div class="row"><label class="field"><span>Mes</span><input id="expMonth" inputmode="numeric" autocomplete="cc-exp-month" placeholder="08" required></label><label class="field"><span>Año</span><input id="expYear" inputmode="numeric" autocomplete="cc-exp-year" placeholder="29" required></label><label class="field"><span>CVC</span><input id="cvc" inputmode="numeric" autocomplete="cc-csc" placeholder="123" required></label></div>
+<label class="field"><span>Nombre en la tarjeta</span><input id="cardHolder" autocomplete="cc-name" placeholder="Cliente NextforIA" required></label>
+<label class="check"><input id="acceptTerms" type="checkbox" required><span>Acepto los <span class="links"><a href="${escapeHtml(acceptance.acceptance_permalink || "#")}" target="_blank" rel="noopener">términos de Wompi</a></span>.</span></label>
+<label class="check"><input id="acceptData" type="checkbox" required><span>Acepto la <span class="links"><a href="${escapeHtml(acceptance.personal_auth_permalink || "#")}" target="_blank" rel="noopener">autorización de datos personales</a></span> para crear la fuente de pago.</span></label>
+<button class="btn" id="submitBtn" type="submit">Autorizar suscripción y cobrar primer mes</button>
+<p class="fine" id="message">La tarjeta se tokeniza directamente con Wompi Sandbox.</p>
+</form>
+<form id="tokenForm" method="post" action="/admin/panel/billing/payment-source" style="display:none"><input name="token"><input name="return_path" value="${escapeHtml(returnPath)}"></form>
+</section></main><script>var CONFIG=${safeInlineJson(payload)};function digits(v){return String(v||"").replace(/\\D/g,"")}function msg(t,bad){var el=document.getElementById("message");el.textContent=t;el.className=bad?"fine error":"fine"}document.getElementById("cardForm").addEventListener("submit",function(event){event.preventDefault();var btn=document.getElementById("submitBtn");btn.disabled=true;msg("Creando token seguro en Wompi...");fetch(CONFIG.tokenizeUrl,{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+CONFIG.publicKey},body:JSON.stringify({number:digits(document.getElementById("cardNumber").value),exp_month:digits(document.getElementById("expMonth").value),exp_year:digits(document.getElementById("expYear").value),cvc:digits(document.getElementById("cvc").value),card_holder:document.getElementById("cardHolder").value})}).then(function(r){return r.json().then(function(body){if(!r.ok)throw new Error(body&&body.error&&body.error.reason||"token_failed");return body})}).then(function(body){var token=body&&body.data&&body.data.id;if(!token)throw new Error("token_missing");var form=document.getElementById("tokenForm");form.elements.token.value=token;msg("Token creado. Activando cobro automático...");form.submit();}).catch(function(error){btn.disabled=false;msg("No pudimos tokenizar la tarjeta: "+error.message,true);});});</script></body></html>`);
+}
+
 app.get("/admin/panel/billing", async (req, res) => {
   if (!PAYMENTS_V1_ENABLED) {
     res.status(404).json({ ok: false, error: "not_found" });
@@ -5644,7 +5701,40 @@ app.post("/admin/panel/billing/checkout", async (req, res) => {
   const auth = dashboardAuth(req);
   const business = customerBusinessForAuth(auth);
   try {
-    const checkout = await paymentService.startCheckout({
+    await paymentService.prepareContract({
+      tenant_id: business.id,
+      customer: business.name,
+      customer_email: auth.email || auth.username,
+      plan_id: business.plan_id,
+      bot_id: business.assigned_bot_id
+    });
+    res.json({
+      ok: true,
+      checkout: {
+        payment_provider: "wompi",
+        environment: "test",
+        authorization_url: "/admin/panel/billing/authorize",
+        checkout_url: "/admin/panel/billing/authorize"
+      }
+    });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.get("/admin/panel/billing/authorize", async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).send("not_found");
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    renderCustomerLogin(res, { targetPath: "/admin/panel/billing/authorize" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const business = customerBusinessForAuth(auth);
+  try {
+    const authorization = await paymentService.paymentSourceAuthorization({
       tenant_id: business.id,
       customer: business.name,
       customer_email: auth.email || auth.username,
@@ -5652,9 +5742,45 @@ app.post("/admin/panel/billing/checkout", async (req, res) => {
       bot_id: business.assigned_bot_id,
       actor: auth.email || auth.username || "customer"
     });
-    res.json({ ok: true, checkout });
+    renderWompiSubscriptionAuthorization(res, {
+      authorization,
+      returnPath: String(req.query && req.query.return_path || "/admin/panel?tab=plan")
+    });
   } catch (error) {
-    sendPaymentError(res, error);
+    const problem = error instanceof PaymentError ? error : new PaymentError("billing_unavailable", 503);
+    res.status(problem.status).send("<!doctype html><meta charset=\"utf-8\"><p>No pudimos preparar la suscripción: " + escapeHtml(problem.code) + "</p><p><a href=\"/admin/panel?tab=plan\">Volver a Mi plan</a></p>");
+  }
+});
+
+app.post("/admin/panel/billing/payment-source", async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).send("not_found");
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).send("unauthorized");
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const business = customerBusinessForAuth(auth);
+  let returnPath = String(req.body && req.body.return_path || "/admin/panel?tab=plan")
+    .replace(/[\r\n]/g, "")
+    .slice(0, 180);
+  if (!returnPath.startsWith("/") || returnPath.startsWith("//")) returnPath = "/admin/panel?tab=plan";
+  try {
+    await paymentService.confirmPaymentSource({
+      tenant_id: business.id,
+      customer: business.name,
+      customer_email: auth.email || auth.username,
+      plan_id: business.plan_id,
+      bot_id: business.assigned_bot_id,
+      token: req.body && req.body.token,
+      actor: auth.email || auth.username || "customer"
+    });
+    res.redirect(returnPath + (returnPath.includes("?") ? "&" : "?") + "payment_authorized=1");
+  } catch (error) {
+    const problem = error instanceof PaymentError ? error : new PaymentError("billing_unavailable", 503);
+    res.status(problem.status).send("<!doctype html><meta charset=\"utf-8\"><p>No pudimos activar el cobro automático: " + escapeHtml(problem.code) + "</p><p><a href=\"/admin/panel/billing/authorize\">Intentar de nuevo</a></p>");
   }
 });
 
@@ -5699,6 +5825,25 @@ app.post("/admin/billing/:tenantId/bypass", async (req, res) => {
       actor: auth.email || auth.username || "super_admin"
     });
     res.json({ ok: true, billing: contract });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/admin/billing/charge-due", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    const charges = await paymentService.chargeDueSubscriptions({
+      as_of: req.body && req.body.as_of,
+      limit: req.body && req.body.limit,
+      actor: auth.email || auth.username || "super_admin"
+    });
+    res.json({ ok: true, charges });
   } catch (error) {
     sendPaymentError(res, error);
   }
@@ -6210,6 +6355,11 @@ function escapeHtml(value) {
   });
 }
 
+function formatCOP(value) {
+  const amount = Number(value || 0);
+  return "$" + Math.round(amount).toLocaleString("es-CO") + " COP";
+}
+
 function renderDemoPaymentStep(res, options) {
   options = options || {};
   const nextPath = options.nextPath || "/admin/panel-demo?tab=channels&from=onboarding";
@@ -6532,15 +6682,12 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
     }
     const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
     if (requestedStatus === "completed" && paymentChoice === "pay") {
-      const business = customerBusinessForAuth(auth);
-      checkout = await paymentService.startCheckout({
-        tenant_id: tenantId,
-        customer: business.name,
-        customer_email: auth.email || auth.username,
-        plan_id: selectedPlanId,
-        bot_id: selectedBotId,
-        actor: auth.email || auth.username || "customer"
-      });
+      checkout = {
+        payment_provider: "wompi",
+        environment: "test",
+        authorization_url: "/admin/panel/billing/authorize",
+        checkout_url: "/admin/panel/billing/authorize"
+      };
     }
     res.json({
       ok: true,
@@ -6549,7 +6696,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       selected_bot_id: selectedPlan && selectedPlan.assigned_bot_id || selectedBotId || null,
       billing,
       checkout,
-      redirect: checkout && checkout.checkout_url ||
+      redirect: checkout && checkout.authorization_url ||
         (record.setup_completed ? CUSTOMER_SETUP_COMPLETION_PATH : null)
     });
   } catch (error) {

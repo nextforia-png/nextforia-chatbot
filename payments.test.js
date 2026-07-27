@@ -43,10 +43,32 @@ const service = createPaymentService({
   store,
   catalogService,
   publicKey: "pub_test_nextforia",
+  privateKey: "prv_test_nextforia",
   integritySecret: "test_integrity_nextforia",
   eventSecret: "test_events_nextforia",
   estimatedFeeRate: 0.029,
   publicBaseUrl: "https://staging.nextforia.example",
+  wompiClient: {
+    async acceptanceTokens() {
+      return {
+        acceptance_token: "acceptance-test",
+        acceptance_permalink: "https://wompi.test/terms",
+        personal_auth_token: "personal-test",
+        personal_auth_permalink: "https://wompi.test/data"
+      };
+    },
+    async createPaymentSource() {
+      return {
+        id: "src_test_123",
+        type: "CARD",
+        status: "AVAILABLE",
+        public_data: { last_four: "4242", payment_method_type: "CARD" }
+      };
+    },
+    async createTransaction() {
+      return { id: "tx-test", status: "PENDING" };
+    }
+  },
   now: function () { return new Date(fixedNow); }
 });
 
@@ -74,7 +96,7 @@ function signedEvent(transaction, timestamp) {
     plan_id: "growth",
     bot_id: "atencion-cliente"
   });
-  assert.strictEqual(contractA.contracted_setup_price, 0);
+  assert.strictEqual(contractA.contracted_setup_price, 300000);
   assert.strictEqual(contractA.contracted_monthly_price, 180000);
   assert.strictEqual(contractA.payment_provider, "wompi");
   assert.strictEqual(contractA.ready_for_bot_creation, false);
@@ -88,7 +110,7 @@ function signedEvent(transaction, timestamp) {
     actor: "a@example.com"
   });
   assert.strictEqual(checkoutA.environment, "test");
-  assert.strictEqual(checkoutA.amount_charged, 180000);
+  assert.strictEqual(checkoutA.amount_charged, 480000);
   assert(checkoutA.checkout_url.startsWith("https://checkout.wompi.co/p/?"));
   assert(checkoutA.checkout_url.includes("public-key=pub_test_nextforia"));
   assert(!checkoutA.checkout_url.includes("test_integrity_nextforia"));
@@ -100,7 +122,7 @@ function signedEvent(transaction, timestamp) {
     id: "wompi-approved-a",
     reference: checkoutA.reference,
     status: "APPROVED",
-    amount_in_cents: 18000000,
+    amount_in_cents: 48000000,
     created_at: "2026-07-25T15:00:02.000Z",
     finalized_at: "2026-07-25T15:00:04.000Z"
   });
@@ -110,9 +132,9 @@ function signedEvent(transaction, timestamp) {
   assert.strictEqual(billingA.payment_status, "paid");
   assert.strictEqual(billingA.subscription_status, "active");
   assert.strictEqual(billingA.ready_for_bot_creation, true);
-  assert.strictEqual(billingA.provider_fee, 5220);
+  assert.strictEqual(billingA.provider_fee, 13920);
   assert.strictEqual(billingA.provider_fee_type, "estimated");
-  assert.strictEqual(billingA.net_amount, 174780);
+  assert.strictEqual(billingA.net_amount, 466080);
   assert.strictEqual(billingA.history.length, 1);
 
   const repeated = await service.processWebhook(approvedEvent, approvedEvent.signature.checksum);
@@ -136,6 +158,79 @@ function signedEvent(transaction, timestamp) {
   });
 
   await service.prepareContract({
+    tenant_id: "tenant-recurring",
+    customer: "Recurring Customer",
+    customer_email: "recurring@example.com",
+    plan_id: "growth",
+    bot_id: "atencion-cliente"
+  });
+  const authorization = await service.paymentSourceAuthorization({
+    tenant_id: "tenant-recurring",
+    customer: "Recurring Customer",
+    customer_email: "recurring@example.com",
+    plan_id: "growth",
+    bot_id: "atencion-cliente"
+  });
+  assert.strictEqual(authorization.public_key, "pub_test_nextforia");
+  const initialRecurring = await service.confirmPaymentSource({
+    tenant_id: "tenant-recurring",
+    customer: "Recurring Customer",
+    customer_email: "recurring@example.com",
+    plan_id: "growth",
+    bot_id: "atencion-cliente",
+    token: "tok_test_card",
+    actor: "recurring@example.com",
+    submit: false
+  });
+  assert.strictEqual(initialRecurring.charge.kind, "initial");
+  assert.strictEqual(initialRecurring.charge.amount_charged, 480000);
+  let recurringBilling = await service.tenantBilling("tenant-recurring");
+  assert.strictEqual(recurringBilling.payment_source_id, "src_test_123");
+  assert.strictEqual(recurringBilling.automatic_billing_enabled, true);
+  assert.strictEqual(recurringBilling.payment_status, "pending");
+  const approvedRecurringInitial = signedEvent({
+    id: "wompi-approved-recurring-initial",
+    reference: initialRecurring.charge.reference,
+    status: "APPROVED",
+    amount_in_cents: 48000000,
+    created_at: "2026-07-25T15:20:02.000Z",
+    finalized_at: "2026-07-25T15:20:04.000Z"
+  }, 1753456800);
+  await service.processWebhook(approvedRecurringInitial, approvedRecurringInitial.signature.checksum);
+  recurringBilling = await service.tenantBilling("tenant-recurring");
+  assert.strictEqual(recurringBilling.subscription_status, "active");
+  assert.strictEqual(recurringBilling.next_payment_date, "2026-08-25T15:20:04.000Z");
+  const monthlyCharges = await service.chargeDueSubscriptions({
+    as_of: "2026-08-26T00:00:00.000Z",
+    submit: false
+  });
+  assert.strictEqual(monthlyCharges.length, 1);
+  assert.strictEqual(monthlyCharges[0].tenant_id, "tenant-recurring");
+  assert.strictEqual(monthlyCharges[0].kind, "monthly");
+  assert.strictEqual(monthlyCharges[0].amount_charged, 180000);
+  assert.strictEqual((await service.chargeDueSubscriptions({
+    as_of: "2026-08-26T00:00:00.000Z",
+    submit: false
+  })).length, 0, "a pending monthly charge must not be duplicated");
+  const approvedMonthly = signedEvent({
+    id: "wompi-approved-recurring-monthly",
+    reference: monthlyCharges[0].reference,
+    status: "APPROVED",
+    amount_in_cents: 18000000,
+    created_at: "2026-08-26T00:00:02.000Z",
+    finalized_at: "2026-08-26T00:00:04.000Z"
+  }, 1756166400);
+  await service.processWebhook(approvedMonthly, approvedMonthly.signature.checksum);
+  recurringBilling = await service.tenantBilling("tenant-recurring");
+  assert.strictEqual(recurringBilling.payment_status, "paid");
+  assert.strictEqual(recurringBilling.subscription_status, "active");
+  assert.strictEqual(recurringBilling.history.length, 2);
+  assert(recurringBilling.history.some(function (item) {
+    return item.kind === "monthly" && item.amount_charged === 180000;
+  }));
+  assert.strictEqual(recurringBilling.next_payment_date, "2026-09-26T00:00:04.000Z");
+
+  await service.prepareContract({
     tenant_id: "tenant-b",
     customer: "Customer B",
     plan_id: "agenda",
@@ -151,11 +246,11 @@ function signedEvent(transaction, timestamp) {
     id: "wompi-failed-b",
     reference: checkoutB.reference,
     status: "DECLINED",
-    amount_in_cents: 15000000,
+    amount_in_cents: 40000000,
     created_at: "2026-07-25T15:10:00.000Z"
   }, 1753456200);
   const wrongAmountEvent = signedEvent(Object.assign({}, failedEvent.data.transaction, {
-    amount_in_cents: 14999900
+    amount_in_cents: 39999900
   }), 1753456150);
   await assert.rejects(
     service.processWebhook(wrongAmountEvent, wrongAmountEvent.signature.checksum),
@@ -238,7 +333,7 @@ function signedEvent(transaction, timestamp) {
   });
 
   const all = await service.adminBilling();
-  assert.strictEqual(all.length, 4);
+  assert.strictEqual(all.length, 5);
   assert(all.some(function (row) { return row.tenant_id === "rav-toys" && row.subscription_status === "pilot"; }));
 
   console.log("payments tests passed");

@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v170-production-auto-enable-setup";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v171-production-public-setup-unlock";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -255,7 +255,7 @@ const DASHBOARD_ACCESS_MODEL = {
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
-const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL);
+const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL, process.env.RENDER_EXTERNAL_URL);
 const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT === "1"
   || (PUBLIC_BASE_URL && new URL(PUBLIC_BASE_URL).hostname === "staging.nextforia.com");
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
@@ -312,10 +312,7 @@ const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_E
   && process.env.NODE_ENV === "production"
   && SUPABASE_ENABLED
   && !!DATA_ENCRYPTION_KEY
-  && !!CUSTOMER_PANEL_BASE_URL
-  && CUSTOMER_ACCESS_EMAIL_PROVIDER === "resend"
-  && !!RESEND_API_KEY
-  && !!CUSTOMER_INVITE_FROM_EMAIL;
+  && !!CUSTOMER_PANEL_BASE_URL;
 const CUSTOMER_ACCESS_V2_ENABLED = CUSTOMER_ACCESS_V2_GATE || CUSTOMER_ACCESS_TEST_MODE || CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED;
 const PAYMENTS_PRODUCTION_AUTO_ENABLED = process.env.PAYMENTS_V1_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
@@ -454,8 +451,8 @@ if (process.env.NODE_ENV === "production" && RAW_DATA_ENCRYPTION_KEY && !DATA_EN
 if (process.env.NODE_ENV === "production" && SUPABASE_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when Supabase persistence is enabled");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("SUPABASE_URL and SUPABASE_KEY are required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
-if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
-if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");

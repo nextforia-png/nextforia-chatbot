@@ -10,6 +10,51 @@ function escapeHtml(value) {
   });
 }
 
+function customerPanelInitials(value) {
+  const words = String(value || "").trim().split(/\s+/).filter(Boolean);
+  return (words.slice(0, 2).map(function (word) { return word.charAt(0); }).join("") || "NX").toUpperCase().slice(0, 3);
+}
+
+function customerPanelContext(options) {
+  const tenant = options.tenantContext && typeof options.tenantContext === "object" ? options.tenantContext : null;
+  if (!tenant) {
+    return {
+      v2: false,
+      businessName: "RAV Toys",
+      initials: "RAV",
+      avatarInitials: "RA",
+      planId: "growth",
+      planName: "Growth",
+      assignedBotId: "duo",
+      assignedBotName: "Atención al cliente + Agendamiento",
+      customerSetupCompleted: false,
+      support: true,
+      appointments: true,
+      referralCode: "RAVTOYS"
+    };
+  }
+  const businessName = String(tenant.company_name || tenant.name || tenant.id || "Tu empresa").trim();
+  const planId = String(tenant.plan_id || "").trim().toLowerCase();
+  const assignedBotId = String(tenant.assigned_bot_id || "").trim().toLowerCase();
+  const planNames = { starter: "Starter", growth: "Growth", scale: "Scale", "nextfor-uno": "Nextfor Uno", "nextfor-aura": "Nextfor Aura" };
+  const botNames = { "atencion-cliente": "Atención al cliente", agendamiento: "Agendamiento", commerce: "Commerce" };
+  const referralCode = businessName.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 14) || "NEXTFORIA";
+  return {
+    v2: true,
+    businessName,
+    initials: customerPanelInitials(businessName),
+    avatarInitials: customerPanelInitials(businessName),
+    planId,
+    planName: planNames[planId] || planId || "Asignado",
+    assignedBotId,
+    assignedBotName: botNames[assignedBotId] || assignedBotId || "Bot asignado",
+    customerSetupCompleted: !!options.customerSetupCompleted,
+    support: assignedBotId === "atencion-cliente" || assignedBotId === "commerce",
+    appointments: assignedBotId === "agendamiento",
+    referralCode
+  };
+}
+
 const PANEL_ICONS = {
   resumen: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect></svg>',
   conversaciones: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>',
@@ -18,8 +63,10 @@ const PANEL_ICONS = {
   edit: '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
   intervencion: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><polyline points="16 11 18 13 22 9"></polyline></svg>',
   plan: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>',
+  channels: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12h8"></path><path d="M12 8v8"></path><circle cx="5" cy="12" r="3"></circle><circle cx="19" cy="12" r="3"></circle><circle cx="12" cy="5" r="3"></circle><circle cx="12" cy="19" r="3"></circle></svg>',
   package: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"></path><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path><path d="M3.3 7 12 12l8.7-5"></path><path d="M12 22V12"></path></svg>',
   gift: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"></rect><path d="M12 8v13"></path><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"></path><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"></path></svg>',
+  logout: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" x2="9" y1="12" y2="12"></line></svg>',
   check: '<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>',
   sparkles: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"></path></svg>',
   settings: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88L4.2 6.56a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.37.72.68 1 .3.26.7.4 1.1.4H21a2 2 0 1 1 0 4h-.09c-.4 0-.8.14-1.1.4-.2.18-.34.38-.41.6Z"></path></svg>',
@@ -37,17 +84,72 @@ module.exports = function renderCustomerPanel(res, options) {
   const appointmentsPath = options.appointmentsPath || "/admin/panel/appointments-data";
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
   const demoMode = !!options.demoMode;
-  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(options.initialTab)
+  const panelContext = customerPanelContext(options);
+  const botVersion = options.botVersion || "dev";
+  const paymentGateRequired = !!options.paymentGateRequired;
+  const channelConnectionsV1Enabled = !!options.channelConnectionsV1Enabled && !paymentGateRequired;
+  const channelConnectionsDemo = options.channelConnectionsDemo || null;
+  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(options.initialTab)
     ? options.initialTab
     : "summary";
-  const initialTab = requestedTab === "human" ? "conversations" : requestedTab;
+  const requestedInitialTab = paymentGateRequired ? "plan" : (requestedTab === "human" ? "conversations" : requestedTab);
+  const initialTab = panelContext.v2 && panelContext.appointments && ["summary", "conversations", "retargeting"].includes(requestedInitialTab)
+    ? "appointments"
+    : (panelContext.v2 && panelContext.support && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
+  // El primer pintado del servidor debe coincidir con lo que showTab(INITIAL_TAB)
+  // dejaría: si no, el header y el módulo saltan al cargar (el "parpadeo").
+  // Estos mapas son un espejo exacto de los del script de cliente (showTab).
+  const summarySubtitle = "Resultados de " + (panelContext.v2 ? panelContext.assignedBotName : "tu bot de atención") + " · Últimos 7 días";
+  const PAGE_TITLES = { summary: "Resumen", conversations: "Conversaciones", appointments: "Citas", plan: "Mi plan", channels: "Finaliza el entrenamiento", setup: "Configuración de tu Nextfor IA", retargeting: "Seguimientos comerciales", tests: "Pruebas" };
+  const PAGE_SUBTITLES = { summary: summarySubtitle, conversations: "La IA atiende y te deja solo lo que necesita de ti.", appointments: "Tu agenda llenándose, sin perseguir confirmaciones.", plan: "Plan, módulos y consumo", channels: "Dile a tu Nextfor dónde debe atender", setup: "Tu negocio, tu voz y tus reglas en un solo lugar", retargeting: "Cola segura, aprobaciones, cancelaciones y auditoría", tests: "Herramientas seguras para validar el bot." };
+  const initialTitle = PAGE_TITLES[initialTab] || "Conversaciones";
+  const initialSubtitle = PAGE_SUBTITLES[initialTab] || PAGE_SUBTITLES.conversations;
+  const SECTION_BY_TAB = { summary: "panel-summary", conversations: "panel-inbox", appointments: "panel-appointments", plan: "panel-plan", channels: "panel-channels", setup: "panel-setup", retargeting: "panel-retargeting", tests: "panel-tests" };
+  const initialSection = SECTION_BY_TAB[initialTab] || "panel-inbox";
+  const viewClass = function (id) { return "view" + (id === initialSection ? " active" : ""); };
+  const toolbarHidden = ["plan", "appointments", "channels", "setup", "retargeting"].includes(initialTab);
   const initialChannel = "all";
   const canRunTests = !!capabilities.run_tests;
   const planNav = "<button class=\"navItem\" id=\"nav-plan\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"navIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
   const planMobileNav = "<button id=\"mnav-plan\" data-bot=\"account\" type=\"button\" onclick=\"showTab('plan')\"><span class=\"mobileNavIcon\">" + PANEL_ICONS.plan + "</span><span>Mi plan</span></button>";
+  const channelsNav = channelConnectionsV1Enabled ? "<button class=\"navItem\" id=\"nav-channels\" type=\"button\" onclick=\"showTab('channels')\"><span class=\"navIcon\">" + PANEL_ICONS.channels + "</span><span>Conectar canales</span></button>" : "";
+  const channelsMobileNav = channelConnectionsV1Enabled ? "<button id=\"mnav-channels\" data-bot=\"account\" type=\"button\" onclick=\"showTab('channels')\"><span class=\"mobileNavIcon\">" + PANEL_ICONS.channels + "</span><span>Canales</span></button>" : "";
   const emojiButtons = ["😀", "😂", "🥰", "😍", "😊", "😉", "😄", "🙌", "👍", "👌", "👏", "🙏", "🎉", "❤️", "💙", "💚", "🔥", "✨", "⭐", "✅", "🤝", "💬", "🛍️", "🎁", "📦", "🚚", "💳", "💰", "📍", "⏰", "☎️", "👋"].map(function (emoji) {
     return '<button type="button" data-emoji="' + emoji + '" onclick="insertEmoji(this.dataset.emoji)" aria-label="Insertar ' + emoji + '">' + emoji + '</button>';
   }).join("");
+  const supportBotName = panelContext.v2 ? panelContext.assignedBotName : "Atención al cliente";
+  const appointmentBotName = panelContext.v2 ? panelContext.assignedBotName : "Agendamiento";
+  const supportBotButton = !paymentGateRequired && panelContext.support ? '<button class="botCard active" id="bot-support" type="button" onclick="selectBot(\'support\')"><span class="botIcon">' + PANEL_ICONS.bot + '</span><span class="botMeta"><strong>' + escapeHtml(supportBotName) + '</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>' : "";
+  const appointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
+  const mobileSupportBotButton = !paymentGateRequired && panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
+  const mobileAppointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
+  const activeBotCount = panelContext.v2 ? 1 : 2;
+  const assignedModuleDescription = panelContext.appointments
+    ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
+    : "Centraliza resultados y conversaciones de los canales conectados en una sola bandeja.";
+  const assignedModuleAction = panelContext.appointments ? "showTab('appointments')" : "showChannel('all')";
+  const assignedModuleCard = '<article class="serviceCard active"><span class="serviceState">Activo</span><h4>Bot de ' + escapeHtml(panelContext.assignedBotName) + '</h4><p>' + escapeHtml(assignedModuleDescription) + '</p><button class="ghostBtn" type="button" onclick="' + assignedModuleAction + '">Ver módulo</button></article>';
+  const planModuleCards = panelContext.v2 ? assignedModuleCard : '<article class="serviceCard active"><span class="serviceState">Activo</span><h4>Bot de atención al cliente</h4><p>Un solo módulo con resultados y conversaciones de WhatsApp, Instagram y Messenger, diferenciadas por canal dentro de la bandeja.</p><button class="ghostBtn" type="button" onclick="showChannel(\'all\')">Ver módulo</button></article><article class="serviceCard"><span class="serviceState off">No activo</span><h4>Agendamiento de citas</h4><p>Se activará como módulo independiente cuando el bot de citas esté contratado y funcionando.</p><button class="ghostBtn" type="button" onclick="showTab(\'appointments\')">Ver estructura</button></article>';
+  const assignedPlanCard = '<article class="planOption"><span class="planBadge">Tu plan actual</span><h4>Bot ' + escapeHtml(panelContext.assignedBotName) + '</h4><p>' + escapeHtml(assignedModuleDescription) + '</p><div class="priceLine"><strong>Plan ' + escapeHtml(panelContext.planName) + '</strong><span>Configuración administrada por NextforIA</span></div><ul class="benefits"><li><span class="benefitIcon">' + PANEL_ICONS.check + '</span>Módulo asignado a tu empresa</li><li><span class="benefitIcon">' + PANEL_ICONS.check + '</span>Datos aislados de otros clientes</li><li><span class="benefitIcon">' + PANEL_ICONS.check + '</span>Acceso seguro para tu equipo</li></ul><div class="planActions"><button class="primaryBtn" type="button" disabled>Plan activo</button></div></article>';
+  const planData = panelContext.v2 ? {
+    nombre: "Bot " + panelContext.assignedBotName,
+    estado: "Activo",
+    mensualidad: "Plan " + panelContext.planName,
+    renovacion: "Servicio activo",
+    chatsIncluidos: 0,
+    chatsConsumidos: 0,
+    rescatesFrecuentes: false,
+    referidos: { codigo: panelContext.referralCode, count: 0, mesesGanados: 0 }
+  } : {
+    nombre: "Bot Atención al cliente",
+    estado: "Activo",
+    mensualidad: "$299.900/mes",
+    renovacion: "Renueva el 1 de agosto",
+    chatsIncluidos: 500,
+    chatsConsumidos: 410,
+    rescatesFrecuentes: true,
+    referidos: { codigo: "RAVTOYS", count: 0, mesesGanados: 0 }
+  };
 
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
@@ -55,7 +157,7 @@ module.exports = function renderCustomerPanel(res, options) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Panel de control · RAV Toys</title>
+<title>Panel de control · ${escapeHtml(panelContext.businessName)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -120,6 +222,8 @@ button{cursor:pointer}
 .navItem{height:46px;border:0;border-radius:14px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:15px}
 .navItem:hover{background:rgba(255,255,255,.06);color:#fff}
 .navItem.active{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;box-shadow:0 10px 22px rgba(18,168,244,.22)}
+.navItem.logoutItem{color:#DDE8F8}
+.navItem.logoutItem:hover{background:rgba(239,78,78,.12);color:#fff}
 .navIcon{font-size:22px;line-height:1;opacity:.92;display:inline-flex;align-items:center;justify-content:center}
 .navIcon svg{width:20px;height:20px;display:block}
 .navBadge{min-width:26px;height:22px;border-radius:999px;background:rgba(148,163,184,.35);color:#fff;display:grid;place-items:center;font-size:12px;padding:0 7px}
@@ -127,6 +231,8 @@ button{cursor:pointer}
 .sidebarFoot{margin-top:auto;display:flex;flex-direction:column;gap:6px;padding-top:14px;border-top:1px solid rgba(255,255,255,.09)}
 .footTitle{padding-bottom:4px}
 .sidebarFoot .whatsappCard{margin-top:10px}
+.panelVersion{margin-top:8px;color:rgba(221,232,248,.54);font-size:10.5px;font-weight:850;letter-spacing:.08em;text-transform:uppercase;text-align:center}
+.panelVersionFixed{position:fixed;right:18px;bottom:10px;z-index:30;border:1px solid rgba(220,229,241,.8);border-radius:999px;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);color:#74839C;font-size:10px;font-weight:850;letter-spacing:.05em;padding:6px 10px;box-shadow:0 8px 18px rgba(8,22,52,.08)}
 .botsActive{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;color:#9DF0C8;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.08)}
 .whatsappCard{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.06);border-radius:16px;padding:18px 16px;color:#EAF2FF}
 .whatsappCard strong{display:flex;align-items:center;gap:9px;font-size:15px}
@@ -170,6 +276,7 @@ button{cursor:pointer}
 .iaBanner p{font-size:20px;line-height:1.35;color:var(--navy-900);font-weight:500}
 .iaBanner strong{font-weight:900}
 .setupReminder{grid-column:1/-1;border:1px solid #BEE6FB;background:linear-gradient(135deg,#F3FBFF,#E8F7FF);border-radius:20px;padding:18px 22px;display:grid;grid-template-columns:auto minmax(0,1fr) minmax(180px,240px) auto;align-items:center;gap:18px;box-shadow:0 10px 28px rgba(18,168,244,.08)}
+.setupReminder[hidden]{display:none}
 .setupReminderIcon{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;display:grid;place-items:center;box-shadow:0 10px 22px rgba(18,168,244,.22)}
 .setupReminderIcon svg{width:22px;height:22px}
 .setupReminder h3{font-size:16px;font-weight:950;color:var(--navy-900)}
@@ -393,6 +500,7 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .planBlock{background:#fff;border:1px solid var(--line);border-radius:22px;padding:22px;box-shadow:var(--shadow)}
 .planBlock h3{font-size:22px;line-height:1.08;font-weight:950;letter-spacing:-.04em}
 .planBlock>p{margin-top:7px;color:var(--slate-500);font-size:14px;font-weight:700}
+.billingGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}.billingMetric{padding:13px;border:1px solid var(--line);border-radius:14px;background:var(--slate-50)}.billingMetric small{display:block;color:var(--slate-500);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}.billingMetric strong{display:block;margin-top:6px;color:var(--navy-900);font-size:13px}.billingHistory{display:grid;gap:8px;margin-top:16px}.billingHistoryRow{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:12px}.billingHistoryRow strong{font-size:12px}.billingHistoryRow span,.billingHistoryRow small{color:var(--slate-500);font-size:10px}.billingFeeLabel{font-size:9px!important;font-weight:900;text-transform:uppercase;color:var(--cyan-700)!important}
 .recommendation{display:flex;align-items:center;justify-content:space-between;gap:18px;background:linear-gradient(135deg,#F3FBFF,#fff);border-color:#BDEBFF}
 .recommendationIcon{width:50px;height:50px;border-radius:16px;background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;display:grid;place-items:center;font-size:24px;flex:0 0 auto}
 .recommendationText{display:flex;align-items:flex-start;gap:16px}
@@ -418,6 +526,39 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .sectionIcon svg{width:20px;height:20px;display:block}
 .planActions{display:grid;gap:8px;margin-top:auto}
 .planActions button:disabled{opacity:.55;cursor:default}
+.channelsView{max-width:980px;margin:0 auto;display:grid;gap:18px}
+.channelsHero{border-radius:24px;padding:28px;background:radial-gradient(circle at 88% 12%,rgba(37,191,255,.28),transparent 38%),linear-gradient(145deg,var(--navy-950),var(--navy-700));color:#fff;box-shadow:var(--shadow)}
+.channelsHero h3{font-size:30px;line-height:1.08;font-weight:950;letter-spacing:-.045em}
+.channelsHero p{max-width:680px;margin-top:10px;color:#C8D3E6;font-size:14px;line-height:1.6;font-weight:650}
+.metaConnectionSteps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px}
+.metaConnectionStep{border:1px solid rgba(255,255,255,.16);border-radius:14px;background:rgba(255,255,255,.08);padding:12px;display:grid;gap:6px}
+.metaConnectionStep b{width:26px;height:26px;border-radius:9px;background:#fff;color:var(--navy-800);display:grid;place-items:center;font-size:12px;font-weight:950}
+.metaConnectionStep strong{font-size:13px;font-weight:950;color:#fff}
+.metaConnectionStep span{font-size:11.5px;line-height:1.35;color:#BFD0E8;font-weight:700}
+.connectionHubGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.connectionHubCard{border:1px solid var(--line);border-radius:18px;background:#fff;padding:16px;box-shadow:var(--shadow-soft)}
+.connectionHubCard small{display:block;color:var(--slate-500);font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
+.connectionHubCard strong{display:block;margin-top:7px;color:var(--navy-900);font-size:15px;font-weight:950;line-height:1.25}
+.connectionHubCard p{margin-top:6px;color:var(--slate-500);font-size:11.5px;line-height:1.45}
+.channelsList{display:grid;gap:14px}
+.channelConnectCard{display:grid;grid-template-columns:58px minmax(0,1fr) auto;align-items:center;gap:17px;border:1px solid var(--line);border-radius:20px;background:#fff;padding:20px;box-shadow:var(--shadow-soft)}
+.channelConnectCard.comingSoon{opacity:.72;background:#F8FAFC}
+.channelConnectCard.recommended{border-color:#8FDDFB;box-shadow:0 0 0 3px rgba(0,160,240,.08),var(--shadow-soft)}
+.channelConnectIcon{width:58px;height:58px;border-radius:17px;display:grid;place-items:center;color:#fff;font-weight:950;font-size:19px;background:linear-gradient(145deg,var(--navy-800),var(--navy-700))}
+.channelConnectIcon.whatsapp{background:#16A76A}.channelConnectIcon.instagram{background:linear-gradient(145deg,#7C3AED,#E11D78,#F59E0B)}.channelConnectIcon.messenger{background:#168AFF}
+.channelConnectCopy h4{font-size:17px;color:var(--navy-900);font-weight:950}
+.channelConnectCopy p{font-size:12.5px;color:var(--slate-500);line-height:1.5;margin-top:4px}
+.channelAccount{font-size:11.5px;color:var(--slate-700);font-weight:850;margin-top:7px}
+.channelConnectActions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;max-width:330px}
+.channelState{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:10.5px;font-weight:950;background:var(--slate-100);color:var(--slate-700)}
+.channelState.connected{background:var(--green-100);color:#087E50}.channelState.connecting{background:var(--cyan-100);color:#057BB6}.channelState.needs_attention{background:var(--amber-100);color:#9C650C}.channelState.disconnected{background:#FDECEC;color:#B73535}
+.channelAssetSelect{height:40px;max-width:260px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;font:750 11.5px var(--font-body);color:var(--navy-900)}
+.channelsMessage{min-height:20px;font-size:12.5px;color:var(--slate-500);text-align:center}
+.channelsMessage.success{color:#087E50}.channelsMessage.error{color:#B73535}
+.channelsLater{justify-self:center;border:0;background:transparent;color:var(--slate-500);font-weight:850;font-size:12px;padding:8px;cursor:pointer}
+.connectorSection{display:grid;gap:12px}
+.connectorSection h4{font-size:17px;color:var(--navy-900);font-weight:950}
+.connectorSection p{margin-top:3px;color:var(--slate-500);font-size:12.5px;line-height:1.5}
 .rescueGrid,.refPromoGrid,.transparencyGrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}
 .rescueCard{border:1px solid var(--line);border-radius:18px;padding:18px;background:#FAFCFF}
 .rescueCard strong{font-size:28px;font-weight:950;display:block}
@@ -456,8 +597,10 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .sidebar{display:none}
   .main{min-width:0}
   .topbar{display:none}
-  .mobileTop{display:flex;position:sticky;top:0;z-index:8;background:linear-gradient(135deg,var(--navy-950),var(--navy-800));border-bottom:1px solid rgba(255,255,255,.08);padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;color:#fff}
-  .mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
+.mobileTop{display:flex;position:sticky;top:0;z-index:8;background:linear-gradient(135deg,var(--navy-950),var(--navy-800));border-bottom:1px solid rgba(255,255,255,.08);padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;color:#fff}
+.mobileTopActions{display:flex;align-items:center;gap:10px}
+.mobileLogout{height:34px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(255,255,255,.08);color:#fff;padding:0 12px;font-size:12px;font-weight:900}
+.mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
   .mobileBrand .ravLogo{width:42px;height:42px;border-radius:13px;font-size:17px}
   .mobileBrand h1{font-family:var(--font-display);font-size:17px;line-height:1;font-weight:800;letter-spacing:-.03em;color:#fff}
   .mobileBrand p{font-size:12px;color:#9FB0CA;font-weight:700;margin-top:3px}
@@ -559,9 +702,10 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .recommendationText{gap:12px}
   .recommendationActions{justify-content:stretch;margin-top:16px}
   .recommendationActions button{width:100%}
-  .planBlock{border-radius:20px;padding:18px}
+  .planBlock{border-radius:20px;padding:18px}.billingGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.billingHistoryRow{grid-template-columns:1fr}
   .planGrid,.rescueGrid,.refPromoGrid,.transparencyGrid,.serviceGrid{grid-template-columns:1fr}
   .planOption{min-height:auto}
+  .channelsHero{padding:22px 20px;border-radius:20px}.channelsHero h3{font-size:25px}.metaConnectionSteps,.connectionHubGrid{grid-template-columns:1fr}.channelConnectCard{grid-template-columns:48px 1fr;padding:16px}.channelConnectIcon{width:48px;height:48px;border-radius:14px}.channelConnectActions{grid-column:1/-1;justify-content:stretch;max-width:none}.channelConnectActions .primaryBtn,.channelConnectActions .ghostBtn,.channelAssetSelect{flex:1;max-width:none}
   .refCode{display:grid}
   .testGrid{grid-template-columns:1fr}
 }
@@ -710,6 +854,31 @@ body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;
 .noteCard button{margin-top:9px;width:100%}
 .noteCard p{font-size:11px;color:var(--slate-500);margin-top:6px}
 .setupView{display:flex;flex-direction:column;gap:20px;max-width:1120px;margin:0 auto}
+.setupSummaryPanel{background:#fff;border:1px solid var(--line);border-radius:22px;padding:24px;box-shadow:var(--shadow-soft);display:grid;gap:18px}
+.setupSummaryHead{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}
+.setupSummaryHead h3{font-size:23px;font-weight:950;letter-spacing:-.04em;color:var(--navy-900)}
+.setupSummaryHead p{margin-top:5px;color:var(--slate-500);font-size:13.5px;line-height:1.5;font-weight:650;max-width:680px}
+.setupFlowSteps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.setupFlowStep{border:1px solid var(--line);border-radius:16px;background:#F8FAFC;padding:14px;display:grid;gap:6px}
+.setupFlowStep b{width:28px;height:28px;border-radius:10px;background:var(--cyan-100);color:#057BB6;display:grid;place-items:center;font-size:12px}
+.setupFlowStep strong{font-size:13px;color:var(--navy-900)}
+.setupFlowStep span{font-size:11px;color:var(--slate-500);font-weight:650;line-height:1.35}
+.setupFlowStep.next{border-color:#9DDCF8;background:linear-gradient(135deg,#F3FBFF,#E7F7FF)}
+.setupConfigGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.setupConfigCard{border:1px solid var(--line);border-radius:16px;background:#fff;padding:16px}
+.setupConfigCard small{display:block;color:#057BB6;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase}
+.setupConfigCard strong{display:block;margin-top:7px;color:var(--navy-900);font-size:17px;font-weight:950;line-height:1.2}
+.setupConfigCard p{margin-top:7px;color:var(--slate-500);font-size:12.5px;line-height:1.45;font-weight:650}
+.channelPlan{border-top:1px solid var(--line);padding-top:18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+.channelPlan h4{font-size:17px;font-weight:950;color:var(--navy-900)}
+.channelPlan p{margin-top:4px;color:var(--slate-500);font-size:13px;font-weight:650;line-height:1.45}
+.setupDetailsToggle{min-height:42px;border:1px solid var(--line);background:#fff;border-radius:12px;color:var(--navy-900);font-size:13px;font-weight:900;padding:0 14px}
+.onboardingDetails{display:none;border:1px solid var(--line);border-radius:18px;background:#F8FAFC;padding:16px}
+.onboardingDetails.open{display:grid;gap:10px}
+.questionnaireList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.questionnaireItem{border:1px solid var(--line);border-radius:14px;background:#fff;padding:12px}
+.questionnaireItem small{display:block;color:#74839C;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.08em}
+.questionnaireItem strong{display:block;margin-top:5px;color:var(--navy-900);font-size:13px;line-height:1.35}
 .setupProgressPanel{flex:0 0 auto;position:relative;overflow:hidden;border-radius:20px;padding:26px 30px;background:radial-gradient(circle at 86% 12%,rgba(0,160,240,.30),transparent 34%),linear-gradient(145deg,var(--navy-950),var(--navy-700));color:#fff;box-shadow:var(--shadow)}
 .setupProgressBody{position:relative;display:flex;align-items:center;gap:26px}
 .setupProgressCopy{flex:1;min-width:0}
@@ -843,7 +1012,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   body.conversations-view.chat-open .chatColumn{display:flex;height:100%}
 }
 @media(max-width:760px){
-  .setupView{gap:14px}.setupProgressPanel{padding:18px 16px;border-radius:17px}.setupProgressBody{gap:12px;align-items:flex-start}.setupStory{font-size:15px;line-height:1.42;padding-right:2px}.setupEyebrow{font-size:9.5px;margin-bottom:6px}.setupStatus{position:static;width:max-content;margin-bottom:8px;padding:5px 9px}.setupProgressRing{width:72px;height:72px;padding:5px}.setupProgressRing strong{font-size:18px}.setupProgressRing span{font-size:6.5px;letter-spacing:.08em}.setupStepper{grid-column:1/-1;margin-top:15px;max-width:none}.setupStepLine{min-width:4px;margin:0 2px}.setupStepDot{width:26px;height:26px;font-size:10.5px}.setupNotice{padding:12px 14px;font-size:12px}.setupGrid,.industryQuestions,.setupAccountsGrid{grid-template-columns:1fr}.setupGrid .wide,.setupAccounts{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px 16px;border-radius:16px}.setupStepHead{grid-template-columns:38px 1fr;gap:11px;margin-bottom:18px}.setupStepNumber{width:38px;height:38px;font-size:16px}.setupStepHead h4{font-size:17px}.setupStepHead p{font-size:12px}.setupAccounts{padding:15px}.setupActions{display:grid;grid-template-columns:auto 1fr;bottom:76px;padding:12px}.setupActions p{grid-column:1/-1;order:-1;margin:0}.setupActions .setupSaveBtn{display:none}.setupActions .primaryBtn{width:100%}.setupActions.firstStep .primaryBtn{grid-column:1/-1}.setupActions .setupBackBtn{width:44px;padding:0}.retargetingPolicy{grid-column:auto}.policyGuardrails{grid-template-columns:1fr}.rtgHero,.rtgMainGrid{grid-template-columns:1fr}.rtgHero{padding:22px}.rtgSafetyCard{padding:16px}.rtgMetrics{grid-template-columns:1fr 1fr}.rtgJob{grid-template-columns:1fr}.rtgJobActions{justify-content:flex-start}
+  .panelVersionFixed{display:none}.setupView{gap:14px}.setupSummaryPanel{padding:18px 16px;border-radius:17px}.setupSummaryHead{display:grid}.setupFlowSteps,.setupConfigGrid,.questionnaireList{grid-template-columns:1fr}.channelPlan{grid-template-columns:1fr}.setupDetailsToggle{width:100%}.setupProgressPanel{padding:18px 16px;border-radius:17px}.setupProgressBody{gap:12px;align-items:flex-start}.setupStory{font-size:15px;line-height:1.42;padding-right:2px}.setupEyebrow{font-size:9.5px;margin-bottom:6px}.setupStatus{position:static;width:max-content;margin-bottom:8px;padding:5px 9px}.setupProgressRing{width:72px;height:72px;padding:5px}.setupProgressRing strong{font-size:18px}.setupProgressRing span{font-size:6.5px;letter-spacing:.08em}.setupStepper{grid-column:1/-1;margin-top:15px;max-width:none}.setupStepLine{min-width:4px;margin:0 2px}.setupStepDot{width:26px;height:26px;font-size:10.5px}.setupNotice{padding:12px 14px;font-size:12px}.setupGrid,.industryQuestions,.setupAccountsGrid{grid-template-columns:1fr}.setupGrid .wide,.setupAccounts{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px 16px;border-radius:16px}.setupStepHead{grid-template-columns:38px 1fr;gap:11px;margin-bottom:18px}.setupStepNumber{width:38px;height:38px;font-size:16px}.setupStepHead h4{font-size:17px}.setupStepHead p{font-size:12px}.setupAccounts{padding:15px}.setupActions{display:grid;grid-template-columns:auto 1fr;bottom:76px;padding:12px}.setupActions p{grid-column:1/-1;order:-1;margin:0}.setupActions .setupSaveBtn{display:none}.setupActions .primaryBtn{width:100%}.setupActions.firstStep .primaryBtn{grid-column:1/-1}.setupActions .setupBackBtn{width:44px;padding:0}.retargetingPolicy{grid-column:auto}.policyGuardrails{grid-template-columns:1fr}.rtgHero,.rtgMainGrid{grid-template-columns:1fr}.rtgHero{padding:22px}.rtgSafetyCard{padding:16px}.rtgMetrics{grid-template-columns:1fr 1fr}.rtgJob{grid-template-columns:1fr}.rtgJobActions{justify-content:flex-start}
   body.conversations-view .content{padding:0}
   body.conversations-view .inboxShell{height:auto;min-height:calc(100vh - 174px);display:block}
   body.conversations-view .listColumn,body.conversations-view .chatColumn{border-radius:0;box-shadow:none;min-height:calc(100vh - 174px)}
@@ -882,30 +1051,30 @@ ${customerAppointments.styles}
 <body>
 <div class="app">
   <header class="mobileTop">
-    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">RAV</div><div><h1>RAV Toys</h1><p>con Nextfor <span>IA</span></p></div></div>
-    <div class="mobileAvatar">RA</div>
+    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1>${escapeHtml(panelContext.businessName)}</h1><p>con Nextfor <span>IA</span></p></div></div>
+    <div class="mobileTopActions"><button class="mobileLogout" type="button" onclick="logoutCustomerPanel()">Salir</button><div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
   </header>
   <div class="mobileBotSwitch" aria-label="Tus bots">
-    <button class="active" id="mobile-bot-support" type="button" onclick="selectBot('support')"><span class="botDot"></span><span>Atención al cliente</span></button>
-    <button id="mobile-bot-appointments" type="button" onclick="selectBot('appointments')"><span class="botDot"></span><span>Agendamiento</span></button>
+    ${mobileSupportBotButton}
+    ${mobileAppointmentBotButton}
   </div>
   <aside class="sidebar">
     <button class="brand" type="button" onclick="openProfile()" aria-label="Editar perfil del negocio">
-      <span class="brandAvatar"><span class="ravLogo" id="brandLogo">RAV</span></span>
-      <span class="brandInfo"><h1 id="brandName">RAV Toys</h1><p>con Nextfor <span>IA</span></p></span>
+      <span class="brandAvatar"><span class="ravLogo" id="brandLogo">${escapeHtml(panelContext.initials)}</span></span>
+      <span class="brandInfo"><h1 id="brandName">${escapeHtml(panelContext.businessName)}</h1><p>con Nextfor <span>IA</span></p></span>
       <span class="brandEdit" aria-hidden="true">${PANEL_ICONS.edit}</span>
     </button>
     <div class="botSwitch" aria-label="Tus bots">
       <div class="botSwitchTitle">Tus bots</div>
-      <button class="botCard active" id="bot-support" type="button" onclick="selectBot('support')"><span class="botIcon">${PANEL_ICONS.bot}</span><span class="botMeta"><strong>Atención al cliente</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>
-      <button class="botCard" id="bot-appointments" type="button" onclick="selectBot('appointments')"><span class="botIcon">${PANEL_ICONS.calendar}</span><span class="botMeta"><strong>Agendamiento</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>
+      ${supportBotButton}
+      ${appointmentBotButton}
     </div>
-    <nav class="nav" id="navSupport" aria-label="Secciones de Atención al cliente">
+    <nav class="nav" id="navSupport"${panelContext.support && !paymentGateRequired ? "" : ' style="display:none"'} aria-label="Secciones de Atención al cliente">
       <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
       <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
       <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
-    <nav class="nav" id="navAppointments" style="display:none" aria-label="Secciones de Agendamiento">
+    <nav class="nav" id="navAppointments" style="display:${panelContext.appointments && !paymentGateRequired && initialTab === "appointments" ? "grid" : "none"}" aria-label="Secciones de Agendamiento">
       <button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
       <button class="navItem" data-appt-nav="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button>
       <button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab('appointments');showAppointmentSection('reminders')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
@@ -913,25 +1082,28 @@ ${customerAppointments.styles}
     <div class="sidebarFoot">
       <div class="footTitle">Cuenta</div>
       ${planNav}
-      <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
+      ${channelsNav}
+      ${paymentGateRequired ? "" : `<button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>`}
+      <button class="navItem logoutItem" id="nav-logout" type="button" onclick="logoutCustomerPanel()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></button>
       <div class="whatsappCard">
-        <div class="botsActive"><span class="statusDot"></span><span>2 bots activos</span></div>
-        <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">Bot de atención conectado</span></strong>
-        <p id="channelStatusDetail">Atención al cliente · Plan Growth</p>
+        <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>
+        <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">${panelContext.v2 ? "Bot conectado" : "Bot de atención conectado"}</span></strong>
+        <p id="channelStatusDetail">${panelContext.v2 ? escapeHtml(panelContext.assignedBotName) + " · Plan " + escapeHtml(panelContext.planName) : "Atención al cliente · Plan Growth"}</p>
       </div>
+      <div class="panelVersion">Versión ${escapeHtml(botVersion)}</div>
     </div>
   </aside>
   <main class="main">
     <header class="topbar">
-      <div class="pageTitle"><h2 id="pageTitle">Resumen</h2><p id="pageSubtitle">Resultados del bot de atención · Últimos 7 días</p><div class="omnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div></div>
-      <div class="toolbar"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div><span class="convImpact" id="conversationImpact">0% resuelto por la IA</span><div class="avatar">RA</div></div>
+      <div class="pageTitle"><h2 id="pageTitle">${escapeHtml(initialTitle)}</h2><p id="pageSubtitle">${escapeHtml(initialSubtitle)}</p><div class="omnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div></div>
+      <div class="toolbar"${toolbarHidden ? ' style="display:none"' : ""}><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div><span class="convImpact" id="conversationImpact">0% resuelto por la IA</span><div class="avatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
     </header>
     <div class="content">
-      <section class="view" id="panel-summary">
+      <section class="${viewClass('panel-summary')}" id="panel-summary">
         <div class="mobilePeriodShell"><div class="periods"><button type="button">Hoy</button><button class="active" type="button">7 días</button><button type="button">30 días</button></div></div>
         <div class="summary">
           <div class="iaBanner"><div class="iaIcon">✧</div><p id="heroLine">Esta semana atendiste a <strong>0 clientes</strong> entre WhatsApp, Instagram y Messenger — tu equipo se ahorró trabajo repetitivo, sin dejar un solo mensaje sin responder.</p></div>
-          <section class="setupReminder" id="setupHomeCard">
+          <section class="setupReminder" id="setupHomeCard"${panelContext.customerSetupCompleted ? " hidden" : ""}>
             <span class="setupReminderIcon">${PANEL_ICONS.settings}</span>
             <div><h3 id="setupHomeTitle">Termina de configurar tu Nextfor IA</h3><p id="setupHomeCopy">Completa la información de tu negocio para que el bot responda con tu voz, políticas y objetivos.</p></div>
             <div class="setupReminderProgress"><span>Progreso</span><strong id="setupHomeProgress">0%</strong><div class="setupReminderTrack"><span id="setupHomeProgressBar"></span></div></div>
@@ -957,7 +1129,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-inbox">
+      <section class="${viewClass('panel-inbox')}" id="panel-inbox">
         <div class="inboxShell">
           <section class="column listColumn">
             <div class="convListControls"><div class="searchBox"><span class="searchIcon" aria-hidden="true">⌕</span><input id="conversationSearch" aria-label="Buscar conversaciones" placeholder="Buscar por nombre, teléfono, correo o mensaje" oninput="renderThreads()"></div><div class="mobileOmnichannelStrip"><span>Todo en una bandeja</span><i></i><span class="channelStripBadges" data-channel-strip></span></div><div class="filters"><button id="filter-all" type="button" onclick="setConversationFilter('all')">Todas <span>0</span></button><button id="filter-you" type="button" onclick="setConversationFilter('you')">Necesitan de ti <span>0</span></button><button id="filter-resolved" type="button" onclick="setConversationFilter('resolved')">Resueltas <span>0</span></button></div></div>
@@ -978,18 +1150,24 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-appointments">
+      <section class="${viewClass('panel-appointments')}" id="panel-appointments">
         ${customerAppointments.markup}
       </section>
 
-      <section class="view" id="panel-plan">
+      <section class="${viewClass('panel-plan')}" id="panel-plan">
         <div class="planView">
+          ${paymentGateRequired ? `<section class="planBlock">
+            <h3>Completa Wompi para activar tu panel</h3>
+            <p>Tu entrenamiento ya quedó guardado. El panel operativo se desbloquea cuando Wompi confirma el pago o tu contrato queda listo para crear el bot.</p>
+            <div class="planCatalogNotice">Estás en el paso correcto: revisa la facturación y usa el botón de Wompi cuando esté disponible.</div>
+          </section>` : ""}
+
           <section class="planHero">
             <div>
               <span class="planPill ok">Activo</span>
-              <h3 id="planName">Bot Atención al cliente</h3>
+              <h3 id="planName">Bot ${escapeHtml(panelContext.v2 ? panelContext.assignedBotName : "Atención al cliente")}</h3>
               <p>Tu asistente de Nextfor IA está atendiendo clientes 24/7. Aquí ves tu plan, consumo y caminos para crecer sin sorpresas.</p>
-              <div class="planMeta"><span class="planPill" id="planMonthly">$299.900/mes</span><span class="planPill" id="planRenewal">Renueva el 1 de agosto</span><span class="planPill">RAV Toys</span></div>
+              <div class="planMeta"><span class="planPill" id="planMonthly">${panelContext.v2 ? "Plan " + escapeHtml(panelContext.planName) : "$299.900/mes"}</span><span class="planPill" id="planRenewal">${panelContext.v2 ? "Servicio activo" : "Renueva el 1 de agosto"}</span><span class="planPill">${escapeHtml(panelContext.businessName)}</span></div>
             </div>
             <article class="usageCard">
               <div class="usageTop"><div><h4>Consumo de chats</h4><span id="usageMessage">Calculando consumo…</span></div><div><strong id="usagePct">0%</strong><span id="usageState">Vas al día</span></div></div>
@@ -998,27 +1176,30 @@ ${customerAppointments.styles}
             </article>
           </section>
 
-          <section class="planBlock recommendation">
+          ${panelContext.v2 ? "" : `<section class="planBlock recommendation">
             <div class="recommendationText"><div class="recommendationIcon">${PANEL_ICONS.sparkles}</div><div><h3>Te recomiendo mirar esto</h3><p id="planRecommendation">Tu plan actual sigue siendo el adecuado para este ritmo de consumo.</p></div></div>
             <div class="recommendationActions"><button class="primaryBtn" type="button" onclick="scrollToPlan('duo')">Ver plan recomendado</button><button class="ghostBtn" type="button">Mantener plan actual</button></div>
-          </section>
+          </section>`}
+
+          ${options.paymentsV1Enabled ? `<section class="planBlock" id="billingBlock">
+            <h3>Facturación de mi plan</h3>
+            <p>El pago se confirma por webhook de Wompi. La respuesta del navegador por sí sola nunca activa tu suscripción.</p>
+            <div id="billingSummary"><div class="planCatalogNotice">Cargando facturación…</div></div>
+          </section>` : ""}
 
           <section class="planBlock">
             <h3>Módulos del panel</h3>
             <p>Cada bot tiene sus propias métricas y se activa cuando el servicio está funcionando.</p>
             <div class="serviceGrid">
-              <article class="serviceCard active"><span class="serviceState">Activo</span><h4>Bot de atención al cliente</h4><p>Un solo módulo con resultados y conversaciones de WhatsApp, Instagram y Messenger, diferenciadas por canal dentro de la bandeja.</p><button class="ghostBtn" type="button" onclick="showChannel('all')">Ver módulo</button></article>
-              <article class="serviceCard"><span class="serviceState off">No activo</span><h4>Agendamiento de citas</h4><p>Se activará como módulo independiente cuando el bot de citas esté contratado y funcionando.</p><button class="ghostBtn" type="button" onclick="showTab('appointments')">Ver estructura</button></article>
+              ${planModuleCards}
             </div>
           </section>
 
           <section class="planBlock">
             <h3>Planes disponibles</h3>
             <p>Elige el bot que mejor acompaña la operación de tu negocio.</p>
-            <div class="planGrid">
-              <article class="planOption"><h4>Bot Agendamiento de citas</h4><p>Ideal para negocios que necesitan reservar, confirmar y recordar citas automáticamente.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Agenda y confirma citas</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Recordatorios automáticos</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Derivación a humano cuando haga falta</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
-              <article class="planOption"><span class="planBadge">Tu plan actual</span><h4>Bot Atención al cliente</h4><p>Responde preguntas frecuentes, guía compras y escala casos importantes a tu equipo.</p><div class="priceLine"><strong>$990.000 setup</strong><span>$299.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Atención 24/7 en WhatsApp, Instagram y Messenger</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Resumen unificado de resultados</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Respuestas humanas asistidas</li></ul><div class="planActions"><button class="primaryBtn" type="button" disabled>Plan activo</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
-              <article class="planOption dark" id="plan-duo"><span class="planBadge">Mejor valor</span><h4>Nextfor Dúo</h4><p>Combina atención al cliente y agendamiento para crecer con menos trabajo operativo.</p><div class="priceLine"><strong>$1.690.000 setup</strong><span>$499.900/mes · chats incluidos por definir</span></div><ul class="benefits"><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Atención + agendamiento</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Mejor cobertura operativa</li><li><span class="benefitIcon">${PANEL_ICONS.check}</span>Más automatización por el mismo canal</li></ul><div class="planActions"><button class="primaryBtn" type="button">Elegir plan</button><button class="ghostBtn" type="button">Ver detalles</button></div></article>
+            <div class="planGrid" id="planCatalogGrid" data-state="loading">
+              <div class="planCatalogNotice">Cargando planes…</div>
             </div>
           </section>
 
@@ -1029,8 +1210,8 @@ ${customerAppointments.styles}
           </section>
 
           <div class="refPromoGrid">
-            <section class="planBlock"><h3><span class="sectionIcon">${PANEL_ICONS.gift}</span>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">RAVTOYS</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
-            <section class="planBlock promoCard"><h3><span class="sectionIcon">${PANEL_ICONS.sparkles}</span>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px">Ver promoción</button></section>
+            <section class="planBlock"><h3><span class="sectionIcon">${PANEL_ICONS.gift}</span>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">${escapeHtml(panelContext.referralCode)}</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
+            ${panelContext.v2 ? "" : `<section class="planBlock promoCard"><h3><span class="sectionIcon">${PANEL_ICONS.sparkles}</span>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px">Ver promoción</button></section>`}
           </div>
 
           <section class="planBlock">
@@ -1046,14 +1227,58 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-setup">
+      ${channelConnectionsV1Enabled ? `<section class="${viewClass('panel-channels')}" id="panel-channels">
+        <div class="channelsView">
+          <section class="channelsHero">
+            <h3>Finaliza el entrenamiento de tu Nextfor</h3>
+            <p>Ya le enseñaste cómo debe atender. Ahora termina lo pendiente sin repetir formularios: empieza con WhatsApp, suma Instagram o Facebook si aplica, y deja Shopify o WooCommerce como conectores opcionales si los pediste.</p>
+            <div class="metaConnectionSteps" aria-label="Pasos finales con Meta">
+              <article class="metaConnectionStep"><b>1</b><strong>Continúa con Meta</strong><span>Entrarás con la cuenta de tu negocio.</span></article>
+              <article class="metaConnectionStep"><b>2</b><strong>Elige dónde atenderá</strong><span>Selecciona el WhatsApp, Instagram o Facebook correcto.</span></article>
+              <article class="metaConnectionStep"><b>3</b><strong>Tu Nextfor queda listo</strong><span>Nosotros revisamos que todo esté bien antes de activarlo.</span></article>
+            </div>
+          </section>
+          <div class="connectionHubGrid" id="connectionHubSummary">
+            <article class="connectionHubCard"><small>Cuestionario</small><strong>Cargando…</strong><p>Estamos leyendo tu configuración.</p></article>
+          </div>
+          <div class="channelsList" id="channelConnectionCards">
+            <div class="planCatalogNotice">Cargando tus canales…</div>
+          </div>
+          <section class="connectorSection">
+            <div><h4>Conectores opcionales de comercio</h4><p>Solo aparecerán si los mencionaste en el setup. No necesitas repetir formularios.</p></div>
+            <div class="channelsList" id="commerceConnectorCards">
+              <article class="channelConnectCard comingSoon"><span class="channelConnectIcon">NX</span><div class="channelConnectCopy"><h4>Sin conector solicitado</h4><p>Si más adelante quieres conectar Shopify o WooCommerce, podrás hacerlo desde esta sección.</p></div><div class="channelConnectActions"><span class="channelState">Opcional</span></div></article>
+            </div>
+          </section>
+          <p class="channelsMessage" id="channelConnectionMessage" role="status" aria-live="polite"></p>
+          <button class="channelsLater" type="button" onclick="showTab('summary')">Hacer esto más tarde</button>
+        </div>
+      </section>` : ""}
+
+      <section class="${viewClass('panel-setup')}" id="panel-setup">
         <div class="setupView">
+          <section class="setupSummaryPanel">
+            <div class="setupSummaryHead">
+              <div><h3>Configuración de tu bot</h3><p>Este es el resumen práctico de lo que entrenaste. Los detalles completos quedan guardados en el mismo registro de tu empresa para el Customer Panel y Super Admin.</p></div>
+              <button class="setupDetailsToggle" id="setupDetailsToggle" type="button" onclick="toggleSetupDetails()">Ver cuestionario completo</button>
+            </div>
+            <div class="setupFlowSteps">
+              <article class="setupFlowStep"><b>1</b><strong>Cuestionario</strong><span>Información guardada por empresa.</span></article>
+              <article class="setupFlowStep"><b>2</b><strong>Resumen</strong><span>Revisión rápida de negocio, bot y reglas.</span></article>
+              <article class="setupFlowStep next"><b>3</b><strong>Finalizar entrenamiento</strong><span>Elige dónde atenderá tu Nextfor.</span></article>
+              <article class="setupFlowStep"><b>4</b><strong>Administrar</strong><span>Todo queda visible desde este panel.</span></article>
+            </div>
+            <div class="setupConfigGrid" id="setupConfigSummary"><article class="setupConfigCard"><small>Estado</small><strong>Cargando…</strong><p>Estamos leyendo la configuración guardada.</p></article></div>
+            <div class="channelPlan"><div><h4>Último paso: dile dónde atender</h4><p id="channelConnectionSummary">${channelConnectionsV1Enabled ? "Empieza con WhatsApp. Instagram y Facebook pueden esperar si todavía no los necesitas." : "Este paso todavía no está disponible para esta cuenta."}</p></div>${channelConnectionsV1Enabled ? '<button class="primaryBtn" type="button" onclick="showTab(\'channels\')">Finalizar entrenamiento</button>' : '<button class="primaryBtn" type="button" disabled>Pendiente</button>'}</div>
+            <div class="onboardingDetails" id="onboardingDetails"><div class="questionnaireList" id="onboardingQuestionnaireList"><article class="questionnaireItem"><small>Cuestionario</small><strong>Cargando respuestas…</strong></article></div></div>
+          </section>
+          <div class="setupDetailsPanel" id="setupDetailsPanel" hidden>
           <section class="setupProgressPanel">
             <div class="setupProgressBody">
               <div class="setupProgressCopy">
                 <span class="setupStatus" id="setupPublishedStatus">No activa</span>
                 <div class="setupEyebrow" id="setupEyebrow">Paso 1 de 7 · Tu negocio</div>
-                <p class="setupStory" id="setupStory">Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien.</p>
+                <p class="setupStory" id="setupStory">${panelContext.v2 ? "Nadie conoce tu negocio como tú. Empieza por lo esencial y tu bot aprenderá a presentarlo igual de bien." : "Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien."}</p>
                 <div class="setupStepper" id="setupStepper" aria-label="Progreso de configuración"></div>
               </div>
               <div class="setupProgressRing" id="setupCompletion"><div><span><strong id="setupCompletionValue">14%</strong>completado</span></div></div>
@@ -1066,8 +1291,8 @@ ${customerAppointments.styles}
             <section class="setupStep active" data-setup-step="0">
               <div class="setupStepHead"><span class="setupStepNumber">1</span><div><h4>Empecemos por tu negocio</h4><p>Esto permite que el bot se presente bien y recomiende con contexto.</p></div></div>
               <div class="setupGrid">
-                <label class="setupField"><span>¿Cómo se llama tu negocio?</span><input data-setup="business.name" maxlength="120" placeholder="Ej. RAV Toys"></label>
-                <label class="setupField"><span>¿Cómo quieres llamar a tu bot?</span><input data-setup="business.bot_name" maxlength="80" placeholder="Ej. RAV-Bot"></label>
+                <label class="setupField"><span>¿Cómo se llama tu negocio?</span><input data-setup="business.name" maxlength="120" placeholder="Ej. ${escapeHtml(panelContext.v2 ? panelContext.businessName : "RAV Toys")}"></label>
+                <label class="setupField"><span>¿Cómo quieres llamar a tu bot?</span><input data-setup="business.bot_name" maxlength="80" placeholder="Ej. ${escapeHtml(panelContext.v2 ? "Asistente " + panelContext.initials : "RAV-Bot")}"></label>
                 <label class="setupField"><span>¿A qué industria pertenece?</span><select data-setup="business.industry" id="setupIndustry" onchange="renderIndustryQuestions()"></select></label>
                 <label class="setupField"><span>Sitio web o catálogo</span><input data-setup="business.website" maxlength="500" placeholder="https://..."></label>
                 <label class="setupField"><span>¿Con qué plataforma está hecha tu web?</span><select data-setup="business.web_platform"><option value="">Selecciona una opción</option><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce (WordPress)</option><option value="wix">Wix</option><option value="squarespace">Squarespace</option><option value="social_shop">Tienda en Instagram/Facebook</option><option value="other">Otra</option><option value="none">Aún no tengo</option></select></label>
@@ -1119,7 +1344,7 @@ ${customerAppointments.styles}
                 <div class="setupField wide"><span>¿En qué canales atenderá?</span><div class="channelChoices"><label class="channelChoice"><input type="checkbox" data-setup="channels.instagram">Instagram</label><label class="channelChoice"><input type="checkbox" data-setup="channels.messenger">Messenger</label><label class="channelChoice"><input type="checkbox" data-setup="channels.whatsapp">WhatsApp</label><label class="channelChoice"><input type="checkbox" data-setup="channels.web">Web</label></div></div>
                 <section class="setupAccounts">
                   <h5>Cuentas y números que usará</h5>
-                  <p>Estos datos identifican los canales del negocio. No incluyas contraseñas, tokens ni claves privadas.</p>
+                  <p>Estos datos ayudan a ubicar los canales del negocio. No compartas contraseñas ni accesos privados.</p>
                   <div class="setupAccountsGrid">
                     <label class="setupField"><span>Número de WhatsApp</span><input data-setup="channels.whatsapp_number" maxlength="80" placeholder="Ej. +57 300 123 4567"></label>
                     <label class="setupField"><span>Usuario de Instagram</span><input data-setup="channels.instagram_handle" maxlength="120" placeholder="Ej. @ravtoys"></label>
@@ -1151,10 +1376,11 @@ ${customerAppointments.styles}
           </form>
 
           <div class="setupActions"><button class="ghostBtn setupBackBtn hidden" id="setupBackBtn" type="button" onclick="backSetupStep()">← Atrás</button><p id="setupMessage">Guarda cuando quieras. “Activar en el bot” aplica los cambios a los mensajes nuevos.</p><button class="ghostBtn setupSaveBtn" id="saveSetupBtn" type="button" onclick="saveBotSetup()">Guardar avance</button><button class="primaryBtn" id="publishSetupBtn" type="button" onclick="setupPrimaryAction()">Continuar →</button></div>
+          </div>
         </div>
       </section>
 
-      <section class="view" id="panel-retargeting">
+      <section class="${viewClass('panel-retargeting')}" id="panel-retargeting">
         <div class="retargetingView">
           <section class="rtgHero">
             <div>
@@ -1198,7 +1424,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="view" id="panel-tests">
+      <section class="${viewClass('panel-tests')}" id="panel-tests">
         <div class="testGrid">
           <article class="card testCard"><h3 class="sectionTitle">Buscar producto</h3><p class="muted">Consulta el catálogo visible para clientes.</p><form id="searchTestForm" class="formStack"><input id="testQuery" name="q" maxlength="80" placeholder="Ej. carro control remoto" required><button class="primaryBtn" id="searchTestBtn" type="submit">Probar búsqueda</button></form><div class="resultBox" id="searchTestResult">Aún no se ha ejecutado una búsqueda.</div></article>
           <article class="card testCard"><h3 class="sectionTitle">Consultar pedido</h3><p class="muted">Valida número y nombre sin mostrar datos sensibles.</p><form id="orderTestForm" class="formStack"><input id="orderNumber" maxlength="80" placeholder="Número de pedido" required><input id="customerName" maxlength="120" placeholder="Nombre completo" required><input id="phoneOrEmail" maxlength="160" placeholder="Teléfono o correo opcional"><button class="primaryBtn" id="orderTestBtn" type="submit">Consultar estado</button></form><div class="resultBox" id="orderTestResult">Aún no se ha consultado un pedido.</div></article>
@@ -1213,6 +1439,7 @@ ${customerAppointments.styles}
     <button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="mobileNavIcon">${PANEL_ICONS.calendar}</span><span>Agenda</span></button>
     <button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button>
     ${planMobileNav}
+    ${channelsMobileNav}
     <button id="mnav-setup" data-bot="account" type="button" onclick="showTab('setup')"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Config.</span></button>
   </nav>
   <div class="profileModal" id="profileModal" role="dialog" aria-modal="true" aria-label="Editar perfil del negocio">
@@ -1221,28 +1448,29 @@ ${customerAppointments.styles}
       <div class="profileHead"><h3>Editar perfil del negocio</h3><button class="profileClose" type="button" onclick="closeProfile()" aria-label="Cerrar">×</button></div>
       <p class="profileHint">Así te verá tu equipo dentro del panel.</p>
       <div class="profileLogoRow">
-        <div class="profileLogo" id="profileLogoPreview">RAV</div>
+        <div class="profileLogo" id="profileLogoPreview">${escapeHtml(panelContext.initials)}</div>
         <label class="profileUpload">${PANEL_ICONS.edit}<span>Cambiar imagen</span><input type="file" accept="image/*" onchange="handleLogoFile(this)" hidden></label>
       </div>
-      <label class="profileField"><span>Nombre del negocio</span><input id="profileNameInput" type="text" value="RAV Toys"></label>
+      <label class="profileField"><span>Nombre del negocio</span><input id="profileNameInput" type="text" value="${escapeHtml(panelContext.businessName)}"></label>
       <div class="profileActions"><button class="profileBtn ghost" type="button" onclick="closeProfile()">Cancelar</button><button class="profileBtn primary" type="button" onclick="saveProfile()">Guardar cambios</button></div>
     </div>
   </div>
 </div>
+<div class="panelVersionFixed" aria-label="Versión del Customer Panel">Versión ${escapeHtml(botVersion)}</div>
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)};
-var PLAN_DATA={nombre:"Bot Atención al cliente",estado:"Activo",mensualidad:"$299.900/mes",renovacion:"Renueva el 1 de agosto",chatsIncluidos:500,chatsConsumidos:410,rescatesFrecuentes:true,referidos:{codigo:"RAVTOYS",count:0,mesesGanados:0}};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:INITIAL_TAB==="appointments"?"appointments":"support",data:null,health:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_ENABLED=${channelConnectionsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_DEMO=${safeJson(channelConnectionsDemo)};
+var PLAN_DATA=${safeJson(planData)};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,channelConnections:null,channelConnectionsLoading:false,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,onboarding:null,onboardingLoading:false,setupDetailsOpen:false,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
-function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";[[bs,support],[ba,!support],[mbs,support],[mba,!support]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");button.style.display=scope==="account"||scope===state.bot?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",support?"5":"4");}
-function selectBot(bot){state.bot=bot==="appointments"?"appointments":"support";syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
-function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():"RAV Toys";modal.classList.add("open");if(input)input.focus();}
+function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";[[bs,support],[ba,!support],[mbs,support],[mba,!support]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");button.style.display=scope==="account"||scope===state.bot?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",String((support?5:4)+(PANEL_CHANNEL_CONNECTIONS_ENABLED?1:0)));}
+function selectBot(bot){var next=bot==="appointments"?"appointments":"support";if(PANEL_CONTEXT.v2&&!PANEL_CONTEXT[next])return;state.bot=next;syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
+function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():PANEL_CONTEXT.businessName;modal.classList.add("open");if(input)input.focus();}
 function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");}
 function saveProfile(){var input=document.getElementById("profileNameInput"),value=input?(input.value||"").trim():"";if(value){text("brandName",value);var mobileName=document.querySelector(".mobileBrand h1");if(mobileName)mobileName.textContent=value;}closeProfile();}
 function handleLogoFile(input){var file=input.files&&input.files[0];if(!file)return;var url=URL.createObjectURL(file),targets=[document.getElementById("profileLogoPreview"),document.getElementById("brandLogo")];document.querySelectorAll(".mobileBrand .ravLogo").forEach(function(el){targets.push(el);});targets.forEach(function(el){if(!el)return;el.style.backgroundImage="url("+url+")";el.style.backgroundSize="cover";el.style.backgroundPosition="center";el.textContent="";});}
-function api(url,opts){opts=opts||{};opts.headers=Object.assign({accept:"application/json"},opts.headers||{});if(opts.body&&!opts.headers["content-type"])opts.headers["content-type"]="application/json";return fetch(url,opts).then(function(response){return response.json().catch(function(){return {};}).then(function(body){if(response.status===401){if(PANEL_LOGIN_PATH)location.href=PANEL_LOGIN_PATH;throw new Error("Sesión vencida");}if(!response.ok){var error=new Error(body.message||body.error||("HTTP "+response.status));error.body=body;throw error;}return body;});});}
+function api(url,opts){opts=opts||{};opts.headers=Object.assign({accept:"application/json"},opts.headers||{});if(opts.body&&!opts.headers["content-type"])opts.headers["content-type"]="application/json";var redirectOnAuth=opts.redirectOnAuth;return fetch(url,opts).then(function(response){return response.json().catch(function(){return {};}).then(function(body){if(response.status===401){if(redirectOnAuth&&PANEL_LOGIN_PATH)location.href=PANEL_LOGIN_PATH;var authError=new Error("Sesión vencida");authError.status=401;throw authError;}if(!response.ok){var error=new Error(body.message||body.error||("HTTP "+response.status));error.status=response.status;error.body=body;throw error;}return body;});});}
 function when(ts){if(!ts)return "";var d=new Date(ts);if(isNaN(d.getTime()))return "";return d.toLocaleString("es-CO",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});}
 function setBusy(id,busy,busyText,normalText){var b=document.getElementById(id);if(!b)return;b.disabled=!!busy;b.textContent=busy?busyText:normalText;}
 function channelLabel(){return "WhatsApp, Instagram y Messenger";}
@@ -1252,9 +1480,24 @@ function combineSummaries(first,second){first=first||{};second=second||{};var sa
 function activeSummary(){var summaries=state.data&&state.data.summaries||{};return combineSummaries(combineSummaries(summaries.whatsapp,summaries.instagram),summaries.messenger);}
 function applyChannelData(){state.channel="all";state.conversations=state.allConversations.slice();if(state.selected&&!findConversation(state.selected))state.selected=null;}
 function showChannel(){state.channel="all";state.selected=null;state.metaDirty=false;applyChannelData();showTab("summary");renderChannelState();renderHeader();renderSummary();renderInbox();}
+function channelConnectionStatusLabel(status){return({not_connected:"Pendiente",connecting:"En proceso",connected:"Listo",needs_attention:"Revisar",disconnected:"Desconectado"})[status]||"Pendiente";}
+function channelConnectionInitial(channel){return({whatsapp:"WA",instagram:"IG",messenger:"MS",telegram:"TG"})[channel]||"NX";}
+function commercePlatformLabel(platform){platform=String(platform||"unknown");return({shopify:"Shopify",woocommerce:"WooCommerce",wordpress:"WordPress",api:"API / conector personalizado",csv:"Catálogo CSV",other:"Otra plataforma",none:"Sin tienda conectada",unknown:"Por definir"})[platform]||platform;}
+function commerceStatusLabel(status){status=String(status||"not_requested");return({not_requested:"No solicitado",requested:"Solicitado",pending_customer:"Opcional para después",connected:"Conectado",needs_review:"Necesita revisión",failed:"Falló la conexión"})[status]||"Pendiente";}
+function onboardingAnswers(){return state.onboarding&&state.onboarding.onboarding&&state.onboarding.onboarding.answers||{};}
+function selectedChannelHints(answers){answers=answers||{};var appt=answers.appointment_setup||{},hints=[];if(setupPathGet(answers,"meta.whatsapp_number"))hints.push("whatsapp");if(appt.instagram_username||setupPathGet(answers,"meta.instagram_account"))hints.push("instagram");if(appt.messenger_page||setupPathGet(answers,"meta.facebook_page"))hints.push("messenger");return hints;}
+function renderConnectionHub(){var root=document.getElementById("connectionHubSummary"),commerceRoot=document.getElementById("commerceConnectorCards");if(!root&&!commerceRoot)return;var payload=state.onboarding||{},onboarding=payload.onboarding||{},answers=onboarding.answers||{},goal=answers.setup_goal,commerce=answers.commerce||{},hints=selectedChannelHints(answers),connections=state.channelConnections&&state.channelConnections.channels||[],connected=connections.filter(function(row){return row.status==="connected";}).length,commercePlatform=commerce.platform||"unknown",commerceStatus=commerce.integration_status||"not_requested",commerceRequested=commercePlatform&&commercePlatform!=="none"&&commercePlatform!=="unknown"&&(commerce.integration_intent==="yes"||commerce.integration_intent==="later"||commerceStatus!=="not_requested");if(root){var cards=[["Cuestionario",onboarding.setup_completed?"Completo":"En progreso",onboarding.setup_completed?"Tu información quedó guardada en el registro compartido.":"Puedes terminarlo sin empezar de cero."],["Bot",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,onboarding.setup_completed?"Listo para que NextforIA lo configure; no se activa automáticamente.":"Se define al cerrar el cuestionario."],["Canales",connected?connected+" conectado(s)":hints.length?hints.map(function(item){return channelConnectionInitial(item);}).join(" · ")+" pendiente(s)":"Por elegir","Conecta solo los canales que vas a usar ahora; los demás pueden esperar."],["Comercio",commerceRequested?commercePlatformLabel(commercePlatform):"Opcional",commerceRequested?commerceStatusLabel(commerceStatus)+" · "+setupShort(commerce.store_url,"sin URL"):"Shopify/WooCommerce aparecerán cuando los solicites."]];root.innerHTML=cards.map(function(item){return '<article class="connectionHubCard"><small>'+esc(item[0])+'</small><strong>'+esc(setupShort(item[1]))+'</strong><p>'+esc(item[2])+'</p></article>';}).join("");}if(commerceRoot){if(!commerceRequested){commerceRoot.innerHTML='<article class="channelConnectCard comingSoon"><span class="channelConnectIcon">NX</span><div class="channelConnectCopy"><h4>Sin conector de comercio solicitado</h4><p>Tu flujo puede seguir sin tienda conectada. Si después quieres Shopify o WooCommerce, lo activaremos desde aquí.</p></div><div class="channelConnectActions"><span class="channelState">Opcional</span></div></article>';return;}var icon=commercePlatform==="shopify"?"SH":commercePlatform==="woocommerce"?"WC":"EC",title=commercePlatformLabel(commercePlatform),description=commercePlatform==="shopify"?"Conector opcional para catálogo, productos y datos comerciales. Se activará desde Commerce Connectors cuando esté habilitado para esta cuenta.":commercePlatform==="woocommerce"?"Conector opcional para WordPress + WooCommerce. Queda preparado para el equipo de Commerce Connectors.":"Conector opcional según la plataforma indicada en el setup.";commerceRoot.innerHTML='<article class="channelConnectCard recommended"><span class="channelConnectIcon">'+esc(icon)+'</span><div class="channelConnectCopy"><h4>'+esc(title)+'</h4><p>'+esc(description)+'</p><div class="channelAccount">'+esc(setupShort(commerce.store_url,"URL pendiente"))+'</div></div><div class="channelConnectActions"><span class="channelState '+attr(commerceStatus==="connected"?"connected":commerceStatus==="failed"?"needs_attention":"connecting")+'">'+esc(commerceStatusLabel(commerceStatus))+'</span><button class="ghostBtn" type="button" onclick="showTab(&quot;setup&quot;)">Ver datos guardados</button></div></article>';}}
+function setChannelConnectionMessage(message,tone){var root=document.getElementById("channelConnectionMessage");if(!root)return;root.textContent=message||"";root.className="channelsMessage"+(tone?" "+tone:"");}
+function renderChannelConnections(){var root=document.getElementById("channelConnectionCards"),payload=state.channelConnections;if(!root||!payload)return;var canManage=SERVER_ROLE==="admin",available=payload.meta_authorization_available||{},hints=selectedChannelHints(onboardingAnswers());root.innerHTML=(payload.channels||[]).map(function(item){var channel=item.channel||item.id,status=item.status||"not_connected",soon=item.coming_soon||item.available===false,recommended=hints.includes(channel),account=item.account_label?'<div class="channelAccount">'+esc(item.account_label)+'</div>':recommended?'<div class="channelAccount">Sugerido por tu cuestionario</div>':"",primary=channel==="whatsapp",actions='<span class="channelState '+attr(status)+'">'+esc(soon?"Próximamente":channelConnectionStatusLabel(status))+'</span>';if(!soon&&canManage){if(item.requires_selection){var options=(item.pending_assets||[]).map(function(asset){return '<option value="'+attr(asset.id)+'">'+esc(asset.label+(asset.detail?" · "+asset.detail:""))+'</option>';}).join("");actions+='<select class="channelAssetSelect" id="channelAsset-'+attr(channel)+'" aria-label="Elige una cuenta">'+options+'</select><button class="primaryBtn" type="button" data-channel="'+attr(channel)+'" onclick="selectChannelAsset(this.dataset.channel)">Elegir esta cuenta</button>';}else if(item.connect_available){actions+='<button class="'+(primary?"primaryBtn":"ghostBtn")+'" type="button" data-channel="'+attr(channel)+'" onclick="connectChannel(this.dataset.channel)">'+(available[channel]===false?"Estamos preparando este paso":"Continuar con Meta")+'</button>';}else if(item.reconnect_available){actions+='<button class="'+(primary?"primaryBtn":"ghostBtn")+'" type="button" data-channel="'+attr(channel)+'" onclick="connectChannel(this.dataset.channel)">Volver a conectar</button>';}if(item.disconnect_available){actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';}}return '<article class="channelConnectCard'+(soon?" comingSoon":"")+(primary?" primaryChannel":"")+(recommended&&!soon?" recommended":"")+'"><span class="channelConnectIcon '+attr(channel)+'">'+esc(channelConnectionInitial(channel))+'</span><div class="channelConnectCopy"><h4>'+esc(item.name||channel)+'</h4><p>'+esc(item.description||"")+'</p>'+account+'</div><div class="channelConnectActions">'+actions+'</div></article>';}).join("");renderConnectionHub();}
+function loadChannelConnections(force){if(!PANEL_CHANNEL_CONNECTIONS_ENABLED||state.channelConnectionsLoading||(!force&&state.channelConnections))return;if(DEMO_MODE&&PANEL_CHANNEL_CONNECTIONS_DEMO){state.channelConnections=PANEL_CHANNEL_CONNECTIONS_DEMO;renderChannelConnections();return;}state.channelConnectionsLoading=true;api("/admin/panel/channel-connections",{redirectOnAuth:true}).then(function(body){state.channelConnections=body;renderChannelConnections();try{var url=new URL(location.href),result=url.searchParams.get("connection");if(result==="success")setChannelConnectionMessage("Listo. Tu Nextfor ya sabe dónde atender.","success");else if(result==="select")setChannelConnectionMessage("Elige la cuenta correcta para terminar.");else if(result==="error")setChannelConnectionMessage("No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");url.searchParams.delete("connection");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}}).catch(function(){setChannelConnectionMessage("No pudimos cargar tus canales. Intenta de nuevo.","error");}).finally(function(){state.channelConnectionsLoading=false;});}
+function connectChannel(channel){if(DEMO_MODE){setChannelConnectionMessage("Demo: aquí continuarías con Meta para elegir la cuenta de tu negocio.","success");return;}setChannelConnectionMessage("Abriendo Meta…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/connect",{method:"POST",body:"{}"}).then(function(body){if(!body.authorization_url)throw new Error("authorization_unavailable");location.assign(body.authorization_url);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");loadChannelConnections(true);});}
+function selectChannelAsset(channel){var select=document.getElementById("channelAsset-"+channel),assetId=select&&select.value;if(!assetId)return;setChannelConnectionMessage("Revisando que sea la cuenta correcta…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/select",{method:"POST",body:JSON.stringify({asset_id:assetId})}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Listo. Tu Nextfor ya sabe dónde atender.","success");loadChannelConnections(true);}).catch(function(){setChannelConnectionMessage("No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");});}
+function disconnectChannel(channel,name){if(!confirm("¿Desconectar "+name+"? Tu Nextfor dejará de recibir nuevos mensajes de este canal."))return;setChannelConnectionMessage("Desconectando el canal…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/disconnect",{method:"POST",body:"{}"}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Canal desconectado.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos desconectar el canal. Habla con NextforIA.","error");});}
 function showTab(name){
   if(name==="human")name="conversations";
   if(name==="tests"&&!SERVER_CAPABILITIES.run_tests)name="plan";
+  if(PANEL_CONTEXT.v2&&name==="appointments"&&!PANEL_CONTEXT.appointments)name="summary";
+  if(PANEL_CONTEXT.v2&&["summary","conversations","retargeting"].includes(name)&&!PANEL_CONTEXT.support)name="appointments";
   state.tab=name;
   if(name==="appointments")state.bot="appointments";
   if(name==="summary"||name==="conversations"||name==="retargeting")state.bot="support";
@@ -1263,35 +1506,52 @@ function showTab(name){
   document.body.classList.toggle("conversations-view",name==="conversations");
   document.body.classList.toggle("appointment-view",name==="appointments");
   var supportModule=name==="summary"||name==="conversations",setupModule=name==="setup",retargetingModule=name==="retargeting",appointmentsModule=name==="appointments";
-  ["summary","conversations","appointments","plan","setup","retargeting","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});
+  ["summary","conversations","appointments","plan","channels","setup","retargeting","tests"].forEach(function(tab){var nav=document.getElementById("nav-"+tab),mnav=document.getElementById("mnav-"+tab);if(nav)nav.classList.toggle("active",tab===name);if(mnav)mnav.classList.toggle("active",tab===name);});
   ["module-support","mobileModule-support"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",supportModule);});
   ["module-setup","mobileModule-setup"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",setupModule);});
   ["module-retargeting","mobileModule-retargeting"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",retargetingModule);});
   ["module-appointments","mobileModule-appointments"].forEach(function(id){var el=document.getElementById(id);if(el)el.classList.toggle("active",appointmentsModule);});
-  var summary=document.getElementById("panel-summary"),inbox=document.getElementById("panel-inbox"),appointments=document.getElementById("panel-appointments"),plan=document.getElementById("panel-plan"),setup=document.getElementById("panel-setup"),retargeting=document.getElementById("panel-retargeting"),tests=document.getElementById("panel-tests"),toolbar=document.querySelector(".toolbar");
+  var summary=document.getElementById("panel-summary"),inbox=document.getElementById("panel-inbox"),appointments=document.getElementById("panel-appointments"),plan=document.getElementById("panel-plan"),channels=document.getElementById("panel-channels"),setup=document.getElementById("panel-setup"),retargeting=document.getElementById("panel-retargeting"),tests=document.getElementById("panel-tests"),toolbar=document.querySelector(".toolbar");
   if(summary)summary.classList.toggle("active",name==="summary");
   if(inbox)inbox.classList.toggle("active",name==="conversations");
   if(appointments)appointments.classList.toggle("active",name==="appointments");
   if(plan)plan.classList.toggle("active",name==="plan");
+  if(name==="plan"){loadPlanCatalog(false);loadBilling(false);}
+  if(channels)channels.classList.toggle("active",name==="channels");
   if(setup)setup.classList.toggle("active",name==="setup");
   if(retargeting)retargeting.classList.toggle("active",name==="retargeting");
   if(tests)tests.classList.toggle("active",name==="tests");
-  if(toolbar)toolbar.style.display=(name==="plan"||name==="appointments"||name==="setup"||name==="retargeting")?"none":"flex";
-  var pageTitle=name==="summary"?"Resumen":name==="tests"?"Pruebas":name==="plan"?"Mi plan":name==="setup"?"Configuración de tu Nextfor IA":name==="retargeting"?"Seguimientos comerciales":name==="appointments"?"Citas":"Conversaciones";
-  var pageSubtitle=name==="summary"?"Resultados del bot de atención · Últimos 7 días":name==="tests"?"Herramientas seguras para validar el bot.":name==="plan"?"Plan, módulos y consumo":name==="setup"?"Tu negocio, tu voz y tus reglas en un solo lugar":name==="retargeting"?"Cola segura, aprobaciones, cancelaciones y auditoría":name==="appointments"?"Tu agenda llenándose, sin perseguir confirmaciones.":"La IA atiende y te deja solo lo que necesita de ti.";
+  if(toolbar)toolbar.style.display=(name==="plan"||name==="appointments"||name==="channels"||name==="setup"||name==="retargeting")?"none":"flex";
+  var pageTitle=name==="summary"?"Resumen":name==="tests"?"Pruebas":name==="plan"?"Mi plan":name==="channels"?"Finaliza el entrenamiento":name==="setup"?"Configuración de tu Nextfor IA":name==="retargeting"?"Seguimientos comerciales":name==="appointments"?"Citas":"Conversaciones";
+  var pageSubtitle=name==="summary"?("Resultados de "+(PANEL_CONTEXT.v2?PANEL_CONTEXT.assignedBotName:"tu bot de atención")+" · Últimos 7 días"):name==="tests"?"Herramientas seguras para validar el bot.":name==="plan"?"Plan, módulos y consumo":name==="channels"?"Dile a tu Nextfor dónde debe atender":name==="setup"?"Tu negocio, tu voz y tus reglas en un solo lugar":name==="retargeting"?"Cola segura, aprobaciones, cancelaciones y auditoría":name==="appointments"?"Tu agenda llenándose, sin perseguir confirmaciones.":"La IA atiende y te deja solo lo que necesita de ti.";
   text("pageTitle",pageTitle);
   text("pageSubtitle",pageSubtitle);
   if(window.innerWidth<=760&&name!=="appointments"){var activeMobileModule=document.getElementById("mobileModule-"+name);if(activeMobileModule)activeMobileModule.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});}
   try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("channel");url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}
-  if(name==="setup")loadBotSetup();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
+  if(name==="channels")loadChannelConnections(false);if(name==="setup")loadBotSetup();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
 }
-function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH).then(function(data){state.data=data;state.allConversations=data.conversations||[];applyChannelData();if(!DEMO_MODE)SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderChannelState();renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
-function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;}).catch(function(){});}
-function renderChannelState(){if(!state.data)return;var channels=state.data.business&&state.data.business.channels||{},rows=Object.keys(channels).map(function(key){return channels[key]||{};}),readyCount=rows.filter(function(row){return row.status==="ready";}).length,ready=readyCount>0,total=rows.reduce(function(sum,row){return sum+(row.conversations_count||0);},0),status=document.getElementById("moduleStatus-support");text("moduleStatus-support",readyCount+" canales activos");if(status)status.classList.toggle("off",!ready);text("mobileModule-support","Atención al cliente · "+(ready?"Activo":"Pendiente"));text("channelStatusTitle",ready?"Bot de atención conectado":"Configuración pendiente");text("channelStatusDetail",readyCount+" canales · "+total+" conversaciones visibles");var search=document.getElementById("conversationSearch");if(search)search.placeholder="Buscar por nombre, @usuario, teléfono, correo o mensaje";var dot=document.getElementById("channelStatusDot");if(dot)dot.style.background=ready?"#22C778":"#F5A524";}
-function renderPlan(){var p=PLAN_DATA,included=Math.max(1,Number(p.chatsIncluidos)||1),used=Math.max(0,Number(p.chatsConsumidos)||0),available=Math.max(0,included-used),pct=Math.min(100,Math.round(used/included*100)),status=pct>=100?"limit":(pct>=80?"warn":"normal"),fill=document.getElementById("usageFill");text("planName",p.nombre);text("planMonthly",p.mensualidad);text("planRenewal",p.renovacion);text("usagePct",pct+"%");text("chatsConsumed",used);text("chatsIncluded",included);text("chatsAvailable",available);text("usageState",status==="limit"?"Límite alcanzado":(status==="warn"?"Atención":"Vas al día"));text("usageMessage",status==="limit"?"Alcanzaste el 100% de tus chats. Suma un paquete de rescate para seguir atendiendo.":(status==="warn"?"Has utilizado el "+pct+"% de tus chats disponibles.":"Vas al día con tu consumo de chats."));if(fill){fill.className="usageFill"+(status==="warn"?" warn":(status==="limit"?" limit":""));fill.style.width=pct+"%";}text("planRecommendation",p.rescatesFrecuentes?"Estás cerca del límite. Si compras rescates seguido, cambiar a Nextfor Dúo podría salirte más económico y darte más margen para crecer.":"Tu consumo adicional es ocasional. Tu plan actual sigue siendo el adecuado.");text("refCode",p.referidos.codigo);text("refHint",(p.referidos.count||0)+" referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.");}
+function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH,{redirectOnAuth:true}).then(function(data){state.data=data;state.allConversations=data.conversations||[];applyChannelData();if(!DEMO_MODE)SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderBusinessContext(data.business);renderChannelState();renderHeader();renderSummary();renderInbox();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
+function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;renderChannelState();}).catch(function(){});}
+function panelMoney(value){var n=(value===null||value===undefined||value==="")?null:Number(value);if(n===null||!isFinite(n)||n<=0)return null;return "$"+String(Math.round(n)).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}
+function panelChats(value){var n=(value===null||value===undefined||value==="")?null:Number(value);if(n===null||!isFinite(n)||n<0)return "chats incluidos por definir";return n+" chats incluidos";}
+function planPriceLine(plan){var custom=!!(plan&&(String(plan.id||"").indexOf("signature")>=0||String(plan.etiqueta||"").toLowerCase().indexOf("definir")>=0)&&Number(plan.precio_mensual||0)===0),mensual=panelMoney(plan.precio_mensual);var head=custom?"Precio a definir con NextforIA":(mensual?(mensual+"/mes"):"Mensualidad por definir");var sub="Sin setup cost · "+panelChats(plan.chats_incluidos);return '<div class="priceLine"><strong>'+esc(head)+'</strong><span>'+esc(sub)+'</span></div>';}
+function planCatalogNotice(message,retry){return '<div class="planCatalogNotice">'+esc(message)+(retry?' <button class="ghostBtn" type="button" onclick="loadPlanCatalog(true)">Reintentar</button>':"")+'</div>';}
+function renderPlanCatalog(payload){var grid=document.getElementById("planCatalogGrid");if(!grid)return;var plans=((payload&&payload.plans)||[]).filter(function(plan){return plan&&plan.activo!==false;});var assigned=PANEL_CONTEXT.v2?String(PANEL_CONTEXT.assignedBotId||"").toLowerCase():"";if(assigned)plans=plans.filter(function(plan){var bot=(plan.bot_id===null||plan.bot_id===undefined)?"":String(plan.bot_id).toLowerCase();return !bot||bot===assigned;});plans=plans.slice().sort(function(a,b){return (Number(a.orden)||0)-(Number(b.orden)||0);});if(!plans.length){grid.setAttribute("data-state","empty");grid.innerHTML=planCatalogNotice("Todavía no hay planes publicados para tu cuenta.",true);return;}var current=String(PANEL_CONTEXT.planId||"").toLowerCase();grid.setAttribute("data-state","ready");grid.innerHTML=plans.map(function(plan){var mine=String(plan.id||"").toLowerCase()===current;var badge=mine?'<span class="planBadge">Tu plan actual</span>':(plan.etiqueta?'<span class="planBadge">'+esc(plan.etiqueta)+'</span>':"");var benefits=(plan.beneficios||[]).map(function(item){return '<li><span class="benefitIcon">'+PANEL_CHECK_ICON+'</span>'+esc(item)+'</li>';}).join("");var action=mine?'<button class="primaryBtn" type="button" disabled>Plan activo</button>':'<button class="primaryBtn" type="button">Elegir plan</button>';return '<article class="planOption'+(mine?" current":"")+'">'+badge+'<h4>'+esc(plan.nombre||plan.name||plan.id||"Plan")+'</h4><p>'+esc(plan.descripcion||"")+'</p>'+planPriceLine(plan)+(benefits?'<ul class="benefits">'+benefits+'</ul>':"")+'<div class="planActions">'+action+'</div></article>';}).join("");}
+function loadPlanCatalog(force){var grid=document.getElementById("planCatalogGrid");if(!grid)return;if(!force&&grid.getAttribute("data-state")==="ready")return;grid.setAttribute("data-state","loading");grid.innerHTML=planCatalogNotice("Cargando planes…",false);api("/admin/panel/catalogs").then(renderPlanCatalog).catch(function(){grid.setAttribute("data-state","error");grid.innerHTML=planCatalogNotice("No pudimos cargar los planes en este momento.",true);});}
+function billingMoney(value){var number=Number(value);if(!isFinite(number)||number<0)return"—";return"$"+String(Math.round(number)).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}
+function billingDate(value){if(!value)return"—";var date=new Date(value);return isNaN(date.getTime())?"—":date.toLocaleDateString("es-CO",{year:"numeric",month:"short",day:"numeric"});}
+function billingStatus(value){return({pending:"Pendiente",paid:"Pagado",failed:"Fallido",refunded:"Reembolsado",trial:"Trial",active:"Activa",past_due:"Vencida",suspended:"Suspendida",cancelled:"Cancelada",pilot:"Piloto"})[value]||"Sin iniciar";}
+function renderBilling(){var root=document.getElementById("billingSummary"),billing=state.billing;if(!root)return;if(!billing){root.innerHTML='<div class="planCatalogNotice">La facturación se preparará al confirmar tu plan.</div>';return;}var history=billing.history||[],canPay=["pending","failed"].includes(billing.payment_status)&&!["trial","pilot","active"].includes(billing.subscription_status),button=canPay?'<button class="primaryBtn" id="billingPayButton" type="button" onclick="startBillingCheckout()">Pagar en Wompi · Sandbox</button>':"",rows=history.length?history.map(function(item){return '<div class="billingHistoryRow"><strong>'+esc(billingStatus(item.payment_status))+' · '+esc(billingMoney(item.amount_charged))+'</strong><span>'+esc(billingDate(item.payment_date||item.created_at))+'</span><small>Comisión '+esc(billingMoney(item.provider_fee))+' <span class="billingFeeLabel">'+esc(item.provider_fee_type==="real"?"Real":"Estimada")+'</span> · Neto '+esc(billingMoney(item.net_amount))+'</small></div>';}).join(""):'<div class="planCatalogNotice">Aún no hay movimientos de pago.</div>';root.innerHTML='<div class="billingGrid"><div class="billingMetric"><small>Bot y plan</small><strong>'+esc((billing.bot_name||billing.bot_id)+" · "+(billing.plan_name||billing.plan_id))+'</strong></div><div class="billingMetric"><small>Precio contratado</small><strong>'+esc(billingMoney(billing.contracted_setup_price))+' setup · '+esc(billingMoney(billing.contracted_monthly_price))+'/mes</strong></div><div class="billingMetric"><small>Estado</small><strong>'+esc(billingStatus(billing.payment_status))+' · '+esc(billingStatus(billing.subscription_status))+'</strong></div><div class="billingMetric"><small>Próximo pago</small><strong>'+esc(billingDate(billing.next_payment_date))+'</strong></div></div><div style="margin-top:14px">'+button+'</div><div class="billingHistory"><strong>Historial de pagos</strong>'+rows+'</div>';}
+function loadBilling(force){if(!PANEL_PAYMENTS_ENABLED||state.billingLoading||(!force&&state.billing))return;state.billingLoading=true;api("/admin/panel/billing").then(function(body){state.billing=body.billing||null;renderBilling();}).catch(function(error){var root=document.getElementById("billingSummary");if(root)root.innerHTML='<div class="planCatalogNotice">'+esc("No pudimos cargar la facturación: "+error.message)+' <button class="ghostBtn" type="button" onclick="loadBilling(true)">Reintentar</button></div>';}).finally(function(){state.billingLoading=false;});}
+function startBillingCheckout(){var button=document.getElementById("billingPayButton");if(button){button.disabled=true;button.textContent="Preparando checkout…";}api("/admin/panel/billing/checkout",{method:"POST",body:JSON.stringify({plan_id:PANEL_CONTEXT.planId,bot_id:PANEL_CONTEXT.assignedBotId})}).then(function(body){if(!body.checkout||!body.checkout.checkout_url)throw new Error("checkout_unavailable");location.href=body.checkout.checkout_url;}).catch(function(error){if(button){button.disabled=false;button.textContent="Pagar en Wompi · Sandbox";}var root=document.getElementById("billingSummary");if(root)root.insertAdjacentHTML("afterbegin",'<div class="planCatalogNotice">'+esc("No pudimos abrir Wompi: "+error.message)+'</div>');});}
+function panelInitials(value){var words=String(value||"").trim().split(/\\s+/).filter(Boolean);return (words.slice(0,2).map(function(word){return word.charAt(0);}).join("")||"NX").toUpperCase().slice(0,3);}
+function panelBusinessName(business){return String((business&&(business.company_name||business.name))||PANEL_CONTEXT.businessName).trim();}
+function renderBusinessContext(business){if(!PANEL_CONTEXT.v2||!business)return;var name=panelBusinessName(business),initials=panelInitials(name);text("brandName",name);text("brandLogo",initials);text("profileLogoPreview",initials);var mobileName=document.querySelector(".mobileBrand h1"),mobileLogo=document.querySelector(".mobileBrand .ravLogo"),mobileAvatar=document.querySelector(".mobileAvatar");if(mobileName)mobileName.textContent=name;if(mobileLogo)mobileLogo.textContent=initials;if(mobileAvatar)mobileAvatar.textContent=initials;document.title="Panel de control · "+name;}
+function renderChannelState(){if(!state.data)return;var channels=state.data.business&&state.data.business.channels||{},rows=Object.keys(channels).map(function(key){return channels[key]||{};}),readyCount=rows.filter(function(row){return row.status==="ready";}).length,channelReady=readyCount>0,total=rows.reduce(function(sum,row){return sum+(row.conversations_count||0);},0),whatsapp=state.health&&state.health.whatsapp_setup||null,activationPending=!!(whatsapp&&whatsapp.app_review_approved&&!whatsapp.real_number_active),ready=channelReady&&!activationPending,status=document.getElementById("moduleStatus-support");text("moduleStatus-support",activationPending?"Numero real pendiente":readyCount+" canales activos");if(status)status.classList.toggle("off",!ready);if(activationPending){text("mobileModule-support","Atención al cliente · Activación pendiente");text("channelStatusTitle","Meta aprobada · falta activar WhatsApp");text("channelStatusDetail",(whatsapp.target_display_phone||"Número real")+" · Panel e intervención listos");}else if(PANEL_CONTEXT.v2){text("mobileModule-support",PANEL_CONTEXT.assignedBotName+" · "+(ready?"Activo":"Pendiente"));text("channelStatusTitle",ready?"Bot conectado":"Configuración pendiente");text("channelStatusDetail",PANEL_CONTEXT.assignedBotName+" · Plan "+PANEL_CONTEXT.planName);}else{text("mobileModule-support","Atención al cliente · "+(ready?"Activo":"Pendiente"));text("channelStatusTitle",ready?"Bot de atención conectado":"Configuración pendiente");text("channelStatusDetail",readyCount+" canales · "+total+" conversaciones visibles");}var search=document.getElementById("conversationSearch");if(search)search.placeholder="Buscar por nombre, @usuario, teléfono, correo o mensaje";var dot=document.getElementById("channelStatusDot");if(dot)dot.style.background=ready?"#22C778":"#F5A524";}
+function renderPlan(){var p=PLAN_DATA,included=Math.max(0,Number(p.chatsIncluidos)||0),used=Math.max(0,Number(p.chatsConsumidos)||0),available=Math.max(0,included-used),pct=included?Math.min(100,Math.round(used/included*100)):0,status=pct>=100&&included?"limit":(pct>=80?"warn":"normal"),fill=document.getElementById("usageFill");text("planName",p.nombre);text("planMonthly",p.mensualidad);text("planRenewal",p.renovacion);text("usagePct",pct+"%");text("chatsConsumed",used);text("chatsIncluded",included||"—");text("chatsAvailable",included?available:"—");text("usageState",included?(status==="limit"?"Límite alcanzado":(status==="warn"?"Atención":"Vas al día")):"Por configurar");text("usageMessage",included?(status==="limit"?"Alcanzaste el 100% de tus chats. Suma un paquete de rescate para seguir atendiendo.":(status==="warn"?"Has utilizado el "+pct+"% de tus chats disponibles.":"Vas al día con tu consumo de chats.")):"El consumo aparecerá cuando se configure el límite de tu plan.");if(fill){fill.className="usageFill"+(status==="warn"?" warn":(status==="limit"?" limit":""));fill.style.width=pct+"%";}text("planRecommendation",p.rescatesFrecuentes?"Estás cerca del límite. Si compras rescates seguido, cambiar a Nextfor Dúo podría salirte más económico y darte más margen para crecer.":"Tu consumo adicional es ocasional. Tu plan actual sigue siendo el adecuado.");text("refCode",p.referidos.codigo);text("refHint",(p.referidos.count||0)+" referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.");}
 function scrollToPlan(id){var el=document.getElementById("plan-"+id);if(el)el.scrollIntoView({behavior:"smooth",block:"center"});}
-function copyReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"RAVTOYS",msg="Código copiado: "+code;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(code).then(function(){text("refHint","¡Copiado! Comparte "+code+" con tu referido.");}).catch(function(){text("refHint",msg);});}else{text("refHint",msg);}}
-function shareReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"RAVTOYS",message="Te comparto Nextfor IA. Usa mi código "+code+" y cuéntales que vienes referido por RAV Toys.";if(navigator.share){navigator.share({title:"Nextfor IA",text:message}).catch(function(){copyReferral();});}else if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(message).then(function(){text("refHint","Mensaje de referido copiado. Pégalo en WhatsApp.");});}else{text("refHint",message);}}
+function copyReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"NEXTFORIA",msg="Código copiado: "+code;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(code).then(function(){text("refHint","¡Copiado! Comparte "+code+" con tu referido.");}).catch(function(){text("refHint",msg);});}else{text("refHint",msg);}}
+function shareReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"NEXTFORIA",message="Te comparto Nextfor IA. Usa mi código "+code+" y cuéntales que vienes referido por "+PANEL_CONTEXT.businessName+".";if(navigator.share){navigator.share({title:"Nextfor IA",text:message}).catch(function(){copyReferral();});}else if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(message).then(function(){text("refHint","Mensaje de referido copiado. Pégalo en WhatsApp.");});}else{text("refHint",message);}}
 function renderHeader(){if(!state.data)return;var pending=state.conversations.filter(function(item){return uiStatus(item)==="you";}).length;text("navConvCount",pending||"");}
 function pendingSalesClosings(){return state.conversations.filter(function(item){if(uiStatus(item)!=="you")return false;var tags=item.tags||[],memory=item.memory||{},stage=memory.purchase_stage||"",textValue=String(item.last_text||"").toLowerCase();return !!(item.business_signals&&item.business_signals.sales_assisted)||tags.includes("venta")||tags.includes("pendiente_pago")||["payment_pending","order_handoff"].includes(stage)||/comprar|quiero|me interesa|disponible|confirmar (el )?pago|cerrar la compra/.test(textValue);}).length;}
 function renderSummary(){if(!state.data)return;var s=activeSummary(),sales=s.sales_assisted||{},sol=s.solutions_provided||{},rating=s.rating||{},closings=pendingSalesClosings();var clients=s.clients_attended||0,saved=estimateHours(clients),rate=sol.rate==null?null:sol.rate,solvedValue=rate==null?(sol.count||0):(rate+"%");text("heroLine","Esta semana atendiste a "+clients+" clientes entre WhatsApp, Instagram y Messenger — tu equipo se ahorró ≈ "+saved+" de trabajo repetitivo, sin dejar un solo mensaje sin responder.");text("kSales",sales.count||0);text("kSalesSub",(sales.count||0)+(sales.count===1?" venta asistida":" ventas asistidas"));text("kSalesDelta","↗ +"+(sales.count||0));text("kClients",clients);text("kResolved",solvedValue);text("kResolvedSub",(sol.count||0)?((sol.count||0)+" soluciones sin ayuda humana"):"Aún no hay conversaciones resueltas");text("kClosings",closings);text("kClosingsSub",closings===1?"chat listo para cerrar la venta":"chats listos para cerrar la venta");var progress=rate==null?0:Math.max(0,Math.min(100,rate));var bar=document.getElementById("resolvedProgress");if(bar)bar.style.width=progress+"%";text("kResponse",clients?"4 s":"24/7");text("satValue",rating.average==null?"-":rating.average);text("satCopy",(rating.count||0)+" calificaciones");text("satPositive",rating.count?"94 % positivas":"0 % positivas");var deg=rating.average==null?0:Math.max(0,Math.min(360,Math.round(rating.average/5*360)));var ring=document.getElementById("satRing");if(ring)ring.style.setProperty("--satDeg",deg+"deg");renderActivity(s.messages_by_day||[]);renderGaps(s.search_gaps||[]);renderOutcomes(s);renderNextStep(s);renderInsight(s,solvedValue);}
@@ -1319,7 +1579,7 @@ function renderQuickReplies(item){var box=document.getElementById("quickReplies"
 function applyQuickReply(reply){var input=document.getElementById("replyText");if(input){input.value=reply;updateReplyCount();input.focus();}}
 function renderHandoffContext(item){text("handoffReason",item?handoffReason(item):"Selecciona una conversación.");text("contextCustomer",item?customerDisplay(item):"—");text("contextStatus",item?handoffStatus(item):"—");}
 function renderChat(){var item=findConversation(state.selected),canWrite=!!SERVER_CAPABILITIES.intervene,canMeta=!!SERVER_CAPABILITIES.manage_notes_tags,human=isHumanTab();["copyBtn","takeBtn","resolveTopBtn","resolveBtn","releaseBtn","sendBtn","sendCircleBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=!item;});var send=document.getElementById("sendBtn"),sendCircle=document.getElementById("sendCircleBtn");if(send)send.disabled=!item||!canWrite;if(sendCircle)sendCircle.disabled=!item||!canWrite;var take=document.getElementById("takeBtn"),release=document.getElementById("releaseBtn"),resolveTop=document.getElementById("resolveTopBtn"),resolveSide=document.getElementById("resolveBtn"),composer=document.getElementById("composer"),note=document.getElementById("customerNote"),copy=document.getElementById("copyBtn");if(copy)copy.textContent=item&&item.channel==="instagram"?(item.instagram_username?"Copiar @usuario":"Copiar ID de Instagram"):"Copiar teléfono";if(take){take.textContent=human?"Atender ahora 🙌":"Tomar control";take.disabled=!item||!canWrite||item.conversation_status==="team_active"||item.conversation_status==="resolved";}if(release){release.textContent="Devolver a la IA";release.disabled=!item||!canWrite||!["needs_attention","team_active"].includes(item.conversation_status);}var canResolve=!!item&&canWrite&&["needs_attention","team_active"].includes(item.conversation_status);if(resolveTop)resolveTop.disabled=!canResolve;if(resolveSide)resolveSide.disabled=!canResolve;if(composer)composer.style.display=(!item||!canWrite||item.conversation_status==="resolved")?"none":"grid";text("hintTitle",human?"✧ Te recomiendo mirar":"✧ Sugerencia IA");if(!item){text("chatTitle",human?"Selecciona un caso":"Selecciona una conversación");text("chatSubtitle",human?("Elige una alerta para responder en "+channelLabel()+"."):"Elige un cliente para ver su historial.");document.getElementById("messages").innerHTML='<div class="empty">'+(human?"No hay caso seleccionado.":"Sin conversación seleccionada.")+'</div>';renderTags(null,canMeta);renderQuickReplies(null);renderHandoffContext(null);if(note){note.value="";note.disabled=true;}text("aiHint",human?"Cuando elijas un caso, te dejo una respuesta lista para usar.":"El bot lo tiene bajo control.");text("autopilotCopy","El bot responde mientras no tomes control.");text("metaHint","Selecciona una conversación.");return;}text("chatTitle",customerDisplay(item));text("chatSubtitle",handoffStatus(item));if(!state.metaDirty)state.draftTags=(item.tags||[]).slice();renderTags(item,canMeta);renderQuickReplies(item);renderHandoffContext(item);if(note&&!state.metaDirty)note.value=item.note||"";if(note)note.disabled=!canMeta;var save=document.getElementById("saveMetaBtn");if(save)save.disabled=!canMeta||!state.metaDirty;text("metaHint",!canMeta?"Tu rol es de solo lectura.":(state.metaDirty?"Cambios sin guardar.":(item.meta_updated_at?"Guardado "+when(item.meta_updated_at):"Sin nota guardada")));text("autopilotCopy",item.conversation_status==="resolved"?"Conversación cerrada.":(["needs_attention","team_active"].includes(item.conversation_status)?"Autopiloto en pausa mientras intervienes.":"La IA responde y mantiene el caso bajo control."));renderSuggestion(item);var messages=document.getElementById("messages");messages.innerHTML=(item.messages||[]).length?item.messages.map(function(m){var author=m.author||"bot",label=author==="customer"?"Cliente":(author==="human"?"Agente":(author==="system"?"Evento":"🤖 Autopiloto IA"));var checks=author==="human"?'<span class="checks read">✓✓</span>':(author==="bot"?'<span class="checks">✓✓</span>':"");return '<div class="bubble '+attr(author)+'">'+esc(m.text)+'<div class="bubbleMeta"><span>'+esc(label)+(m.ts?" · "+esc(when(m.ts)):"")+'</span>'+checks+'</div></div>';}).join(""):'<div class="empty">No hay mensajes para este cliente.</div>';messages.scrollTop=messages.scrollHeight;updateReplyCount();}
-function renderSuggestion(item){var textValue="El bot lo tiene bajo control.",reply="";if(item.needs_reply){textValue=isHumanTab()?"🙌 Un mensaje tuyo puede destrabar esta conversación. Te dejo una respuesta lista para usar.":"Te recomiendo responder: este cliente está esperando una acción del equipo.";reply="🙌 ¡Hola! Soy del equipo de RAV Toys. Ya revisé tu caso y te ayudo con mucho gusto.";}else if((item.tags||[]).includes("venta")){textValue="Hay señal de venta. Confirmar disponibilidad o envío puede cerrar esta conversación.";reply="✅ Te confirmo disponibilidad y opciones de envío para que puedas completar tu compra.";}state.suggestion=reply;text("aiHint",textValue);}
+function renderSuggestion(item){var textValue="El bot lo tiene bajo control.",reply="";if(item.needs_reply){textValue=isHumanTab()?"🙌 Un mensaje tuyo puede destrabar esta conversación. Te dejo una respuesta lista para usar.":"Te recomiendo responder: este cliente está esperando una acción del equipo.";reply="🙌 ¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu caso y te ayudo con mucho gusto.";}else if((item.tags||[]).includes("venta")){textValue="Hay señal de venta. Confirmar disponibilidad o envío puede cerrar esta conversación.";reply="✅ Te confirmo disponibilidad y opciones de envío para que puedas completar tu compra.";}state.suggestion=reply;text("aiHint",textValue);}
 function useSuggestion(){var input=document.getElementById("replyText");if(input&&state.suggestion){input.value=state.suggestion;updateReplyCount();input.focus();}}
 function toggleAutopilot(){state.autopilot=!state.autopilot;var sw=document.getElementById("autopilotSwitch");if(sw)sw.classList.toggle("on",state.autopilot);text("autopilotCopy",state.autopilot?"El bot responde mientras no tomes control.":"El equipo humano está priorizado.");}
 function renderTags(item,canEdit){var box=document.getElementById("tagRow"),tags=state.data&&state.data.tags||[];if(!box)return;box.innerHTML=tags.map(function(tag){var active=state.draftTags.indexOf(tag.id)>=0;return '<button type="button" class="tagBtn'+(active?" active":"")+'" data-tag="'+attr(tag.id)+'" onclick="toggleTag(this.dataset.tag)" '+(!item||!canEdit?"disabled":"")+'>'+esc(tag.label)+'</button>';}).join("");}
@@ -1353,7 +1613,7 @@ function renderChannelStrips(){document.querySelectorAll("[data-channel-strip]")
 function contactValue(item){var channel=channelType(item);if(item&&item.copy_value)return item.copy_value;if(channel==="email")return item&&item.email||item&&item.phone||"";if(channel==="instagram")return item&&item.instagram_username||item&&item.phone||"";if(channel==="messenger")return item&&item.messenger_username||item&&item.phone||"";return item&&item.phone?("+"+String(item.phone).replace(/^\\+/,"")):"";}
 function copyActionLabel(item){var channel=channelType(item);if(channel==="instagram")return item&&item.instagram_username?"Copiar @usuario":"Copiar ID";if(channel==="email")return "Copiar correo";if(channel==="messenger")return "Copiar contacto";return "Copiar número";}
 function renderThreads(info){var box=document.getElementById("threadList");if(!box)return;info=info||renderConversationHeader();var items=filteredConversations(),intro=renderFilterIntro(info.counts,info.pct);var cards=items.map(function(item){var key=conversationKey(item),status=uiStatus(item),meta=statusMeta(status),nudge=conversationNudge(item),icon=meta.icon;return '<button type="button" class="thread status-'+status+(key===state.selected?' active':'')+'" data-key="'+attr(key)+'" onclick="selectConversation(this.dataset.key)"><div class="threadMain"><span class="avatarChannelWrap"><span class="contactAvatar">'+esc(initialsFor(item))+'</span>'+channelBadge(item,true,false)+'</span><div class="threadIdentity"><div class="threadTop"><strong>'+esc(customerDisplay(item))+'</strong><time>'+esc(when(item.last_ts))+'</time></div><p>'+esc(item.last_text||"Sin mensajes")+'</p></div></div><div class="threadStatus"><span class="statusPill '+status+'">'+icon+esc(meta.label)+'</span>'+(nudge?'<small>'+esc(nudge)+'</small>':'')+'</div></button>';}).join("");box.innerHTML=intro+(cards||'<div class="empty">No hay conversaciones en este estado.</div>');}
-function suggestedReply(item){var tags=item&&item.tags||[],value=((item&&item.last_text)||"").toLowerCase();if(tags.indexOf("garantia")>=0||/garant|reclamo|dañad|incomplet/.test(value))return "Hola, ya revisé tu caso y voy a ayudarte a resolverlo. ¿Me confirmas por favor el número del pedido y una foto del producto?";if(tags.indexOf("envio")>=0||/env[ií]o|pedido|entrega/.test(value))return "¡Hola! Ya revisé tu solicitud 🙌 Te confirmo la opción de envío para que podamos dejar todo listo hoy.";if(tags.indexOf("venta")>=0||/compr|quiero|interesa|disponible/.test(value))return "¡Hola! Ya revisé lo que buscas 🙌 Te confirmo disponibilidad y te ayudo a dejar la compra lista.";return "¡Hola! Soy del equipo de RAV Toys. Ya revisé tu conversación y te ayudo con mucho gusto.";}
+function suggestedReply(item){var tags=item&&item.tags||[],value=((item&&item.last_text)||"").toLowerCase();if(tags.indexOf("garantia")>=0||/garant|reclamo|dañad|incomplet/.test(value))return "Hola, ya revisé tu caso y voy a ayudarte a resolverlo. ¿Me confirmas por favor el número del pedido y una foto del producto?";if(tags.indexOf("envio")>=0||/env[ií]o|pedido|entrega/.test(value))return "¡Hola! Ya revisé tu solicitud 🙌 Te confirmo la opción de envío para que podamos dejar todo listo hoy.";if(tags.indexOf("venta")>=0||/compr|quiero|interesa|disponible/.test(value))return "¡Hola! Ya revisé lo que buscas 🙌 Te confirmo disponibilidad y te ayudo a dejar la compra lista.";return "¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu conversación y te ayudo con mucho gusto.";}
 function selectConversation(key){state.selected=key;state.metaDirty=false;var item=findConversation(key);state.draftTags=item?(item.tags||[]).slice():[];state.guidedFor=key;state.guidedDraft=item&&uiStatus(item)==="you"?suggestedReply(item):"";renderThreads();renderChat();document.body.classList.add("chat-open");window.scrollTo(0,0);}
 function showNeedsYou(){state.filter="you";showTab("conversations");var item=state.conversations.find(function(row){return uiStatus(row)==="you";});if(item)selectConversation(conversationKey(item));}
 function closeConversation(){closeEmojiPickers();state.selected=null;state.metaDirty=false;state.guidedFor=null;state.guidedDraft="";document.body.classList.remove("chat-open");renderThreads();renderChat();window.scrollTo(0,0);}
@@ -1410,11 +1670,18 @@ function toggleRetargetingPause(){if(!state.retargeting||!state.retargeting.can_
 function setupPathGet(source,path){return String(path||"").split(".").reduce(function(value,key){return value&&value[key]!=null?value[key]:undefined;},source);}
 function setupPathSet(target,path,value){var parts=String(path||"").split("."),cursor=target;parts.forEach(function(key,index){if(index===parts.length-1)cursor[key]=value;else{if(!cursor[key]||typeof cursor[key]!=="object")cursor[key]={};cursor=cursor[key];}});}
 function cloneSetup(value){return JSON.parse(JSON.stringify(value||{}));}
+function readableSetupValue(value){if(value===true)return "Sí";if(value===false)return "No";if(Array.isArray(value))return value.join(", ");if(value&&typeof value==="object")return Object.keys(value).map(function(key){return key+": "+value[key];}).join(" · ");return String(value==null?"":value).replace(/\\s+/g," ").trim();}
+function setupShort(value,fallback){var textValue=readableSetupValue(value);return textValue?textValue.slice(0,220)+(textValue.length>220?"…":""):(fallback||"Pendiente");}
+function setupGoalLabel(goal){goal=String(goal||"unknown");if(goal==="both")return "Atención al cliente + Agendamiento";if(goal==="appointments")return "Agendamiento";if(goal==="customer_service")return "Atención al cliente";return "Por definir";}
+function renderOnboardingSummary(payload){var box=document.getElementById("setupConfigSummary"),details=document.getElementById("onboardingQuestionnaireList");if(!box)return;var onboarding=payload&&payload.onboarding||{},answers=onboarding.answers||{},appt=answers.appointment_setup||{},svc=answers.customer_service_setup||{},goal=answers.setup_goal,business=setupPathGet(answers,"business.brand_name")||appt.business_name||PANEL_CONTEXT.businessName,clients=setupPathGet(answers,"operations.monthly_customer_volume"),tone=svc.tone||appt.assistant_tone||setupPathGet(answers,"voice.formality"),whatsapp=setupPathGet(answers,"meta.whatsapp_number"),instagram=appt.instagram_username||setupPathGet(answers,"meta.instagram_account"),email=appt.channel_email||setupPathGet(answers,"business.contact_email"),other=appt.other_channels,commerce=answers.commerce||{},channels=[whatsapp?("WhatsApp "+whatsapp):"",instagram?("Instagram "+instagram):"",email?("Correo "+email):"",other].filter(Boolean).join(" · "),commerceLabel=commerce.platform&&commerce.platform!=="unknown"&&commerce.platform!=="none"?commercePlatformLabel(commerce.platform)+" · "+commerceStatusLabel(commerce.integration_status):"Opcional",updated=onboarding.last_updated_at||onboarding.updated_at||"",status=onboarding.setup_completed?"Cuestionario completo":"En progreso";var cards=[["Empresa",business,"Marca y cuenta asociada al tenant."],["Bot contratado",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,"Plan: "+(PANEL_CONTEXT.planName||"Asignado")],["Clientes al mes",clients,"Aproximado para dimensionar plan y consumo."],["Cómo debe hablar",tone,"Voz base para responder como tu equipo."],["Canales recopilados",channels,"Datos guardados; se conectan desde el hub."],["Commerce connector",commerceLabel,"Shopify/WooCommerce queda como conector opcional."],["Estado",status,updated?("Última actualización: "+when(updated)):"Se actualizará al guardar."]];box.innerHTML=cards.map(function(item){return '<article class="setupConfigCard"><small>'+esc(item[0])+'</small><strong>'+esc(setupShort(item[1]))+'</strong><p>'+esc(item[2])+'</p></article>';}).join("");text("channelConnectionSummary",PANEL_CHANNEL_CONNECTIONS_ENABLED?"Conecta "+(channels||"los canales elegidos")+" con la autorización oficial de Meta. Si algo queda pendiente, lo terminarás desde el panel sin repetir el cuestionario.":"La conexión de canales todavía no está disponible para esta cuenta.");if(details){var questions=payload&&payload.questionnaire&&payload.questionnaire.questions||[],rows=[];questions.filter(function(question){return question&&question.active!==false&&question.path;}).sort(function(a,b){return(Number(a.order)||0)-(Number(b.order)||0);}).forEach(function(question){var value=setupPathGet(answers,question.path);var readable=readableSetupValue(value);if(!readable||readable==="unknown")return;rows.push([question.section||"general",question.label||question.path,readable]);});["meta.whatsapp_number","appointment_setup.instagram_username","appointment_setup.channel_email","appointment_setup.other_channels","commerce.platform","commerce.store_url","commerce.integration_intent"].forEach(function(path){var exists=rows.some(function(row){return row[1]===path;}),value=setupPathGet(answers,path);if(!exists&&readableSetupValue(value))rows.push(["pendientes",path,readableSetupValue(value)]);});details.innerHTML=rows.length?rows.map(function(row){return '<article class="questionnaireItem"><small>'+esc(row[0])+'</small><strong>'+esc(row[1])+'</strong><p>'+esc(setupShort(row[2]))+'</p></article>';}).join(""):'<article class="questionnaireItem"><small>Cuestionario</small><strong>Aún no hay respuestas guardadas.</strong></article>';}if(state.channelConnections)renderChannelConnections();else renderConnectionHub();}
+function loadClientOnboardingSummary(){if(state.onboardingLoading)return;state.onboardingLoading=true;api(PANEL_ONBOARDING_PATH).then(function(payload){state.onboarding=payload;renderOnboardingSummary(payload);}).catch(function(error){var box=document.getElementById("setupConfigSummary");if(box)box.innerHTML='<article class="setupConfigCard"><small>Configuración</small><strong>No se pudo cargar</strong><p>'+esc(error.message||"Intenta de nuevo en unos minutos.")+'</p></article>';}).finally(function(){state.onboardingLoading=false;});}
+function toggleSetupDetails(){state.setupDetailsOpen=!state.setupDetailsOpen;var panel=document.getElementById("setupDetailsPanel"),details=document.getElementById("onboardingDetails"),button=document.getElementById("setupDetailsToggle");if(panel)panel.hidden=!state.setupDetailsOpen;if(details)details.classList.toggle("open",state.setupDetailsOpen);if(button)button.textContent=state.setupDetailsOpen?"Ocultar detalles":"Ver cuestionario completo";}
 var SETUP_STEP_TITLES=["Tu negocio","Sedes y horarios","Oferta y condiciones","Tu industria","Personalidad y canales","Autonomía del bot","Resultados"];
+var SETUP_DEFAULT_BOT_NAME=PANEL_CONTEXT.v2?"tu bot":"RAV-Bot";
 var SETUP_STEP_MESSAGES=[
-  "Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien.",
+  "Nadie conoce tu negocio como tú. Empieza por lo esencial y "+SETUP_DEFAULT_BOT_NAME+" aprenderá a presentarlo igual de bien.",
   "Tú sabes dónde y cuándo te buscan. Enséñaselo para que oriente a cada cliente tan bien como lo harías tú.",
-  "Estas condiciones son tu experiencia hecha reglas. Compártelas y RAV-Bot responderá con tu mismo criterio.",
+  "Estas condiciones son tu experiencia hecha reglas. Compártelas y "+SETUP_DEFAULT_BOT_NAME+" responderá con tu mismo criterio.",
   "Tú dominas los detalles de tu sector. Pásaselos y resolverá hasta las dudas más específicas como un experto.",
   "Tu trato es lo que te distingue. Dale tu voz y tus canales para que suene como uno más de tu equipo.",
   "Tú decides hasta dónde llega. Marca sus límites y sabrá cuándo brillar solo y cuándo dejártelo a ti.",
@@ -1422,23 +1689,24 @@ var SETUP_STEP_MESSAGES=[
 ];
 function collectSetupAnswers(){var base=state.setup&&state.setup.current&&state.setup.current.answers?cloneSetup(state.setup.current.answers):{};document.querySelectorAll("[data-setup]").forEach(function(field){var value=field.type==="checkbox"?field.checked:field.value;setupPathSet(base,field.getAttribute("data-setup"),value);});return base;}
 function setupCompletionEstimate(answers){var paths=["business.name","business.description","business.audience","presence.locations","presence.hours","service.main_offering","service.conditions","voice.tone","automation.can_answer","automation.must_not_answer","outcomes.primary_goal","outcomes.success_metrics"],filled=paths.filter(function(path){return String(setupPathGet(answers,path)||"").trim();}).length,channels=answers.channels||{};if(["instagram","messenger","whatsapp","web"].some(function(key){return channels[key];}))filled++;return Math.round(filled/13*100);}
-function setupBotName(){var field=document.querySelector('[data-setup="business.bot_name"]'),value=field?field.value:setupPathGet(state.setup&&state.setup.current&&state.setup.current.answers,"business.bot_name");return String(value||"RAV-Bot").trim()||"RAV-Bot";}
-function renderSetupWizard(){var step=Math.max(0,Math.min(6,Number(state.setupStep)||0)),live=!!state.setupActivated,botName=setupBotName(),pct=live?100:Math.round((step+1)/7*100),story=live&&!state.setupDirty?"¡Listo! "+botName+" ya está activo y atendiendo con tu configuración. Tú diriges, él ejecuta. 👌":SETUP_STEP_MESSAGES[step].replace(/RAV-Bot/g,botName);state.setupStep=step;text("setupEyebrow","Paso "+(step+1)+" de 7 · "+SETUP_STEP_TITLES[step]);text("setupStory",story);text("setupCompletionValue",pct+"%");var ring=document.getElementById("setupCompletion");if(ring)ring.style.setProperty("--wizard-progress",pct+"%");var status=document.getElementById("setupPublishedStatus");if(status){status.textContent=live?"Activa en el bot":"No activa";status.classList.toggle("live",live);}var stepper=document.getElementById("setupStepper");if(stepper)stepper.innerHTML=SETUP_STEP_TITLES.map(function(title,index){var mode=index<step?"done":index===step?"current":"pending",line=index?'<span class="setupStepLine"></span>':"",label=index<step?"✓":String(index+1);return '<span class="setupStepLink '+mode+'">'+line+'<button class="setupStepDot" type="button" aria-label="Ir al paso '+(index+1)+': '+attr(title)+'" title="'+attr(title)+'" onclick="goSetupStep('+index+')">'+label+'</button></span>';}).join("");document.querySelectorAll("[data-setup-step]").forEach(function(section){section.classList.toggle("active",Number(section.getAttribute("data-setup-step"))===step);});var notice=document.getElementById("setupNotice");if(notice)notice.style.display=step===0&&!live?"flex":"none";var back=document.getElementById("setupBackBtn");if(back)back.classList.toggle("hidden",step===0);var actions=document.querySelector(".setupActions");if(actions)actions.classList.toggle("firstStep",step===0);var primary=document.getElementById("publishSetupBtn");if(primary){primary.textContent=step<6?"Continuar →":live&&!state.setupDirty?"Bot activo ✓":"Activar en el bot";primary.disabled=!(state.setup&&state.setup.can_edit)||(step===6&&live&&!state.setupDirty);}var canEdit=!!(state.setup&&state.setup.can_edit),message=!canEdit?"Tu rol permite consultar esta configuración, pero no editarla.":step===6?"Revisa y activa. Puedes editar y volver a activar cuando quieras.":"Guarda cuando quieras. “Activar en el bot” aplica los cambios a los mensajes nuevos.";text("setupMessage",message);}
+function setupBotName(){var field=document.querySelector('[data-setup="business.bot_name"]'),value=field?field.value:setupPathGet(state.setup&&state.setup.current&&state.setup.current.answers,"business.bot_name");return String(value||SETUP_DEFAULT_BOT_NAME).trim()||SETUP_DEFAULT_BOT_NAME;}
+function renderSetupWizard(){var step=Math.max(0,Math.min(6,Number(state.setupStep)||0)),live=!!state.setupActivated,botName=setupBotName(),pct=live?100:Math.round((step+1)/7*100),story=live&&!state.setupDirty?"¡Listo! "+botName+" ya está activo y atendiendo con tu configuración. Tú diriges, él ejecuta. 👌":SETUP_STEP_MESSAGES[step].replace(SETUP_DEFAULT_BOT_NAME,botName);state.setupStep=step;text("setupEyebrow","Paso "+(step+1)+" de 7 · "+SETUP_STEP_TITLES[step]);text("setupStory",story);text("setupCompletionValue",pct+"%");var ring=document.getElementById("setupCompletion");if(ring)ring.style.setProperty("--wizard-progress",pct+"%");var status=document.getElementById("setupPublishedStatus");if(status){status.textContent=live?"Activa en el bot":"No activa";status.classList.toggle("live",live);}var stepper=document.getElementById("setupStepper");if(stepper)stepper.innerHTML=SETUP_STEP_TITLES.map(function(title,index){var mode=index<step?"done":index===step?"current":"pending",line=index?'<span class="setupStepLine"></span>':"",label=index<step?"✓":String(index+1);return '<span class="setupStepLink '+mode+'">'+line+'<button class="setupStepDot" type="button" aria-label="Ir al paso '+(index+1)+': '+attr(title)+'" title="'+attr(title)+'" onclick="goSetupStep('+index+')">'+label+'</button></span>';}).join("");document.querySelectorAll("[data-setup-step]").forEach(function(section){section.classList.toggle("active",Number(section.getAttribute("data-setup-step"))===step);});var notice=document.getElementById("setupNotice");if(notice)notice.style.display=step===0&&!live?"flex":"none";var back=document.getElementById("setupBackBtn");if(back)back.classList.toggle("hidden",step===0);var actions=document.querySelector(".setupActions");if(actions)actions.classList.toggle("firstStep",step===0);var primary=document.getElementById("publishSetupBtn");if(primary){primary.textContent=step<6?"Continuar →":live&&!state.setupDirty?"Bot activo ✓":"Activar en el bot";primary.disabled=!(state.setup&&state.setup.can_edit)||(step===6&&live&&!state.setupDirty);}var canEdit=!!(state.setup&&state.setup.can_edit),message=!canEdit?"Tu rol permite consultar esta configuración, pero no editarla.":step===6?"Revisa y activa. Puedes editar y volver a activar cuando quieras.":"Guarda cuando quieras. “Activar en el bot” aplica los cambios a los mensajes nuevos.";text("setupMessage",message);}
 function goSetupStep(index){state.setupStep=Math.max(0,Math.min(6,Number(index)||0));renderSetupWizard();var content=document.querySelector(".content");if(content)content.scrollTop=0;window.scrollTo(0,0);}
 function backSetupStep(){goSetupStep(state.setupStep-1);}
 function setupPrimaryAction(){if(state.setupStep<6){goSetupStep(state.setupStep+1);return;}publishBotSetup();}
 function renderSetupHome(completion,live){completion=Math.max(0,Math.min(100,Number(completion)||0));var card=document.getElementById("setupHomeCard"),bar=document.getElementById("setupHomeProgressBar"),complete=completion>=100; text("setupHomeProgress",completion+"%");if(bar)bar.style.width=completion+"%";if(card)card.classList.toggle("complete",complete&&live);if(complete&&live){text("setupHomeTitle","Tu Nextfor IA está configurada y activa");text("setupHomeCopy","Puedes revisar o actualizar su conocimiento, personalidad y reglas cuando lo necesites.");text("setupHomeButton","Revisar configuración");}else if(complete){text("setupHomeTitle","Tu configuración está lista para activar");text("setupHomeCopy","Revisa la información y publícala para aplicarla a los mensajes nuevos.");text("setupHomeButton","Revisar y activar");}else if(live){text("setupHomeTitle","Tu Nextfor IA está activa, pero puedes completarla mejor");text("setupHomeCopy","Añade la información pendiente para darle más contexto y precisión en cada conversación.");text("setupHomeButton","Continuar configuración");}else{text("setupHomeTitle","Termina de configurar tu Nextfor IA");text("setupHomeCopy","Completa la información de tu negocio para que el bot responda con tu voz, políticas y objetivos.");text("setupHomeButton","Continuar configuración");}}
 function renderIndustryQuestions(){if(!state.setup)return;var answers=collectSetupAnswers(),industry=setupPathGet(answers,"business.industry")||"other",profile=state.setup.industries&&state.setup.industries[industry],box=document.getElementById("industryQuestions");if(!profile||!box)return;state.setup.current.answers=answers;text("industryHelp","Preguntas para "+profile.label+". Cambian automáticamente si eliges otra industria.");box.innerHTML=(profile.questions||[]).map(function(question){var value=setupPathGet(answers,"industry_answers."+question.id)||"";return '<label class="setupField"><span>'+esc(question.label)+'</span><textarea data-setup="industry_answers.'+attr(question.id)+'" placeholder="'+attr(question.placeholder||"")+'">'+esc(value)+'</textarea></label>';}).join("");}
 function fillSetupForm(){if(!state.setup)return;var current=state.setup.current||{},answers=current.answers||{},industry=document.getElementById("setupIndustry"),industries=state.setup.industries||{},industryOrder=["commerce","professional_services","health","restaurants","education","real_estate","beauty","other"];if(industry){industry.innerHTML=industryOrder.filter(function(key){return industries[key];}).map(function(key){return '<option value="'+attr(key)+'">'+esc(industries[key].label)+'</option>';}).join("");}document.querySelectorAll("[data-setup]").forEach(function(field){var value=setupPathGet(answers,field.getAttribute("data-setup"));if(field.type==="checkbox")field.checked=!!value;else if(value!=null)field.value=value;});renderIndustryQuestions();var canEdit=!!state.setup.can_edit;document.querySelectorAll("#botSetupForm input,#botSetupForm textarea,#botSetupForm select").forEach(function(field){field.disabled=!canEdit;});var save=document.getElementById("saveSetupBtn"),completion=current.completion==null?setupCompletionEstimate(answers):current.completion;if(save)save.disabled=!canEdit;var live=!!state.setup.published,moduleStatus=document.getElementById("moduleStatus-setup");state.setupActivated=live;if(moduleStatus){moduleStatus.textContent=live?"Activo":completion+"% completo";moduleStatus.classList.toggle("off",!live);}text("mobileModule-setup","Configuración de tu Nextfor IA · "+(live?"Activa":completion+"%"));renderSetupHome(completion,live);state.setupDirty=false;renderSetupWizard();}
-function loadBotSetup(){if(state.setupLoading)return;if(state.setup&&!state.setupDirty){fillSetupForm();return;}state.setupLoading=true;text("setupMessage","Cargando configuración…");api(PANEL_SETUP_PATH).then(function(data){state.setup=data;fillSetupForm();}).catch(function(error){text("setupMessage","No se pudo cargar la configuración: "+error.message);}).finally(function(){state.setupLoading=false;});}
+function loadBotSetup(){if(state.setupLoading)return;if(state.setup&&!state.setupDirty){fillSetupForm();return;}state.setupLoading=true;text("setupMessage","Cargando configuración…");api(PANEL_SETUP_PATH).then(function(data){state.setup=data;fillSetupForm();}).catch(function(error){text("setupMessage",error&&error.status===401?"La configuración guiada del bot todavía no está disponible para tu cuenta.":"No se pudo cargar la configuración: "+error.message);}).finally(function(){state.setupLoading=false;});}
 function markSetupDirty(){if(!state.setup||!state.setup.can_edit)return;state.setupDirty=true;var answers=collectSetupAnswers(),completion=setupCompletionEstimate(answers);state.setup.current.answers=answers;renderSetupHome(completion,!!state.setup.published);renderSetupWizard();text("setupMessage","Tienes cambios sin guardar.");}
 function setSetupBusy(busy,action){var save=document.getElementById("saveSetupBtn"),publish=document.getElementById("publishSetupBtn"),back=document.getElementById("setupBackBtn");if(save){save.disabled=busy;save.textContent=busy&&action==="save"?"Guardando…":"Guardar avance";}if(publish){publish.disabled=busy;if(busy&&action==="publish")publish.textContent="Activando…";}if(back)back.disabled=busy;if(!busy)renderSetupWizard();}
 function saveBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),save=document.getElementById("saveSetupBtn"),feedback="";setSetupBusy(true,"save");text("setupMessage","Guardando tu avance…");api("/admin/bot-setup",{method:"PUT",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setupDirty=false;fillSetupForm();feedback="✓ Avance guardado. El bot activo todavía no cambió.";}).catch(function(error){feedback="No se pudo guardar: "+error.message;}).finally(function(){setSetupBusy(false,"save");text("setupMessage",feedback||"Completa la información a tu ritmo.");if(feedback.indexOf("✓")===0&&save){save.textContent="Avance guardado ✓";setTimeout(function(){save.textContent="Guardar avance";},2000);}});}
 function publishBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),feedback="";setSetupBusy(true,"publish");text("setupMessage","Validando y personalizando tu bot…");api("/admin/bot-setup/publish",{method:"POST",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setup.published={status:"published",completion:result.setup.completion,updated_at:result.setup.updated_at,published_at:result.setup.published_at};state.setupDirty=false;state.setupActivated=true;fillSetupForm();feedback="✓ Configuración activa. Se aplicará a los mensajes nuevos.";}).catch(function(error){var detail=error.body&&error.body.completion!=null?" Vas en "+error.body.completion+"%.":"";feedback=(error.body&&error.body.message||"No se pudo activar la configuración.")+detail;}).finally(function(){setSetupBusy(false,"publish");text("setupMessage",feedback||"Revisa la configuración e intenta nuevamente.");});}
+function logoutCustomerPanel(){fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin/panel";});}
 ${customerAppointments.clientScript}
 var reply=document.getElementById("replyText");if(reply)reply.addEventListener("keydown",function(event){if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();sendReply();}});document.addEventListener("click",function(event){if(!event.target.closest(".emojiControl"))closeEmojiPickers();});document.addEventListener("keydown",function(event){if(event.key==="Escape")closeEmojiPickers();});var searchForm=document.getElementById("searchTestForm");if(searchForm)searchForm.addEventListener("submit",runProductTest);var orderForm=document.getElementById("orderTestForm");if(orderForm)orderForm.addEventListener("submit",runOrderTest);
 try{var initialView=new URL(location.href).searchParams.get("view");if(["agenda","chats","reminders"].includes(initialView))state.appointmentSection=initialView;}catch(e){}
-renderChannelStrips();showTab(INITIAL_TAB);loadBotSetup();loadPanelData(false);loadPanelHealth();setInterval(function(){if(!DEMO_MODE&&!state.metaDirty)loadPanelData(false);},30000);setInterval(loadPanelHealth,120000);
+renderChannelStrips();showTab(INITIAL_TAB);loadBotSetup();loadClientOnboardingSummary();loadPanelData(false);loadPanelHealth();if(INITIAL_TAB==="plan")loadBilling(false);setInterval(function(){if(!DEMO_MODE&&!state.metaDirty)loadPanelData(false);},30000);setInterval(loadPanelHealth,120000);
 </script>
 </body>
 </html>`);

@@ -1,6 +1,7 @@
 "use strict";
 
 const DEFAULT_ONBOARDING = Object.freeze({
+  setup_goal: "unknown",
   business: {
     brand_name: "",
     legal_name: "",
@@ -36,15 +37,19 @@ const DEFAULT_ONBOARDING = Object.freeze({
     integration_notes: ""
   },
   commerce: {
-    platform: "shopify",
+    platform: "unknown",
     other_platform: "",
     store_url: "",
     catalog_ready: "unknown",
     orders_required: true,
-    access_owner: ""
+    access_owner: "",
+    integration_intent: "unknown",
+    integration_status: "not_requested"
   },
   operations: {
     primary_country: "Colombia",
+    primary_city: "",
+    monthly_customer_volume: "",
     countries_served: "Colombia",
     foreign_number_location_check: true,
     business_hours: "",
@@ -70,28 +75,267 @@ const DEFAULT_ONBOARDING = Object.freeze({
     owns_information: false,
     accepts_guided_setup: false,
     understands_meta_dependency: false
-  }
+  },
+  customer_service_setup: {
+    business_offer_type: "",
+    business_offer_description: "",
+    ideal_customer: "",
+    value_proposition: "",
+    bot_display_name: "",
+    tone: "",
+    custom_tone_description: "",
+    brand_restrictions: "",
+    company_logo: "",
+    data_consent: false,
+    data_consent_version: "",
+    data_consent_accepted_at: "",
+    setup_status: "draft"
+  },
+  appointment_setup: {
+    business_name: "",
+    business_category: "",
+    business_category_other: "",
+    target_customer: "",
+    business_description: "",
+    business_differentiator: "",
+    assistant_tone: "",
+    bot_display_name: "",
+    bot_image: "",
+    bot_logo: "",
+    allowed_topics: "",
+    forbidden_topics: "",
+    escalation_triggers: "",
+    escalation_contact: "",
+    human_support_hours: "",
+    services: "",
+    business_hours: "",
+    payment_methods: "",
+    faqs: "",
+    knowledge_documents: "",
+    staff_mode: "",
+    appointment_staff: "",
+    appointment_locations: "",
+    availability_rules: "",
+    required_booking_fields: "",
+    minimum_booking_notice: "",
+    maximum_booking_window: "",
+    booking_confirmation_mode: "",
+    cancellation_policy: "",
+    no_show_policy: "",
+    booking_payment_required: "",
+    booking_payment_details: "",
+    calendar_provider: "",
+    calendar_email: "",
+    reminder_channel: "",
+    reminder_timing: "",
+    survey_enabled: "unknown",
+    survey_scale: "",
+    high_rating_action: "",
+    low_rating_action: "",
+    operational_channels: "",
+    instagram_username: "",
+    channel_email: "",
+    other_channels: "",
+    social_accounts: "",
+    data_consent: false,
+    data_consent_version: "",
+    data_consent_accepted_at: "",
+    setup_status: "draft"
+  },
+  custom: {}
 });
 
+// Stable, versioned question contract for the first-login setup. Super Admin can
+// later persist and manage these same IDs (label/order/active) without changing
+// the answer paths already stored for each tenant.
 const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
-  { id: "company_name", path: "business.brand_name", section: "business", order: 10, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?", placeholder: "Ej. RAV Toys" },
-  { id: "administrator_email", path: "team.admin_email", section: "business", order: 20, active: true, required: true, type: "email_readonly", label: "Correo del administrador", placeholder: "admin@empresa.com" },
-  { id: "contact_email", path: "business.contact_email", section: "business", order: 30, active: true, required: true, type: "email", label: "Correo de contacto", placeholder: "contacto@empresa.com" },
-  { id: "phone", path: "business.contact_phone", section: "business", order: 40, active: true, required: true, type: "tel", label: "Teléfono", placeholder: "+57..." },
-  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 50, active: true, required: true, type: "tel", label: "WhatsApp", placeholder: "+57..." },
-  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 60, active: true, required: true, type: "choice", label: "¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?", placeholder: "" },
-  { id: "business_hours", path: "operations.business_hours", section: "business", order: 70, active: true, required: true, type: "textarea", label: "Horarios de atención", placeholder: "Días, horas y festivos" },
-  { id: "services_products", path: "operations.services_products", section: "offering", order: 80, active: true, required: true, type: "textarea", label: "Servicios o productos", placeholder: "Qué vende u ofrece el negocio." },
-  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 90, active: true, required: true, type: "textarea", label: "Preguntas frecuentes", placeholder: "Pregunta y respuesta ideal. Una por línea." },
-  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 100, active: true, required: true, type: "textarea", label: "Políticas importantes", placeholder: "Garantías, cambios, privacidad, cancelaciones y excepciones." },
-  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 110, active: true, required: true, type: "text", label: "Contacto de soporte humano", placeholder: "Nombre, teléfono, correo o área." },
-  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 120, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot", placeholder: "Tono, límites y reglas especiales para responder." }
+  { id: "setup_goal", path: "setup_goal", section: "goal", order: 10, active: true, required: true, type: "choice", label: "¿Qué quieres que NextforIA impulse primero?" },
+  { id: "company_name", path: "business.brand_name", section: "business", order: 20, active: true, required: true, type: "text", label: "¿Cómo se llama tu empresa?" },
+  { id: "administrator_email", path: "team.admin_email", section: "business", order: 30, active: true, required: true, type: "email_readonly", label: "Correo del administrador" },
+  { id: "contact_email", path: "business.contact_email", section: "business", order: 40, active: true, required: true, type: "email", label: "Correo de contacto" },
+  { id: "phone", path: "business.contact_phone", section: "business", order: 50, active: true, required: true, type: "tel", label: "Teléfono" },
+  { id: "whatsapp", path: "meta.whatsapp_number", section: "business", order: 60, active: true, required: true, type: "tel", label: "WhatsApp" },
+  { id: "whatsapp_integration_intent", path: "meta.whatsapp_integration_intent", section: "business", order: 70, active: false, required: false, type: "choice", label: "Conexión de WhatsApp con Meta" },
+  { id: "business_hours", path: "operations.support_hours", section: "business", order: 80, active: true, required: true, type: "textarea", label: "Horario de atención humana" },
+  { id: "primary_country", path: "operations.primary_country", section: "business", order: 82, active: true, required: true, type: "text", label: "País principal" },
+  { id: "primary_city", path: "operations.primary_city", section: "business", order: 84, active: true, required: true, type: "text", label: "Ciudad principal" },
+  { id: "monthly_customer_volume", path: "operations.monthly_customer_volume", section: "business", order: 85, active: true, required: true, type: "number", label: "Clientes atendidos al mes" },
+  { id: "customer_service_offer_type", path: "customer_service_setup.business_offer_type", section: "business", order: 86, active: true, required: true, type: "choice", label: "¿Qué vende tu empresa?" },
+  { id: "customer_service_offer_description", path: "customer_service_setup.business_offer_description", section: "business", order: 88, active: true, required: true, type: "textarea", label: "Qué ofreces" },
+  { id: "customer_service_ideal_customer", path: "customer_service_setup.ideal_customer", section: "business", order: 89, active: true, required: true, type: "textarea", label: "Cliente ideal" },
+  { id: "customer_service_value_proposition", path: "customer_service_setup.value_proposition", section: "business", order: 90, active: true, required: true, type: "textarea", label: "Por qué deberían comprarte" },
+  { id: "customer_service_bot_name", path: "customer_service_setup.bot_display_name", section: "business", order: 91, active: true, required: true, type: "text", label: "Nombre de Nextfor" },
+  { id: "customer_service_tone", path: "customer_service_setup.tone", section: "business", order: 92, active: true, required: true, type: "choice", label: "Tono comercial" },
+  { id: "customer_service_brand_restrictions", path: "customer_service_setup.brand_restrictions", section: "business", order: 93, active: true, required: true, type: "textarea", label: "Restricciones de marca" },
+  { id: "customer_service_company_logo", path: "customer_service_setup.company_logo", section: "business", order: 94, active: false, required: false, type: "file", label: "Logo de la empresa" },
+  { id: "services_products", path: "operations.services_products", section: "offering", order: 95, active: true, required: true, type: "textarea", label: "Servicios o productos" },
+  { id: "commerce_platform", path: "commerce.platform", section: "commerce", order: 96, active: true, required: true, type: "choice", label: "Plataforma de comercio" },
+  { id: "commerce_store_url", path: "commerce.store_url", section: "commerce", order: 97, active: true, required: false, type: "text", label: "URL de la tienda o sitio" },
+  { id: "commerce_integration_intent", path: "commerce.integration_intent", section: "commerce", order: 98, active: true, required: true, type: "choice", label: "¿Quieres conectar la tienda con NextforIA?" },
+  { id: "commerce_catalog_ready", path: "commerce.catalog_ready", section: "commerce", order: 99, active: true, required: false, type: "choice", label: "¿El catálogo está actualizado?" },
+  { id: "commerce_orders_required", path: "commerce.orders_required", section: "commerce", order: 100, active: true, required: false, type: "checkbox", label: "El bot debe consultar pedidos" },
+  { id: "commerce_access_owner", path: "commerce.access_owner", section: "commerce", order: 101, active: true, required: false, type: "text", label: "Responsable de autorizar la conexión" },
+  { id: "frequently_asked_questions", path: "operations.frequent_questions", section: "offering", order: 110, active: true, required: true, type: "textarea", label: "Preguntas frecuentes" },
+  { id: "important_policies", path: "operations.important_policies", section: "offering", order: 120, active: true, required: true, type: "textarea", label: "Políticas importantes" },
+  { id: "human_support_contact", path: "team.human_support_contact", section: "voice", order: 130, active: true, required: true, type: "text", label: "Contacto de soporte humano" },
+  { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 140, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" },
+  { id: "customer_service_data_consent", path: "customer_service_setup.data_consent", section: "voice", order: 150, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" },
+  { id: "appointment_business_name", path: "appointment_setup.business_name", section: "appointments_business", order: 200, active: true, required: true, type: "text", label: "¿Cómo se llama tu negocio?" },
+  { id: "appointment_business_category", path: "appointment_setup.business_category", section: "appointments_business", order: 210, active: true, required: true, type: "choice", label: "¿A qué se dedica?" },
+  { id: "appointment_target_customer", path: "appointment_setup.target_customer", section: "appointments_business", order: 220, active: true, required: true, type: "textarea", label: "¿A quién atiendes principalmente?" },
+  { id: "appointment_business_description", path: "appointment_setup.business_description", section: "appointments_business", order: 230, active: true, required: true, type: "textarea", label: "¿Qué hace tu negocio?" },
+  { id: "appointment_business_differentiator", path: "appointment_setup.business_differentiator", section: "appointments_business", order: 235, active: true, required: false, type: "textarea", label: "¿Qué hace especial tu forma de atender?" },
+  { id: "appointment_assistant_tone", path: "appointment_setup.assistant_tone", section: "appointments_business", order: 240, active: true, required: true, type: "choice", label: "Agendamiento: tono para hablar con tus clientes" },
+  { id: "appointment_display_name", path: "appointment_setup.bot_display_name", section: "appointments_business", order: 250, active: true, required: true, type: "text", label: "¿Cómo quieres que NextforIA se presente?" },
+  { id: "appointment_bot_image", path: "appointment_setup.bot_image", section: "appointments_business", order: 260, active: false, required: false, type: "file", label: "Logo o imagen" },
+  { id: "appointment_allowed_topics", path: "appointment_setup.allowed_topics", section: "appointments_rules", order: 300, active: true, required: true, type: "textarea", label: "Temas que puede responder" },
+  { id: "appointment_forbidden_topics", path: "appointment_setup.forbidden_topics", section: "appointments_rules", order: 310, active: true, required: true, type: "textarea", label: "Temas que debe evitar" },
+  { id: "appointment_escalation_triggers", path: "appointment_setup.escalation_triggers", section: "appointments_rules", order: 320, active: true, required: true, type: "textarea", label: "Cuándo debe pedir ayuda" },
+  { id: "appointment_escalation_contact", path: "appointment_setup.escalation_contact", section: "appointments_rules", order: 330, active: true, required: true, type: "text", label: "Responsable de apoyo humano" },
+  { id: "appointment_services", path: "appointment_setup.services", section: "appointments_knowledge", order: 400, active: true, required: true, type: "textarea", label: "Servicios que se pueden reservar" },
+  { id: "appointment_business_hours", path: "appointment_setup.business_hours", section: "appointments_knowledge", order: 410, active: true, required: true, type: "textarea", label: "Horario general de atención" },
+  { id: "appointment_payment_methods", path: "appointment_setup.payment_methods", section: "appointments_knowledge", order: 420, active: true, required: false, type: "textarea", label: "Métodos de pago" },
+  { id: "appointment_faqs", path: "appointment_setup.faqs", section: "appointments_knowledge", order: 430, active: true, required: false, type: "textarea", label: "Preguntas frecuentes" },
+  { id: "appointment_staff_mode", path: "appointment_setup.staff_mode", section: "appointments_schedule", order: 500, active: true, required: true, type: "choice", label: "Quién atiende las citas" },
+  { id: "appointment_locations", path: "appointment_setup.appointment_locations", section: "appointments_schedule", order: 510, active: true, required: true, type: "textarea", label: "Dónde se realizan las citas" },
+  { id: "appointment_availability_rules", path: "appointment_setup.availability_rules", section: "appointments_schedule", order: 520, active: true, required: true, type: "textarea", label: "Disponibilidad para citas" },
+  { id: "appointment_required_booking_fields", path: "appointment_setup.required_booking_fields", section: "appointments_schedule", order: 530, active: true, required: true, type: "textarea", label: "Datos necesarios para reservar" },
+  { id: "appointment_booking_confirmation_mode", path: "appointment_setup.booking_confirmation_mode", section: "appointments_schedule", order: 540, active: true, required: true, type: "choice", label: "Confirmación de citas" },
+  { id: "appointment_cancellation_policy", path: "appointment_setup.cancellation_policy", section: "appointments_schedule", order: 550, active: true, required: true, type: "textarea", label: "Cancelaciones y cambios" },
+  { id: "appointment_calendar_provider", path: "appointment_setup.calendar_provider", section: "appointments_schedule", order: 560, active: true, required: true, type: "choice", label: "Calendario actual" },
+  { id: "appointment_reminder_channel", path: "appointment_setup.reminder_channel", section: "appointments_followup", order: 600, active: true, required: true, type: "choice", label: "Canal de recordatorios" },
+  { id: "appointment_reminder_timing", path: "appointment_setup.reminder_timing", section: "appointments_followup", order: 610, active: true, required: true, type: "choice", label: "Momento de recordatorio" },
+  { id: "appointment_survey_enabled", path: "appointment_setup.survey_enabled", section: "appointments_followup", order: 620, active: true, required: true, type: "choice", label: "Encuesta posterior" },
+  { id: "appointment_operational_channels", path: "appointment_setup.operational_channels", section: "appointments_channels", order: 700, active: false, required: false, type: "textarea", label: "Resumen interno de canales" },
+  { id: "appointment_channel_whatsapp", path: "meta.whatsapp_number", section: "appointments_channels", order: 701, active: true, required: true, type: "tel", label: "WhatsApp + número" },
+  { id: "appointment_instagram_username", path: "appointment_setup.instagram_username", section: "appointments_channels", order: 702, active: true, required: false, type: "text", label: "Instagram + usuario" },
+  { id: "appointment_channel_email", path: "appointment_setup.channel_email", section: "appointments_channels", order: 703, active: true, required: false, type: "email", label: "Correo electrónico" },
+  { id: "appointment_other_channels", path: "appointment_setup.other_channels", section: "appointments_channels", order: 704, active: true, required: false, type: "textarea", label: "Otros canales" },
+  { id: "appointment_social_accounts", path: "appointment_setup.social_accounts", section: "appointments_channels", order: 710, active: false, required: false, type: "textarea", label: "Redes del negocio" },
+  { id: "appointment_data_consent", path: "appointment_setup.data_consent", section: "appointments_review", order: 800, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" }
 ]);
 
-const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
-const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:nexforia";
-const CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX = "[CustomerSetupQuestionnaire] ";
-const QUESTION_TYPES = ["text", "email", "email_readonly", "tel", "textarea", "choice"];
+const QUESTION_TYPES = Object.freeze(["text", "number", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
+const SETUP_REVIEW_STATUSES = Object.freeze(["incomplete", "ready", "building", "testing", "live"]);
+const CUSTOMER_SERVICE_CONFIGURATION_VERSION = 1;
+const QUESTION_SECTIONS = Object.freeze([
+  "goal",
+  "business",
+  "offering",
+  "commerce",
+  "voice",
+  "appointments_business",
+  "appointments_rules",
+  "appointments_knowledge",
+  "appointments_schedule",
+  "appointments_followup",
+  "appointments_channels",
+  "appointments_review"
+]);
+const BASE_QUESTION_BY_ID = CUSTOMER_SETUP_QUESTIONS.reduce(function (acc, question) {
+  acc[question.id] = question;
+  return acc;
+}, {});
+
+function slugifyQuestionId(value) {
+  const clean = text(value, 90).toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return clean || "pregunta";
+}
+
+function normalizeQuestionType(value, fallback) {
+  const clean = text(value, 40).toLowerCase();
+  return QUESTION_TYPES.includes(clean) ? clean : (fallback || "text");
+}
+
+function normalizeQuestionSection(value, fallback) {
+  const clean = text(value, 60).toLowerCase();
+  return QUESTION_SECTIONS.includes(clean) ? clean : (fallback || "business");
+}
+
+function normalizeCustomQuestionId(input, label, used) {
+  const raw = text(input, 80).toLowerCase();
+  const base = raw.indexOf("custom_") === 0 ? raw.slice(7) : raw;
+  let id = "custom_" + slugifyQuestionId(base || label);
+  let suffix = 2;
+  while (used.has(id) || BASE_QUESTION_BY_ID[id]) {
+    id = "custom_" + slugifyQuestionId(base || label) + "_" + suffix;
+    suffix += 1;
+  }
+  used.add(id);
+  return id;
+}
+
+function customQuestionPath(id) {
+  return "custom." + slugifyQuestionId(String(id || "").replace(/^custom_/, ""));
+}
+
+function normalizeCustomerSetupQuestionnaire(input, actor, now) {
+  const source = input && typeof input === "object" ? input : {};
+  const incoming = Array.isArray(source.questions) ? source.questions : [];
+  const incomingById = incoming.reduce(function (acc, question) {
+    if (question && question.id) acc[String(question.id)] = question;
+    return acc;
+  }, {});
+  const normalizedAt = now || new Date().toISOString();
+  const usedCustomIds = new Set();
+  const questions = CUSTOMER_SETUP_QUESTIONS.map(function (base) {
+    const patch = incomingById[base.id] || {};
+    return Object.assign({}, base, {
+      active: patch.active === false ? false : true,
+      required: patch.required === false ? false : true,
+      order: Number.isFinite(Number(patch.order)) ? Number(patch.order) : base.order,
+      type: normalizeQuestionType(patch.type, base.type),
+      label: text(patch.label, 220) || base.label,
+      placeholder: text(patch.placeholder, 500)
+    });
+  });
+  incoming.forEach(function (question) {
+    if (!question || BASE_QUESTION_BY_ID[question.id]) return;
+    const label = text(question.label, 220) || "Nueva pregunta";
+    const id = normalizeCustomQuestionId(question.id, label, usedCustomIds);
+    questions.push({
+      id,
+      path: customQuestionPath(id),
+      section: normalizeQuestionSection(question.section, "business"),
+      order: Number.isFinite(Number(question.order)) ? Number(question.order) : 900 + questions.length,
+      active: question.active !== false,
+      required: question.required === true,
+      type: normalizeQuestionType(question.type, "text"),
+      label,
+      placeholder: text(question.placeholder, 500),
+      custom: true
+    });
+  });
+  questions.sort(function (a, b) {
+    return (Number(a.order) || 0) - (Number(b.order) || 0) || String(a.id).localeCompare(String(b.id));
+  });
+  return {
+    version: 1,
+    updated_at: normalizedAt,
+    updated_by: text(actor, 120),
+    questions
+  };
+}
+
+function questionAppliesToAnswers(question, answers) {
+  const goal = answers && answers.setup_goal || "unknown";
+  if (question.path === "setup_goal") return true;
+  if (question.path === "operations.monthly_customer_volume") return goal === "customer_service" || goal === "appointments" || goal === "both";
+  if (question.section === "business") return goal === "customer_service" || goal === "both";
+  const appointmentQuestion = String(question.section || "").indexOf("appointments_") === 0 || String(question.path || "").indexOf("appointment_setup.") === 0;
+  if (appointmentQuestion) return goal === "appointments" || goal === "both";
+  return goal === "customer_service" || goal === "both";
+}
+
+function requiredPathsForQuestionnaire(answers, questionnaire) {
+  if (!questionnaire || !Array.isArray(questionnaire.questions)) return null;
+  return questionnaire.questions.filter(function (question) {
+    return question && question.active !== false && question.required === true && question.path && questionAppliesToAnswers(question, answers);
+  }).map(function (question) { return question.path; });
+}
 
 function cloneDefaults() {
   return JSON.parse(JSON.stringify(DEFAULT_ONBOARDING));
@@ -115,9 +359,32 @@ function normalizeOnboarding(input) {
   const operations = input.operations || {};
   const team = input.team || {};
   const confirmations = input.confirmations || {};
+  const customerServiceSetup = input.customer_service_setup || {};
+  const appointmentSetup = input.appointment_setup || {};
+  const custom = input.custom && typeof input.custom === "object" ? input.custom : {};
+  const normalizedCustom = {};
+  Object.keys(custom).slice(0, 120).forEach(function (key) {
+    const cleanKey = slugifyQuestionId(key);
+    if (cleanKey) normalizedCustom[cleanKey] = text(custom[key], 8000);
+  });
   const yesNoUnknown = ["yes", "no", "unknown"];
   const whatsappIntent = choice(meta.whatsapp_integration_intent, ["yes", "later", "no", "unknown"], "unknown");
+  const commerceIntent = choice(commerce.integration_intent, ["yes", "later", "no", "unknown"], "unknown");
+  const commerceStoredStatus = choice(
+    commerce.integration_status,
+    ["not_requested", "requested", "pending_customer", "connected", "needs_review", "failed"],
+    "not_requested"
+  );
+  const commerceIntegrationStatus = commerceStoredStatus === "connected" || commerceStoredStatus === "needs_review" || commerceStoredStatus === "failed"
+    ? commerceStoredStatus
+    : commerceIntent === "yes"
+      ? "requested"
+      : commerceIntent === "later"
+        ? "pending_customer"
+        : "not_requested";
+  const setupGoal = choice(input.setup_goal, ["customer_service", "appointments", "both", "unknown"], "unknown");
   return {
+    setup_goal: setupGoal,
     business: {
       brand_name: text(business.brand_name, 120),
       legal_name: text(business.legal_name, 180),
@@ -157,15 +424,19 @@ function normalizeOnboarding(input) {
       integration_notes: text(channels.integration_notes, 1600)
     },
     commerce: {
-      platform: choice(commerce.platform, ["shopify", "woocommerce", "csv", "api", "other", "none"], "shopify"),
+      platform: choice(commerce.platform, ["shopify", "woocommerce", "wordpress", "csv", "api", "other", "none", "unknown"], "unknown"),
       other_platform: text(commerce.other_platform, 160),
       store_url: text(commerce.store_url, 500),
       catalog_ready: choice(commerce.catalog_ready, yesNoUnknown, "unknown"),
       orders_required: commerce.orders_required !== false,
-      access_owner: text(commerce.access_owner, 120)
+      access_owner: text(commerce.access_owner, 120),
+      integration_intent: commerceIntent,
+      integration_status: commerceIntegrationStatus
     },
     operations: {
       primary_country: text(operations.primary_country, 120) || "Colombia",
+      primary_city: text(operations.primary_city, 120),
+      monthly_customer_volume: text(operations.monthly_customer_volume, 80),
       countries_served: text(operations.countries_served, 1200),
       foreign_number_location_check: operations.foreign_number_location_check !== false,
       business_hours: text(operations.business_hours, 1200),
@@ -191,7 +462,83 @@ function normalizeOnboarding(input) {
       owns_information: !!confirmations.owns_information,
       accepts_guided_setup: !!confirmations.accepts_guided_setup,
       understands_meta_dependency: !!confirmations.understands_meta_dependency
-    }
+    },
+    customer_service_setup: {
+      business_offer_type: choice(customerServiceSetup.business_offer_type, ["products", "services", "both", ""], ""),
+      business_offer_description: text(customerServiceSetup.business_offer_description, 1800),
+      ideal_customer: text(customerServiceSetup.ideal_customer, 1800),
+      value_proposition: text(customerServiceSetup.value_proposition, 1800),
+      bot_display_name: text(customerServiceSetup.bot_display_name, 120),
+      tone: choice(customerServiceSetup.tone, [
+        "cercano_profesional", "vendedor_dinamico", "calido_empatico",
+        "formal_corporativo", "premium", "juvenil_casual", "personalizado", ""
+      ], ""),
+      custom_tone_description: text(customerServiceSetup.custom_tone_description, 1200),
+      brand_restrictions: text(customerServiceSetup.brand_restrictions, 3000),
+      company_logo: text(customerServiceSetup.company_logo, 800000),
+      data_consent: !!customerServiceSetup.data_consent,
+      data_consent_version: text(customerServiceSetup.data_consent_version, 80),
+      data_consent_accepted_at: text(customerServiceSetup.data_consent_accepted_at, 40),
+      setup_status: choice(customerServiceSetup.setup_status, ["draft", "pending_review", "changes_requested", "approved", "active", "ready"], "draft")
+    },
+    appointment_setup: {
+      business_name: text(appointmentSetup.business_name, 120),
+      business_category: choice(appointmentSetup.business_category, [
+        "salud_bienestar", "belleza_estetica", "servicios_profesionales", "legal",
+        "inmobiliaria", "restaurantes", "educacion", "automotriz", "otro"
+      ], ""),
+      business_category_other: text(appointmentSetup.business_category_other, 160),
+      target_customer: text(appointmentSetup.target_customer, 1200),
+      business_description: text(appointmentSetup.business_description, 1800),
+      business_differentiator: text(appointmentSetup.business_differentiator, 1800),
+      assistant_tone: choice(appointmentSetup.assistant_tone, [
+        "cercano_profesional", "formal_corporativo", "calido_empatico",
+        "directo_sencillo", "alegre_casual"
+      ], ""),
+      bot_display_name: text(appointmentSetup.bot_display_name, 120),
+      bot_image: text(appointmentSetup.bot_image, 800000),
+      bot_logo: text(appointmentSetup.bot_logo, 800000),
+      allowed_topics: text(appointmentSetup.allowed_topics, 2500),
+      forbidden_topics: text(appointmentSetup.forbidden_topics, 2500),
+      escalation_triggers: text(appointmentSetup.escalation_triggers, 2500),
+      escalation_contact: text(appointmentSetup.escalation_contact, 1000),
+      human_support_hours: text(appointmentSetup.human_support_hours, 1200),
+      services: text(appointmentSetup.services, 7000),
+      business_hours: text(appointmentSetup.business_hours, 2000),
+      payment_methods: text(appointmentSetup.payment_methods, 2000),
+      faqs: text(appointmentSetup.faqs, 5000),
+      knowledge_documents: text(appointmentSetup.knowledge_documents, 5000),
+      staff_mode: choice(appointmentSetup.staff_mode, ["one", "multiple", "depends", ""], ""),
+      appointment_staff: text(appointmentSetup.appointment_staff, 5000),
+      appointment_locations: text(appointmentSetup.appointment_locations, 5000),
+      availability_rules: text(appointmentSetup.availability_rules, 5000),
+      required_booking_fields: text(appointmentSetup.required_booking_fields, 2500),
+      minimum_booking_notice: text(appointmentSetup.minimum_booking_notice, 500),
+      maximum_booking_window: text(appointmentSetup.maximum_booking_window, 500),
+      booking_confirmation_mode: choice(appointmentSetup.booking_confirmation_mode, ["automatic", "manual_approval", "depends", ""], ""),
+      cancellation_policy: text(appointmentSetup.cancellation_policy, 3000),
+      no_show_policy: text(appointmentSetup.no_show_policy, 2500),
+      booking_payment_required: choice(appointmentSetup.booking_payment_required, ["no", "full", "deposit", "depends", ""], ""),
+      booking_payment_details: text(appointmentSetup.booking_payment_details, 2500),
+      calendar_provider: choice(appointmentSetup.calendar_provider, ["google", "outlook", "calendly", "other", "none", ""], ""),
+      calendar_email: text(appointmentSetup.calendar_email, 180).toLowerCase(),
+      reminder_channel: choice(appointmentSetup.reminder_channel, ["whatsapp", "email", "sms", "none", ""], ""),
+      reminder_timing: choice(appointmentSetup.reminder_timing, ["24h", "2h", "both", "custom", "none", ""], ""),
+      survey_enabled: choice(appointmentSetup.survey_enabled, ["yes", "no", "unknown"], "unknown"),
+      survey_scale: choice(appointmentSetup.survey_scale, ["1_5", "1_10", "nps", ""], ""),
+      high_rating_action: text(appointmentSetup.high_rating_action, 2000),
+      low_rating_action: text(appointmentSetup.low_rating_action, 2000),
+      operational_channels: text(appointmentSetup.operational_channels, 2500),
+      instagram_username: text(appointmentSetup.instagram_username, 120),
+      channel_email: text(appointmentSetup.channel_email, 180).toLowerCase(),
+      other_channels: text(appointmentSetup.other_channels, 2500),
+      social_accounts: text(appointmentSetup.social_accounts, 2500),
+      data_consent: !!appointmentSetup.data_consent,
+      data_consent_version: text(appointmentSetup.data_consent_version, 80),
+      data_consent_accepted_at: text(appointmentSetup.data_consent_accepted_at, 40),
+      setup_status: choice(appointmentSetup.setup_status, ["draft", "pending_review", "changes_requested", "approved", "active", "ready"], "draft")
+    },
+    custom: normalizedCustom
   };
 }
 
@@ -199,122 +546,389 @@ function getPath(source, path) {
   return path.split(".").reduce(function (value, key) { return value && value[key]; }, source);
 }
 
-const REQUIRED_PATHS = CUSTOMER_SETUP_QUESTIONS
-  .filter(function (question) { return question.active && question.required; })
-  .sort(function (a, b) { return a.order - b.order; })
-  .map(function (question) { return question.path; });
-
-function normalizeCustomerSetupQuestionnaire(input, actor, now) {
-  const incoming = Array.isArray(input && input.questions) ? input.questions : Array.isArray(input) ? input : [];
-  const byId = new Map(incoming.map(function (question) { return [text(question && question.id, 80), question || {}]; }));
-  const questions = CUSTOMER_SETUP_QUESTIONS.map(function (base) {
-    const src = byId.get(base.id) || {};
-    const type = choice(src.type, QUESTION_TYPES, base.type);
-    const label = text(src.label == null ? base.label : src.label, 160) || base.label;
-    const placeholder = text(src.placeholder == null ? base.placeholder : src.placeholder, 280);
-    const order = Math.max(1, Math.min(999, Math.round(Number(src.order == null ? base.order : src.order) || base.order)));
+function normalizeSetupReview(input, fallbackStatus) {
+  const source = input && typeof input === "object" ? input : {};
+  const status = choice(source.status, SETUP_REVIEW_STATUSES, fallbackStatus || "incomplete");
+  const history = Array.isArray(source.history) ? source.history.slice(-50).map(function (event) {
+    event = event && typeof event === "object" ? event : {};
     return {
-      id: base.id,
-      path: base.path,
-      section: base.section,
-      order,
-      active: src.active == null ? base.active !== false : src.active === true,
-      required: src.required == null ? base.required === true : src.required === true,
-      type,
-      label,
-      placeholder
+      status: choice(event.status, SETUP_REVIEW_STATUSES, status),
+      action: text(event.action, 80),
+      note: text(event.note, 1200),
+      actor: text(event.actor, 160),
+      at: text(event.at, 40)
     };
-  }).sort(function (a, b) { return a.order - b.order; });
+  }) : [];
   return {
-    version: 1,
-    questions,
-    updated_at: now || new Date().toISOString(),
-    updated_by: text(actor || "super_admin", 120)
+    status,
+    note: text(source.note, 1200),
+    requested_changes: text(source.requested_changes, 2000),
+    updated_by: text(source.updated_by, 160),
+    updated_at: text(source.updated_at, 40),
+    history
   };
 }
 
-function customerSetupRequiredPaths(questionnaire) {
-  const questions = questionnaire && Array.isArray(questionnaire.questions) ? questionnaire.questions : CUSTOMER_SETUP_QUESTIONS;
-  const active = questions.filter(function (question) { return question.active !== false && question.required === true; });
-  return (active.length ? active : CUSTOMER_SETUP_QUESTIONS.filter(function (question) { return question.active && question.required; }))
-    .sort(function (a, b) { return a.order - b.order; })
-    .map(function (question) { return question.path; });
+function customerServiceToneLabel(value, customDescription) {
+  if (value === "personalizado") return text(customDescription, 1200) || "Personalizado";
+  return {
+    cercano_profesional: "Cercano y profesional",
+    vendedor_dinamico: "Vendedor y dinámico",
+    calido_empatico: "Cálido y empático",
+    formal_corporativo: "Formal y corporativo",
+    premium: "Premium",
+    juvenil_casual: "Juvenil y casual"
+  }[value] || text(value, 1200);
 }
+
+function addConfigurationSection(lines, title, entries) {
+  const present = entries.filter(function (entry) { return text(entry[1], 10000); });
+  if (!present.length) return;
+  lines.push("", title + ":");
+  present.forEach(function (entry) {
+    lines.push("- " + entry[0] + ": " + text(entry[1], 10000));
+  });
+}
+
+function buildCustomerServiceSystemPrompt(configuration) {
+  const config = configuration && typeof configuration === "object" ? configuration : {};
+  const lines = [
+    "CONFIGURACIÓN DE CUSTOMER SERVICE EN REVISIÓN INTERNA.",
+    "Esta configuración proviene del setup compartido aprobado por el cliente y Super Admin.",
+    "No inventes información ausente, precios, disponibilidad, descuentos ni promesas.",
+    "No gestiones citas ni uses reglas del bot de agendamiento.",
+    "",
+    "IDENTIDAD:",
+    "- Empresa: " + (text(config.business_name, 120) || "No definida"),
+    "- Nombre del asistente: " + (text(config.assistant_name, 120) || "Nextfor"),
+    "- Objetivo: " + (text(config.objective, 1800) || "Atender clientes y apoyar procesos de compra.")
+  ];
+  addConfigurationSection(lines, "NEGOCIO Y CLIENTE", [
+    ["Qué ofrece", config.business_summary],
+    ["Cliente ideal", config.ideal_customer],
+    ["Propuesta de valor", config.value_proposition],
+    ["País principal", config.primary_country],
+    ["Países atendidos", config.countries_served]
+  ]);
+  addConfigurationSection(lines, "CONOCIMIENTO DE CUSTOMER SERVICE", [
+    ["Productos o servicios", config.products_services],
+    ["Preguntas frecuentes", config.frequent_questions],
+    ["Políticas importantes", config.important_policies],
+    ["Pagos", config.payments],
+    ["Envíos", config.shipping],
+    ["Garantías", config.warranties]
+  ]);
+  addConfigurationSection(lines, "VOZ Y LÍMITES", [
+    ["Tono", config.tone],
+    ["Restricciones de marca", config.brand_restrictions],
+    ["Instrucciones adicionales", config.bot_instructions],
+    ["Confirmar ubicación de números extranjeros", config.foreign_number_location_check ? "Sí" : "No"]
+  ]);
+  addConfigurationSection(lines, "ESCALAMIENTO HUMANO", [
+    ["Escalar cuando", config.handoff_cases],
+    ["Contacto humano", config.handoff_contact],
+    ["Horario humano", config.support_hours]
+  ]);
+  addConfigurationSection(lines, "INTEGRACIONES AUTORIZADAS", [
+    ["Plataforma de comercio", config.commerce_platform],
+    ["Tienda", config.store_url],
+    ["Estado del catálogo", config.catalog_ready],
+    ["Intención de conexión", config.commerce_integration_intent],
+    ["Estado de conexión", config.commerce_integration_status],
+    ["Responsable de autorización", config.commerce_access_owner],
+    ["Consulta de pedidos solicitada", config.orders_required ? "Sí" : "No"],
+    ["Canales", Array.isArray(config.channels) ? config.channels.join(", ") : ""]
+  ]);
+  return lines.join("\n");
+}
+
+function normalizeCustomerServiceConfiguration(input, meta) {
+  const source = input && typeof input === "object" ? input : {};
+  const now = meta && meta.now || new Date().toISOString();
+  const lifecycle = choice(
+    meta && meta.lifecycle != null ? meta.lifecycle : source.lifecycle,
+    ["draft", "approved_for_testing"],
+    "draft"
+  );
+  const channels = Array.isArray(source.channels)
+    ? source.channels.map(function (channel) { return text(channel, 40).toLowerCase(); })
+      .filter(function (channel, index, values) { return channel && values.indexOf(channel) === index; })
+      .slice(0, 12)
+    : [];
+  const normalized = {
+    version: CUSTOMER_SERVICE_CONFIGURATION_VERSION,
+    bot_type: "customer_service",
+    lifecycle,
+    source_record: "client-onboarding",
+    source_setup_updated_at: text(source.source_setup_updated_at, 40),
+    business_name: text(source.business_name, 120),
+    assistant_name: text(source.assistant_name, 120),
+    objective: text(source.objective, 1800),
+    business_summary: text(source.business_summary, 5000),
+    ideal_customer: text(source.ideal_customer, 3000),
+    value_proposition: text(source.value_proposition, 3000),
+    products_services: text(source.products_services, 8000),
+    frequent_questions: text(source.frequent_questions, 8000),
+    important_policies: text(source.important_policies, 8000),
+    payments: text(source.payments, 4000),
+    shipping: text(source.shipping, 4000),
+    warranties: text(source.warranties, 4000),
+    primary_country: text(source.primary_country, 120),
+    countries_served: text(source.countries_served, 1200),
+    foreign_number_location_check: source.foreign_number_location_check !== false,
+    tone: text(source.tone, 1200),
+    brand_restrictions: text(source.brand_restrictions, 5000),
+    bot_instructions: text(source.bot_instructions, 8000),
+    handoff_cases: text(source.handoff_cases, 5000),
+    handoff_contact: text(source.handoff_contact, 1500),
+    support_hours: text(source.support_hours, 1500),
+    commerce_platform: text(source.commerce_platform, 120),
+    store_url: text(source.store_url, 500),
+    catalog_ready: text(source.catalog_ready, 80),
+    commerce_integration_intent: text(source.commerce_integration_intent, 80),
+    commerce_integration_status: text(source.commerce_integration_status, 80),
+    commerce_access_owner: text(source.commerce_access_owner, 160),
+    orders_required: source.orders_required !== false,
+    channels,
+    generated_at: text(source.generated_at, 40) || now,
+    updated_at: now,
+    updated_by: text(meta && meta.actor != null ? meta.actor : source.updated_by, 160),
+    approved_for_testing_at: lifecycle === "approved_for_testing"
+      ? (text(source.approved_for_testing_at, 40) || now)
+      : null,
+    approved_for_testing_by: lifecycle === "approved_for_testing"
+      ? text(meta && meta.actor != null ? meta.actor : source.approved_for_testing_by, 160)
+      : ""
+  };
+  normalized.system_prompt = buildCustomerServiceSystemPrompt(normalized);
+  return normalized;
+}
+
+function generateCustomerServiceConfiguration(input, meta) {
+  const answers = normalizeOnboarding(input);
+  if (answers.setup_goal !== "customer_service" && answers.setup_goal !== "both") return null;
+  const service = answers.customer_service_setup;
+  const enabledChannels = Object.keys(answers.channels).filter(function (channel) {
+    return typeof answers.channels[channel] === "boolean" && answers.channels[channel];
+  });
+  return normalizeCustomerServiceConfiguration({
+    source_setup_updated_at: text(meta && meta.source_setup_updated_at, 40),
+    business_name: answers.business.brand_name,
+    assistant_name: service.bot_display_name,
+    objective: "Atender consultas, orientar al cliente y apoyar procesos de compra exitosos.",
+    business_summary: service.business_offer_description,
+    ideal_customer: service.ideal_customer,
+    value_proposition: service.value_proposition,
+    products_services: answers.operations.services_products,
+    frequent_questions: answers.operations.frequent_questions,
+    important_policies: answers.operations.important_policies,
+    payments: answers.operations.payments,
+    shipping: answers.operations.shipping,
+    warranties: answers.operations.warranties,
+    primary_country: answers.operations.primary_country,
+    countries_served: answers.operations.countries_served,
+    foreign_number_location_check: answers.operations.foreign_number_location_check,
+    tone: customerServiceToneLabel(service.tone, service.custom_tone_description),
+    brand_restrictions: service.brand_restrictions,
+    bot_instructions: answers.operations.bot_instructions,
+    handoff_cases: answers.operations.handoff_cases,
+    handoff_contact: answers.team.human_support_contact,
+    support_hours: answers.operations.support_hours,
+    commerce_platform: answers.commerce.platform,
+    store_url: answers.commerce.store_url,
+    catalog_ready: answers.commerce.catalog_ready,
+    commerce_integration_intent: answers.commerce.integration_intent,
+    commerce_integration_status: answers.commerce.integration_status,
+    commerce_access_owner: answers.commerce.access_owner,
+    orders_required: answers.commerce.orders_required,
+    channels: enabledChannels
+  }, {
+    actor: meta && meta.actor,
+    lifecycle: "draft",
+    now: meta && meta.now
+  });
+}
+
+const CUSTOMER_SERVICE_REQUIRED_PATHS = [
+  "setup_goal",
+  "business.brand_name",
+  "operations.primary_country",
+  "operations.primary_city",
+  "operations.monthly_customer_volume",
+  "customer_service_setup.business_offer_type",
+  "customer_service_setup.business_offer_description",
+  "customer_service_setup.ideal_customer",
+  "customer_service_setup.value_proposition",
+  "customer_service_setup.bot_display_name",
+  "customer_service_setup.tone",
+  "customer_service_setup.brand_restrictions",
+  "team.admin_email",
+  "business.contact_email",
+  "business.contact_phone",
+  "meta.whatsapp_number",
+  "operations.support_hours",
+  "operations.services_products",
+  "commerce.platform",
+  "commerce.integration_intent",
+  "operations.frequent_questions",
+  "operations.important_policies",
+  "team.human_support_contact",
+  "operations.bot_instructions",
+  "customer_service_setup.data_consent"
+];
+
+const APPOINTMENT_STAGE1_REQUIRED_PATHS = [
+  "setup_goal",
+  "appointment_setup.business_name",
+  "appointment_setup.business_category",
+  "operations.monthly_customer_volume",
+  "appointment_setup.target_customer",
+  "appointment_setup.business_description",
+  "appointment_setup.assistant_tone",
+  "appointment_setup.bot_display_name",
+  "appointment_setup.allowed_topics",
+  "appointment_setup.forbidden_topics",
+  "appointment_setup.escalation_triggers",
+  "appointment_setup.escalation_contact",
+  "appointment_setup.services",
+  "appointment_setup.business_hours",
+  "appointment_setup.staff_mode",
+  "appointment_setup.appointment_locations",
+  "appointment_setup.availability_rules",
+  "appointment_setup.required_booking_fields",
+  "appointment_setup.booking_confirmation_mode",
+  "appointment_setup.cancellation_policy",
+  "appointment_setup.calendar_provider",
+  "appointment_setup.reminder_channel",
+  "appointment_setup.reminder_timing",
+  "appointment_setup.survey_enabled",
+  "meta.whatsapp_number",
+  "appointment_setup.data_consent"
+];
+
+function requiredPathsForAnswers(input, questionnaire) {
+  const answers = normalizeOnboarding(input);
+  if (answers.setup_goal === "unknown") return ["setup_goal"];
+  const questionnaireRequired = requiredPathsForQuestionnaire(answers, questionnaire);
+  let required;
+  if (questionnaireRequired && questionnaireRequired.length) {
+    required = questionnaireRequired;
+  } else if (answers.setup_goal === "both") {
+    required = Array.from(new Set(CUSTOMER_SERVICE_REQUIRED_PATHS.concat(APPOINTMENT_STAGE1_REQUIRED_PATHS)));
+  } else if (answers.setup_goal === "appointments") {
+    required = APPOINTMENT_STAGE1_REQUIRED_PATHS;
+  } else {
+    required = CUSTOMER_SERVICE_REQUIRED_PATHS;
+  }
+  if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") {
+    if (["shopify", "woocommerce", "wordpress", "api", "other"].includes(answers.commerce.platform)) {
+      required = required.concat(["commerce.store_url"]);
+    }
+    if (answers.commerce.platform === "other") required = required.concat(["commerce.other_platform"]);
+  }
+  return Array.from(new Set(required));
+}
+
+const REQUIRED_PATHS = CUSTOMER_SERVICE_REQUIRED_PATHS;
 
 function onboardingCompletion(input, questionnaire) {
   const answers = normalizeOnboarding(input);
-  const requiredPaths = customerSetupRequiredPaths(questionnaire);
-  const complete = requiredPaths.filter(function (path) {
+  const required = requiredPathsForAnswers(answers, questionnaire);
+  const complete = required.filter(function (path) {
     const value = getPath(answers, path);
     return value !== "" && value !== "unknown" && value !== false && value != null;
   }).length;
-  return Math.round(complete / requiredPaths.length * 100);
+  return Math.round(complete / required.length * 100);
 }
 
 function createOnboardingRecord(input, meta) {
   meta = meta || {};
   const answers = normalizeOnboarding(input);
-  const questionnaire = normalizeCustomerSetupQuestionnaire(meta.questionnaire || {}, meta.updated_by || "system");
   const now = new Date().toISOString();
   const status = choice(meta.status, ["draft", "submitted", "completed", "in_review", "ready"], "draft");
   const previous = meta.previous && typeof meta.previous === "object" ? meta.previous : {};
+  const previousReview = normalizeSetupReview(previous.setup_review, previous.setup_completed ? "ready" : "incomplete");
+  const reviewStatus = choice(meta.review_status, SETUP_REVIEW_STATUSES, status === "completed" ? "ready" : previousReview.status || "incomplete");
+  if (status === "completed" && (answers.setup_goal === "appointments" || answers.setup_goal === "both")) {
+    const previousAppointmentStatus = previous.answers && previous.answers.appointment_setup && previous.answers.appointment_setup.setup_status;
+    if (!previous.setup_completed || previousAppointmentStatus === "draft" || previousAppointmentStatus === "changes_requested") {
+      answers.appointment_setup.setup_status = "pending_review";
+    }
+    if (answers.appointment_setup.data_consent && !answers.appointment_setup.data_consent_accepted_at) {
+      answers.appointment_setup.data_consent_accepted_at = now;
+    }
+    if (answers.appointment_setup.data_consent && !answers.appointment_setup.data_consent_version) {
+      answers.appointment_setup.data_consent_version = "nextforia-customer-setup-2026-07";
+    }
+  }
+  if (status === "completed" && (answers.setup_goal === "customer_service" || answers.setup_goal === "both")) {
+    const previousCustomerServiceStatus = previous.answers && previous.answers.customer_service_setup && previous.answers.customer_service_setup.setup_status;
+    if (!previous.setup_completed || previousCustomerServiceStatus === "draft" || previousCustomerServiceStatus === "changes_requested") {
+      answers.customer_service_setup.setup_status = "pending_review";
+    }
+    if (answers.customer_service_setup.data_consent && !answers.customer_service_setup.data_consent_accepted_at) {
+      answers.customer_service_setup.data_consent_accepted_at = now;
+    }
+    if (answers.customer_service_setup.data_consent && !answers.customer_service_setup.data_consent_version) {
+      answers.customer_service_setup.data_consent_version = "nextforia-customer-setup-2026-07";
+    }
+  }
   const setupCompleted = previous.setup_completed === true || status === "completed";
   const setupCompletedAt = setupCompleted
     ? (previous.setup_completed_at || meta.setup_completed_at || now)
     : null;
+  if (meta.review_status === "incomplete") {
+    if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "changes_requested";
+    if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "changes_requested";
+  } else if (meta.review_status === "ready" && meta.approve_setup === true) {
+    if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "approved";
+    if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "approved";
+  } else if (meta.review_status === "live") {
+    if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "active";
+    if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "active";
+  }
+  const setupReview = normalizeSetupReview(Object.assign({}, previousReview, {
+    status: reviewStatus,
+    note: meta.review_note != null ? meta.review_note : previousReview.note,
+    requested_changes: meta.requested_changes != null ? meta.requested_changes : previousReview.requested_changes,
+    updated_by: meta.review_actor || previousReview.updated_by,
+    updated_at: meta.review_actor || meta.review_status ? now : previousReview.updated_at,
+    history: previousReview.history.concat(meta.review_event ? [Object.assign({}, meta.review_event, {
+      status: reviewStatus,
+      actor: meta.review_actor || meta.updated_by,
+      at: now
+    })] : [])
+  }), setupCompleted ? "ready" : "incomplete");
+  let customerServiceConfiguration = null;
+  if (Object.prototype.hasOwnProperty.call(meta, "customer_service_configuration")) {
+    customerServiceConfiguration = meta.customer_service_configuration
+      ? normalizeCustomerServiceConfiguration(meta.customer_service_configuration, {
+        actor: meta.review_actor || meta.updated_by,
+        lifecycle: meta.configuration_lifecycle,
+        now
+      })
+      : null;
+  } else if (previous.customer_service_configuration) {
+    customerServiceConfiguration = normalizeCustomerServiceConfiguration(previous.customer_service_configuration, {
+      actor: previous.customer_service_configuration.updated_by,
+      lifecycle: previous.customer_service_configuration.lifecycle,
+      now: previous.customer_service_configuration.updated_at || now
+    });
+  }
   return {
     version: 2,
-    questionnaire_version: questionnaire.version,
+    questionnaire_version: 1,
     tenant_id: text(meta.tenant_id, 80),
     status,
-    completion: onboardingCompletion(answers, questionnaire),
+    completion: onboardingCompletion(answers, meta.questionnaire),
     setup_completed: setupCompleted,
     setup_completed_at: setupCompletedAt,
+    setup_review: setupReview,
+    customer_service_configuration: customerServiceConfiguration,
     last_updated_at: now,
     answers,
     updated_at: now,
     updated_by: text(meta.updated_by, 120)
-  };
-}
-
-function parseCustomerSetupQuestionnaireTurn(turn) {
-  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
-  if (!tools.includes(CUSTOMER_SETUP_QUESTIONNAIRE_TOOL)) return null;
-  const raw = String(turn.botReply || "");
-  if (!raw.startsWith(CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX)) return null;
-  try {
-    const parsed = JSON.parse(raw.slice(CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX.length));
-    if (parsed.version !== 1) return null;
-    return normalizeCustomerSetupQuestionnaire(parsed, parsed.updated_by, parsed.updated_at);
-  } catch (_) {
-    return null;
-  }
-}
-
-function customerSetupQuestionnaireFromTurns(turns) {
-  let current = normalizeCustomerSetupQuestionnaire({}, "system", null);
-  (turns || []).slice().sort(function (a, b) {
-    return new Date(a.ts || 0) - new Date(b.ts || 0);
-  }).forEach(function (turn) {
-    const parsed = parseCustomerSetupQuestionnaireTurn(turn);
-    if (parsed) current = parsed;
-  });
-  return current;
-}
-
-function buildCustomerSetupQuestionnaireRecord(questionnaire) {
-  return {
-    ts: questionnaire.updated_at,
-    userId: CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
-    userMessage: "",
-    botReply: CUSTOMER_SETUP_QUESTIONNAIRE_PREFIX + JSON.stringify(questionnaire),
-    tools: [CUSTOMER_SETUP_QUESTIONNAIRE_TOOL],
-    zeroResultQueries: [],
-    handoff: false,
-    rating: null,
-    numTools: 1,
-    status: "ok",
-    eval: { skip: true, reason: CUSTOMER_SETUP_QUESTIONNAIRE_TOOL }
   };
 }
 
@@ -330,19 +944,23 @@ function buildCoverageConversationContext(record) {
 }
 
 module.exports = {
-  CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
-  CUSTOMER_SETUP_QUESTIONNAIRE_TOOL,
+  CUSTOMER_SERVICE_CONFIGURATION_VERSION,
   CUSTOMER_SETUP_QUESTIONS,
   DEFAULT_ONBOARDING,
+  QUESTION_SECTIONS,
+  QUESTION_TYPES,
+  SETUP_REVIEW_STATUSES,
+  APPOINTMENT_STAGE1_REQUIRED_PATHS,
+  CUSTOMER_SERVICE_REQUIRED_PATHS,
   REQUIRED_PATHS,
-  buildCustomerSetupQuestionnaireRecord,
   buildCoverageConversationContext,
+  buildCustomerServiceSystemPrompt,
   cloneDefaults,
   createOnboardingRecord,
-  customerSetupQuestionnaireFromTurns,
-  customerSetupRequiredPaths,
-  normalizeOnboarding,
+  generateCustomerServiceConfiguration,
+  normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
-  parseCustomerSetupQuestionnaireTurn,
+  normalizeOnboarding,
+  normalizeSetupReview,
   onboardingCompletion
 };

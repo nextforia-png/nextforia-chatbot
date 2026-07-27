@@ -20,6 +20,38 @@ const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
 const renderSuperAdminPanel = require("./super-admin-panel");
 const renderSuperAdminLogin = require("./super-admin-login");
+const renderAppointmentPanel = require("./appointment-panel");
+const {
+  customerAppointmentSnapshot,
+  demoAppointmentSnapshot
+} = require("./customer-appointments");
+const renderCustomerPasswordSetup = require("./customer-access");
+const renderCustomerLogin = require("./customer-login");
+const renderCustomerPublicSignup = require("./customer-public-signup");
+const {
+  CatalogError,
+  CUSTOMER_VISIBLE_BOT_IDS,
+  CUSTOMER_VISIBLE_PLAN_IDS,
+  InMemoryCatalogStore,
+  NEXTFOR_PRICING_JULY_2026,
+  SupabaseCatalogStore,
+  createCatalogService
+} = require("./platform-catalogs");
+const {
+  InMemoryPaymentStore,
+  integritySignature,
+  PaymentError,
+  SupabasePaymentStore,
+  createPaymentService
+} = require("./payments");
+const {
+  CustomerAccessError,
+  InMemoryCustomerAccessStore,
+  SupabaseCustomerAccessStore,
+  createCustomerAccessService,
+  createMemoryEmailSender,
+  createResendEmailSender
+} = require("./customer-access-v2");
 const {
   DEFAULT_PLATFORM_GOALS,
   PLATFORM_GOAL_RECORD_ID,
@@ -28,21 +60,15 @@ const {
   normalizePlatformGoal,
   platformGoalsFromTurns
 } = require("./platform-goals");
-const renderAppointmentPanel = require("./appointment-panel");
-const {
-  customerAppointmentSnapshot,
-  demoAppointmentSnapshot
-} = require("./customer-appointments");
-const renderCustomerPasswordSetup = require("./customer-access");
 const renderClientOnboarding = require("./client-onboarding-page");
 const {
-  CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
-  CUSTOMER_SETUP_QUESTIONNAIRE_TOOL,
-  buildCustomerSetupQuestionnaireRecord,
+  CUSTOMER_SETUP_QUESTIONS,
+  SETUP_REVIEW_STATUSES,
   buildCoverageConversationContext,
   cloneDefaults: defaultClientOnboarding,
   createOnboardingRecord,
-  customerSetupQuestionnaireFromTurns,
+  generateCustomerServiceConfiguration,
+  normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire
 } = require("./client-onboarding");
 const {
@@ -77,6 +103,18 @@ const {
   createTenantConfig,
   validateWhatsAppDestination
 } = require("./tenant-config");
+const { buildRavIntegration } = require("./nextfor-integration");
+const {
+  ChannelConnectionError,
+  InMemoryChannelConnectionStore,
+  MetaChannelProvider,
+  SupabaseChannelConnectionStore,
+  cleanChannel,
+  createChannelConnectionService,
+  createLegacyConnections,
+  createOAuthState,
+  readOAuthState
+} = require("./channel-connections");
 const {
   buildServiceAreaContext,
   buildServiceAreaQuestion,
@@ -137,9 +175,27 @@ function configuredHttpsOrigin(value, fallback, allowedHostnames) {
   }
 }
 
+function configuredHttpsOrigins(value) {
+  return String(value || "").split(",").map(function (entry) {
+    return configuredHttpsOrigin(entry.trim());
+  }).filter(Boolean);
+}
+
+function isSameOriginRequestFromAny(req, configuredOrigins) {
+  // Local/test environments may intentionally omit a public base URL. Preserve
+  // the original same-host validation in that case instead of rejecting every
+  // state-changing admin request.
+  if (!configuredOrigins.length) return isSameOriginRequest(req, "");
+  if (process.env.NODE_ENV === "test" && isSameOriginRequest(req, "")) return true;
+  return configuredOrigins.some(function (origin) { return isSameOriginRequest(req, origin); });
+}
+
 const app = express();
 app.disable("x-powered-by");
-if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
+// Every deployed environment (Production and Staging) runs behind Cloudflare + Render.
+// Without this, req.ip resolves to the proxy address and per-IP rate limiting collapses
+// into a single shared bucket for all clients, so one noisy source locks out everyone.
+app.set("trust proxy", 1);
 app.use(securityHeaders);
 app.post("/webhooks/elevenlabs/post-call", express.raw({ type: "application/json", limit: "1mb" }), receiveElevenLabsPostCallWebhook);
 app.use(express.json({
@@ -151,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v91-super-admin-questionnaire-editor";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v158-release-chatbot-only-preprod";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -188,7 +244,7 @@ const DASHBOARD_ACCESS_MODEL = {
     { role: "viewer", level: 1, scope: "tenant", owner: "Cliente", purpose: "Consulta metricas y conversaciones sin intervenir." }
   ],
   migration_steps: [
-    "Mantener RAV Toys como entorno legado y DERCO como cliente registrado #1.",
+    "Usar RAV Toys como integracion piloto #1 de Atencion al cliente y DERCO como piloto de Agendamiento.",
     "Crear usuarios super_admin para NexforIA y admin/agent/viewer por cliente.",
     "Mantener separado el dashboard Admin del panel Super admin.",
     "Agregar tenant_id a logs, usuarios y configuracion.",
@@ -199,6 +255,8 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL);
+const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT === "1"
+  || (PUBLIC_BASE_URL && new URL(PUBLIC_BASE_URL).hostname === "staging.nextforia.com");
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
 const SUPABASE_URL = normalizedSupabaseUrl && (
@@ -210,6 +268,41 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
+const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
+const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
+const CUSTOMER_SETUP_COMPLETION_PATH = CHANNEL_CONNECTIONS_V1_ENABLED
+  ? "/admin/panel?tab=channels&from=onboarding"
+  : "/admin/panel?tab=setup&from=onboarding";
+const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
+const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
+const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
+const PAYMENTS_ENV = String(process.env.PAYMENTS_ENV || "").trim().toLowerCase();
+const WOMPI_PUBLIC_KEY = String(process.env.WOMPI_PUBLIC_KEY || "").trim();
+const WOMPI_INTEGRITY_SECRET = String(process.env.WOMPI_INTEGRITY_SECRET || "").trim();
+const WOMPI_EVENT_SECRET = String(process.env.WOMPI_EVENT_SECRET || "").trim();
+const WOMPI_ESTIMATED_FEE_RATE = Number(process.env.WOMPI_ESTIMATED_FEE_RATE || 0);
+const WOMPI_ESTIMATED_FIXED_FEE = Number(process.env.WOMPI_ESTIMATED_FIXED_FEE || 0);
+const WOMPI_ESTIMATED_FEE_TAX_RATE = Number(process.env.WOMPI_ESTIMATED_FEE_TAX_RATE || 0);
+const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24, 1, 168);
+const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
+const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
+const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL, CUSTOMER_PANEL_FALLBACK_BASE_URLS).filter(Boolean);
+const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
+  || process.env.CHANNEL_CONNECTIONS_V1_PREVIEW === "1"
+  || (
+    process.env.CHANNEL_CONNECTIONS_V1_PREVIEW !== "0"
+    && process.env.NODE_ENV === "production"
+    && [CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL].filter(Boolean).some(function (origin) {
+      try { return new URL(origin).hostname === "staging.nextforia.com"; }
+      catch (_) { return false; }
+    })
+  );
+const CHANNEL_CONNECTIONS_V1_VISIBLE = CHANNEL_CONNECTIONS_V1_ENABLED || CHANNEL_CONNECTIONS_STAGING_PREVIEW;
+const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
+const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
+const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
 const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
 const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
@@ -226,6 +319,8 @@ const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
+const META_APP_ID = String(process.env.META_APP_ID || "").trim();
+const META_WHATSAPP_CONFIG_ID = String(process.env.META_WHATSAPP_CONFIG_ID || "").trim();
 const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
   ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
   : "";
@@ -242,6 +337,9 @@ const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_I
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.MESSENGER_APP_SECRET || "";
 const MESSENGER_APP_SECRET = META_APP_SECRET;
+const CHANNEL_CONNECTION_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
+  ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/channel-connections/meta/callback"
+  : "";
 const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
 const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -287,7 +385,9 @@ const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
 const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":draft";
 const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":published";
 const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
-const CLIENT_ONBOARDING_RECORD_ID = "client-onboarding:" + DEFAULT_TENANT_ID;
+const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
+const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:global";
+const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
 const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
@@ -305,6 +405,10 @@ const CUSTOMER_PANEL_BUSINESS = {
   customer_number: TENANT_CONFIG.customerNumber,
   status: TENANT_CONFIG.status
 };
+
+function currentRavIntegration(metaWhatsappCheck) {
+  return buildRavIntegration(process.env, { metaWhatsappCheck });
+}
 // ─────────────────────────────────────────────────────────────────────────────────
 
 const productionConfigErrors = validateProductionConfig({
@@ -323,6 +427,29 @@ if (process.env.NODE_ENV === "production" && RAW_SUPABASE_URL && !SUPABASE_URL) 
 if (process.env.NODE_ENV === "production" && (!IG_GRAPH_BASE_URL || !MESSENGER_GRAPH_BASE_URL)) productionConfigErrors.push("Meta Graph API base URLs are invalid");
 if (process.env.NODE_ENV === "production" && RAW_DATA_ENCRYPTION_KEY && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY must be a base64url-encoded 32-byte key");
 if (process.env.NODE_ENV === "production" && SUPABASE_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when Supabase persistence is enabled");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("SUPABASE_URL and SUPABASE_KEY are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_VISIBLE && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when channel connections are visible");
+if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
+if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");
+if (PAYMENTS_V1_ENABLED && PAYMENTS_ENV !== "staging") productionConfigErrors.push("PAYMENTS_ENV=staging is required for Payments v1");
+if (PAYMENTS_V1_ENABLED && !PAYMENTS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required for Payments v1 outside test mode");
+if (PAYMENTS_V1_ENABLED && !PUBLIC_BASE_URL) productionConfigErrors.push("PUBLIC_BASE_URL must be a valid HTTPS origin for Wompi checkout and webhook redirects");
+if (PAYMENTS_V1_ENABLED && (!/^pub_test_/.test(WOMPI_PUBLIC_KEY) || !/^test_integrity_/.test(WOMPI_INTEGRITY_SECRET) || !/^test_events_/.test(WOMPI_EVENT_SECRET))) {
+  productionConfigErrors.push("Wompi Sandbox public, integrity and event credentials are required for Payments v1");
+}
+if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_RATE) || WOMPI_ESTIMATED_FEE_RATE < 0 || WOMPI_ESTIMATED_FEE_RATE > 1)) {
+  productionConfigErrors.push("WOMPI_ESTIMATED_FEE_RATE must be a decimal between 0 and 1");
+}
+if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FIXED_FEE) || WOMPI_ESTIMATED_FIXED_FEE < 0)) {
+  productionConfigErrors.push("WOMPI_ESTIMATED_FIXED_FEE must be a non-negative COP amount");
+}
+if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_TAX_RATE) || WOMPI_ESTIMATED_FEE_TAX_RATE < 0 || WOMPI_ESTIMATED_FEE_TAX_RATE > 1)) {
+  productionConfigErrors.push("WOMPI_ESTIMATED_FEE_TAX_RATE must be a decimal between 0 and 1");
+}
 if (productionConfigErrors.length) {
   console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
   process.exit(1);
@@ -334,20 +461,34 @@ if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
 if (!ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY missing"); process.exit(1); }
 
 const adminRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 600 });
+const wompiWebhookRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 300 });
 const loginRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 12,
   keyGenerator: function (req) {
-    const username = String(req.body && (req.body.username || (req.body.key ? "master-key" : "unknown")) || "unknown").trim().toLowerCase();
+    const username = String(req.body && (req.body.email || req.body.username || (req.body.key ? "master-key" : "unknown")) || "unknown").trim().toLowerCase();
     return String(req.ip || req.socket && req.socket.remoteAddress || "unknown") + ":" + username;
   }
 });
 app.use("/admin", adminRateLimiter);
+app.use("/admin", async function revalidateCustomerSession(req, res, next) {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
+  const session = readDashboardSession(req);
+  if (!session || session.version !== 2) return next();
+  req.dashboardSessionChecked = true;
+  try {
+    const activeUser = await customerAccessService.validateSession(session);
+    req.dashboardVerifiedSession = activeUser ? Object.assign({}, session, activeUser, { ok: true, version: 2, session_version: 2, method: "session" }) : null;
+    return next();
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "customer_access_unavailable" });
+  }
+});
 app.use("/admin", function protectAdminStateChanges(req, res, next) {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   const auth = dashboardAuth(req);
   if (auth.ok && auth.method === "key") return next();
-  if (!isSameOriginRequest(req, PUBLIC_BASE_URL)) {
+  if (!isSameOriginRequestFromAny(req, ADMIN_ALLOWED_BASE_URLS)) {
     res.status(403).json({ ok: false, error: "invalid_request_origin" });
     return;
   }
@@ -404,7 +545,7 @@ const instagramRuntimeState = {
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
-let clientOnboardingCache = { loaded_at: 0, record: null };
+const clientOnboardingCacheByTenant = new Map();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
@@ -416,6 +557,179 @@ let turnRating = null;     // rating capturado en el turno
 
 // ─── Persistencia en Supabase (v37) ───────────────────────────────────
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+const customerAccessStore = CUSTOMER_ACCESS_V2_ENABLED
+  ? (CUSTOMER_ACCESS_TEST_MODE
+      ? new InMemoryCustomerAccessStore()
+      : new SupabaseCustomerAccessStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_USERS) {
+  try {
+    const fixtures = JSON.parse(process.env.CUSTOMER_ACCESS_TEST_USERS);
+    if (!Array.isArray(fixtures)) throw new Error("fixtures_must_be_array");
+    fixtures.forEach(function (fixture) {
+      customerAccessStore.seedActiveUser(fixture);
+      // Existing test customers represent returning users unless a fixture
+      // explicitly asks to exercise first-login setup.
+      if (fixture.setup_completed === false) return;
+      const answers = defaultClientOnboarding();
+      const email = String(fixture.email || "").trim().toLowerCase();
+      answers.business.brand_name = String(fixture.company_name || fixture.tenant_id || "Empresa");
+      answers.business.contact_email = email;
+      answers.business.contact_phone = "+57 300 000 0000";
+      answers.meta.whatsapp_number = "+57 300 000 0000";
+      answers.operations.business_hours = "Lunes a viernes, 9:00 a.m. a 6:00 p.m.";
+      answers.operations.services_products = "Productos y servicios de prueba";
+      answers.operations.frequent_questions = "Preguntas frecuentes de prueba";
+      answers.operations.important_policies = "Políticas de prueba";
+      answers.operations.bot_instructions = "Responder con claridad y escalar cuando corresponda.";
+      answers.team.admin_email = email;
+      answers.team.human_support_contact = email;
+      const record = createOnboardingRecord(answers, {
+        tenant_id: fixture.tenant_id,
+        status: "completed",
+        updated_by: email
+      });
+      clientOnboardingCacheByTenant.set(cleanTenantId(fixture.tenant_id), { loaded_at: Date.now(), record });
+    });
+  } catch (_) {
+    throw new Error("CUSTOMER_ACCESS_TEST_USERS must be a valid fixture array");
+  }
+}
+if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_INVITATIONS) {
+  try {
+    const fixtures = JSON.parse(process.env.CUSTOMER_ACCESS_TEST_INVITATIONS);
+    if (!Array.isArray(fixtures)) throw new Error("fixtures_must_be_array");
+    fixtures.forEach(function (fixture) { customerAccessStore.seedInvitation(fixture); });
+  } catch (_) {
+    throw new Error("CUSTOMER_ACCESS_TEST_INVITATIONS must be a valid fixture array");
+  }
+}
+const customerAccessEmailSender = CUSTOMER_ACCESS_V2_ENABLED
+  ? (CUSTOMER_ACCESS_TEST_MODE
+      ? createMemoryEmailSender()
+      : createResendEmailSender({ apiKey: RESEND_API_KEY, from: CUSTOMER_INVITE_FROM_EMAIL, replyTo: CUSTOMER_INVITE_REPLY_TO, axiosClient: axios }))
+  : null;
+const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
+  ? createCustomerAccessService({
+      store: customerAccessStore,
+      emailSender: customerAccessEmailSender,
+      baseUrl: CUSTOMER_PANEL_BASE_URL,
+      fallbackBaseUrls: CUSTOMER_PANEL_FALLBACK_BASE_URLS,
+      inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
+    })
+  : null;
+const channelConnectionsPreviewOnly = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHANNEL_CONNECTIONS_V1_ENABLED;
+const channelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE
+  ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsPreviewOnly
+      ? new InMemoryChannelConnectionStore()
+      : new SupabaseChannelConnectionStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
+  ? new MetaChannelProvider({
+      appId: META_APP_ID,
+      appSecret: META_APP_SECRET,
+      whatsappConfigId: META_WHATSAPP_CONFIG_ID,
+      graphVersion: META_GRAPH_VERSION,
+      redirectUri: CHANNEL_CONNECTION_CALLBACK_URL,
+      axiosClient: axios
+    })
+  : null;
+const protectedLegacyChannelConnections = createLegacyConnections({
+  tenantId: DEFAULT_TENANT_ID,
+  whatsapp: {
+    configured: !!(WA_TOKEN && PHONE_NUMBER_ID),
+    phoneNumberId: PHONE_NUMBER_ID,
+    displayPhone: process.env.TENANT_DISPLAY_PHONE || "",
+    webhookStatus: VERIFY_TOKEN ? "configured" : "needs_attention"
+  },
+  instagram: {
+    configured: !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID),
+    userId: IG_USER_ID,
+    label: process.env.IG_USERNAME || "",
+    webhookStatus: IG_VERIFY_TOKEN ? "configured" : "needs_attention"
+  },
+  messenger: {
+    configured: !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID),
+    pageId: MESSENGER_PAGE_ID,
+    label: process.env.MESSENGER_PAGE_NAME || "",
+    webhookStatus: MESSENGER_VERIFY_TOKEN ? "configured" : "needs_attention"
+  }
+});
+const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
+  ? createChannelConnectionService({
+      store: channelConnectionStore,
+      provider: channelConnectionProvider,
+      encryptionKey: DATA_ENCRYPTION_KEY,
+      legacyConnections: protectedLegacyChannelConnections
+    })
+  : null;
+const usedChannelOAuthNonces = new Set();
+// Catálogo editable de planes y bots. Comparte el gate de customer access v2.
+const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
+  ? (CUSTOMER_ACCESS_TEST_MODE
+      ? new InMemoryCatalogStore({ accessStore: customerAccessStore })
+      : new SupabaseCatalogStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const catalogService = CUSTOMER_ACCESS_V2_ENABLED ? createCatalogService({ store: catalogStore }) : null;
+const paymentStore = PAYMENTS_V1_ENABLED
+  ? (PAYMENTS_TEST_MODE
+      ? new InMemoryPaymentStore()
+      : new SupabasePaymentStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : null;
+const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
+  store: paymentStore,
+  catalogService,
+  publicKey: WOMPI_PUBLIC_KEY,
+  integritySecret: WOMPI_INTEGRITY_SECRET,
+  eventSecret: WOMPI_EVENT_SECRET,
+  estimatedFeeRate: WOMPI_ESTIMATED_FEE_RATE,
+  estimatedFixedFee: WOMPI_ESTIMATED_FIXED_FEE,
+  estimatedTaxRate: WOMPI_ESTIMATED_FEE_TAX_RATE,
+  publicBaseUrl: PUBLIC_BASE_URL
+}) : null;
+
+async function syncNextforPricingJuly2026() {
+  if (!NEXTFOR_PRICING_SYNC_ON_BOOT || CUSTOMER_ACCESS_TEST_MODE || !CUSTOMER_ACCESS_V2_ENABLED || !SUPABASE_ENABLED) return;
+  const rest = SUPABASE_URL + "/rest/v1/";
+  const upsertHeaders = Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS);
+  const patchHeaders = Object.assign({ Prefer: "return=minimal" }, SB_HEADERS);
+  const bots = [
+    { id: "atencion-cliente", name: "Atención al cliente", descripcion: "Atiende, orienta, responde preguntas y escala casos a humanos.", orden: 1, active: true, updated_at: new Date().toISOString() },
+    { id: "agendamiento", name: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", orden: 2, active: true, updated_at: new Date().toISOString() },
+    { id: "commerce", name: "Commerce", descripcion: "Consulta productos, precios, disponibilidad y pedidos cuando aplique.", orden: 3, active: true, updated_at: new Date().toISOString() }
+  ];
+  const plans = NEXTFOR_PRICING_JULY_2026.map(function (plan) {
+    return {
+      id: plan.id,
+      name: plan.nombre,
+      descripcion: plan.descripcion,
+      bot_id: plan.bot_id,
+      precio_setup: 0,
+      precio_mensual: plan.precio_mensual,
+      chats_incluidos: plan.chats_incluidos,
+      beneficios: plan.beneficios,
+      etiqueta: plan.etiqueta,
+      orden: plan.orden,
+      active: true,
+      updated_at: new Date().toISOString()
+    };
+  });
+  try {
+    await axios.post(rest + "platform_bots?on_conflict=id", bots, { headers: upsertHeaders, timeout: 10000 });
+    await axios.post(rest + "platform_plans?on_conflict=id", plans, { headers: upsertHeaders, timeout: 10000 });
+    await axios.patch(rest + "platform_plans?id=in.(starter,growth,scale)", { active: false, precio_setup: 0, updated_at: new Date().toISOString() }, { headers: patchHeaders, timeout: 10000 });
+    await axios.patch(rest + "tenants", { precio_setup_contratado: 0 }, { params: { precio_setup_contratado: "not.is.null" }, headers: patchHeaders, timeout: 10000 });
+    try {
+      await axios.patch(rest + "billing_contracts", { contracted_setup_price: 0, updated_at: new Date().toISOString() }, { params: { contracted_setup_price: "gt.0" }, headers: patchHeaders, timeout: 10000 });
+    } catch (billingError) {
+      const status = billingError && billingError.response && billingError.response.status;
+      if (status && status !== 404) throw billingError;
+    }
+    console.log("Nextfor pricing July 2026 synced");
+  } catch (error) {
+    console.error("Nextfor pricing sync failed:", error.response && error.response.data || error.message);
+  }
+}
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -499,10 +813,10 @@ async function supabaseFetchRecent(limit) {
     return r.data;
   } catch (e) { console.error("supabaseFetchRecent error:", e.message); return null; }
 }
-async function supabaseFetchUserRecent(userId, limit) {
+async function supabaseFetchUserRecent(userId, limit, tenantId) {
   if (!SUPABASE_ENABLED) return null;
   try {
-    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(DEFAULT_TENANT_ID) : "";
+    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(cleanTenantId(tenantId) || DEFAULT_TENANT_ID) : "";
     const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*&user_id=eq." + encodeURIComponent(userId) + tenantFilter + "&order=ts.desc&limit=" + (limit || 20);
     const r = await axios.get(url, { headers: SB_HEADERS, timeout: 8000 });
     return r.data;
@@ -526,6 +840,23 @@ async function supabaseFetchUserToolRecent(userId, toolName, limit) {
     });
     return r.data;
   } catch (e) { console.error("supabaseFetchUserToolRecent error:", e.message); return null; }
+}
+async function supabaseFetchToolRecent(toolName, limit) {
+  if (!SUPABASE_ENABLED) return null;
+  try {
+    const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE;
+    const r = await axios.get(url, {
+      params: {
+        select: "*",
+        tools: "cs." + JSON.stringify([toolName]),
+        order: "ts.desc",
+        limit: limit || 100
+      },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    return r.data;
+  } catch (e) { console.error("supabaseFetchToolRecent error:", e.message); return null; }
 }
 async function supabaseFetchPending(limit) {
   if (!SUPABASE_ENABLED) return null;
@@ -681,13 +1012,8 @@ function isCustomerMemoryTurn(turn) {
   return tools.includes(CUSTOMER_MEMORY_TOOL);
 }
 
-function isPlatformGoalTurn(turn) {
-  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
-  return tools.includes(PLATFORM_GOAL_TOOL);
-}
-
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn) || isPlatformGoalTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -3092,6 +3418,16 @@ function instagramEventsFromEntry(entry) {
   return events;
 }
 
+function instagramEntryMatchesLegacyRuntime(entry, events) {
+  const expected = [IG_USER_ID, IG_SEND_ID].filter(Boolean).map(String);
+  if (!expected.length) return false;
+  const destinations = [entry && entry.id];
+  (events || []).forEach(function (event) {
+    destinations.push(event && event.recipient && event.recipient.id);
+  });
+  return destinations.filter(Boolean).map(String).some(function (id) { return expected.includes(id); });
+}
+
 app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.webhook_requests++;
   instagramRuntimeState.last_webhook_at = new Date().toISOString();
@@ -3109,6 +3445,11 @@ app.post("/instagram/webhook", async (req, res) => {
     }
     for (const entry of req.body?.entry || []) {
       const events = instagramEventsFromEntry(entry);
+      if (!instagramEntryMatchesLegacyRuntime(entry, events)) {
+        instagramRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
+        log("info", "instagram_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
+        continue;
+      }
       instagramRuntimeState.last_entry_shape = Array.isArray(entry?.messaging)
         ? "messaging"
         : Array.isArray(entry?.changes) ? "changes" : "unknown";
@@ -3172,6 +3513,10 @@ app.post("/messenger/webhook", async (req, res) => {
   try {
     if (req.body?.object !== "page") return;
     for (const entry of req.body?.entry || []) {
+      if (!MESSENGER_PAGE_ID || String(entry && entry.id || "") !== String(MESSENGER_PAGE_ID)) {
+        log("info", "messenger_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
+        continue;
+      }
       for (const event of entry.messaging || []) {
         if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
         const userId = `ms:${event.sender.id}`;
@@ -3289,7 +3634,22 @@ function signDashboardPayload(payload) {
 }
 
 function createDashboardSession(user) {
+  if (CUSTOMER_ACCESS_V2_ENABLED && user.user_id && user.email && user.tenant_id) {
+    const payloadV2 = Buffer.from(JSON.stringify({
+      v: 2,
+      uid: String(user.user_id),
+      e: normalizeDashboardUsername(user.email),
+      n: normalizeDashboardUsername(user.email),
+      r: cleanDashboardRole(user.role),
+      t: cleanTenantId(user.tenant_id),
+      exp: Date.now() + DASHBOARD_SESSION_TTL_HOURS * 60 * 60 * 1000
+    })).toString("base64url");
+    return payloadV2 + "." + signDashboardPayload(payloadV2);
+  }
   const payload = Buffer.from(JSON.stringify({
+    v: 1,
+    uid: null,
+    e: user.email || null,
     u: user.username,
     n: user.name || user.username,
     r: cleanDashboardRole(user.role),
@@ -3309,8 +3669,29 @@ function readDashboardSession(req) {
   try {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!session.exp || session.exp < Date.now()) return null;
+    if (session.v === 2) {
+      const email = normalizeDashboardUsername(session.e);
+      const tenantId = cleanTenantId(session.t);
+      const userId = String(session.uid || "");
+      if (!CUSTOMER_ACCESS_V2_ENABLED || !userId || !email || !tenantId || !session.r) return null;
+      return {
+        ok: true,
+        version: 2,
+        session_version: 2,
+        user_id: userId,
+        email,
+        username: email,
+        name: email,
+        role: cleanDashboardRole(session.r),
+        tenant_id: tenantId,
+        method: "session"
+      };
+    }
     return {
       ok: true,
+      version: Number(session.v) || 1,
+      user_id: session.uid ? String(session.uid) : null,
+      email: session.e ? normalizeDashboardUsername(session.e) : null,
       username: String(session.u || "usuario"),
       name: String(session.n || session.u || "usuario"),
       role: cleanDashboardRole(session.r),
@@ -3425,40 +3806,6 @@ async function persistDashboardCustomerUser(input) {
   return user;
 }
 
-async function loadPlatformGoals(requirePersistentRead) {
-  let turns = conversationLogs.filter(isPlatformGoalTurn);
-  if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(PLATFORM_GOAL_RECORD_ID, 100);
-    if (rows) turns = rows.map(normalizeTurnRow).concat(turns);
-    else if (requirePersistentRead && !turns.length) throw new Error("platform_goal_store_unavailable");
-  } else if (requirePersistentRead && process.env.NODE_ENV === "production" && !turns.length) {
-    throw new Error("platform_goal_store_unavailable");
-  }
-  return platformGoalsFromTurns(turns);
-}
-
-async function persistPlatformGoal(goalId, input, auth) {
-  const memoryGoal = platformGoalsFromTurns(conversationLogs.filter(isPlatformGoalTurn))
-    .find(function (goal) { return goal.id === goalId; });
-  const current = memoryGoal
-    || DEFAULT_PLATFORM_GOALS.find(function (goal) { return goal.id === goalId; })
-    || null;
-  const goal = normalizePlatformGoal(
-    Object.assign({}, input || {}, { id: goalId }),
-    current,
-    auth && (auth.username || auth.name) || "super_admin"
-  );
-  const rec = buildPlatformGoalRecord(goal);
-  conversationLogs.push(rec);
-  if (conversationLogs.length > 100) conversationLogs.shift();
-  if (SUPABASE_ENABLED) {
-    supabaseInsertStrict(rec).catch(function (error) {
-      log("error", "platform_goal_async_persist_failed", { error: String(error && error.message || "").slice(0, 160) });
-    });
-  }
-  return goal;
-}
-
 function parseBotSetupTurn(turn) {
   if (!isBotSetupTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[BotSetup\]\s*/, "");
@@ -3522,78 +3869,157 @@ async function persistBotSetup(answers, status, auth) {
   return record;
 }
 
-function parseClientOnboardingTurn(turn) {
+function clientOnboardingRecordId(tenantId) {
+  return "client-onboarding:" + (cleanTenantId(tenantId) || DEFAULT_TENANT_ID);
+}
+
+function parseClientOnboardingTurn(turn, tenantId) {
   if (!isClientOnboardingTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    if (![1, 2].includes(parsed.version) || parsed.tenant_id !== CUSTOMER_PANEL_BUSINESS.id || !parsed.answers) return null;
+    if (![1, 2].includes(parsed.version) || parsed.tenant_id !== (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) || !parsed.answers) return null;
+    if (parsed.version === 1) {
+      parsed.setup_completed = false;
+      parsed.setup_completed_at = null;
+      parsed.last_updated_at = parsed.updated_at || null;
+    }
     return parsed;
   } catch (_) {
     return null;
   }
 }
 
-async function loadClientOnboarding(force) {
+function parseAnyClientOnboardingTurn(turn) {
+  if (!isClientOnboardingTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (![1, 2].includes(parsed.version) || !parsed.tenant_id || !parsed.answers) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function isMissingConversationLogsError(error) {
+  const data = error && error.response && error.response.data;
+  const text = JSON.stringify(data || {}) + " " + String(error && error.message || "");
+  return text.includes("PGRST205") || text.includes("conversation_logs");
+}
+
+async function appendClientOnboardingAuditFallback(record, tenantId, actor) {
+  if (!SUPABASE_ENABLED || !record) return null;
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const payload = {
+    tenant_id: cleanTenant,
+    invitation_id: null,
+    actor: String(actor || "customer").slice(0, 160),
+    action: "tenant_user_login",
+    metadata: {
+      source: CLIENT_ONBOARDING_TOOL,
+      storage_fallback: "tenant_access_audit",
+      record
+    }
+  };
+  await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", payload, {
+    headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS),
+    timeout: 8000
+  });
+  return record;
+}
+
+async function fetchClientOnboardingAuditFallback(tenantId) {
+  if (!SUPABASE_ENABLED) return null;
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+      headers: SB_HEADERS,
+      params: {
+        select: "metadata,created_at",
+        tenant_id: "eq." + cleanTenant,
+        order: "created_at.desc",
+        limit: 50
+      },
+      timeout: 8000
+    });
+    const rows = Array.isArray(response.data) ? response.data : [];
+    return rows.map(function (row) {
+      const metadata = row && row.metadata || {};
+      return metadata.source === CLIENT_ONBOARDING_TOOL && metadata.record
+        ? metadata.record
+        : null;
+    }).find(function (record) {
+      return record && record.tenant_id === cleanTenant && record.answers;
+    }) || null;
+  } catch (error) {
+    console.error("client onboarding audit fallback fetch error:", error.message);
+    return null;
+  }
+}
+
+async function loadClientOnboarding(force, tenantId) {
+  tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
-  if (!force && clientOnboardingCache.loaded_at && now - clientOnboardingCache.loaded_at < 30000) return clientOnboardingCache.record;
-  let record = clientOnboardingCache.record;
+  const cached = clientOnboardingCacheByTenant.get(tenantId) || { loaded_at: 0, record: null };
+  if (!force && cached.loaded_at && now - cached.loaded_at < 30000) return cached.record;
+  let record = cached.record;
+  const recordId = clientOnboardingRecordId(tenantId);
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(CLIENT_ONBOARDING_RECORD_ID, 1);
-    if (rows) record = rows.map(normalizeTurnRow).map(parseClientOnboardingTurn).find(Boolean) || record;
+    const rows = await supabaseFetchUserRecent(recordId, 1, tenantId);
+    if (rows) record = rows.map(normalizeTurnRow).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
+    if (!record) record = await fetchClientOnboardingAuditFallback(tenantId) || record;
   } else {
-    record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === CLIENT_ONBOARDING_RECORD_ID; }).map(parseClientOnboardingTurn).find(Boolean) || record;
+    record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === recordId; }).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
   }
   if (!record) {
     record = createOnboardingRecord(defaultClientOnboarding(), {
-      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
+      tenant_id: tenantId,
       status: "draft",
       updated_by: ""
     });
     record.updated_at = null;
-    record.last_updated_at = null;
-    record.setup_completed_at = null;
   }
-  clientOnboardingCache = { loaded_at: now, record };
+  clientOnboardingCacheByTenant.set(tenantId, { loaded_at: now, record });
   return record;
 }
 
-async function loadCustomerSetupQuestionnaire(force) {
-  const now = Date.now();
-  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < 30000) {
-    return customerSetupQuestionnaireCache.questionnaire;
+async function listRecentClientOnboardingRecords(limit) {
+  const seen = new Set();
+  const records = [];
+  function collect(turn) {
+    const fallbackRecord = parseAnyClientOnboardingTurn(turn);
+    const tenantId = cleanTenantId(turn && turn.tenantId) || cleanTenantId(fallbackRecord && fallbackRecord.tenant_id);
+    if (!tenantId || seen.has(tenantId)) return;
+    const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
+    if (!record || !record.answers) return;
+    seen.add(tenantId);
+    records.push(record);
   }
-  let turns = conversationLogs.filter(isCustomerSetupQuestionnaireTurn);
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID, 50);
-    if (rows) turns = rows.map(normalizeTurnRow).concat(turns);
+    const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200);
+    (rows || []).map(normalizeTurnRow).forEach(collect);
+  } else {
+    conversationLogs.slice().reverse().filter(isClientOnboardingTurn).forEach(collect);
   }
-  const questionnaire = customerSetupQuestionnaireFromTurns(turns);
-  customerSetupQuestionnaireCache = { loaded_at: now, questionnaire };
-  return questionnaire;
+  return records;
 }
 
-async function persistCustomerSetupQuestionnaire(input, auth) {
-  const questionnaire = normalizeCustomerSetupQuestionnaire(input, auth && (auth.name || auth.username) || "super_admin");
-  const rec = buildCustomerSetupQuestionnaireRecord(questionnaire);
-  conversationLogs.push(rec);
-  if (conversationLogs.length > 100) conversationLogs.shift();
-  customerSetupQuestionnaireCache = { loaded_at: Date.now(), questionnaire };
-  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
-  return questionnaire;
-}
-
-async function persistClientOnboarding(answers, status, auth) {
+async function persistClientOnboarding(answers, status, auth, tenantId) {
+  tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const previous = await loadClientOnboarding(false, tenantId);
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
   const record = createOnboardingRecord(answers, {
-    tenant_id: CUSTOMER_PANEL_BUSINESS.id,
-    status: status === "submitted" ? "submitted" : "draft",
+    tenant_id: tenantId,
+    status: ["submitted", "completed"].includes(status) ? status : "draft",
     updated_by: auth && (auth.name || auth.username),
+    previous,
     questionnaire
   });
   const rec = {
     ts: record.updated_at,
-    userId: CLIENT_ONBOARDING_RECORD_ID,
+    userId: clientOnboardingRecordId(tenantId),
+    tenantId,
     userMessage: "",
     botReply: "[ClientOnboarding] " + JSON.stringify(record),
     tools: [CLIENT_ONBOARDING_TOOL],
@@ -3604,11 +4030,343 @@ async function persistClientOnboarding(answers, status, auth) {
     status: "ok",
     eval: { skip: true, reason: CLIENT_ONBOARDING_TOOL }
   };
+  if (SUPABASE_ENABLED) {
+    try {
+      await supabaseInsertStrict(rec);
+    } catch (error) {
+      if (!isMissingConversationLogsError(error)) throw error;
+      await appendClientOnboardingAuditFallback(record, tenantId, auth && (auth.name || auth.username || auth.email) || "customer");
+    }
+  }
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  clientOnboardingCacheByTenant.set(tenantId, { loaded_at: Date.now(), record });
+  return record;
+}
+
+async function appendClientOnboardingRecord(record, tenantId) {
+  tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const rec = {
+    ts: record.updated_at || new Date().toISOString(),
+    userId: clientOnboardingRecordId(tenantId),
+    tenantId,
+    userMessage: "",
+    botReply: "[ClientOnboarding] " + JSON.stringify(record),
+    tools: [CLIENT_ONBOARDING_TOOL, SUPER_ADMIN_SETUP_REVIEW_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 2,
+    status: "ok",
+    eval: { skip: true, reason: SUPER_ADMIN_SETUP_REVIEW_TOOL }
+  };
+  if (SUPABASE_ENABLED) {
+    try {
+      await supabaseInsertStrict(rec);
+    } catch (error) {
+      if (!isMissingConversationLogsError(error)) throw error;
+      await appendClientOnboardingAuditFallback(record, tenantId, "super_admin_setup_review");
+    }
+  }
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  clientOnboardingCacheByTenant.set(tenantId, { loaded_at: Date.now(), record });
+  return record;
+}
+
+function setupReviewSummary(record) {
+  const review = record && record.setup_review || {};
+  const rawStatus = String(review.status || (record && record.setup_completed ? "ready" : "incomplete")).toLowerCase();
+  const status = SETUP_REVIEW_STATUSES.includes(rawStatus) ? rawStatus : "incomplete";
+  return {
+    status,
+    label: {
+      incomplete: "Incomplete",
+      ready: "Ready",
+      building: "Building",
+      testing: "Testing",
+      live: "Live"
+    }[status],
+    updated_at: review.updated_at || record && (record.last_updated_at || record.updated_at) || null,
+    updated_by: review.updated_by || record && record.updated_by || null,
+    note: review.note || "",
+    requested_changes: review.requested_changes || "",
+    history: Array.isArray(review.history) ? review.history.slice(-20) : []
+  };
+}
+
+async function listSetupReviewTenants() {
+  const tenants = [];
+  const seen = new Set();
+  function add(tenant) {
+    if (!tenant || !tenant.id || seen.has(tenant.id)) return;
+    seen.add(tenant.id);
+    tenants.push(tenant);
+  }
+  add({
+    id: CUSTOMER_PANEL_BUSINESS.id,
+    company_name: CUSTOMER_PANEL_BUSINESS.name,
+    name: CUSTOMER_PANEL_BUSINESS.name,
+    plan_id: "legacy",
+    assigned_bot_id: "atencion-cliente",
+    status: CUSTOMER_PANEL_BUSINESS.status || "active"
+  });
+  if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
+    const rows = await catalogService.listTenants();
+    rows.forEach(function (tenant) {
+      add({
+        id: cleanTenantId(tenant.id),
+        company_name: tenant.company_name || tenant.name || tenant.id,
+        name: tenant.company_name || tenant.name || tenant.id,
+        plan_id: tenant.plan_id || null,
+        assigned_bot_id: tenant.assigned_bot_id || null,
+        status: tenant.status || "setup",
+        admin_email: tenant.admin_email || null
+      });
+    });
+  }
+  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && customerAccessService.listInvitations) {
+    try {
+      const invitations = await customerAccessService.listInvitations();
+      invitations.filter(function (invitation) {
+        return invitation && invitation.status === "used" && invitation.tenant_id;
+      }).forEach(function (invitation) {
+        add({
+          id: cleanTenantId(invitation.tenant_id),
+          company_name: invitation.company_name || invitation.tenant_id,
+          name: invitation.company_name || invitation.tenant_id,
+          plan_id: invitation.plan_id || null,
+          assigned_bot_id: invitation.assigned_bot_id || null,
+          status: "setup",
+          admin_email: invitation.admin_email || invitation.email_normalized || null
+        });
+      });
+    } catch (error) {
+      console.error("setup review invitation fallback error:", error.message);
+    }
+  }
+  try {
+    const onboardingRecords = await listRecentClientOnboardingRecords(200);
+    onboardingRecords.forEach(function (record) {
+      const answers = record.answers || {};
+      add({
+        id: cleanTenantId(record.tenant_id),
+        company_name: answers.business && answers.business.brand_name || record.tenant_id,
+        name: answers.business && answers.business.brand_name || record.tenant_id,
+        plan_id: null,
+        assigned_bot_id: null,
+        status: "setup",
+        admin_email: answers.team && answers.team.admin_email || answers.business && answers.business.contact_email || null
+      });
+    });
+  } catch (error) {
+    console.error("setup review onboarding fallback error:", error.message);
+  }
+  return tenants;
+}
+
+async function setupReviewTenant(tenantId) {
+  const clean = cleanTenantId(tenantId);
+  const tenants = await listSetupReviewTenants();
+  return tenants.find(function (tenant) { return tenant.id === clean; }) || null;
+}
+
+function setupReviewFailure(code, status) {
+  const error = new Error(code);
+  error.status = status || 422;
+  return error;
+}
+
+async function persistSetupReview(tenantId, input, auth) {
+  const tenant = await setupReviewTenant(tenantId);
+  if (!tenant) {
+    const error = new Error("tenant_not_found");
+    error.status = 404;
+    throw error;
+  }
+  const previous = await loadClientOnboarding(false, tenant.id);
+  const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const fallbackStatus = previous.setup_review && previous.setup_review.status || (previous.setup_completed ? "ready" : "incomplete");
+  const action = String(input && input.action || "update").slice(0, 80);
+  const answers = input && input.answers && typeof input.answers === "object" ? input.answers : previous.answers;
+  const actor = auth && (auth.name || auth.username || auth.email);
+  let cleanStatus = fallbackStatus;
+  let configuration = previous.customer_service_configuration || null;
+  let configurationLifecycle = configuration && configuration.lifecycle || "draft";
+
+  if (action === "request_changes") {
+    cleanStatus = "incomplete";
+    configuration = null;
+  } else if (action === "approve") {
+    if (!previous.setup_completed) throw setupReviewFailure("setup_not_completed");
+    cleanStatus = "ready";
+    configuration = null;
+  } else if (action === "build_configuration") {
+    const setupGoal = previous.answers && previous.answers.setup_goal;
+    if (setupGoal !== "customer_service" && setupGoal !== "both") {
+      throw setupReviewFailure("customer_service_not_selected");
+    }
+    const customerServiceSetupStatus = previous.answers && previous.answers.customer_service_setup &&
+      previous.answers.customer_service_setup.setup_status;
+    if (!previous.setup_completed || fallbackStatus !== "ready" ||
+        !["approved", "active"].includes(customerServiceSetupStatus)) {
+      throw setupReviewFailure("setup_must_be_approved");
+    }
+    configuration = generateCustomerServiceConfiguration(answers, {
+      actor,
+      source_setup_updated_at: previous.last_updated_at || previous.updated_at
+    });
+    if (!configuration) throw setupReviewFailure("customer_service_not_selected");
+    cleanStatus = "building";
+    configurationLifecycle = "draft";
+  } else if (action === "save_configuration") {
+    if (!["building", "testing"].includes(fallbackStatus) || !configuration) {
+      throw setupReviewFailure("configuration_not_building");
+    }
+    if (!input.customer_service_configuration || typeof input.customer_service_configuration !== "object") {
+      throw setupReviewFailure("configuration_required");
+    }
+    configuration = normalizeCustomerServiceConfiguration(input.customer_service_configuration, {
+      actor,
+      lifecycle: "draft"
+    });
+    cleanStatus = "building";
+    configurationLifecycle = "draft";
+  } else if (action === "approve_configuration") {
+    if (fallbackStatus !== "building" || !configuration) {
+      throw setupReviewFailure("configuration_not_building");
+    }
+    configuration = normalizeCustomerServiceConfiguration(
+      input.customer_service_configuration && typeof input.customer_service_configuration === "object"
+        ? input.customer_service_configuration
+        : configuration,
+      { actor, lifecycle: "approved_for_testing" }
+    );
+    cleanStatus = "testing";
+    configurationLifecycle = "approved_for_testing";
+  } else if (action === "mark_live" || String(input && input.review_status || "").toLowerCase() === "live") {
+    throw setupReviewFailure("public_activation_requires_separate_approval", 403);
+  }
+  const record = createOnboardingRecord(answers, {
+    tenant_id: tenant.id,
+    status: previous.status || "draft",
+    updated_by: actor,
+    previous,
+    questionnaire,
+    review_status: cleanStatus,
+    approve_setup: action === "approve",
+    review_note: input && input.review_note,
+    requested_changes: input && input.requested_changes,
+    review_actor: actor,
+    customer_service_configuration: configuration,
+    configuration_lifecycle: configurationLifecycle,
+    review_event: {
+      action,
+      note: input && (input.requested_changes || input.review_note) || ""
+    }
+  });
+  return appendClientOnboardingRecord(record, tenant.id);
+}
+
+function parseCustomerSetupQuestionnaireTurn(turn) {
+  if (!isCustomerSetupQuestionnaireTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[CustomerSetupQuestionnaire\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || !Array.isArray(parsed.questions)) return null;
+    return normalizeCustomerSetupQuestionnaire(parsed, parsed.updated_by || "", parsed.updated_at);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadCustomerSetupQuestionnaire(force) {
+  const now = Date.now();
+  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < 30000) {
+    return customerSetupQuestionnaireCache.questionnaire;
+  }
+  let questionnaire = customerSetupQuestionnaireCache.questionnaire;
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID, 1);
+    if (rows) questionnaire = rows.map(normalizeTurnRow).map(parseCustomerSetupQuestionnaireTurn).find(Boolean) || questionnaire;
+  } else {
+    questionnaire = conversationLogs.slice().reverse()
+      .filter(function (turn) { return turn.userId === CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID; })
+      .map(parseCustomerSetupQuestionnaireTurn)
+      .find(Boolean) || questionnaire;
+  }
+  if (!questionnaire) questionnaire = normalizeCustomerSetupQuestionnaire({ questions: CUSTOMER_SETUP_QUESTIONS }, "", null);
+  customerSetupQuestionnaireCache = { loaded_at: now, questionnaire };
+  return questionnaire;
+}
+
+async function persistCustomerSetupQuestionnaire(input, auth) {
+  const current = await loadCustomerSetupQuestionnaire(false);
+  const incoming = input && typeof input === "object" ? input : {};
+  const incomingQuestions = Array.isArray(incoming.questions) ? incoming.questions : [];
+  const incomingIds = new Set(incomingQuestions.map(function (question) { return String(question && question.id || ""); }).filter(Boolean));
+  const preservedQuestions = (current && Array.isArray(current.questions) ? current.questions : [])
+    .filter(function (question) {
+      return question && question.custom && question.id && !incomingIds.has(String(question.id));
+    });
+  const questionnaire = normalizeCustomerSetupQuestionnaire(
+    Object.assign({}, incoming, { questions: incomingQuestions.concat(preservedQuestions) }),
+    auth && (auth.name || auth.username),
+    new Date().toISOString()
+  );
+  const rec = {
+    ts: questionnaire.updated_at,
+    userId: CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID,
+    userMessage: "",
+    botReply: "[CustomerSetupQuestionnaire] " + JSON.stringify(questionnaire),
+    tools: [CUSTOMER_SETUP_QUESTIONNAIRE_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: CUSTOMER_SETUP_QUESTIONNAIRE_TOOL }
+  };
   if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
-  clientOnboardingCache = { loaded_at: Date.now(), record };
-  return record;
+  customerSetupQuestionnaireCache = { loaded_at: Date.now(), questionnaire };
+  return questionnaire;
+}
+
+function isPlatformGoalTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(PLATFORM_GOAL_TOOL);
+}
+
+async function loadPlatformGoals(requirePersistentRead) {
+  let turns = conversationLogs.filter(isPlatformGoalTurn);
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(PLATFORM_GOAL_RECORD_ID, 100);
+    if (rows) turns = rows.map(normalizeTurnRow);
+    else if (requirePersistentRead) throw new Error("platform_goal_store_unavailable");
+  } else if (requirePersistentRead && process.env.NODE_ENV === "production") {
+    throw new Error("platform_goal_store_unavailable");
+  }
+  return platformGoalsFromTurns(turns);
+}
+
+async function persistPlatformGoal(goalId, input, auth) {
+  const memoryGoal = platformGoalsFromTurns(conversationLogs.filter(isPlatformGoalTurn))
+    .find(function (goal) { return goal.id === goalId; });
+  const current = memoryGoal
+    || DEFAULT_PLATFORM_GOALS.find(function (goal) { return goal.id === goalId; })
+    || null;
+  const goal = normalizePlatformGoal(
+    Object.assign({}, input || {}, { id: goalId }),
+    current,
+    auth && (auth.username || auth.name) || "super_admin"
+  );
+  const rec = buildPlatformGoalRecord(goal);
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  return goal;
 }
 
 async function retargetingPolicyForTenant(tenantId) {
@@ -3686,7 +4444,7 @@ async function createRetargetingJobForCustomer(userId, eventType, sourceEventId,
   }
 }
 
-async function dashboardUserFromCredentials(username, password) {
+async function dashboardUserFromCredentials(username, password, options) {
   const cleanUser = String(username || "").trim();
   const normalizedUser = normalizeDashboardUsername(cleanUser);
   const cleanPass = String(password || "");
@@ -3695,6 +4453,10 @@ async function dashboardUserFromCredentials(username, password) {
     (user.email && user.email === normalizedUser)
   ) && safeEqualText(user.password, cleanPass));
   if (environmentUser) return environmentUser;
+  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
+    const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    if (customerAccessUser) return customerAccessUser;
+  }
   const customerUser = await loadDashboardCustomerUser(false);
   if (!customerUser || customerUser.username !== normalizedUser) return null;
   let candidate = "";
@@ -3704,6 +4466,19 @@ async function dashboardUserFromCredentials(username, password) {
     return null;
   }
   return safeEqualText(candidate, customerUser.password_hash) ? customerUser : null;
+}
+
+function validEmailIdentity(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || ""));
+}
+
+function sendCustomerAccessError(res, error) {
+  const problem = error instanceof CustomerAccessError
+    ? error
+    : new CustomerAccessError("customer_access_unavailable", 503);
+  const payload = { ok: false, error: problem.code };
+  if (problem.details && typeof problem.details === "object") Object.assign(payload, problem.details);
+  res.status(problem.status).json(payload);
 }
 
 function createDashboardCustomerInvite() {
@@ -3733,6 +4508,7 @@ function dashboardAuth(req) {
   if (DASHBOARD_KEY && suppliedKey && safeEqualText(suppliedKey, DASHBOARD_KEY)) {
     return { ok: true, username: "clave-maestra", name: "Clave maestra", role: "super_admin", tenant_id: null, method: "key" };
   }
+  if (req.dashboardSessionChecked) return req.dashboardVerifiedSession || { ok: false, role: "none" };
   return readDashboardSession(req) || { ok: false, role: "none" };
 }
 
@@ -3749,6 +4525,263 @@ function adminAuthOk(req, minRole = "viewer") {
   const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
   const actual = DASHBOARD_ROLES[auth.role] || 0;
   return !!auth.ok && actual >= required && canAccessTenant(auth, DEFAULT_TENANT_ID);
+}
+
+function customerTenantForAuth(auth) {
+  if (!auth || !auth.ok) return "";
+  if (auth.version === 2) return cleanTenantId(auth.tenant_id);
+  return DEFAULT_TENANT_ID;
+}
+
+function customerPanelAuthOk(req, minRole = "viewer") {
+  const auth = dashboardAuth(req);
+  if (auth.version !== 2) return adminAuthOk(req, minRole);
+  const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
+  const actual = DASHBOARD_ROLES[auth.role] || 0;
+  const tenantId = customerTenantForAuth(auth);
+  return !!auth.ok && !!tenantId && actual >= required && canAccessTenant(auth, tenantId);
+}
+
+function customerBusinessForAuth(auth) {
+  const tenantId = customerTenantForAuth(auth);
+  if (auth && auth.version === 2) {
+    return {
+      id: tenantId,
+      name: String(auth.company_name || tenantId),
+      company_name: String(auth.company_name || tenantId),
+      customer_number: null,
+      status: String(auth.tenant_status || "setup"),
+      plan_id: String(auth.plan_id || ""),
+      assigned_bot_id: String(auth.assigned_bot_id || "")
+    };
+  }
+  return CUSTOMER_PANEL_BUSINESS;
+}
+
+function customerChannelConnectionsVisibleForAuth(auth) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
+  if (!auth || auth.version !== 2) return true;
+  const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
+  return assignedBotId === "atencion-cliente" || assignedBotId === "commerce";
+}
+
+async function customerPanelEntryRedirect(user) {
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !user || !user.user_id || !user.tenant_id) return "/admin/panel?tab=summary";
+  const record = await loadClientOnboarding(false, user.tenant_id);
+  return record && record.setup_completed ? "/admin/panel?tab=summary" : "/admin/client-onboarding";
+}
+
+function publicSignupDefaults(catalogs) {
+  const active = function (item) { return item && item.activo !== false && item.active !== false; };
+  const id = function (value) { return String(value || "").trim().toLowerCase(); };
+  const bots = (catalogs && catalogs.bots || []).filter(active).filter(function (item) { return id(item.id); });
+  const plans = (catalogs && catalogs.plans || []).filter(active).filter(function (item) { return id(item.id); });
+  const preferredBot = bots.find(function (item) { return id(item.id) === "atencion-cliente"; }) || bots[0] || null;
+  if (!preferredBot || !plans.length) throw new CustomerAccessError("customer_access_unavailable", 503);
+  const preferredBotId = id(preferredBot.id);
+  const compatiblePlans = plans.filter(function (item) {
+    const botId = id(item.bot_id);
+    return !botId || botId === preferredBotId;
+  });
+  const plan = compatiblePlans.find(function (item) { return id(item.id) === "nextfor-uno"; })
+    || compatiblePlans.find(function (item) { return id(item.id) === "nextfor-aura"; })
+    || compatiblePlans.find(function (item) { return id(item.id) === "starter"; })
+    || compatiblePlans.find(function (item) { return id(item.id) === "growth"; })
+    || compatiblePlans[0]
+    || plans[0];
+  const planBotId = id(plan && plan.bot_id);
+  return {
+    plan_id: id(plan && plan.id),
+    assigned_bot_id: planBotId || preferredBotId
+  };
+}
+
+function ensureInitialProductionCustomerSelection(planId, botId) {
+  const cleanPlan = String(planId || "").trim().toLowerCase();
+  const cleanBot = String(botId || "").trim().toLowerCase();
+  if (cleanPlan && CUSTOMER_VISIBLE_PLAN_IDS.indexOf(cleanPlan) < 0) throw new CatalogError("plan_not_found", 404);
+  if (cleanBot && CUSTOMER_VISIBLE_BOT_IDS.indexOf(cleanBot) < 0) throw new CatalogError("bot_not_found", 404);
+}
+
+function ensureChatbotOnlyOnboardingAnswers(answers) {
+  const goal = String(answers && answers.setup_goal || "").trim().toLowerCase();
+  if (goal && goal !== "unknown" && goal !== "customer_service") throw new CatalogError("chatbot_only_release", 422);
+}
+
+function cleanPublicSignupPhone(value) {
+  return String(value || "")
+    .trim()
+    .replace(/[^\d+()\-\s.]/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 40);
+}
+
+async function persistPublicSignupLeadDraft(user, input) {
+  const phone = cleanPublicSignupPhone(input && input.contact_phone);
+  if (!user || !user.tenant_id || !phone) return null;
+  const answers = defaultClientOnboarding();
+  answers.business.brand_name = String(user.company_name || input.company_name || "").trim().slice(0, 160);
+  answers.business.contact_email = String(user.email || input.admin_email || "").trim().toLowerCase().slice(0, 160);
+  answers.business.contact_phone = phone;
+  answers.meta.whatsapp_number = phone;
+  answers.team.admin_email = answers.business.contact_email;
+  answers.team.notification_phone = phone;
+  return persistClientOnboarding(answers, "draft", Object.assign({}, user, {
+    name: user.email,
+    username: user.email
+  }), user.tenant_id);
+}
+
+function leadDateLabel(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function billingMakesCustomer(billing) {
+  if (!billing) return false;
+  const paymentStatus = String(billing.payment_status || "").toLowerCase();
+  const subscriptionStatus = String(billing.subscription_status || "").toLowerCase();
+  return billing.ready_for_bot_creation === true ||
+    paymentStatus === "paid" ||
+    ["active", "trial", "pilot"].includes(subscriptionStatus);
+}
+
+function leadStageFor(record, billing) {
+  if (record && record.setup_completed) {
+    return billingMakesCustomer(billing) ? "customer" : "setup_completed";
+  }
+  const completion = Number(record && record.completion) || 0;
+  if (completion > 0) return "setup_started";
+  return "account_created";
+}
+
+function leadStageLabel(stage) {
+  return ({
+    account_created: "Cuenta creada",
+    setup_started: "Setup iniciado",
+    setup_completed: "Setup completo · falta pago/trial",
+    customer: "Cliente"
+  })[stage] || "Lead";
+}
+
+function leadNextAction(stage) {
+  return ({
+    account_created: "Acompañar para que empiece el setup.",
+    setup_started: "Revisar avance y ayudar a terminar el setup.",
+    setup_completed: "Activar pago, trial o piloto aprobado.",
+    customer: "Ya puede moverse a Cliente."
+  })[stage] || "Revisar lead.";
+}
+
+async function buildSuperAdminLeadsPipeline() {
+  const empty = { kpis: { active: 0, won: 0, demos: 0, conversion: 0 }, sources: [], rows: [], customers: [] };
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !catalogService) return empty;
+  let tenants = [];
+  try {
+    tenants = await catalogService.listTenants();
+  } catch (error) {
+    console.error("lead pipeline tenants error:", error.message);
+    return empty;
+  }
+  let invitations = [];
+  if (customerAccessService && customerAccessService.listInvitations) {
+    try { invitations = await customerAccessService.listInvitations(); }
+    catch (error) { console.error("lead pipeline invitations error:", error.message); }
+  }
+  const usedInvitationByTenant = new Set((invitations || []).filter(function (row) {
+    return row && row.status === "used" && row.tenant_id;
+  }).map(function (row) { return cleanTenantId(row.tenant_id); }));
+  let billingByTenant = new Map();
+  if (PAYMENTS_V1_ENABLED && paymentService) {
+    try {
+      const billingRows = await paymentService.adminBilling();
+      billingByTenant = new Map((billingRows || []).map(function (row) { return [cleanTenantId(row.tenant_id), row]; }));
+    } catch (error) {
+      console.error("lead pipeline billing error:", error.message);
+    }
+  }
+  let onboardingRecordByTenant = new Map();
+  try {
+    const onboardingRecords = await listRecentClientOnboardingRecords(200);
+    onboardingRecordByTenant = new Map(onboardingRecords.map(function (record) {
+      return [cleanTenantId(record.tenant_id), record];
+    }).filter(function (entry) { return !!entry[0]; }));
+    const existingTenantIds = new Set((tenants || []).map(function (tenant) { return cleanTenantId(tenant && tenant.id); }));
+    onboardingRecords.forEach(function (record) {
+      const tenantId = cleanTenantId(record.tenant_id);
+      if (!tenantId || existingTenantIds.has(tenantId)) return;
+      const answers = record.answers || {};
+      tenants.push({
+        id: tenantId,
+        company_name: answers.business && answers.business.brand_name || tenantId,
+        name: answers.business && answers.business.brand_name || tenantId,
+        plan_id: null,
+        assigned_bot_id: null,
+        status: "setup",
+        admin_email: answers.team && answers.team.admin_email || answers.business && answers.business.contact_email || null,
+        created_at: record.setup_completed_at || record.updated_at || record.last_updated_at || null,
+        updated_at: record.last_updated_at || record.updated_at || null
+      });
+      existingTenantIds.add(tenantId);
+    });
+  } catch (error) {
+    console.error("lead pipeline onboarding scan error:", error.message);
+  }
+  const rows = [];
+  const customers = [];
+  for (const tenant of tenants || []) {
+    const tenantId = cleanTenantId(tenant && tenant.id);
+    if (!tenantId || tenant.status === "archivado") continue;
+    const activeUsers = Number(tenant.usuarios_activos);
+    const onboardingFromScan = onboardingRecordByTenant.get(tenantId) || null;
+    const accountCreated = activeUsers > 0 || usedInvitationByTenant.has(tenantId) || !!(onboardingFromScan && onboardingFromScan.updated_at);
+    if (!accountCreated) continue;
+    let onboarding = onboardingFromScan;
+    try { onboarding = onboarding || await loadClientOnboarding(false, tenantId); }
+    catch (error) { console.error("lead pipeline onboarding error:", tenantId, error.message); }
+    const billing = billingByTenant.get(tenantId) || null;
+    const stage = leadStageFor(onboarding, billing);
+    const row = {
+      tenant_id: tenantId,
+      company_name: tenant.company_name || tenant.name || tenantId,
+      admin_email: tenant.admin_email || onboarding && onboarding.answers && onboarding.answers.team && onboarding.answers.team.admin_email || null,
+      contact_phone: onboarding && onboarding.answers && (
+        onboarding.answers.business && onboarding.answers.business.contact_phone ||
+        onboarding.answers.meta && onboarding.answers.meta.whatsapp_number ||
+        onboarding.answers.team && onboarding.answers.team.notification_phone
+      ) || null,
+      plan_id: tenant.plan_id || billing && billing.plan_id || null,
+      assigned_bot_id: tenant.assigned_bot_id || billing && billing.bot_id || null,
+      stage,
+      stage_label: leadStageLabel(stage),
+      next_action: leadNextAction(stage),
+      completion: Number(onboarding && onboarding.completion) || 0,
+      setup_completed: !!(onboarding && onboarding.setup_completed),
+      payment_status: billing && billing.payment_status || null,
+      subscription_status: billing && billing.subscription_status || null,
+      created_at: leadDateLabel(tenant.created_at),
+      updated_at: leadDateLabel(onboarding && (onboarding.last_updated_at || onboarding.updated_at) || tenant.updated_at)
+    };
+    if (stage === "customer") customers.push(row);
+    else rows.push(row);
+  }
+  rows.sort(function (a, b) { return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")); });
+  customers.sort(function (a, b) { return String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")); });
+  const created = rows.length + customers.length;
+  const won = customers.length;
+  return {
+    kpis: {
+      active: rows.length,
+      won,
+      demos: 0,
+      conversion: created > 0 ? Math.round(won / created * 100) : 0
+    },
+    sources: created ? [{ name: "Cuenta creada", paid: false, leads: created, won }] : [],
+    rows,
+    customers
+  };
 }
 
 function adminKeyOk(req) {
@@ -3773,13 +4806,15 @@ function customerPanelCapabilities(role) {
 }
 
 function customerPanelWhatsappSetup() {
-  const stage = (COMMERCIAL_READINESS.stages || []).find(function (item) {
-    return item.id === "meta_whatsapp";
-  });
-  const ready = !!stage && stage.status === "ready";
+  const integration = currentRavIntegration();
+  const ready = integration.connection.real_number_active;
   return {
     status: ready ? "ready" : "pending",
-    label: ready ? "WhatsApp listo" : "Configuracion de WhatsApp pendiente"
+    label: ready ? "WhatsApp en funcionamiento" : "Meta aprobada; falta activar el numero real",
+    app_review_approved: integration.app_review.approved,
+    real_number_active: integration.connection.real_number_active,
+    target_display_phone: integration.target_display_phone,
+    integration_status: integration.status
   };
 }
 
@@ -4382,7 +5417,9 @@ function buildCustomerPanelDemoSnapshot() {
 }
 
 app.post("/admin/login", loginRateLimiter, async (req, res) => {
+  const email = String(req.body && req.body.email || "").trim();
   const username = String(req.body && req.body.username || "").trim();
+  const identity = email || username;
   const password = String(req.body && req.body.password || "");
   const key = String(req.body && req.body.key || "").trim();
 
@@ -4393,13 +5430,34 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
     return;
   }
 
-  const user = await dashboardUserFromCredentials(username, password);
+  let user;
+  try {
+    user = await dashboardUserFromCredentials(identity, password, { customerV2: !!email });
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "customer_access_unavailable" });
+    return;
+  }
   if (!user) {
     res.status(401).json({ ok: false, error: "invalid_credentials" });
     return;
   }
+  let redirect = "/admin/panel?tab=summary";
+  try { redirect = await customerPanelEntryRedirect(user); }
+  catch (_) {}
   setDashboardSessionCookie(req, res, user);
-  res.json({ ok: true, user: { username: user.username, name: user.name, role: user.role, method: "session" } });
+  res.json({
+    ok: true,
+    user: {
+      user_id: user.user_id || null,
+      email: user.email || null,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      tenant_id: user.tenant_id || null,
+      method: "session"
+    },
+    redirect
+  });
 });
 
 app.post("/admin/logout", (req, res) => {
@@ -4420,13 +5478,333 @@ app.get("/admin/session", async (req, res) => {
     users_enabled: DASHBOARD_USERS.length > 0 || !!customerUser,
     customer_user_configured: !!customerUser,
     access_model_version: DASHBOARD_ACCESS_MODEL.version,
-    user: { username: auth.username, name: auth.name, role: auth.role, method: auth.method }
+    user: {
+      user_id: auth.user_id || null,
+      email: auth.email || null,
+      username: auth.username,
+      name: auth.name,
+      role: auth.role,
+      tenant_id: auth.tenant_id || null,
+      method: auth.method
+    }
   });
+});
+
+app.get("/admin/customer-access/catalogs", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json(Object.assign({ ok: true }, await customerAccessService.catalogs()));
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.get("/admin/customer-invitations", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, invitations: await customerAccessService.listInvitations() });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.post("/admin/customer-invitations/:invitationId/revoke", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, invitation: await customerAccessService.revokeInvitation(req.params.invitationId, auth) });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+// ─── Catálogo de planes y bots ────────────────────────────────────────────
+// Escritura y lectura completa: solo super_admin.
+// Lectura de activos: también clientes autenticados (la consume el Panel de Cliente).
+
+function sendCatalogError(res, error) {
+  const problem = error instanceof CatalogError ? error : new CatalogError("catalog_unavailable", 503);
+  res.status(problem.status).json({ ok: false, error: problem.code });
+}
+
+function catalogSuperAdminGuard(req, res) {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return null;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return null;
+  }
+  return auth;
+}
+
+app.get("/admin/catalogs", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json(Object.assign({ ok: true }, await catalogService.adminCatalogs()));
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/catalogs/plans", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: true, plan: await catalogService.upsertPlan(req.body, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/catalogs/bots", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: true, bot: await catalogService.upsertBot(req.body, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/catalogs/plans/:id/toggle", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const activo = req.body && typeof req.body.activo === "boolean" ? req.body.activo : false;
+    res.json({ ok: true, plan: await catalogService.togglePlan(req.params.id, activo, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// Solo lectura, solo activos. Es el contrato que consume el Panel de Cliente
+// para dejar de tener los planes escritos a mano en HTML.
+app.get("/admin/panel/catalogs", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json(Object.assign({ ok: true }, await catalogService.activeCatalogs()));
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// ─── Payments v1 · Wompi Sandbox ─────────────────────────────────────────
+
+function sendPaymentError(res, error) {
+  const problem = error instanceof PaymentError ? error : new PaymentError("billing_unavailable", 503);
+  res.status(problem.status).json({ ok: false, error: problem.code });
+}
+
+app.get("/admin/panel/billing", async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenantId = customerTenantForAuth(dashboardAuth(req));
+    res.json({ ok: true, billing: await paymentService.tenantBilling(tenantId) });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/admin/panel/billing/checkout", async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const business = customerBusinessForAuth(auth);
+  try {
+    const checkout = await paymentService.startCheckout({
+      tenant_id: business.id,
+      customer: business.name,
+      customer_email: auth.email || auth.username,
+      plan_id: business.plan_id,
+      bot_id: business.assigned_bot_id,
+      actor: auth.email || auth.username || "customer"
+    });
+    res.json({ ok: true, checkout });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.get("/admin/billing", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    res.json({ ok: true, billing: await paymentService.adminBilling() });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/admin/billing/:tenantId/bypass", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    const tenantId = cleanTenantId(req.params.tenantId);
+    const tenants = await catalogService.listTenants();
+    const tenant = tenants.find(function (row) { return row.id === tenantId; });
+    if (!tenant) throw new PaymentError("tenant_not_found", 404);
+    await paymentService.prepareContract({
+      tenant_id: tenant.id,
+      customer: tenant.company_name || tenant.id,
+      plan_id: req.body && req.body.plan_id || tenant.plan_id,
+      bot_id: req.body && req.body.bot_id || tenant.assigned_bot_id
+    });
+    const contract = await paymentService.approveBypass({
+      tenant_id: tenant.id,
+      subscription_status: req.body && req.body.subscription_status,
+      trial_start: req.body && req.body.trial_start,
+      trial_end: req.body && req.body.trial_end,
+      reason: req.body && req.body.reason,
+      actor: auth.email || auth.username || "super_admin"
+    });
+    res.json({ ok: true, billing: contract });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+app.post("/webhooks/wompi", wompiWebhookRateLimiter, async (req, res) => {
+  if (!PAYMENTS_V1_ENABLED) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  try {
+    const result = await paymentService.processWebhook(req.body, req.get("x-event-checksum"));
+    res.status(200).json({ ok: true, duplicate: !!(result && result.duplicate) });
+  } catch (error) {
+    sendPaymentError(res, error);
+  }
+});
+
+// ─── Ciclo de vida del cliente ────────────────────────────────────────────
+
+app.get("/admin/tenants", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    res.json({ ok: true, tenants: await catalogService.listTenants() });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+app.post("/admin/tenants/:tenantId/status", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const status = req.body && req.body.status;
+    res.json({ ok: true, tenant: await catalogService.setTenantStatus(req.params.tenantId, status, auth) });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// Respaldo descargable. Se genera antes de cualquier borrado, y también
+// puede pedirse por separado.
+app.get("/admin/tenants/:tenantId/backup", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const backup = await catalogService.tenantBackup(req.params.tenantId);
+    res.setHeader("content-disposition",
+      'attachment; filename="respaldo-' + String(req.params.tenantId).replace(/[^a-z0-9-]/gi, "") + '.json"');
+    res.json(backup);
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
+});
+
+// Borrado irreversible. Tres salvaguardas: el cliente debe estar suspendido,
+// hay que escribir el nombre exacto de la empresa, y confirmar explícitamente.
+// El respaldo se genera y se devuelve en la misma respuesta.
+app.post("/admin/tenants/:tenantId/delete", async (req, res) => {
+  const auth = catalogSuperAdminGuard(req, res);
+  if (!auth) return;
+  try {
+    const outcome = await catalogService.deleteTenant({
+      tenant_id: req.params.tenantId,
+      company_name_confirmacion: req.body && req.body.company_name_confirmacion,
+      confirmacion_final: req.body && req.body.confirmacion_final === true
+    }, auth);
+    console.log("[tenant-eliminado]", JSON.stringify({
+      actor: auth.username || auth.email || "super_admin",
+      tenant_id: outcome.result && outcome.result.tenant_id,
+      company_name: outcome.result && outcome.result.company_name,
+      at: new Date().toISOString()
+    }));
+    res.json({ ok: true, deleted: outcome.result, backup: outcome.backup });
+  } catch (error) {
+    sendCatalogError(res, error);
+  }
 });
 
 app.post("/admin/customer-invite", async (req, res) => {
   if (!adminAuthOk(req, "super_admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (CUSTOMER_ACCESS_V2_ENABLED) {
+    try {
+      const created = await customerAccessService.createInvitation(req.body, dashboardAuth(req));
+      res.status(201).json(Object.assign({ ok: true }, created));
+    } catch (error) {
+      sendCustomerAccessError(res, error);
+    }
     return;
   }
   if (!SUPABASE_ENABLED) {
@@ -4458,9 +5836,91 @@ app.post("/admin/customer-invite", async (req, res) => {
   });
 });
 
+app.get("/admin/create-account", async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService) {
+    res.status(404).send("Not found");
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (auth.ok && auth.version === 2) {
+    try { res.redirect(await customerPanelEntryRedirect(auth)); }
+    catch (_) { res.redirect("/admin/panel?tab=summary"); }
+    return;
+  }
+  try {
+    renderCustomerPublicSignup(res, {
+      businessHint: req.query.business || req.query.q || ""
+    });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService || !customerAccessService.createPublicSignup) {
+    res.status(404).json({ ok: false, error: "not_found" });
+    return;
+  }
+  const keys = Object.keys(req.body || {});
+  const allowed = ["company_name", "admin_email", "contact_phone", "password", "password_confirmation"];
+  if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
+    res.status(400).json({ ok: false, error: "invalid_request" });
+    return;
+  }
+  const contactPhone = cleanPublicSignupPhone(req.body && req.body.contact_phone);
+  if (!contactPhone || contactPhone.replace(/\D/g, "").length < 7) {
+    res.status(400).json({ ok: false, error: "invalid_contact_phone" });
+    return;
+  }
+  try {
+    const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
+    const defaults = publicSignupDefaults(catalogs);
+    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, { contact_phone: contactPhone }, defaults));
+    let onboardingDraft = null;
+    try {
+      onboardingDraft = await persistPublicSignupLeadDraft(user, Object.assign({}, req.body, { contact_phone: contactPhone }));
+    } catch (draftError) {
+      console.error("public signup lead draft save error:", draftError.message);
+    }
+    const redirect = await customerPanelEntryRedirect(user);
+    setDashboardSessionCookie(req, res, user);
+    res.status(201).json({
+      ok: true,
+      tenant: { id: user.tenant_id, company_name: user.company_name, plan_id: user.plan_id, assigned_bot_id: user.assigned_bot_id },
+      user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+      lead: { contact_phone: contactPhone, onboarding_draft_saved: !!onboardingDraft },
+      redirect
+    });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
 app.get("/admin/setup/:tenantId", async (req, res) => {
   const tenantId = String(req.params.tenantId || "");
   const invite = String(req.query.invite || "");
+  if (CUSTOMER_ACCESS_V2_ENABLED) {
+    try {
+      const invitation = await customerAccessService.inspectInvitation(tenantId, invite);
+      renderCustomerPasswordSetup(res, {
+        valid: true,
+        invite,
+        businessName: invitation.company_name,
+        email: invitation.email,
+        expiresAt: invitation.expires_at
+      });
+    } catch (error) {
+      const problem = error instanceof CustomerAccessError ? error : new CustomerAccessError("customer_access_unavailable", 503);
+      const reasons = {
+        invitation_expired: "Esta invitación venció. Solicita una nueva a Nextfor IA.",
+        invitation_revoked: "Esta invitación fue revocada por Nextfor IA.",
+        invitation_already_used: "Esta invitación ya fue utilizada. Ingresa con tu correo y contraseña.",
+        invalid_invitation: "El enlace no es válido o pertenece a otro negocio."
+      };
+      renderCustomerPasswordSetup(res, { valid: false, status: problem.status, reason: reasons[problem.code] || "No pudimos validar el acceso en este momento." });
+    }
+    return;
+  }
   const invitation = readDashboardCustomerInvite(invite);
   if (tenantId !== CUSTOMER_PANEL_BUSINESS.id || !invitation) {
     renderCustomerPasswordSetup(res, { valid: false, reason: "El enlace no es válido o ya venció." });
@@ -4483,6 +5943,58 @@ app.get("/admin/setup/:tenantId", async (req, res) => {
 app.post("/admin/setup/:tenantId", async (req, res) => {
   const tenantId = String(req.params.tenantId || "");
   const invite = String(req.body && req.body.invite || "");
+  if (CUSTOMER_ACCESS_V2_ENABLED) {
+    const keys = Object.keys(req.body || {});
+    const allowed = ["invite", "password", "password_confirmation"];
+    if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
+      res.status(400).json({ ok: false, error: "invalid_request" });
+      return;
+    }
+    try {
+      const user = await customerAccessService.consumeInvitation({
+        tenant_id: tenantId,
+        token: invite,
+        password: req.body.password,
+        password_confirmation: req.body.password_confirmation
+      });
+      const redirect = await customerPanelEntryRedirect(user);
+      setDashboardSessionCookie(req, res, user);
+      res.status(201).json({
+        ok: true,
+        tenant: { id: user.tenant_id, company_name: user.company_name },
+        user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+        redirect
+      });
+    } catch (error) {
+      if (error instanceof CustomerAccessError && error.code === "invitation_already_used" && customerAccessService.confirmExistingAccess) {
+        if (req.body.password !== req.body.password_confirmation) {
+          res.status(400).json({ ok: false, error: "password_mismatch" });
+          return;
+        }
+        try {
+          const user = await customerAccessService.confirmExistingAccess({
+            tenant_id: tenantId,
+            token: invite,
+            password: req.body.password
+          });
+          const redirect = await customerPanelEntryRedirect(user);
+          setDashboardSessionCookie(req, res, user);
+          res.status(200).json({
+            ok: true,
+            existing_access: true,
+            tenant: { id: user.tenant_id, company_name: user.company_name },
+            user: { user_id: user.user_id, email: user.email, role: user.role, tenant_id: user.tenant_id },
+            redirect
+          });
+        } catch (confirmError) {
+          sendCustomerAccessError(res, confirmError);
+        }
+        return;
+      }
+      sendCustomerAccessError(res, error);
+    }
+    return;
+  }
   const username = normalizeDashboardUsername(req.body && req.body.username);
   const name = String(req.body && req.body.name || "Administrador RAV Toys").trim();
   const password = String(req.body && req.body.password || "");
@@ -4563,51 +6075,6 @@ app.get("/admin/access-model", (req, res) => {
       super_admin_route: "/admin/super-admin"
     }
   });
-});
-
-app.get("/admin/platform-goals", async (req, res) => {
-  const auth = dashboardAuth(req);
-  if (!auth.ok || auth.role !== "super_admin") {
-    res.status(401).json({ ok: false, error: "unauthorized" });
-    return;
-  }
-  try {
-    const goals = await loadPlatformGoals(true);
-    res.json({
-      ok: true,
-      goals,
-      persistent_store: SUPABASE_ENABLED ? "supabase" : "memory_test_only"
-    });
-  } catch (_) {
-    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
-  }
-});
-
-app.put("/admin/platform-goals/:goalId", async (req, res) => {
-  const auth = dashboardAuth(req);
-  if (!auth.ok || auth.role !== "super_admin") {
-    res.status(401).json({ ok: false, error: "unauthorized" });
-    return;
-  }
-  const goalId = String(req.params.goalId || "").trim().toLowerCase();
-  try {
-    const goal = await persistPlatformGoal(goalId, req.body, auth);
-    res.json({ ok: true, goal });
-  } catch (error) {
-    const validationErrors = new Set([
-      "invalid_goal_id",
-      "invalid_goal_type",
-      "invalid_goal_label",
-      "invalid_goal_unit",
-      "invalid_goal_target"
-    ]);
-    if (validationErrors.has(error && error.code)) {
-      res.status(400).json({ ok: false, error: error.code });
-      return;
-    }
-    log("error", "platform_goal_save_failed", { error: String(error && error.message || "").slice(0, 160) });
-    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
-  }
 });
 
 function releaseAdminConversation(req, res) {
@@ -4720,6 +6187,14 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
 });
 
 app.get("/admin/client-onboarding-demo", (req, res) => {
+  if (String(req.query.step || "") !== "setup") {
+    renderCustomerPublicSignup(res, {
+      businessHint: req.query.business || "Comercio piloto",
+      demoMode: true,
+      demoNextPath: "/admin/client-onboarding-demo?step=setup"
+    });
+    return;
+  }
   const answers = defaultClientOnboarding();
   answers.business.brand_name = "Comercio piloto";
   answers.business.contact_name = "Responsable del proyecto";
@@ -4728,82 +6203,138 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
   answers.meta.number_status = "business_app";
   answers.commerce.store_url = "https://tienda-ejemplo.com";
   answers.team.admin_name = "Administrador del cliente";
-  const questionnaire = normalizeCustomerSetupQuestionnaire({}, "NexforIA");
+  const questionnaire = normalizeCustomerSetupQuestionnaire({ questions: CUSTOMER_SETUP_QUESTIONS }, "NexforIA", null);
   const record = createOnboardingRecord(answers, { tenant_id: "pilot-demo", status: "draft", updated_by: "NexforIA", questionnaire });
   renderClientOnboarding(res, {
     tenant: { id: "pilot-demo", name: "Comercio piloto" },
     record,
-    questionnaire,
     actor: "NexforIA",
     demo: true,
-    apiPath: ""
+    apiPath: "",
+    completionPath: "/admin/panel-demo?tab=channels&from=onboarding",
+    paymentsV1Enabled: true,
+    demoPaymentPath: "/admin/client-onboarding-demo/payment",
+    questionnaire
+  });
+});
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char];
+  });
+}
+
+function renderDemoPaymentStep(res, options) {
+  options = options || {};
+  const nextPath = options.nextPath || "/admin/panel-demo?tab=channels&from=onboarding";
+  const checkoutUrl = options.checkoutUrl || "";
+  const unavailableReason = options.unavailableReason || "";
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pago Wompi · Nextfor IA</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Sora:wght@700;800&display=swap" rel="stylesheet"><style>:root{--navy:#071632;--cyan:#16AEEF;--line:#DDE7F2;--muted:#66758D;--green:#14A971}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#F4F8FC;color:#071632;font-family:"Plus Jakarta Sans",sans-serif;display:grid;place-items:center;padding:24px}.card{width:min(780px,100%);background:#fff;border:1px solid var(--line);border-radius:28px;box-shadow:0 20px 55px rgba(7,22,50,.12);overflow:hidden}.hero{display:grid;grid-template-columns:1fr 170px;gap:20px;align-items:center;padding:34px;background:linear-gradient(135deg,#071632,#0E3A69);color:#fff}.hero img{width:150px;justify-self:center;filter:drop-shadow(0 18px 28px rgba(22,174,239,.28))}.hero small{color:#65D4FF;font-weight:800;letter-spacing:.14em}.hero h1{margin:10px 0 8px;font:800 clamp(30px,5vw,44px)/1.05 Sora,sans-serif;letter-spacing:-.04em}.hero p{margin:0;color:#C5D6EC;line-height:1.6}.body{padding:30px 34px}.steps{display:grid;gap:12px;margin:0 0 22px}.step{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid var(--line);border-radius:16px;background:#F8FBFE}.step b{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--cyan);color:#fff}.step strong{display:block;font-size:14px}.step span{display:block;margin-top:3px;color:var(--muted);font-size:13px;line-height:1.45}.actions{display:flex;gap:12px;flex-wrap:wrap}.btn{height:48px;border-radius:14px;padding:0 18px;border:1px solid var(--line);background:#fff;color:#071632;font-weight:800;text-decoration:none;display:inline-grid;place-items:center}.btn.primary{border:0;background:linear-gradient(135deg,#27B8F2,#009FEF);color:#fff;box-shadow:0 12px 30px rgba(22,174,239,.24)}.notice{margin-top:16px;padding:13px 14px;border-radius:14px;background:#FFF8E8;color:#745119;font-size:12px;line-height:1.5}@media(max-width:680px){.hero{grid-template-columns:1fr;text-align:center}.hero img{order:-1}.body{padding:24px 18px}.actions .btn{width:100%}}</style></head><body><main class="card"><section class="hero"><div><small>✧ WOMPI SANDBOX</small><h1>Ahora registra el pago para activar tu panel.</h1><p>El entrenamiento ya quedó guardado. El Customer Panel operativo se abre después de completar el paso de Wompi.</p></div><img src="/admin/assets/lumen-entrenando.png" alt="Lumen entrenando"></section><section class="body"><div class="steps"><article class="step"><b>1</b><div><strong>Entrenamiento completo</strong><span>Nextfor ya tiene las instrucciones de tu negocio.</span></div></article><article class="step"><b>2</b><div><strong>Pago con Wompi</strong><span>${checkoutUrl ? "Abriremos Wompi Sandbox para registrar el pago de prueba." : "Wompi Sandbox no está configurado en este ambiente; usa la simulación segura para revisar el flujo."}</span></div></article><article class="step"><b>3</b><div><strong>Panel desbloqueado</strong><span>En real, esto ocurre cuando Wompi confirma el pago por webhook o el contrato queda listo.</span></div></article></div><div class="actions">${checkoutUrl ? `<a class="btn primary" href="${escapeHtml(checkoutUrl)}">Abrir Wompi Sandbox →</a>` : `<a class="btn primary" href="/admin/client-onboarding-demo/payment-return?demo_payment=approved&next=${encodeURIComponent(nextPath)}">Simular registro en Wompi →</a>`}<a class="btn" href="${escapeHtml(nextPath)}">Saltar solo en demo</a></div>${unavailableReason ? `<div class="notice"><strong>Modo demo:</strong> ${escapeHtml(unavailableReason)}</div>` : ""}</section></main></body></html>`);
+}
+
+app.get("/admin/client-onboarding-demo/payment", (req, res) => {
+  const nextPath = String(req.query.next || "/admin/panel-demo?tab=channels&from=onboarding");
+  let checkoutUrl = "";
+  let unavailableReason = "";
+  if (/^pub_test_/.test(WOMPI_PUBLIC_KEY) && /^test_integrity_/.test(WOMPI_INTEGRITY_SECRET) && PUBLIC_BASE_URL) {
+    const reference = "nexfor-demo-" + Date.now().toString(36) + "-" + crypto.randomBytes(4).toString("hex");
+    const amountInCents = 500000;
+    const query = new URLSearchParams({
+      "public-key": WOMPI_PUBLIC_KEY,
+      currency: "COP",
+      "amount-in-cents": String(amountInCents),
+      reference,
+      "signature:integrity": integritySignature(reference, amountInCents, WOMPI_INTEGRITY_SECRET),
+      "redirect-url": PUBLIC_BASE_URL + "/admin/client-onboarding-demo/payment-return?next=" + encodeURIComponent(nextPath)
+    });
+    checkoutUrl = "https://checkout.wompi.co/p/?" + query.toString();
+  } else {
+    unavailableReason = "Render Staging todavía no tiene activadas las credenciales sandbox de Wompi para abrir checkout real. La simulación solo valida el orden del journey.";
+  }
+  renderDemoPaymentStep(res, { nextPath, checkoutUrl, unavailableReason });
+});
+
+app.get("/admin/client-onboarding-demo/payment-return", (req, res) => {
+  const nextPath = String(req.query.next || "/admin/panel-demo?tab=channels&from=onboarding");
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pago confirmado · Nextfor IA</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Sora:wght@700;800&display=swap" rel="stylesheet"><style>:root{--navy-900:#071632;--navy-800:#0A1836;--navy-700:#122A5C;--cyan-500:#00A0F0;--cyan-400:#25B8F2;--cyan-300:#62D4FF;--green-500:#14A971;--gradient-hero:radial-gradient(120% 120% at 78% 0%,rgba(0,160,240,.18),rgba(0,160,240,0) 52%),linear-gradient(145deg,#122A5C 0%,#071632 58%,#060F22 100%);--gradient-cyan:linear-gradient(135deg,#27B8F2,#009FEF);--shadow-xl:0 34px 90px rgba(7,22,50,.28);--shadow-lg:0 18px 44px rgba(7,22,50,.22);--shadow-glow:0 18px 42px rgba(0,160,240,.34);--ease-out:cubic-bezier(.22,.61,.36,1);--ease-spring:cubic-bezier(.2,.9,.25,1.22)}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#071632;color:#fff;font-family:"Plus Jakarta Sans",ui-sans-serif,sans-serif;display:grid;place-items:center;padding:48px 24px}.welcome{position:relative;width:min(940px,100%);min-height:min(760px,calc(100vh - 96px));display:flex;align-items:center;justify-content:center;background:var(--gradient-hero);border-radius:32px;overflow:hidden;box-shadow:var(--shadow-xl);animation:bprise .55s var(--ease-out) both}.welcome:before{content:"";position:absolute;top:-150px;right:-110px;width:520px;height:520px;background:radial-gradient(circle,rgba(0,160,240,.26),transparent 62%);pointer-events:none;animation:bpglow 5s ease-in-out infinite}.welcome:after{content:"";position:absolute;bottom:-190px;left:-150px;width:480px;height:480px;background:radial-gradient(circle,rgba(30,68,136,.34),transparent 64%);pointer-events:none}.inner{position:relative;z-index:1;width:100%;padding:44px 52px 52px;display:flex;flex-direction:column;align-items:center;text-align:center}.badge{display:inline-flex;align-items:center;gap:10px;background:rgba(20,169,113,.15);border:1px solid rgba(20,169,113,.4);color:#3DE0A0;font-size:15px;font-weight:800;padding:11px 20px;border-radius:999px;animation:bppop .5s var(--ease-spring) .1s both}.badge i{display:inline-flex;width:24px;height:24px;border-radius:50%;background:var(--gradient-cyan);align-items:center;justify-content:center;font-style:normal}.mascotWrap{position:relative;width:170px;height:170px;margin:26px 0 4px;animation:bpfloat 6s ease-in-out infinite}.mascotWrap img{width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 22px 44px rgba(0,160,240,.3))}.bubble{position:absolute;top:10px;left:128px;background:#fff;color:var(--navy-800);font-size:15px;font-weight:800;padding:11px 16px;border-radius:16px 16px 16px 4px;box-shadow:var(--shadow-lg);white-space:nowrap;animation:bppop .5s var(--ease-spring) .45s both}.overline{margin-top:10px;color:var(--cyan-300);font-size:15px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;animation:bprise .5s var(--ease-out) .25s both}h1{max-width:17ch;margin:18px 0 0;color:#fff;font:800 clamp(42px,6.2vw,72px)/1.04 Sora,sans-serif;letter-spacing:-.045em;text-wrap:balance;animation:bprise .5s var(--ease-out) .32s both}h1 span{color:var(--cyan-400)}p{max-width:62ch;margin:22px 0 0;color:rgba(255,255,255,.84);font-size:clamp(18px,2.1vw,24px);line-height:1.55;text-wrap:pretty;animation:bprise .5s var(--ease-out) .4s both}.traits{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-top:34px;animation:bprise .5s var(--ease-out) .5s both}.trait{display:inline-flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);padding:12px 20px;border-radius:999px;color:rgba(255,255,255,.92);font-size:17px;font-weight:800;white-space:nowrap}.trait i{width:12px;height:12px;border-radius:50%;background:var(--cyan-300);font-style:normal}.actions{display:flex;flex-direction:column;align-items:center;gap:18px;margin-top:48px;animation:bprise .5s var(--ease-out) .6s both}.btn{height:64px;padding:0 40px;display:inline-flex;align-items:center;gap:14px;border-radius:16px;background:var(--gradient-cyan);box-shadow:var(--shadow-glow);color:#fff;text-decoration:none;font-size:20px;font-weight:900;transition:transform .2s var(--ease-out),box-shadow .2s var(--ease-out)}.btn:hover{transform:translateY(-1px);box-shadow:0 22px 52px rgba(0,160,240,.42)}.status{display:inline-flex;align-items:center;gap:10px;color:rgba(255,255,255,.64);font-size:16px}.status i{width:10px;height:10px;border-radius:50%;background:var(--green-500);box-shadow:0 0 0 5px rgba(20,169,113,.22);font-style:normal}@keyframes bpfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}@keyframes bppop{from{opacity:0;transform:translateY(12px) scale(.95)}to{opacity:1;transform:none}}@keyframes bprise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}@keyframes bpglow{0%,100%{opacity:.85}50%{opacity:1}}@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}@media(max-width:680px){body{padding:0;background:#05070E}.welcome{min-height:100vh;border-radius:0;box-shadow:none}.inner{min-height:100vh;padding:44px 24px 30px}.badge{font-size:12px;padding:8px 14px}.badge i{width:19px;height:19px}.mascotWrap{width:128px;height:128px;margin-top:20px}.bubble{left:96px;top:0;font-size:12px;padding:8px 11px}.overline{font-size:11px;margin-top:12px}h1{font-size:clamp(32px,10.5vw,42px);margin-top:12px}p{font-size:16px;line-height:1.55;margin-top:16px}.traits{gap:8px;margin-top:22px}.trait{font-size:13px;padding:9px 13px}.actions{width:100%;margin-top:auto;padding-top:30px}.btn{width:100%;height:56px;justify-content:center;font-size:17px;padding:0 18px}.status{font-size:13px}}</style></head><body><main class="welcome"><section class="inner"><div class="badge"><i><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg></i>Pago confirmado</div><div class="mascotWrap"><img src="/admin/assets/nextfor-mascota-nobg.png" alt="Nextfor, tu asistente de Nextfor IA"><div class="bubble">¡Ya soy de tu equipo!</div></div><div class="overline">✧ Bienvenido a Nextfor</div><h1>Tu negocio acaba de sumar a quien <span>nunca se va a casa</span>.</h1><p>Desde hoy Nextfor atiende, responde y agenda por ti en WhatsApp. El fichaje que rinde mes a mes — sin descansos, sin días malos.</p><div class="traits"><span class="trait"><i></i>Trabaja 24/7</span><span class="trait"><i></i>Nunca falta</span><span class="trait"><i></i>Rinde mes a mes</span></div><div class="actions"><a class="btn" href="${escapeHtml(nextPath)}">Ir al Customer Panel <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></a><span class="status"><i></i>Tu panel ya está activo y listo para trabajar</span></div></section></main></body></html>`);
+});
+
+app.get("/admin/create-account-demo", (req, res) => {
+  renderCustomerPublicSignup(res, {
+    businessHint: req.query.business || "Comercio piloto",
+    demoMode: true,
+    demoNextPath: "/admin/client-onboarding-demo?step=setup"
   });
 });
 
 app.get("/admin/client-onboarding", async (req, res) => {
   const auth = dashboardAuth(req);
-  if (!auth.ok || !adminAuthOk(req, "admin")) {
-    renderAdminLogin(res, "/admin/client-onboarding");
+  if (!auth.ok || !customerPanelAuthOk(req, "admin")) {
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/client-onboarding" });
+    else renderAdminLogin(res, "/admin/client-onboarding");
     return;
   }
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
-  const record = await loadClientOnboarding(false);
+  const tenantId = customerTenantForAuth(auth);
+  const record = await loadClientOnboarding(false, tenantId);
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const reviewStatus = record.setup_review && record.setup_review.status || "";
+  if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
+    res.redirect(PAYMENTS_V1_ENABLED ? "/admin/panel?tab=plan" : "/admin/panel?tab=summary");
+    return;
+  }
+  let catalogs = { plans: [], bots: [] };
+  if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
+    try { catalogs = await catalogService.activeCatalogs(); }
+    catch (_) {}
+  }
+  const business = customerBusinessForAuth(auth);
+  const plan = (catalogs.plans || []).find(function (item) { return item.id === business.plan_id; }) || null;
+  const bot = (catalogs.bots || []).find(function (item) { return item.id === business.assigned_bot_id; }) || null;
+  let billing = null;
+  if (PAYMENTS_V1_ENABLED && paymentService) {
+    try { billing = await paymentService.tenantBilling(tenantId); }
+    catch (_) {}
+  }
+  const displayRecord = JSON.parse(JSON.stringify(record));
+  displayRecord.answers = displayRecord.answers || defaultClientOnboarding();
+  if (!displayRecord.answers.business.brand_name) displayRecord.answers.business.brand_name = business.name;
+  if (!displayRecord.answers.team.admin_email) displayRecord.answers.team.admin_email = auth.email || auth.username;
+  if (!displayRecord.answers.business.contact_email) displayRecord.answers.business.contact_email = auth.email || auth.username;
   renderClientOnboarding(res, {
-    tenant: CUSTOMER_PANEL_BUSINESS,
-    record,
-    questionnaire,
+    tenant: business,
+    record: displayRecord,
     actor: auth.name || auth.username,
+    adminEmail: auth.email || auth.username,
+    plan,
+    plans: catalogs.plans || [],
+    bot,
+    bots: catalogs.bots || [],
+    billing,
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     demo: false,
-    apiPath: "/admin/client-onboarding/data"
+    apiPath: "/admin/client-onboarding/data",
+    completionPath: CUSTOMER_SETUP_COMPLETION_PATH,
+    questionnaire
   });
 });
 
 app.get("/admin/client-onboarding/data", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const questionnaire = await loadCustomerSetupQuestionnaire(false);
   res.json({
     ok: true,
-    tenant: CUSTOMER_PANEL_BUSINESS,
-    onboarding: await loadClientOnboarding(false),
-    questionnaire: await loadCustomerSetupQuestionnaire(false)
+    tenant: customerBusinessForAuth(auth),
+    onboarding: await loadClientOnboarding(false, tenantId),
+    questionnaire
   });
-});
-
-app.put("/admin/client-onboarding/data", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
-    res.status(401).json({ ok: false, error: "unauthorized" });
-    return;
-  }
-  try {
-    const auth = dashboardAuth(req);
-    const questionnaire = await loadCustomerSetupQuestionnaire(false);
-    const requestedStatus = req.body && req.body.status === "submitted" ? "submitted" : "draft";
-    const candidate = createOnboardingRecord(req.body && req.body.answers, {
-      tenant_id: CUSTOMER_PANEL_BUSINESS.id,
-      status: requestedStatus,
-      updated_by: auth.name || auth.username,
-      questionnaire
-    });
-    const confirmations = candidate.answers.confirmations || {};
-    const confirmationsReady = confirmations.owns_information && confirmations.accepts_guided_setup && confirmations.understands_meta_dependency;
-    if (requestedStatus === "submitted" && (candidate.completion < 75 || !confirmationsReady)) {
-      res.status(422).json({
-        ok: false,
-        error: "onboarding_incomplete",
-        completion: candidate.completion,
-        message: "Completa al menos el 75% y las confirmaciones antes de enviar la información para revisión."
-      });
-      return;
-    }
-    const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth);
-    res.json({ ok: true, onboarding: record });
-  } catch (error) {
-    console.error("client onboarding save error:", error.message);
-    res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
-  }
 });
 
 app.get("/admin/customer-setup-questionnaire", async (req, res) => {
@@ -4812,7 +6343,15 @@ app.get("/admin/customer-setup-questionnaire", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  res.json({ ok: true, questionnaire: await loadCustomerSetupQuestionnaire(false) });
+  try {
+    res.json({
+      ok: true,
+      questionnaire: await loadCustomerSetupQuestionnaire(true),
+      persistent_store: SUPABASE_ENABLED ? "supabase" : "memory_test_only"
+    });
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "questionnaire_store_unavailable" });
+  }
 });
 
 app.put("/admin/customer-setup-questionnaire", async (req, res) => {
@@ -4822,11 +6361,238 @@ app.put("/admin/customer-setup-questionnaire", async (req, res) => {
     return;
   }
   try {
-    const questionnaire = await persistCustomerSetupQuestionnaire(req.body && (req.body.questionnaire || req.body), auth);
+    const questionnaire = await persistCustomerSetupQuestionnaire(req.body && req.body.questionnaire || req.body, auth);
     res.json({ ok: true, questionnaire });
   } catch (error) {
-    console.error("customer setup questionnaire save error:", error.message);
-    res.status(503).json({ ok: false, error: "questionnaire_store_unavailable", message: "No pudimos guardar el cuestionario. Intenta nuevamente." });
+    console.error("customer setup questionnaire error:", error.message);
+    res.status(503).json({ ok: false, error: "questionnaire_store_unavailable" });
+  }
+});
+
+app.get("/admin/customer-setups", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenants = await listSetupReviewTenants();
+    const setups = await Promise.all(tenants.map(async function (tenant) {
+      const onboarding = await loadClientOnboarding(true, tenant.id);
+      const review = setupReviewSummary(onboarding);
+      return {
+        tenant,
+        tenant_id: tenant.id,
+        company_name: tenant.company_name || tenant.name || tenant.id,
+        setup_goal: onboarding.answers && onboarding.answers.setup_goal || "unknown",
+        completion: onboarding.completion || 0,
+        setup_completed: !!onboarding.setup_completed,
+        customer_service_configuration: onboarding.customer_service_configuration ? {
+          lifecycle: onboarding.customer_service_configuration.lifecycle,
+          updated_at: onboarding.customer_service_configuration.updated_at,
+          updated_by: onboarding.customer_service_configuration.updated_by
+        } : null,
+        review,
+        updated_at: onboarding.last_updated_at || onboarding.updated_at || null
+      };
+    }));
+    setups.sort(function (a, b) {
+      return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+    });
+    res.json({ ok: true, statuses: SETUP_REVIEW_STATUSES, setups });
+  } catch (error) {
+    console.error("customer setups list error:", error.message);
+    res.status(503).json({ ok: false, error: "setup_review_unavailable" });
+  }
+});
+
+app.get("/admin/leads", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({ ok: true, leads: await buildSuperAdminLeadsPipeline() });
+  } catch (error) {
+    console.error("super admin leads error:", error.message);
+    res.status(503).json({ ok: false, error: "leads_unavailable" });
+  }
+});
+
+app.get("/admin/customer-setups/:tenantId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenant = await setupReviewTenant(req.params.tenantId);
+    if (!tenant) {
+      res.status(404).json({ ok: false, error: "tenant_not_found" });
+      return;
+    }
+    const onboarding = await loadClientOnboarding(true, tenant.id);
+    res.json({
+      ok: true,
+      tenant,
+      onboarding,
+      review: setupReviewSummary(onboarding),
+      questionnaire: await loadCustomerSetupQuestionnaire(false),
+      statuses: SETUP_REVIEW_STATUSES
+    });
+  } catch (error) {
+    console.error("customer setup detail error:", error.message);
+    res.status(error.status || 503).json({ ok: false, error: error.message === "tenant_not_found" ? "tenant_not_found" : "setup_review_unavailable" });
+  }
+});
+
+app.put("/admin/customer-setups/:tenantId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const record = await persistSetupReview(req.params.tenantId, req.body || {}, auth);
+    res.json({
+      ok: true,
+      onboarding: record,
+      review: setupReviewSummary(record)
+    });
+  } catch (error) {
+    console.error("customer setup review save error:", error.message);
+    const expectedErrors = [
+      "tenant_not_found",
+      "setup_not_completed",
+      "setup_must_be_approved",
+      "customer_service_not_selected",
+      "configuration_not_building",
+      "configuration_required",
+      "public_activation_requires_separate_approval"
+    ];
+    res.status(error.status || 503).json({
+      ok: false,
+      error: expectedErrors.includes(error.message) ? error.message : "setup_review_unavailable"
+    });
+  }
+});
+
+app.put("/admin/client-onboarding/data", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const requestedStatus = req.body && ["submitted", "completed"].includes(req.body.status) ? req.body.status : "draft";
+	    const candidate = createOnboardingRecord(req.body && req.body.answers, {
+	      tenant_id: tenantId,
+	      status: requestedStatus,
+	      updated_by: auth.name || auth.username,
+	      questionnaire: await loadCustomerSetupQuestionnaire(false)
+	    });
+	    ensureChatbotOnlyOnboardingAnswers(candidate.answers);
+    if (requestedStatus === "completed" && candidate.completion < 100) {
+      res.status(422).json({
+        ok: false,
+        error: "setup_incomplete",
+        completion: candidate.completion,
+        message: "Completa la información requerida antes de terminar la configuración."
+      });
+      return;
+    }
+    const paymentChoice = requestedStatus === "completed" && PAYMENTS_V1_ENABLED
+      ? String(req.body && req.body.payment_choice || "").trim().toLowerCase()
+      : "";
+    if (requestedStatus === "completed" && PAYMENTS_V1_ENABLED &&
+        !["pay", "trial", "pilot"].includes(paymentChoice)) {
+      throw new PaymentError("payment_choice_required", 400);
+    }
+	    const selectedPlanId = String(req.body && req.body.plan_id || auth.plan_id || "").trim().toLowerCase();
+	    const selectedBotId = String(req.body && req.body.bot_id || auth.assigned_bot_id || "").trim().toLowerCase();
+	    ensureInitialProductionCustomerSelection(selectedPlanId, selectedBotId);
+    if (PAYMENTS_V1_ENABLED && requestedStatus === "completed" && (!selectedPlanId || !selectedBotId)) {
+      throw new PaymentError("plan_and_bot_required", 400);
+    }
+    let selectedPlan = null;
+    if (auth.version === 2 && selectedPlanId && selectedBotId &&
+        (selectedPlanId !== String(auth.plan_id || "").toLowerCase() ||
+         selectedBotId !== String(auth.assigned_bot_id || "").toLowerCase())) {
+      if (!catalogService) throw new CatalogError("catalog_unavailable", 503);
+      selectedPlan = await catalogService.selectTenantPlan(
+        tenantId,
+        selectedPlanId,
+        selectedBotId,
+        auth
+      );
+    }
+    let billing = null;
+    let checkout = null;
+    if (PAYMENTS_V1_ENABLED && paymentService && selectedPlanId && selectedBotId) {
+      const business = customerBusinessForAuth(auth);
+      billing = await paymentService.prepareContract({
+        tenant_id: tenantId,
+        customer: business.name,
+        customer_email: auth.email || auth.username,
+        plan_id: selectedPlanId,
+        bot_id: selectedBotId
+      });
+      if (requestedStatus === "completed") {
+        if (paymentChoice !== "pay" &&
+            (!billing || billing.subscription_status !== paymentChoice || !billing.ready_for_bot_creation)) {
+          throw new PaymentError("bypass_not_approved", 403);
+        }
+      }
+    }
+    const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
+    if (requestedStatus === "completed" && paymentChoice === "pay") {
+      const business = customerBusinessForAuth(auth);
+      checkout = await paymentService.startCheckout({
+        tenant_id: tenantId,
+        customer: business.name,
+        customer_email: auth.email || auth.username,
+        plan_id: selectedPlanId,
+        bot_id: selectedBotId,
+        actor: auth.email || auth.username || "customer"
+      });
+    }
+    res.json({
+      ok: true,
+      onboarding: record,
+      selected_plan_id: selectedPlan && selectedPlan.plan_id || selectedPlanId || null,
+      selected_bot_id: selectedPlan && selectedPlan.assigned_bot_id || selectedBotId || null,
+      billing,
+      checkout,
+      redirect: checkout && checkout.checkout_url ||
+        (record.setup_completed ? CUSTOMER_SETUP_COMPLETION_PATH : null)
+    });
+  } catch (error) {
+    console.error("client onboarding save error:", error.message);
+    if (error instanceof CatalogError) {
+      res.status(error.status || 400).json({
+        ok: false,
+        error: error.code,
+        message: error.code === "invalid_plan_for_bot"
+          ? "Este plan no está disponible para el bot asignado a tu empresa."
+          : "El plan elegido ya no está disponible. Selecciona otro plan activo."
+      });
+      return;
+    }
+    if (error instanceof PaymentError) {
+      res.status(error.status || 400).json({
+        ok: false,
+        error: error.code,
+        message: ({
+          payment_choice_required: "Elige pagar o usa un trial/piloto previamente aprobado.",
+          bypass_not_approved: "Este trial o piloto todavía no está aprobado por Super Admin.",
+          wompi_staging_not_configured: "Wompi Sandbox todavía no está configurado en Staging."
+        })[error.code] || "No pudimos preparar la facturación de tu plan."
+      });
+      return;
+    }
+    res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
   }
 });
 
@@ -5099,15 +6865,281 @@ app.post("/admin/retargeting/worker", async (req, res) => {
   });
 });
 
+function channelConnectionActor(auth) {
+  return auth && (auth.email || auth.username || auth.user_id || auth.name) || "system";
+}
+
+function channelConnectionErrorResponse(res, error) {
+  const problem = error instanceof ChannelConnectionError
+    ? error
+    : new ChannelConnectionError("channel_connection_unavailable", 503, error && error.message);
+  const customerCodes = [
+    "invalid_channel_request",
+    "channel_oauth_not_configured",
+    "connection_selection_expired",
+    "invalid_asset_selection",
+    "connection_not_found",
+    "legacy_connection_protected"
+  ];
+  res.status(problem.status || 503).json({
+    ok: false,
+    error: customerCodes.includes(problem.code) ? problem.code : "channel_connection_failed",
+    message: problem.code === "channel_oauth_not_configured"
+      ? "Aún estamos preparando este paso. Habla con NextforIA."
+      : problem.code === "legacy_connection_protected"
+        ? "No se puede cambiar esta conexión desde aquí."
+        : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."
+  });
+}
+
+app.get("/admin/panel/channel-connections", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  try {
+    const tenantId = customerTenantForAuth(auth);
+    res.json({
+      ok: true,
+      channels: await channelConnectionService.listTenant(tenantId),
+      meta_authorization_available: {
+        whatsapp: channelConnectionService.providerConfigured("whatsapp"),
+        instagram: channelConnectionService.providerConfigured("instagram"),
+        messenger: channelConnectionService.providerConfigured("messenger")
+      }
+    });
+  } catch (error) {
+    console.error("customer channel list error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  const channel = cleanChannel(req.params.channel);
+  const tenantId = customerTenantForAuth(auth);
+  try {
+    const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
+      tenant_id: tenantId,
+      channel,
+      actor_id: auth.user_id || auth.username,
+      actor: channelConnectionActor(auth)
+    });
+    const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state);
+    res.json({ ok: true, authorization_url: authorizationUrl });
+  } catch (error) {
+    console.error("customer channel connect start error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.get("/admin/channel-connections/meta/callback", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.redirect("/admin/panel?tab=channels&connection=error");
+    return;
+  }
+  const state = readOAuthState(DASHBOARD_SESSION_SECRET, req.query.state);
+  if (!state || usedChannelOAuthNonces.has(state.nonce)) {
+    res.redirect("/admin/panel?tab=channels&connection=error");
+    return;
+  }
+  const session = dashboardAuth(req);
+  if (session.ok && session.version === 2 &&
+      (customerTenantForAuth(session) !== state.tenant_id ||
+       String(session.user_id || session.username) !== String(state.actor_id))) {
+    res.redirect("/admin/panel?tab=channels&connection=error");
+    return;
+  }
+  usedChannelOAuthNonces.add(state.nonce);
+  if (usedChannelOAuthNonces.size > 10000) {
+    usedChannelOAuthNonces.delete(usedChannelOAuthNonces.values().next().value);
+  }
+  try {
+    const result = await channelConnectionService.completeAuthorization({
+      tenant_id: state.tenant_id,
+      channel: state.channel,
+      actor: state.actor,
+      code: req.query.error ? "" : req.query.code
+    });
+    res.redirect("/admin/panel?tab=channels&connection=" +
+      (result.status === "selection_required" ? "select" : "success"));
+  } catch (error) {
+    console.error("Meta channel authorization failed:", state.channel, error.internalMessage || error.message);
+    res.redirect("/admin/panel?tab=channels&connection=error");
+  }
+});
+
+app.post("/admin/panel/channel-connections/:channel/select", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  try {
+    const connection = await channelConnectionService.selectAsset(
+      customerTenantForAuth(auth),
+      req.params.channel,
+      req.body && req.body.asset_id,
+      auth
+    );
+    res.json({ ok: true, message: "Connected successfully.", connection });
+  } catch (error) {
+    console.error("customer channel asset selection error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  try {
+    const connection = await channelConnectionService.disconnect(
+      customerTenantForAuth(auth),
+      req.params.channel,
+      auth
+    );
+    res.json({ ok: true, message: "Canal desconectado.", connection });
+  } catch (error) {
+    console.error("customer channel disconnect error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.get("/admin/channel-connections", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenants = await listSetupReviewTenants();
+    res.json({ ok: true, channels: await channelConnectionService.listAll(tenants) });
+  } catch (error) {
+    console.error("super admin channel list error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/verify", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await channelConnectionService.verify(req.params.tenantId, req.params.channel, auth)
+    });
+  } catch (error) {
+    console.error("super admin channel verify error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/help-reconnect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await channelConnectionService.requestReconnect(req.params.tenantId, req.params.channel, auth)
+    });
+  } catch (error) {
+    console.error("super admin channel reconnect request error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/disconnect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await channelConnectionService.disconnect(req.params.tenantId, req.params.channel, auth)
+    });
+  } catch (error) {
+    console.error("super admin channel disconnect error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
 app.get("/admin/panel/data", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
   const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 500, 500));
-  let source = "memory";
-  let turns = conversationLogs.slice().reverse();
-  if (SUPABASE_ENABLED) {
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let source = tenantId === DEFAULT_TENANT_ID ? "memory" : "tenant_isolated";
+  let turns = tenantId === DEFAULT_TENANT_ID
+    ? conversationLogs.slice().reverse()
+    : conversationLogs.filter(function (turn) { return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId; }).reverse();
+  if (SUPABASE_ENABLED && tenantId === DEFAULT_TENANT_ID) {
     const rows = await supabaseFetchRecent(500);
     if (rows) {
       source = "supabase";
@@ -5117,10 +7149,16 @@ app.get("/admin/panel/data", async (req, res) => {
   turns.sort(function (a, b) {
     return new Date(b.ts || 0) - new Date(a.ts || 0);
   });
-  const auth = dashboardAuth(req);
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns);
-  res.json(buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit));
+  const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
+  if (auth.version === 2) snapshot.business = Object.assign({}, snapshot.business, customerBusinessForAuth(auth), {
+    whatsapp_setup: { status: "pending", label: "WhatsApp pendiente" },
+    instagram_setup: { status: "pending", label: "Instagram pendiente" },
+    messenger_setup: { status: "pending", label: "Messenger pendiente" },
+    channels: {}
+  });
+  res.json(snapshot);
 });
 
 app.get("/admin/panel/demo-data", (req, res) => {
@@ -5128,14 +7166,16 @@ app.get("/admin/panel/demo-data", (req, res) => {
 });
 
 app.get("/admin/panel/appointments-data", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const persistent = await hydrateAppointmentsForTenant(DEFAULT_TENANT_ID);
-  const snapshot = appointmentRegistry.snapshot(DEFAULT_TENANT_ID);
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const persistent = await hydrateAppointmentsForTenant(tenantId);
+  const snapshot = appointmentRegistry.snapshot(tenantId);
   snapshot.source = persistent ? "supabase" : "memory";
-  res.json(customerAppointmentSnapshot(snapshot, CUSTOMER_PANEL_BUSINESS));
+  res.json(customerAppointmentSnapshot(snapshot, customerBusinessForAuth(auth)));
 });
 
 app.get("/admin/panel/demo-appointments-data", (req, res) => {
@@ -5428,29 +7468,31 @@ app.get("/admin/super-admin", async (req, res) => {
   if (auth.method === "key") {
     setDashboardSessionCookie(req, res, auth);
   }
-
   let platformGoals = DEFAULT_PLATFORM_GOALS;
   try {
     platformGoals = await loadPlatformGoals(false);
-  } catch (_) {}
-  let customerSetup = null;
+  } catch (_) {
+    platformGoals = DEFAULT_PLATFORM_GOALS;
+  }
+  let leadsPipeline = null;
   try {
-    customerSetup = await loadClientOnboarding(false);
-  } catch (_) {}
-  let customerSetupQuestionnaire = null;
-  try {
-    customerSetupQuestionnaire = await loadCustomerSetupQuestionnaire(false);
-  } catch (_) {}
+    leadsPipeline = await buildSuperAdminLeadsPipeline();
+  } catch (error) {
+    console.error("super admin leads pipeline render error:", error.message);
+  }
+
   renderSuperAdminPanel(res, {
     auth,
     botVersion: BOT_VERSION,
     commercialReadiness: COMMERCIAL_READINESS,
     accessModel: DASHBOARD_ACCESS_MODEL,
-    tenant: CUSTOMER_PANEL_BUSINESS,
-    registeredClients: listRegisteredClients(),
+    customerAccessV2Enabled: CUSTOMER_ACCESS_V2_ENABLED,
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
+    channelConnectionsV1Enabled: CHANNEL_CONNECTIONS_V1_VISIBLE,
     platformGoals,
-    customerSetup,
-    customerSetupQuestionnaire,
+    tenant: CUSTOMER_PANEL_BUSINESS,
+    integration: currentRavIntegration(),
+    registeredClients: listRegisteredClients(),
     // Contrato de datos del diseño aprobado del Super Admin.
     // Se mantienen en null a propósito: el panel renderiza estados vacíos
     // honestos en vez de cifras de ejemplo. Al conectar la fuente real basta
@@ -5465,10 +7507,56 @@ app.get("/admin/super-admin", async (req, res) => {
     finance: null,
     // leads: {
     //   kpis: { active, won, demos, conversion },
-    //   sources: [{ name, paid: true|false, leads, won }]
+    //   sources: [{ name, paid: true|false, leads, won }],
+    //   rows: [{ tenant_id, company_name, admin_email, contact_phone, stage, completion }]
     // }
-    leads: null
+    leads: leadsPipeline
   });
+});
+
+app.get("/admin/platform-goals", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const goals = await loadPlatformGoals(true);
+    res.json({
+      ok: true,
+      goals,
+      persistent_store: SUPABASE_ENABLED ? "supabase" : "memory_test_only"
+    });
+  } catch (_) {
+    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
+  }
+});
+
+app.put("/admin/platform-goals/:goalId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const goalId = String(req.params.goalId || "").trim().toLowerCase();
+  try {
+    const goal = await persistPlatformGoal(goalId, req.body, auth);
+    res.json({ ok: true, goal });
+  } catch (error) {
+    const validationErrors = new Set([
+      "invalid_goal_id",
+      "invalid_goal_type",
+      "invalid_goal_label",
+      "invalid_goal_unit",
+      "invalid_goal_target"
+    ]);
+    if (validationErrors.has(error && error.code)) {
+      res.status(400).json({ ok: false, error: error.code });
+      return;
+    }
+    log("error", "platform_goal_save_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "platform_goal_store_unavailable" });
+  }
 });
 
 app.get("/admin/super-admin/login", (req, res) => {
@@ -5530,22 +7618,47 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
   }, appointmentRegistry.snapshot(DERCO_TENANT_ID)));
 });
 
-app.get("/admin/panel", (req, res) => {
+app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-    renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
+    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/panel?tab=" + requestedTab });
+    else renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
-  if (!canAccessTenant(auth, DEFAULT_TENANT_ID)) {
+  const panelTenantId = customerTenantForAuth(auth);
+  if (!panelTenantId || !canAccessTenant(auth, panelTenantId)) {
     res.status(403).send("Acceso restringido al tenant de este panel.");
     return;
   }
   if (auth.method === "key") {
     setDashboardSessionCookie(req, res, auth);
   }
+  let customerSetupCompleted = false;
+  let paymentGateRequired = false;
+  if (auth.version === 2) {
+    try {
+      const onboarding = await loadClientOnboarding(false, panelTenantId);
+      if (!onboarding.setup_completed) {
+        res.redirect("/admin/client-onboarding");
+        return;
+      }
+      if (PAYMENTS_V1_ENABLED && paymentService) {
+        const billing = await paymentService.tenantBilling(panelTenantId);
+        paymentGateRequired = !billingMakesCustomer(billing);
+      }
+      customerSetupCompleted = true;
+    } catch (error) {
+      console.error("customer setup gate error:", error.message);
+      res.status(503).send("No pudimos comprobar la configuración de tu empresa. Intenta nuevamente.");
+      return;
+    }
+  }
   const capabilities = customerPanelCapabilities(auth.role);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  const channelConnectionsVisibleForCustomer = customerChannelConnectionsVisibleForAuth(auth);
+  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  if (paymentGateRequired) initialTab = "plan";
+  if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -5553,15 +7666,20 @@ app.get("/admin/panel", (req, res) => {
     auth,
     capabilities,
     initialTab,
+    tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
+    customerSetupCompleted,
+    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
+    paymentGateRequired,
+    channelConnectionsV1Enabled: channelConnectionsVisibleForCustomer,
     botVersion: BOT_VERSION
   });
 });
 
 app.get("/admin/panel-demo", (req, res) => {
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "agent", method: "demo" };
-  const capabilities = customerPanelCapabilities("agent");
+  const auth = { username: "demo", name: "Demo RAV Toys", role: "admin", method: "demo" };
+  const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities,
@@ -5573,6 +7691,37 @@ app.get("/admin/panel-demo", (req, res) => {
     retargetingPath: "/admin/panel/demo-retargeting",
     healthPath: null,
     loginPath: null,
+    channelConnectionsV1Enabled: true,
+    channelConnectionsDemo: {
+      ok: true,
+      meta_authorization_available: { whatsapp: true, instagram: true, messenger: true },
+      channels: [
+        {
+          id: "whatsapp",
+          channel: "whatsapp",
+          name: "WhatsApp",
+          description: "Recomendado. Aquí es donde tu Nextfor empezará a atender primero.",
+          status: "not_connected",
+          connect_available: true
+        },
+        {
+          id: "instagram",
+          channel: "instagram",
+          name: "Instagram",
+          description: "Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",
+          status: "not_connected",
+          connect_available: true
+        },
+        {
+          id: "messenger",
+          channel: "messenger",
+          name: "Facebook Messenger",
+          description: "Opcional. Súmalo si tus clientes también te escriben por Facebook.",
+          status: "not_connected",
+          connect_available: true
+        }
+      ]
+    },
     botVersion: BOT_VERSION
   });
 });
@@ -6112,8 +8261,9 @@ async function buildAdminHealthResult() {
   result.production_readiness = {
     infrastructure_ready: blockers.length === 0,
     blockers,
-    app_review_status: "external_meta_review_not_checked_here"
+    app_review_status: currentRavIntegration(result.checks.meta_whatsapp).app_review.status
   };
+  result.integration = currentRavIntegration(result.checks.meta_whatsapp);
   return result;
 }
 
@@ -6144,12 +8294,54 @@ app.get("/admin/panel/health", async (req, res) => {
       status: ready ? "ok" : "needs_review",
       label: ready ? "Infra OK" : "Needs review"
     },
-    whatsapp_setup: customerPanelWhatsappSetup(),
+    whatsapp_setup: health.integration ? {
+      status: health.integration.connection.real_number_active ? "ready" : "pending",
+      label: health.integration.label,
+      app_review_approved: health.integration.app_review.approved,
+      real_number_active: health.integration.connection.real_number_active,
+      target_display_phone: health.integration.target_display_phone,
+      integration_status: health.integration.status,
+      graph_api_ready: health.integration.connection.graph_api_ready
+    } : customerPanelWhatsappSetup(),
     services: [
       { id: "catalog", label: "Catalogo", status: health.checks.shopify_storefront === "ok" ? "ready" : "needs_review" },
       { id: "messaging", label: "Mensajeria", status: health.checks.meta_whatsapp === "ok" ? "ready" : "needs_review" },
       { id: "history", label: "Historial", status: health.checks.supabase_conversation_logs === "ok" ? "ready" : "needs_review" }
     ]
+  });
+});
+
+app.get("/admin/integrations/rav/test", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(403).json({ ok: false, error: "forbidden" });
+    return;
+  }
+
+  const health = await buildAdminHealthResult();
+  const integration = health.integration || currentRavIntegration(health.checks.meta_whatsapp);
+  const checks = {
+    meta_app_review_approved: integration.app_review.approved,
+    meta_graph_api: health.checks.meta_whatsapp === "ok",
+    shopify_catalog: health.checks.shopify_storefront === "ok",
+    conversation_history: health.checks.supabase_conversation_logs === "ok",
+    customer_panel: integration.capabilities.customer_panel,
+    human_intervention: integration.capabilities.human_intervention
+  };
+  const technicalPassed = Object.keys(checks).every(function (key) { return checks[key] === true; });
+
+  res.json({
+    ok: technicalPassed,
+    tested_at: new Date().toISOString(),
+    integration,
+    checks,
+    technical_passed: technicalPassed,
+    live_ready: technicalPassed && integration.connection.real_number_active,
+    message: technicalPassed
+      ? (integration.connection.real_number_active
+          ? "Integracion lista para una prueba real de WhatsApp."
+          : "Integracion tecnica aprobada. Falta activar el numero real de WhatsApp.")
+      : "La integracion necesita revision tecnica antes de activar el numero real."
   });
 });
 
@@ -6613,6 +8805,7 @@ app.listen(PORT, () => {
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
+  syncNextforPricingJuly2026();
 
   if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;

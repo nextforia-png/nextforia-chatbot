@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v162-production-setup-super-admin-bridge";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v163-production-setup-save-as-client";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4675,6 +4675,39 @@ function customerBusinessForAuth(auth) {
   return CUSTOMER_PANEL_BUSINESS;
 }
 
+function onboardingTenantIdForSave(auth, answers) {
+  const defaultTenant = DEFAULT_TENANT_ID;
+  if (!auth || auth.version === 2 || auth.role !== "super_admin") return customerTenantForAuth(auth) || defaultTenant;
+  const normalized = answers && typeof answers === "object" ? answers : {};
+  const business = normalized.business || {};
+  const team = normalized.team || {};
+  const company = String(business.brand_name || "").trim();
+  const email = String(team.admin_email || business.contact_email || "").trim().toLowerCase();
+  const defaultIds = new Set([defaultTenant, cleanTenantId(CUSTOMER_PANEL_BUSINESS.name)]);
+  const companyId = cleanTenantId(company);
+  if (companyId && !defaultIds.has(companyId)) return companyId;
+  if (email && !/@ravtoys\.com$/i.test(email)) {
+    const local = email.split("@")[0];
+    const emailId = cleanTenantId(local);
+    if (emailId && !defaultIds.has(emailId)) return emailId;
+  }
+  return defaultTenant;
+}
+
+function customerBusinessForOnboarding(auth, tenantId, answers) {
+  const base = customerBusinessForAuth(auth);
+  const cleanTenant = cleanTenantId(tenantId) || base.id;
+  if (cleanTenant === base.id) return base;
+  const normalized = answers && typeof answers === "object" ? answers : {};
+  const business = normalized.business || {};
+  return Object.assign({}, base, {
+    id: cleanTenant,
+    name: String(business.brand_name || cleanTenant),
+    company_name: String(business.brand_name || cleanTenant),
+    status: "setup"
+  });
+}
+
 function customerChannelConnectionsVisibleForAuth(auth) {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
   if (!auth || auth.version !== 2) return true;
@@ -6601,17 +6634,35 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
+  if (process.env.NODE_ENV === "production" && !SUPABASE_ENABLED) {
+    res.status(503).json({
+      ok: false,
+      error: "persistent_setup_store_unavailable",
+      message: "No se puede guardar el setup porque la persistencia de producción no está activa."
+    });
+    return;
+  }
   try {
     const auth = dashboardAuth(req);
-    const tenantId = customerTenantForAuth(auth);
+    let tenantId = customerTenantForAuth(auth);
     const requestedStatus = req.body && ["submitted", "completed"].includes(req.body.status) ? req.body.status : "draft";
-	    const candidate = createOnboardingRecord(req.body && req.body.answers, {
+    let candidate = createOnboardingRecord(req.body && req.body.answers, {
 	      tenant_id: tenantId,
 	      status: requestedStatus,
 	      updated_by: auth.name || auth.username,
 	      questionnaire: await loadCustomerSetupQuestionnaire(false)
 	    });
 	    ensureChatbotOnlyOnboardingAnswers(candidate.answers);
+    tenantId = onboardingTenantIdForSave(auth, candidate.answers);
+    if (tenantId !== candidate.tenant_id) {
+      candidate = createOnboardingRecord(candidate.answers, {
+        tenant_id: tenantId,
+        status: requestedStatus,
+        updated_by: auth.name || auth.username,
+        questionnaire: await loadCustomerSetupQuestionnaire(false)
+      });
+      ensureChatbotOnlyOnboardingAnswers(candidate.answers);
+    }
     if (requestedStatus === "completed" && candidate.completion < 100) {
       res.status(422).json({
         ok: false,
@@ -6649,7 +6700,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
     let billing = null;
     let checkout = null;
     if (PAYMENTS_V1_ENABLED && paymentService && selectedPlanId && selectedBotId) {
-      const business = customerBusinessForAuth(auth);
+      const business = customerBusinessForOnboarding(auth, tenantId, candidate.answers);
       billing = await paymentService.prepareContract({
         tenant_id: tenantId,
         customer: business.name,
@@ -6666,7 +6717,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
     }
     const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
     if (requestedStatus === "completed" && paymentChoice === "pay") {
-      const business = customerBusinessForAuth(auth);
+      const business = customerBusinessForOnboarding(auth, tenantId, candidate.answers);
       checkout = await paymentService.startCheckout({
         tenant_id: tenantId,
         customer: business.name,

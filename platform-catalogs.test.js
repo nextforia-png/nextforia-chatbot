@@ -148,17 +148,6 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
     return service.setTenantStatus("panaderia-espiga", "borrado", actor);
   }, /invalid_status/, "solo se aceptan los cuatro estados del contrato");
 
-  // No se puede eliminar un cliente activo: primero hay que suspenderlo.
-  await assert.rejects(function () {
-    return service.deleteTenant({
-      tenant_id: "panaderia-espiga",
-      company_name_confirmacion: "Panadería La Espiga",
-      confirmacion_final: true
-    }, actor);
-  }, /tenant_not_suspended/, "salvaguarda 1: debe estar suspendido");
-
-  await service.setTenantStatus("panaderia-espiga", "suspendido", actor);
-
   // El nombre de la empresa debe coincidir exactamente.
   await assert.rejects(function () {
     return service.deleteTenant({
@@ -166,7 +155,7 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
       company_name_confirmacion: "Panaderia La Espiga",
       confirmacion_final: true
     }, actor);
-  }, /company_name_mismatch/, "salvaguarda 2: el nombre debe coincidir");
+  }, /company_name_mismatch/, "salvaguarda 1: el nombre debe coincidir");
 
   // Falta la confirmación final explícita.
   await assert.rejects(function () {
@@ -174,9 +163,9 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
       tenant_id: "panaderia-espiga",
       company_name_confirmacion: "Panadería La Espiga"
     }, actor);
-  }, /final_confirmation_required/, "salvaguarda 3: confirmación explícita");
+  }, /final_confirmation_required/, "salvaguarda 2: confirmación explícita");
 
-  // Con las tres cumplidas: borra y devuelve respaldo.
+  // Con las salvaguardas cumplidas: suspende automáticamente, borra y devuelve respaldo.
   const outcome = await service.deleteTenant({
     tenant_id: "panaderia-espiga",
     company_name_confirmacion: "Panadería La Espiga",

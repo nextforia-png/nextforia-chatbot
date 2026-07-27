@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v160-production-legacy-client-delete-button";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v161-production-safer-client-actions";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4411,14 +4411,34 @@ async function persistLegacyClientVisibility(input, auth) {
   return legacyClientVisibilityCache;
 }
 
-async function hideLegacyClient(tenantId, auth) {
+function legacyClientRecord(tenantId) {
   const cleanId = cleanTenantId(tenantId);
-  const allowed = [DEFAULT_TENANT_ID].concat(listRegisteredClients().map(function (client) {
-    return cleanTenantId(client && client.tenant_id);
-  })).filter(Boolean);
-  if (!cleanId || !allowed.includes(cleanId)) {
+  if (!cleanId) return null;
+  const rows = [{
+    tenant_id: DEFAULT_TENANT_ID,
+    brand_name: CUSTOMER_PANEL_BUSINESS.name || "RAV Toys"
+  }].concat(listRegisteredClients());
+  return rows.find(function (client) { return cleanTenantId(client && client.tenant_id) === cleanId; }) || null;
+}
+
+async function hideLegacyClient(tenantId, input, auth) {
+  const cleanId = cleanTenantId(tenantId);
+  const client = legacyClientRecord(cleanId);
+  if (!client) {
     const error = new Error("legacy_client_not_found");
     error.status = 404;
+    throw error;
+  }
+  const expectedName = String(client.brand_name || client.name || cleanId).trim();
+  const confirmedName = String(input && input.company_name_confirmacion || "").trim();
+  if (!expectedName || confirmedName !== expectedName) {
+    const error = new Error("company_name_mismatch");
+    error.status = 400;
+    throw error;
+  }
+  if (!input || input.confirmacion_final !== true) {
+    const error = new Error("final_confirmation_required");
+    error.status = 400;
     throw error;
   }
   const current = await loadLegacyClientVisibility(false);
@@ -7620,7 +7640,10 @@ app.post("/admin/legacy-clients/:tenantId/hide", async (req, res) => {
     return;
   }
   try {
-    const visibility = await hideLegacyClient(req.params.tenantId, auth);
+    const visibility = await hideLegacyClient(req.params.tenantId, {
+      company_name_confirmacion: req.body && req.body.company_name_confirmacion,
+      confirmacion_final: req.body && req.body.confirmacion_final === true
+    }, auth);
     console.log("[legacy-client-hidden]", JSON.stringify({
       actor: auth.email || auth.username || "super_admin",
       tenant_id: cleanTenantId(req.params.tenantId),

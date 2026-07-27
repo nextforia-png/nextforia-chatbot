@@ -121,6 +121,10 @@ assert.match(html, /Clientes visibles/);
 assert.match(html, /hideLegacyClient/);
 assert.match(html, /\/admin\/legacy-clients\//);
 assert.match(html, />Eliminar<\/button>/);
+assert.match(html, /Filtro 1 de 2/);
+assert.match(html, /Filtro 2 de 2/);
+assert.match(html, /company_name_confirmacion/);
+assert.match(html, /confirmacion_final/);
 assert.doesNotMatch(html, /La lista antigua ya no se muestra en Staging/);
 assert.match(html, /Crear acceso RAV/);
 assert.match(html, /role="dialog" aria-modal="true"/);
@@ -265,6 +269,7 @@ assert.match(accessV2Html, /id="tenantDeleteModal"/);
 assert.match(accessV2Html, /Escribe el nombre exacto de la empresa/);
 assert.match(accessV2Html, /Se descarga un respaldo antes de borrar/);
 assert.match(accessV2Html, /El acceso se corta automáticamente/);
+assert.match(accessV2Html, /Perderá acceso al panel, pero sus datos quedan guardados/);
 assert.match(accessV2Html, /\/admin\/tenants/);
 
 // Sin el gate, nada del catálogo se filtra al panel.

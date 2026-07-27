@@ -97,6 +97,7 @@ async function login(base, body) {
     const userB = await login(base, { email: "admin@b.example", password: "TenantPassword2026" });
     const appointmentUser = await login(base, { email: "admin@c.example", password: "TenantPassword2026" });
     const superAdmin = await login(base, { username: "owner@nextforia.test", password: "OwnerPassword2026" });
+    let body;
 
     let response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
@@ -112,16 +113,21 @@ async function login(base, body) {
     response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: appointmentUser.cookie } });
     assert.strictEqual(response.status, 200);
     const appointmentPanel = await response.text();
-    assert(!appointmentPanel.includes("Conectar canales"));
-    assert(!appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
+    assert(appointmentPanel.includes("Conectar canales"));
+    assert(appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentUser.cookie } });
-    assert.strictEqual(response.status, 404);
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.deepStrictEqual(body.channels.map(function (row) { return row.name; }), [
+      "WhatsApp", "Instagram", "Facebook Messenger"
+    ]);
+    assert(body.channels.every(function (row) { return row.tenant_id === "tenant-c"; }));
 
     response = await fetch(base + "/admin/panel/channel-connections?tenant_id=tenant-b", {
       headers: { cookie: userA.cookie }
     });
     assert.strictEqual(response.status, 200);
-    let body = await response.json();
+    body = await response.json();
     assert.deepStrictEqual(body.channels.map(function (row) { return row.name; }), [
       "WhatsApp", "Instagram", "Facebook Messenger"
     ]);

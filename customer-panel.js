@@ -37,7 +37,9 @@ function customerPanelContext(options) {
   const planId = String(tenant.plan_id || "").trim().toLowerCase();
   const assignedBotId = String(tenant.assigned_bot_id || "").trim().toLowerCase();
   const planNames = { starter: "Starter", growth: "Growth", scale: "Scale", "nextfor-uno": "Nextfor Uno", "nextfor-aura": "Nextfor Aura" };
-  const botNames = { "atencion-cliente": "Atención al cliente", agendamiento: "Agendamiento", commerce: "Commerce" };
+  const botNames = { "atencion-cliente": "Atención al cliente", agendamiento: "Agendamiento", commerce: "Commerce", duo: "Atención al cliente + Agendamiento", both: "Atención al cliente + Agendamiento" };
+  const supportBots = ["atencion-cliente", "commerce", "duo", "both"];
+  const appointmentBots = ["agendamiento", "duo", "both"];
   const referralCode = businessName.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 14) || "NEXTFORIA";
   return {
     v2: true,
@@ -49,8 +51,8 @@ function customerPanelContext(options) {
     assignedBotId,
     assignedBotName: botNames[assignedBotId] || assignedBotId || "Bot asignado",
     customerSetupCompleted: !!options.customerSetupCompleted,
-    support: assignedBotId === "atencion-cliente" || assignedBotId === "commerce",
-    appointments: assignedBotId === "agendamiento",
+    support: supportBots.includes(assignedBotId),
+    appointments: appointmentBots.includes(assignedBotId),
     referralCode
   };
 }
@@ -123,7 +125,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const appointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
   const mobileSupportBotButton = !paymentGateRequired && panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
   const mobileAppointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
-  const activeBotCount = panelContext.v2 ? 1 : 2;
+  const activeBotCount = panelContext.v2 ? ((panelContext.support ? 1 : 0) + (panelContext.appointments ? 1 : 0) || 1) : 2;
   const assignedModuleDescription = panelContext.appointments
     ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
     : "Centraliza resultados y conversaciones de los canales conectados en una sola bandeja.";

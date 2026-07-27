@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v163-production-setup-save-as-client";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v164-production-onboarding-connections";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -271,9 +271,6 @@ const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_A
 const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
-const CUSTOMER_SETUP_COMPLETION_PATH = CHANNEL_CONNECTIONS_V1_ENABLED
-  ? "/admin/panel?tab=channels&from=onboarding"
-  : "/admin/panel?tab=setup&from=onboarding";
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
@@ -288,6 +285,8 @@ const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24,
 const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
 const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
 const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL, CUSTOMER_PANEL_FALLBACK_BASE_URLS).filter(Boolean);
+const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
+const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
 const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
   || process.env.CHANNEL_CONNECTIONS_V1_PREVIEW === "1"
   || (
@@ -298,7 +297,13 @@ const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
       catch (_) { return false; }
     })
   );
-const CHANNEL_CONNECTIONS_V1_VISIBLE = CHANNEL_CONNECTIONS_V1_ENABLED || CHANNEL_CONNECTIONS_STAGING_PREVIEW;
+const CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW = !CHANNEL_CONNECTIONS_V1_ENABLED
+  && process.env.CHANNEL_CONNECTIONS_V1_PREVIEW !== "0"
+  && process.env.NODE_ENV === "production"
+  && CUSTOMER_ACCESS_V2_ENABLED
+  && SUPABASE_ENABLED
+  && !!DATA_ENCRYPTION_KEY;
+const CHANNEL_CONNECTIONS_V1_VISIBLE = CHANNEL_CONNECTIONS_V1_ENABLED || CHANNEL_CONNECTIONS_STAGING_PREVIEW || CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW;
 const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
@@ -307,8 +312,6 @@ const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET |
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
 const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
 const appointmentRegistry = new AppointmentRegistry();
-const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
-const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
 const WA_TOKEN = process.env.WA_TOKEN;
 const TENANT_CONFIG = createTenantConfig(process.env);
 const DEFAULT_TENANT_ID = TENANT_CONFIG.id;
@@ -622,8 +625,9 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
     })
   : null;
 const channelConnectionsPreviewOnly = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHANNEL_CONNECTIONS_V1_ENABLED;
+const channelConnectionsMemoryPreview = channelConnectionsPreviewOnly && !CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW;
 const channelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE
-  ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsPreviewOnly
+  ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsMemoryPreview
       ? new InMemoryChannelConnectionStore()
       : new SupabaseChannelConnectionStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
   : null;
@@ -4712,13 +4716,80 @@ function customerChannelConnectionsVisibleForAuth(auth) {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
   if (!auth || auth.version !== 2) return true;
   const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
-  return assignedBotId === "atencion-cliente" || assignedBotId === "commerce";
+  return !!assignedBotId;
+}
+
+function customerSetupCompletionPath(auth, source) {
+  const cleanSource = String(source || "onboarding").replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || "onboarding";
+  return customerChannelConnectionsVisibleForAuth(auth)
+    ? "/admin/panel?tab=channels&from=" + encodeURIComponent(cleanSource)
+    : "/admin/panel?tab=setup&from=" + encodeURIComponent(cleanSource);
+}
+
+function onboardingValueAt(answers, path) {
+  return String(path || "").split(".").reduce(function (current, key) {
+    return current && current[key] !== undefined && current[key] !== null ? current[key] : "";
+  }, answers || {});
+}
+
+function onboardingRequestedChannels(answers) {
+  const channels = [];
+  const add = function (channel, value) {
+    if (String(value || "").trim() && !channels.includes(channel)) channels.push(channel);
+  };
+  add("whatsapp", onboardingValueAt(answers, "meta.whatsapp_number"));
+  add("instagram", onboardingValueAt(answers, "meta.instagram_account"));
+  add("instagram", onboardingValueAt(answers, "appointment_setup.instagram_username"));
+  add("messenger", onboardingValueAt(answers, "meta.facebook_page"));
+  add("messenger", onboardingValueAt(answers, "appointment_setup.messenger_page"));
+  return channels;
+}
+
+function onboardingRequestedCommerce(answers) {
+  const commerce = answers && answers.commerce || {};
+  const platform = String(commerce.platform || "").trim().toLowerCase();
+  const intent = String(commerce.integration_intent || "").trim().toLowerCase();
+  const status = String(commerce.integration_status || "").trim().toLowerCase();
+  return !!platform && !["none", "unknown"].includes(platform) &&
+    (intent === "yes" || intent === "later" || status && status !== "not_requested");
+}
+
+async function onboardingNeedsConnectionFollowup(auth, record) {
+  const answers = record && record.answers || {};
+  const requestedChannels = onboardingRequestedChannels(answers);
+  const commerceRequested = onboardingRequestedCommerce(answers);
+  if (!customerChannelConnectionsVisibleForAuth(auth)) return requestedChannels.length > 0 || commerceRequested;
+  if (commerceRequested) return true;
+  if (!requestedChannels.length) return true;
+  if (!channelConnectionService || !auth || !auth.tenant_id) return true;
+  try {
+    const rows = await channelConnectionService.listTenant(auth.tenant_id);
+    return requestedChannels.some(function (channel) {
+      const row = rows.find(function (item) { return item.channel === channel; });
+      return !row || row.status !== "connected";
+    });
+  } catch (_) {
+    return true;
+  }
+}
+
+async function customerPanelNextPathAfterSetup(auth, record, source) {
+  if (PAYMENTS_V1_ENABLED && paymentService && auth && auth.tenant_id) {
+    let billing = null;
+    try { billing = await paymentService.tenantBilling(auth.tenant_id); }
+    catch (_) {}
+    if (!billingMakesCustomer(billing)) return "/admin/panel?tab=plan&from=" + encodeURIComponent(source || "onboarding");
+  }
+  if (await onboardingNeedsConnectionFollowup(auth, record)) {
+    return customerSetupCompletionPath(auth, source);
+  }
+  return "/admin/panel?tab=summary";
 }
 
 async function customerPanelEntryRedirect(user) {
   if (!CUSTOMER_ACCESS_V2_ENABLED || !user || !user.user_id || !user.tenant_id) return "/admin/panel?tab=summary";
   const record = await loadClientOnboarding(false, user.tenant_id);
-  return record && record.setup_completed ? "/admin/panel?tab=summary" : "/admin/client-onboarding";
+  return record && record.setup_completed ? await customerPanelNextPathAfterSetup(user, record, "login") : "/admin/client-onboarding";
 }
 
 function publicSignupDefaults(catalogs) {
@@ -6433,7 +6504,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
   const reviewStatus = record.setup_review && record.setup_review.status || "";
   if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
-    res.redirect(PAYMENTS_V1_ENABLED ? "/admin/panel?tab=plan" : "/admin/panel?tab=summary");
+    res.redirect(await customerPanelNextPathAfterSetup(auth, record, "onboarding"));
     return;
   }
   let catalogs = { plans: [], bots: [] };
@@ -6467,7 +6538,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     demo: false,
     apiPath: "/admin/client-onboarding/data",
-    completionPath: CUSTOMER_SETUP_COMPLETION_PATH,
+    completionPath: customerSetupCompletionPath(auth, "onboarding"),
     questionnaire
   });
 });
@@ -6735,7 +6806,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       billing,
       checkout,
       redirect: checkout && checkout.checkout_url ||
-        (record.setup_completed ? CUSTOMER_SETUP_COMPLETION_PATH : null)
+        (record.setup_completed ? await customerPanelNextPathAfterSetup(auth, record, "onboarding") : null)
     });
   } catch (error) {
     console.error("client onboarding save error:", error.message);
@@ -7856,7 +7927,7 @@ app.get("/admin/panel", async (req, res) => {
   const channelConnectionsVisibleForCustomer = customerChannelConnectionsVisibleForAuth(auth);
   let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (paymentGateRequired) initialTab = "plan";
-  if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "summary";
+  if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "setup";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }

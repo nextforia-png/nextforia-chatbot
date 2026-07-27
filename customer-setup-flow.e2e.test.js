@@ -446,7 +446,7 @@ function bothBotAnswers(company, email) {
       redirect: "manual"
     });
     assert.strictEqual(response.status, 302, "completed customers must not repeat onboarding");
-    assert.strictEqual(response.headers.get("location"), "/admin/panel?tab=summary");
+    assert.strictEqual(response.headers.get("location"), "/admin/panel?tab=setup&from=onboarding");
 
     response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieB },

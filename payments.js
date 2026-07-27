@@ -494,7 +494,7 @@ function createPaymentService(options) {
         "amount-in-cents": String(amountInCents),
         reference: reference,
         "signature:integrity": signature,
-        "redirect-url": publicBaseUrl + "/admin/panel?tab=plan&payment_return=1"
+        "redirect-url": publicBaseUrl + "/admin/panel?tab=channels&from=payment&payment_return=1"
       });
       return {
         payment_provider: "wompi",

@@ -117,6 +117,11 @@ assert.match(html, /\/admin\/pilots\/derco/);
 assert.match(html, /Cliente #1 · RAV Toys/);
 assert.match(html, /rav-toys · Integracion #1/);
 assert.match(html, /Piloto #1/);
+assert.match(html, /Clientes visibles/);
+assert.match(html, /hideLegacyClient/);
+assert.match(html, /\/admin\/legacy-clients\//);
+assert.match(html, />Eliminar<\/button>/);
+assert.doesNotMatch(html, /La lista antigua ya no se muestra en Staging/);
 assert.match(html, /Crear acceso RAV/);
 assert.match(html, /role="dialog" aria-modal="true"/);
 assert.match(html, /Meta aprobada/);
@@ -140,6 +145,31 @@ assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
 // Sin fuente financiera el panel no inventa cifras.
 assert.match(html, /sin fuente financiera conectada/);
 assert.match(html, /El Pareto de ingresos aparece con ventas reales/);
+
+// Los registros heredados pueden ocultarse del panel sin activar Customer Access v2.
+let hiddenLegacyHtml = "";
+renderSuperAdminPanel({
+  setHeader: function () {},
+  send: function (body) { hiddenLegacyHtml = body; }
+}, {
+  auth: { username: "root", name: "Root", role: "super_admin" },
+  botVersion: "v-test",
+  tenant: { id: "rav-toys", name: "RAV Toys", status: "active", customer_number: 1 },
+  registeredClients: [{
+    tenant_id: "grupo-derco",
+    brand_name: "Grupo Jurídico DERCO S.A.S.",
+    short_name: "DERCO",
+    customer_number: 1,
+    status: "pilot",
+    industry: "professional_services"
+  }],
+  hiddenLegacyClientIds: ["grupo-derco"],
+  commercialReadiness: { stages: [], requiredTenantFields: [] },
+  accessModel: { roles: [], future_panels: [] },
+  integration: { status: "activation_pending", label: "Activacion pendiente", app_review: {} }
+});
+assert.doesNotMatch(hiddenLegacyHtml, /Grupo Jurídico DERCO/);
+assert.match(hiddenLegacyHtml, /RAV Toys/);
 
 // Con fuente financiera conectada el diseño pinta desglose, tabla y Pareto.
 let richHtml = "";

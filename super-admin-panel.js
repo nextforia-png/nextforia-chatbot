@@ -68,6 +68,7 @@ function renderSuperAdminPanel(res, options) {
   const customerAccessV2Enabled = !!options.customerAccessV2Enabled;
   const paymentsV1Enabled = !!options.paymentsV1Enabled;
   const channelConnectionsV1Enabled = !!options.channelConnectionsV1Enabled;
+  const hiddenLegacyClientIds = new Set((options.hiddenLegacyClientIds || []).map(function (id) { return String(id || "").trim().toLowerCase(); }).filter(Boolean));
   const readiness = options.commercialReadiness || {};
   const accessModel = options.accessModel || {};
   const tenant = options.tenant || { id: "rav-toys", name: "RAV Toys", status: "active" };
@@ -117,7 +118,9 @@ function renderSuperAdminPanel(res, options) {
     industry: "ecommerce",
     panel_path: "/admin/panel?tab=summary"
   }].concat(registeredClients);
-  const platformAccounts = customerAccessV2Enabled ? [] : legacyPlatformAccounts;
+  const platformAccounts = customerAccessV2Enabled ? [] : legacyPlatformAccounts.filter(function (client) {
+    return !hiddenLegacyClientIds.has(String(client.tenant_id || "").trim().toLowerCase());
+  });
   const stages = readiness.stages || [];
   const readyCount = stages.filter(function (stage) { return stage.status === "ready"; }).length;
   const waitingCount = stages.filter(function (stage) { return stage.status === "waiting_meta"; }).length;
@@ -264,8 +267,11 @@ function renderSuperAdminPanel(res, options) {
     const plan = isDefault ? "Growth · piloto" : "Piloto citas";
     const integrations = isDefault ? "WhatsApp · Shopify" : "ElevenLabs · Calendar";
     const search = [client.brand_name, client.short_name, client.tenant_id, sector].join(" ").toLowerCase();
-    const content = '<span class="tenant-cell"><span class="avatar sm">' + escapeHtml(initials) + '</span><span><strong>' + escapeHtml(client.brand_name) + '</strong><span>' + escapeHtml(client.tenant_id) + '</span></span></span><span class="cell-text">' + escapeHtml(sector) + '</span><span class="badge neutral">' + escapeHtml(plan) + '</span><span class="cell-text">' + escapeHtml(integrations) + '</span><span class="badge ' + (isDefault ? integrationTone : 'info') + ' dot">' + (isDefault ? escapeHtml(integrationStateLabel) : 'Piloto') + '</span><span>' + icon("chevron", 17) + '</span>';
-    return isDefault ? '<button class="tenant-row" data-search="' + escapeHtml(search) + '" type="button" onclick="openTenant()">' + content + '</button>' : '<a class="tenant-row" data-search="' + escapeHtml(search) + '" href="' + escapeHtml(client.panel_path || "#") + '">' + content + '</a>';
+    const clientLink = isDefault
+      ? '<button class="table-client-link" type="button" onclick="openTenant()"><span class="avatar sm">' + escapeHtml(initials) + '</span><span><strong>' + escapeHtml(client.brand_name) + '</strong><span>' + escapeHtml(client.tenant_id) + '</span></span></button>'
+      : '<a class="table-client-link" href="' + escapeHtml(client.panel_path || "#") + '"><span class="avatar sm">' + escapeHtml(initials) + '</span><span><strong>' + escapeHtml(client.brand_name) + '</strong><span>' + escapeHtml(client.tenant_id) + '</span></span></a>';
+    const content = '<span class="tenant-cell">' + clientLink + '</span><span class="cell-text">' + escapeHtml(sector) + '</span><span class="badge neutral">' + escapeHtml(plan) + '</span><span class="cell-text">' + escapeHtml(integrations) + '</span><span class="badge ' + (isDefault ? integrationTone : 'info') + ' dot">' + (isDefault ? escapeHtml(integrationStateLabel) : 'Piloto') + '</span><span><button class="legacy-delete" type="button" onclick="hideLegacyClient(event,' + escapeHtml(JSON.stringify(client.tenant_id)) + ',' + escapeHtml(JSON.stringify(client.brand_name)) + ')">Eliminar</button></span>';
+    return '<div class="tenant-row" data-search="' + escapeHtml(search) + '">' + content + '</div>';
   }).join("");
 
   // ---------- Leads ----------
@@ -559,7 +565,7 @@ function renderSuperAdminPanel(res, options) {
 .chip.active{background:var(--navy-900);border-color:var(--navy-900);color:#fff}
 .chip span{font:600 9px var(--font-mono);margin-left:5px;color:var(--cyan-500)}
 .table-card{overflow:hidden;padding:0}
-.table-head,.tenant-row{min-width:820px;display:grid;grid-template-columns:2fr 1.1fr .75fr 1.1fr .9fr 24px;gap:14px;align-items:center}
+.table-head,.tenant-row{min-width:900px;display:grid;grid-template-columns:2fr 1.1fr .75fr 1.1fr .9fr 100px;gap:14px;align-items:center}
 .table-head{padding:12px 18px;background:var(--slate-50);border-bottom:1px solid var(--border-subtle);font-size:9.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--text-subtle)}
 .table-scroll{overflow:auto}
 .tenant-row{width:100%;padding:15px 18px;border:0;background:var(--surface-card);text-align:left;font:inherit;cursor:pointer}
@@ -567,6 +573,11 @@ function renderSuperAdminPanel(res, options) {
 .tenant-cell{display:flex;align-items:center;gap:10px}
 .tenant-cell strong{display:block;font-size:12px;color:var(--text-strong)}
 .tenant-cell span{font-size:10px;color:var(--text-muted)}
+.table-client-link{display:flex;align-items:center;gap:10px;border:0;background:transparent;padding:0;color:inherit;text-align:left;font:inherit;cursor:pointer;text-decoration:none}
+.table-client-link:hover strong{text-decoration:underline}
+.legacy-delete{border:1px solid rgba(220,38,38,.28);border-radius:999px;background:#fff;color:#b91c1c;padding:8px 12px;font:800 11px var(--font-body);cursor:pointer}
+.legacy-delete:hover{background:#fee2e2;border-color:#ef4444}
+.legacy-delete:disabled{opacity:.55;cursor:not-allowed}
 .cell-text{font-size:11px;color:var(--text-muted)}
 .empty{padding:48px 24px;text-align:center}
 .empty-icon{width:54px;height:54px;border-radius:17px;background:var(--cyan-50);color:var(--cyan-600);display:grid;place-items:center;margin:0 auto 15px}
@@ -781,7 +792,7 @@ function renderSuperAdminPanel(res, options) {
   <div class="two-col" style="margin-top:0"><section class="card"><div class="card-head"><div><h2>Embudo real</h2><p>Estados actuales del alta automática.</p></div></div><ol class="steps"><li><span class="step-number">1</span><div><strong>Cuenta creada</strong><p>Email + clave guardados. Ya es lead.</p></div></li><li><span class="step-number">2</span><div><strong>Setup iniciado</strong><p>El cliente empieza a llenar su información.</p></div></li><li><span class="step-number">3</span><div><strong>Setup completo</strong><p>NextforIA revisa y activa pago, trial o piloto.</p></div></li><li><span class="step-number">4</span><div><strong>Cliente</strong><p>Setup completo + pago/trial/piloto listo.</p></div></li></ol></section><section class="card"><div class="card-head"><div><h2>Datos guardados hoy</h2><p>Sin secretos, solo información útil para venta y seguimiento.</p></div></div><div class="fields"><code>company_name</code><code>admin_email</code><code>contact_phone</code><code>tenant_id</code><code>setup_completion</code><code>plan_id</code><code>assigned_bot_id</code><code>stage</code></div></section></div>
 </div></section>
 
-<section class="view" data-panel="clients"><div class="stack">${legacyRegistrySection}${tenantLifecyclePanel}${customerAccessPanel}<div class="callout"><div><strong>Clientes del flujo nuevo</strong><p>La lista antigua ya no se muestra en Staging. La fuente de verdad ahora es la base de clientes reales creada desde Super Admin o por onboarding.</p></div><span class="badge info">${currentClients} de ${currentClients}</span></div></div></section>
+<section class="view" data-panel="clients"><div class="stack">${legacyRegistrySection}${tenantLifecyclePanel}${customerAccessPanel}<div class="callout"><div><strong>Clientes visibles</strong><p>Usa Eliminar para quitar de esta vista los registros heredados. Cuando Customer Access v2 esté activo, aquí también se administrará la base nueva de clientes.</p></div><span class="badge info">${currentClients} de ${currentClients}</span></div></div></section>
 
 <section class="view" data-panel="agendamiento"><div class="stack">
   <section class="card"><div class="empty"><img class="empty-lumen" src="/admin/assets/lumen.png" alt="" aria-hidden="true"><h2>El módulo de Agendamiento se activa con datos del bot</h2><p>Mostrará citas del mes, tasa de confirmación, calendarios conectados, consentimientos y clientes con el bot activo. Hoy el piloto de citas vive en el panel del cliente; aquí se consolidará toda la flota.</p></div></section>
@@ -893,6 +904,7 @@ function loadCustomerInvitations(){if(!customerAccessV2Enabled)return Promise.re
 function revokeInvitation(id,button){button.disabled=true;fetch("/admin/customer-invitations/"+encodeURIComponent(id)+"/revoke",{method:"POST",headers:{"content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"customer_access_unavailable");return body;});}).then(function(){showToast("Invitación revocada.");return loadCustomerInvitations();}).catch(function(error){button.disabled=false;showToast(customerErrorLabel(error.message));});}
 var customerCreateForm=document.getElementById("customerCreateForm");if(customerCreateForm)customerCreateForm.addEventListener("submit",function(event){event.preventDefault();var submit=document.getElementById("customerCreateSubmit"),error=document.getElementById("customerCreateError"),payload={company_name:document.getElementById("companyName").value,admin_email:document.getElementById("adminEmail").value,plan_id:document.getElementById("planId").value,assigned_bot_id:document.getElementById("assignedBotId").value};error.textContent="";submit.disabled=true;submit.textContent="Creando…";fetch("/admin/customer-invite",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(payload)}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"customer_access_unavailable");return body;});}).then(function(){customerCreateForm.reset();closeCustomerCreate();showView("clients");showToast("Cliente creado e invitación enviada al correo administrador.");return loadCustomerInvitations();}).catch(function(problem){error.textContent=customerErrorLabel(problem.message);if(problem.message==="email_delivery_failed")loadCustomerInvitations();}).finally(function(){submit.disabled=false;submit.textContent="Crear y enviar invitación";});});
 var search=document.getElementById("clientSearch");if(search)search.addEventListener("input",function(){var query=search.value.trim().toLowerCase(),shown=0;document.querySelectorAll(".tenant-row[data-search]").forEach(function(row){var match=row.dataset.search.indexOf(query)>=0;row.hidden=!match;if(match)shown++;});var empty=document.getElementById("clientEmpty");if(empty)empty.hidden=shown>0;});
+function hideLegacyClient(event,tenantId,name){if(event){event.preventDefault();event.stopPropagation();}if(!tenantId)return;var ok=window.confirm('¿Eliminar "'+name+'" de esta lista?');if(!ok)return;var button=event&&event.currentTarget;if(button){button.disabled=true;button.textContent="Eliminando…";}fetch("/admin/legacy-clients/"+encodeURIComponent(tenantId)+"/hide",{method:"POST",headers:{accept:"application/json","content-type":"application/json"},body:"{}"}).then(function(response){return response.json().then(function(body){if(!response.ok)throw new Error(body.error||"legacy_client_visibility_unavailable");return body;});}).then(function(){var row=button&&button.closest(".tenant-row");if(row)row.remove();showToast("Cliente eliminado de la lista.");}).catch(function(){showToast("No se pudo eliminar. Intenta otra vez.");if(button){button.disabled=false;button.textContent="Eliminar";}});}
 /* ── Catálogo de planes y bots ─────────────────────────────────────── */
 var catalogCache={plans:[],bots:[]};
 function copMoney(value){if(value==null||value==="")return "—";var n=parseInt(String(value).replace(/[^\\d-]/g,""),10);if(!isFinite(n))return "—";return "$"+String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}

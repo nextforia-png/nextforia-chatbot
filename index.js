@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v159-production-super-admin-delete-clients";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v160-production-legacy-client-delete-button";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -387,6 +387,8 @@ const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":publi
 const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:global";
+const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
+const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
@@ -547,6 +549,7 @@ let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 const clientOnboardingCacheByTenant = new Map();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
+let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
 const retargetingAppendLocks = new Map();
@@ -997,6 +1000,11 @@ function isCustomerSetupQuestionnaireTurn(turn) {
   return tools.includes(CUSTOMER_SETUP_QUESTIONNAIRE_TOOL);
 }
 
+function isLegacyClientVisibilityTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(LEGACY_CLIENT_VISIBILITY_TOOL);
+}
+
 function isRetargetingEventTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(RETARGETING_EVENT_TOOL);
@@ -1013,7 +1021,7 @@ function isCustomerMemoryTurn(turn) {
 }
 
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
+  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isCustomerSetupQuestionnaireTurn(turn) || isLegacyClientVisibilityTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {
@@ -4334,6 +4342,90 @@ async function persistCustomerSetupQuestionnaire(input, auth) {
   return questionnaire;
 }
 
+function normalizeLegacyClientVisibility(input) {
+  const hidden = Array.isArray(input && input.hidden_ids) ? input.hidden_ids : [];
+  return {
+    version: 1,
+    hidden_ids: Array.from(new Set(hidden.map(function (id) {
+      return cleanTenantId(id);
+    }).filter(Boolean))).slice(0, 50),
+    updated_at: input && input.updated_at || new Date().toISOString(),
+    updated_by: String(input && input.updated_by || "super_admin").slice(0, 120)
+  };
+}
+
+function parseLegacyClientVisibilityTurn(turn) {
+  if (!isLegacyClientVisibilityTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[LegacyClientVisibility\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || !Array.isArray(parsed.hidden_ids)) return null;
+    return normalizeLegacyClientVisibility(parsed);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadLegacyClientVisibility(force) {
+  const now = Date.now();
+  if (!force && legacyClientVisibilityCache.loaded_at && now - legacyClientVisibilityCache.loaded_at < 30000) {
+    return legacyClientVisibilityCache;
+  }
+  let visibility = legacyClientVisibilityCache && legacyClientVisibilityCache.hidden_ids ? legacyClientVisibilityCache : null;
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(LEGACY_CLIENT_VISIBILITY_RECORD_ID, 1);
+    if (rows) visibility = rows.map(normalizeTurnRow).map(parseLegacyClientVisibilityTurn).find(Boolean) || visibility;
+  } else {
+    visibility = conversationLogs.slice().reverse()
+      .filter(function (turn) { return turn.userId === LEGACY_CLIENT_VISIBILITY_RECORD_ID; })
+      .map(parseLegacyClientVisibilityTurn)
+      .find(Boolean) || visibility;
+  }
+  if (!visibility) visibility = normalizeLegacyClientVisibility({ hidden_ids: [] });
+  legacyClientVisibilityCache = Object.assign({ loaded_at: now }, visibility);
+  return legacyClientVisibilityCache;
+}
+
+async function persistLegacyClientVisibility(input, auth) {
+  const visibility = normalizeLegacyClientVisibility(Object.assign({}, input || {}, {
+    updated_at: new Date().toISOString(),
+    updated_by: auth && (auth.email || auth.username || auth.name) || "super_admin"
+  }));
+  const rec = {
+    ts: visibility.updated_at,
+    userId: LEGACY_CLIENT_VISIBILITY_RECORD_ID,
+    userMessage: "",
+    botReply: "[LegacyClientVisibility] " + JSON.stringify(visibility),
+    tools: [LEGACY_CLIENT_VISIBILITY_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: LEGACY_CLIENT_VISIBILITY_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  legacyClientVisibilityCache = Object.assign({ loaded_at: Date.now() }, visibility);
+  return legacyClientVisibilityCache;
+}
+
+async function hideLegacyClient(tenantId, auth) {
+  const cleanId = cleanTenantId(tenantId);
+  const allowed = [DEFAULT_TENANT_ID].concat(listRegisteredClients().map(function (client) {
+    return cleanTenantId(client && client.tenant_id);
+  })).filter(Boolean);
+  if (!cleanId || !allowed.includes(cleanId)) {
+    const error = new Error("legacy_client_not_found");
+    error.status = 404;
+    throw error;
+  }
+  const current = await loadLegacyClientVisibility(false);
+  const hidden = Array.from(new Set((current.hidden_ids || []).concat([cleanId])));
+  return persistLegacyClientVisibility({ hidden_ids: hidden }, auth);
+}
+
 function isPlatformGoalTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(PLATFORM_GOAL_TOOL);
@@ -7480,6 +7572,12 @@ app.get("/admin/super-admin", async (req, res) => {
   } catch (error) {
     console.error("super admin leads pipeline render error:", error.message);
   }
+  let legacyClientVisibility = { hidden_ids: [] };
+  try {
+    legacyClientVisibility = await loadLegacyClientVisibility(false);
+  } catch (error) {
+    console.error("super admin legacy visibility render error:", error.message);
+  }
 
   renderSuperAdminPanel(res, {
     auth,
@@ -7493,6 +7591,7 @@ app.get("/admin/super-admin", async (req, res) => {
     tenant: CUSTOMER_PANEL_BUSINESS,
     integration: currentRavIntegration(),
     registeredClients: listRegisteredClients(),
+    hiddenLegacyClientIds: legacyClientVisibility.hidden_ids || [],
     // Contrato de datos del diseño aprobado del Super Admin.
     // Se mantienen en null a propósito: el panel renderiza estados vacíos
     // honestos en vez de cifras de ejemplo. Al conectar la fuente real basta
@@ -7512,6 +7611,25 @@ app.get("/admin/super-admin", async (req, res) => {
     // }
     leads: leadsPipeline
   });
+});
+
+app.post("/admin/legacy-clients/:tenantId/hide", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const visibility = await hideLegacyClient(req.params.tenantId, auth);
+    console.log("[legacy-client-hidden]", JSON.stringify({
+      actor: auth.email || auth.username || "super_admin",
+      tenant_id: cleanTenantId(req.params.tenantId),
+      at: new Date().toISOString()
+    }));
+    res.json({ ok: true, hidden_ids: visibility.hidden_ids || [] });
+  } catch (error) {
+    res.status(error.status || 503).json({ ok: false, error: error.message || "legacy_client_visibility_unavailable" });
+  }
 });
 
 app.get("/admin/platform-goals", async (req, res) => {

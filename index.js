@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v164-production-onboarding-connections";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v165-production-commerce-connector-request";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4754,6 +4754,11 @@ function onboardingRequestedCommerce(answers) {
     (intent === "yes" || intent === "later" || status && status !== "not_requested");
 }
 
+function cleanCommerceConnectorPlatform(value) {
+  const platform = String(value || "").trim().toLowerCase();
+  return ["shopify", "woocommerce"].includes(platform) ? platform : "";
+}
+
 async function onboardingNeedsConnectionFollowup(auth, record) {
   const answers = record && record.answers || {};
   const requestedChannels = onboardingRequestedChannels(answers);
@@ -6666,6 +6671,57 @@ app.get("/admin/customer-setups/:tenantId", async (req, res) => {
   } catch (error) {
     console.error("customer setup detail error:", error.message);
     res.status(error.status || 503).json({ ok: false, error: error.message === "tenant_not_found" ? "tenant_not_found" : "setup_review_unavailable" });
+  }
+});
+
+app.post("/admin/panel/commerce-connector", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (process.env.NODE_ENV === "production" && !SUPABASE_ENABLED) {
+    res.status(503).json({
+      ok: false,
+      error: "persistent_setup_store_unavailable",
+      message: "No se puede guardar la solicitud porque la persistencia de producción no está activa."
+    });
+    return;
+  }
+  try {
+    const platform = cleanCommerceConnectorPlatform(req.body && req.body.platform);
+    if (!platform) {
+      res.status(400).json({ ok: false, error: "invalid_commerce_connector" });
+      return;
+    }
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const previous = await loadClientOnboarding(false, tenantId);
+    const answers = JSON.parse(JSON.stringify(previous.answers || defaultClientOnboarding()));
+    const requestedAt = new Date().toISOString();
+    answers.commerce = Object.assign({}, answers.commerce || {}, {
+      platform,
+      integration_intent: "yes",
+      integration_status: "requested",
+      requested_from: "customer_panel",
+      requested_at: requestedAt,
+      last_requested_at: requestedAt
+    });
+    const status = previous.setup_completed
+      ? "completed"
+      : (previous.status === "submitted" ? "submitted" : "draft");
+    const record = await persistClientOnboarding(answers, status, auth, tenantId);
+    res.json({
+      ok: true,
+      onboarding: record,
+      commerce: record.answers && record.answers.commerce || answers.commerce
+    });
+  } catch (error) {
+    console.error("customer commerce connector request error:", error.message);
+    res.status(503).json({
+      ok: false,
+      error: "commerce_connector_request_failed",
+      message: "No pudimos guardar esta solicitud. Intenta de nuevo o habla con NextforIA."
+    });
   }
 });
 

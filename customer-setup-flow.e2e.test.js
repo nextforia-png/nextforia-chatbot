@@ -466,6 +466,36 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.tenant.plan_id, "nextfor-aura", "tenant B plan must not change when tenant A selects a plan");
     assert(!JSON.stringify(payload).includes("Servicios A"), "tenant B cannot infer tenant A setup");
 
+    response = await fetch(base + "/admin/panel/commerce-connector?tenant_id=tenant-setup-a", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: cookieB },
+      body: JSON.stringify({ tenant_id: "tenant-setup-a", platform: "shopify" })
+    });
+    assert.strictEqual(response.status, 200, "customer can request commerce later from the panel");
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.tenant_id, "tenant-returning-b");
+    assert.strictEqual(payload.commerce.platform, "shopify");
+    assert.strictEqual(payload.commerce.integration_intent, "yes");
+    assert.strictEqual(payload.commerce.integration_status, "requested");
+    assert.strictEqual(payload.commerce.requested_from, "customer_panel");
+
+    response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieB } });
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.answers.commerce.platform, "shopify");
+    assert.strictEqual(payload.onboarding.answers.commerce.integration_status, "requested");
+    assert.strictEqual(payload.tenant.id, "tenant-returning-b");
+
+    response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.notStrictEqual(payload.onboarding.answers.commerce.requested_from, "customer_panel", "commerce request cannot cross tenants");
+
+    response = await fetch(base + "/admin/panel/commerce-connector", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: cookieB },
+      body: JSON.stringify({ platform: "magento" })
+    });
+    assert.strictEqual(response.status, 400);
+
     response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: cookieC },

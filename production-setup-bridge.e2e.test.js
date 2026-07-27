@@ -150,6 +150,13 @@ function completedAnswers() {
         row.review.status === "ready";
     }), "completed setup must appear in Super Admin setup review without customer access v2");
 
+    response = await fetch(base + "/admin/customer-setups/cliente-producci-n-qa", { headers: { cookie } });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert(Array.isArray(payload.channels), "setup detail exposes real channel connection states when available");
+    assert.strictEqual(payload.onboarding.answers.meta.whatsapp_number, "+57 300 000 0000");
+    assert.strictEqual(payload.onboarding.answers.commerce.platform, "none");
+
     console.log("production-setup-bridge.e2e.test.js: ok");
   } finally {
     child.kill();

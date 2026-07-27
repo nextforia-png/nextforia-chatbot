@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v165-production-commerce-connector-request";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v166-production-meta-channel-readiness";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -297,12 +297,12 @@ const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
       catch (_) { return false; }
     })
   );
-const CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW = !CHANNEL_CONNECTIONS_V1_ENABLED
-  && process.env.CHANNEL_CONNECTIONS_V1_PREVIEW !== "0"
+const CHANNEL_CONNECTIONS_PRODUCTION_READY = process.env.CHANNEL_CONNECTIONS_V1_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && CUSTOMER_ACCESS_V2_ENABLED
   && SUPABASE_ENABLED
   && !!DATA_ENCRYPTION_KEY;
+const CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW = !CHANNEL_CONNECTIONS_V1_ENABLED && CHANNEL_CONNECTIONS_PRODUCTION_READY;
 const CHANNEL_CONNECTIONS_V1_VISIBLE = CHANNEL_CONNECTIONS_V1_ENABLED || CHANNEL_CONNECTIONS_STAGING_PREVIEW || CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW;
 const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
@@ -4716,7 +4716,7 @@ function customerChannelConnectionsVisibleForAuth(auth) {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
   if (!auth || auth.version !== 2) return true;
   const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
-  return !!assignedBotId;
+  return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
 }
 
 function customerSetupCompletionPath(auth, source) {
@@ -8517,6 +8517,23 @@ async function buildAdminHealthResult() {
       last_search_results_cached: lastSearchResults.size
     },
     commerce: commerceRegistry.describe(DEFAULT_TENANT_ID),
+    channel_connections: {
+      visible: CHANNEL_CONNECTIONS_V1_VISIBLE,
+      enabled_flag: CHANNEL_CONNECTIONS_V1_ENABLED,
+      production_ready: CHANNEL_CONNECTIONS_PRODUCTION_READY,
+      storage: channelConnectionStore
+        ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsMemoryPreview ? "memory" : "supabase")
+        : "disabled",
+      meta_authorization_available: channelConnectionService ? {
+        whatsapp: channelConnectionService.providerConfigured("whatsapp"),
+        instagram: channelConnectionService.providerConfigured("instagram"),
+        messenger: channelConnectionService.providerConfigured("messenger")
+      } : {
+        whatsapp: false,
+        instagram: false,
+        messenger: false
+      }
+    },
     checks: {}
   };
   // Probar Shopify storefront search (gratis, no consume saldo)

@@ -105,23 +105,18 @@ async function login(base, body) {
     assert(panel.includes("Finaliza el entrenamiento de tu Nextfor"));
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
-    assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Conectores opcionales de comercio"));
+    assert(!panel.includes('id="commerceConnectorCards"'));
+    assert(!panel.includes("Conectores opcionales de comercio"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
 
     response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: appointmentUser.cookie } });
     assert.strictEqual(response.status, 200);
     const appointmentPanel = await response.text();
-    assert(appointmentPanel.includes("Conectar canales"));
-    assert(appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
+    assert(!appointmentPanel.includes("Conectar canales"));
+    assert(!appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentUser.cookie } });
-    assert.strictEqual(response.status, 200);
-    body = await response.json();
-    assert.deepStrictEqual(body.channels.map(function (row) { return row.name; }), [
-      "WhatsApp", "Instagram", "Facebook Messenger"
-    ]);
-    assert(body.channels.every(function (row) { return row.tenant_id === "tenant-c"; }));
+    assert.strictEqual(response.status, 404);
 
     response = await fetch(base + "/admin/panel/channel-connections?tenant_id=tenant-b", {
       headers: { cookie: userA.cookie }

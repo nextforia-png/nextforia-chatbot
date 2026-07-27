@@ -1233,7 +1233,7 @@ ${customerAppointments.styles}
         <div class="channelsView">
           <section class="channelsHero">
             <h3>Finaliza el entrenamiento de tu Nextfor</h3>
-            <p>Ya le enseñaste cómo debe atender. Ahora termina lo pendiente sin repetir formularios: empieza con WhatsApp, suma Instagram o Facebook si aplica, y deja Shopify o WooCommerce como conectores opcionales si los pediste.</p>
+            <p>Ya le enseñaste cómo debe atender. Ahora solo falta decirle dónde recibirá a tus clientes. Empieza con WhatsApp y suma Instagram o Facebook si tus clientes también te escriben por ahí.</p>
             <div class="metaConnectionSteps" aria-label="Pasos finales con Meta">
               <article class="metaConnectionStep"><b>1</b><strong>Continúa con Meta</strong><span>Entrarás con la cuenta de tu negocio.</span></article>
               <article class="metaConnectionStep"><b>2</b><strong>Elige dónde atenderá</strong><span>Selecciona el WhatsApp, Instagram o Facebook correcto.</span></article>
@@ -1246,12 +1246,6 @@ ${customerAppointments.styles}
           <div class="channelsList" id="channelConnectionCards">
             <div class="planCatalogNotice">Cargando tus canales…</div>
           </div>
-          <section class="connectorSection">
-            <div><h4>Conectores opcionales de comercio</h4><p>Solo aparecerán si los mencionaste en el setup. No necesitas repetir formularios.</p></div>
-            <div class="channelsList" id="commerceConnectorCards">
-              <article class="channelConnectCard comingSoon"><span class="channelConnectIcon">NX</span><div class="channelConnectCopy"><h4>Sin conector solicitado</h4><p>Si más adelante quieres conectar Shopify o WooCommerce, podrás hacerlo desde esta sección.</p></div><div class="channelConnectActions"><span class="channelState">Opcional</span></div></article>
-            </div>
-          </section>
           <p class="channelsMessage" id="channelConnectionMessage" role="status" aria-live="polite"></p>
           <button class="channelsLater" type="button" onclick="showTab('summary')">Hacer esto más tarde</button>
         </div>

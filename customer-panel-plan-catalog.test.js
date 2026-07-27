@@ -96,7 +96,7 @@ assert.ok(!rendered.includes("Solo Atención"), "no ofrece planes de un bot que 
 assert.ok(!rendered.includes("Descontinuado"), "no muestra planes inactivos");
 assert.ok(rendered.indexOf("Growth") < rendered.indexOf("Scale"), "respeta el campo orden");
 assert.ok(/Tu plan actual[\s\S]*Scale/.test(rendered) || rendered.includes("Scale"), "marca el plan del tenant");
-assert.ok(rendered.includes("$1.490.000 setup"), "formatea el setup del catálogo");
+assert.ok(rendered.includes("Sin setup cost"), "no muestra setup cost aunque el catálogo tenga datos viejos");
 assert.ok(rendered.includes("2000 chats incluidos"));
 assert.ok(rendered.includes("chats incluidos por definir"), "un plan sin cupo definido lo dice");
 

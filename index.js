@@ -31,6 +31,7 @@ const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
   CatalogError,
   InMemoryCatalogStore,
+  NEXTFOR_PRICING_JULY_2026,
   SupabaseCatalogStore,
   createCatalogService
 } = require("./platform-catalogs");
@@ -204,7 +205,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v147-staging-plan-selection-design";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v148-staging-nextfor-pricing-july-2026";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -252,6 +253,8 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL);
+const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT === "1"
+  || (PUBLIC_BASE_URL && new URL(PUBLIC_BASE_URL).hostname === "staging.nextforia.com");
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
 const SUPABASE_URL = normalizedSupabaseUrl && (
@@ -682,6 +685,49 @@ const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
   estimatedTaxRate: WOMPI_ESTIMATED_FEE_TAX_RATE,
   publicBaseUrl: PUBLIC_BASE_URL
 }) : null;
+
+async function syncNextforPricingJuly2026() {
+  if (!NEXTFOR_PRICING_SYNC_ON_BOOT || CUSTOMER_ACCESS_TEST_MODE || !CUSTOMER_ACCESS_V2_ENABLED || !SUPABASE_ENABLED) return;
+  const rest = SUPABASE_URL + "/rest/v1/";
+  const upsertHeaders = Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS);
+  const patchHeaders = Object.assign({ Prefer: "return=minimal" }, SB_HEADERS);
+  const bots = [
+    { id: "atencion-cliente", name: "Atención al cliente", descripcion: "Atiende, orienta, responde preguntas y escala casos a humanos.", orden: 1, active: true, updated_at: new Date().toISOString() },
+    { id: "agendamiento", name: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", orden: 2, active: true, updated_at: new Date().toISOString() },
+    { id: "commerce", name: "Commerce", descripcion: "Consulta productos, precios, disponibilidad y pedidos cuando aplique.", orden: 3, active: true, updated_at: new Date().toISOString() }
+  ];
+  const plans = NEXTFOR_PRICING_JULY_2026.map(function (plan) {
+    return {
+      id: plan.id,
+      name: plan.nombre,
+      descripcion: plan.descripcion,
+      bot_id: plan.bot_id,
+      precio_setup: 0,
+      precio_mensual: plan.precio_mensual,
+      chats_incluidos: plan.chats_incluidos,
+      beneficios: plan.beneficios,
+      etiqueta: plan.etiqueta,
+      orden: plan.orden,
+      active: true,
+      updated_at: new Date().toISOString()
+    };
+  });
+  try {
+    await axios.post(rest + "platform_bots?on_conflict=id", bots, { headers: upsertHeaders, timeout: 10000 });
+    await axios.post(rest + "platform_plans?on_conflict=id", plans, { headers: upsertHeaders, timeout: 10000 });
+    await axios.patch(rest + "platform_plans?id=in.(starter,growth,scale)", { active: false, precio_setup: 0, updated_at: new Date().toISOString() }, { headers: patchHeaders, timeout: 10000 });
+    await axios.patch(rest + "tenants", { precio_setup_contratado: 0 }, { params: { precio_setup_contratado: "not.is.null" }, headers: patchHeaders, timeout: 10000 });
+    try {
+      await axios.patch(rest + "billing_contracts", { contracted_setup_price: 0, updated_at: new Date().toISOString() }, { params: { contracted_setup_price: "gt.0" }, headers: patchHeaders, timeout: 10000 });
+    } catch (billingError) {
+      const status = billingError && billingError.response && billingError.response.status;
+      if (status && status !== 404) throw billingError;
+    }
+    console.log("Nextfor pricing July 2026 synced");
+  } catch (error) {
+    console.error("Nextfor pricing sync failed:", error.response && error.response.data || error.message);
+  }
+}
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -4535,7 +4581,9 @@ function publicSignupDefaults(catalogs) {
     const botId = id(item.bot_id);
     return !botId || botId === preferredBotId;
   });
-  const plan = compatiblePlans.find(function (item) { return id(item.id) === "starter"; })
+  const plan = compatiblePlans.find(function (item) { return id(item.id) === "nextfor-uno"; })
+    || compatiblePlans.find(function (item) { return id(item.id) === "nextfor-aura"; })
+    || compatiblePlans.find(function (item) { return id(item.id) === "starter"; })
     || compatiblePlans.find(function (item) { return id(item.id) === "growth"; })
     || compatiblePlans[0]
     || plans[0];
@@ -8741,6 +8789,7 @@ app.listen(PORT, () => {
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
+  syncNextforPricingJuly2026();
 
   if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;

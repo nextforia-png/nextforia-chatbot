@@ -19,9 +19,10 @@ const {
 assert.strictEqual(slugify("Bot Agendamiento de Citas"), "bot-agendamiento-de-citas");
 assert.strictEqual(slugify("Atención al Cliente"), "atencion-al-cliente");
 
-// La gente escribe los precios como los lee. Todos deben llegar al mismo entero.
+// Setup cost fue eliminado comercialmente. El campo sigue en el contrato, pero
+// siempre se normaliza a 0 para no revivir cobros viejos desde el formulario.
 ["990000", "990.000", "$990.000", " 990,000 "].forEach(function (input) {
-  assert.strictEqual(validatePlanInput({ nombre: "Plan", precio_setup: input }).precio_setup, 990000, "precio: " + input);
+  assert.strictEqual(validatePlanInput({ nombre: "Plan", precio_setup: input }).precio_setup, 0, "precio: " + input);
 });
 
 // Precios en enteros, sin decimales: es el contrato congelado.
@@ -34,7 +35,7 @@ const plan = validatePlanInput({
   etiqueta: "Mejor valor"
 });
 assert.strictEqual(plan.id, "bot-agendamiento-de-citas");
-assert.strictEqual(plan.precio_setup, 990000);
+assert.strictEqual(plan.precio_setup, 0);
 assert.strictEqual(plan.precio_mensual, 299900);
 assert.strictEqual(plan.chats_incluidos, null, "vacío significa 'por definir', no cero");
 assert.deepStrictEqual(plan.beneficios, ["Atención 24/7", "Reportes", "Confirmación automática"]);
@@ -44,7 +45,7 @@ assert.throws(function () { validatePlanInput({ nombre: "X" }); }, function (err
   return error instanceof CatalogError && error.code === "plan_name_required";
 }, "un nombre de una sola letra no alcanza");
 assert.throws(function () { validatePlanInput({ nombre: "Plan", id: "MAYÚSCULAS!" }); }, /invalid_plan_id/);
-assert.throws(function () { validatePlanInput({ nombre: "Plan", precio_setup: "-500" }); }, /invalid_price/);
+assert.throws(function () { validatePlanInput({ nombre: "Plan", precio_mensual: "-500" }); }, /invalid_price/);
 assert.throws(function () { validateBotInput({ nombre: "" }); }, /bot_name_required/);
 
 // Formateo de presentación: nunca se guarda formateado.
@@ -61,7 +62,7 @@ assert.strictEqual(normalizeStatus("cualquier-cosa"), null);
 // ─── Snapshot de precio contratado ──────────────────────────────────────────
 
 const snapshot = contractedPriceSnapshot({ precio_setup: 990000, precio_mensual: 299900 }, new Date("2026-07-22T10:00:00Z"));
-assert.strictEqual(snapshot.precio_setup_contratado, 990000);
+assert.strictEqual(snapshot.precio_setup_contratado, 0);
 assert.strictEqual(snapshot.precio_mensual_contratado, 299900);
 assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
 
@@ -82,7 +83,7 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   let admin = await service.adminCatalogs();
   const duo = admin.plans.find(function (row) { return row.id === "nextfor-duo"; });
   assert.ok(duo, "el plan nuevo aparece en el catálogo de administración");
-  assert.strictEqual(duo.precio_setup, 1490000);
+  assert.strictEqual(duo.precio_setup, 0);
   assert.strictEqual(duo.activo, true, "un plan nuevo nace activo");
 
   // Un bot inexistente se rechaza: el plan no puede apuntar al vacío.
@@ -111,8 +112,8 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   assert.strictEqual(tenants.length, 1);
   assert.strictEqual(tenants[0].status, "activo");
 
-  const selected = await service.selectTenantPlan("panaderia-espiga", "scale", "atencion-cliente", { username: "duenio@espiga.example" });
-  assert.strictEqual(selected.plan_id, "scale", "el cliente puede elegir directamente un plan activo");
+  const selected = await service.selectTenantPlan("panaderia-espiga", "nextfor-atlas", "atencion-cliente", { username: "duenio@espiga.example" });
+  assert.strictEqual(selected.plan_id, "nextfor-atlas", "el cliente puede elegir directamente un plan activo");
 
   // Supabase puede devolver 204/sin representación aunque el PATCH haya aplicado.
   // En ese caso la app lee el tenant actualizado antes de bloquear el onboarding.

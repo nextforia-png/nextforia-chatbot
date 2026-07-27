@@ -157,7 +157,7 @@ function bothBotAnswers(company, email) {
       email: "admin@setup-a.example",
       password,
       role: "admin",
-      plan_id: "growth",
+      plan_id: "nextfor-aura",
       assigned_bot_id: "atencion-cliente",
       setup_completed: false
     },
@@ -168,7 +168,7 @@ function bothBotAnswers(company, email) {
       email: "admin@returning-b.example",
       password,
       role: "admin",
-      plan_id: "scale",
+      plan_id: "nextfor-tempo",
       assigned_bot_id: "agendamiento",
       setup_completed: true
     },
@@ -179,7 +179,7 @@ function bothBotAnswers(company, email) {
       email: "admin@citas-c.example",
       password,
       role: "admin",
-      plan_id: "scale",
+      plan_id: "nextfor-tempo",
       assigned_bot_id: "agendamiento",
       setup_completed: false
     },
@@ -190,7 +190,7 @@ function bothBotAnswers(company, email) {
       email: "admin@ambos-d.example",
       password,
       role: "admin",
-      plan_id: "growth",
+      plan_id: "nextfor-atlas",
       assigned_bot_id: "atencion-cliente",
       setup_completed: false
     }
@@ -265,7 +265,7 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("lumen-entrenando.png"));
     assert(setupHtml.includes("Empresa Setup A"));
     assert(setupHtml.includes("admin@setup-a.example"));
-    assert(setupHtml.includes("Growth"));
+    assert(setupHtml.includes("Nextfor Aura"));
     assert(setupHtml.includes("Atención al cliente"));
     assert(setupHtml.includes("Revisa y confirma el entrenamiento"));
     assert(setupHtml.includes('id="setupSummaryGrid"'));
@@ -281,7 +281,7 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("missingSummary"));
     assert(setupHtml.includes(".field.invalid .segment span"));
     assert(setupHtml.includes(".goalCards.invalid .goalCardBody"));
-    assert(setupHtml.includes('name="selected_plan" value="starter"'));
+    assert(setupHtml.includes('name="selected_plan" value="nextfor-uno"'));
     assert(!setupHtml.includes("Empresa Returning B"));
 
     response = await fetch(base + "/admin/client-onboarding/data?tenant_id=tenant-returning-b", {
@@ -298,7 +298,7 @@ function bothBotAnswers(company, email) {
     response = await fetch(base + "/admin/client-onboarding/data?tenant_id=tenant-returning-b", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: cookieA },
-      body: JSON.stringify({ tenant_id: "tenant-returning-b", status: "draft", plan_id: "starter", answers: draft })
+      body: JSON.stringify({ tenant_id: "tenant-returning-b", status: "draft", plan_id: "nextfor-uno", answers: draft })
     });
     assert.strictEqual(response.status, 200);
     payload = await response.json();
@@ -306,12 +306,12 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.status, "draft");
     assert.strictEqual(payload.onboarding.setup_completed, false);
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "Servicios A");
-    assert.strictEqual(payload.selected_plan_id, "starter");
+    assert.strictEqual(payload.selected_plan_id, "nextfor-uno");
     assert(payload.onboarding.last_updated_at);
 
     response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
     payload = await response.json();
-    assert.strictEqual(payload.tenant.plan_id, "starter", "the customer selection updates its own central tenant");
+    assert.strictEqual(payload.tenant.plan_id, "nextfor-uno", "the customer selection updates its own central tenant");
 
     response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",
@@ -461,7 +461,7 @@ function bothBotAnswers(company, email) {
     });
     payload = await response.json();
     assert.strictEqual(payload.tenant.id, "tenant-returning-b");
-    assert.strictEqual(payload.tenant.plan_id, "scale", "tenant B plan must not change when tenant A selects a plan");
+    assert.strictEqual(payload.tenant.plan_id, "nextfor-tempo", "tenant B plan must not change when tenant A selects a plan");
     assert(!JSON.stringify(payload).includes("Servicios A"), "tenant B cannot infer tenant A setup");
 
     response = await fetch(base + "/admin/client-onboarding/data", {

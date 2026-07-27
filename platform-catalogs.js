@@ -24,6 +24,73 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 const TENANT_STATUSES = ["setup", "activo", "suspendido", "archivado"];
 // Estados heredados de la migración anterior. Se leen, no se escriben.
 const LEGACY_STATUS_ALIASES = { live: "activo", paused: "suspendido", pilot: "setup" };
+const NEXTFOR_PRICING_JULY_2026 = [
+  {
+    id: "nextfor-uno",
+    nombre: "Nextfor Uno",
+    descripcion: "El primer paso para dejar de hacerlo todo tú: atención automática por WhatsApp 24/7.",
+    bot_id: "atencion-cliente",
+    precio_setup: 0,
+    precio_mensual: 49900,
+    chats_incluidos: null,
+    beneficios: ["Atención automática por WhatsApp", "Respuestas sobre productos, horarios y ubicación", "Captura de interesados", "Panel básico de conversaciones"],
+    etiqueta: "Desde $49.900",
+    activo: true,
+    orden: 1
+  },
+  {
+    id: "nextfor-aura",
+    nombre: "Nextfor Aura",
+    descripcion: "Tu negocio siempre presente: atiende, orienta y vende por tus canales 24/7.",
+    bot_id: "atencion-cliente",
+    precio_setup: 0,
+    precio_mensual: 299900,
+    chats_incluidos: null,
+    beneficios: ["Atiende como tu mejor colaborador", "Convierte conversaciones en ventas", "Conecta tienda, productos y pedidos", "Métricas desde el panel"],
+    etiqueta: "Atención + ventas",
+    activo: true,
+    orden: 2
+  },
+  {
+    id: "nextfor-tempo",
+    nombre: "Nextfor Tempo",
+    descripcion: "Más citas y reservas, menos tiempo coordinando: agenda y confirma 24/7.",
+    bot_id: "agendamiento",
+    precio_setup: 0,
+    precio_mensual: 299900,
+    chats_incluidos: null,
+    beneficios: ["Agenda 24/7", "Reprograma, cancela y confirma", "Recordatorios", "Conexión con calendario"],
+    etiqueta: "Agendamiento",
+    activo: true,
+    orden: 3
+  },
+  {
+    id: "nextfor-atlas",
+    nombre: "Nextfor Atlas",
+    descripcion: "Atiende, vende y agenda en un solo lugar.",
+    bot_id: null,
+    precio_setup: 0,
+    precio_mensual: 499900,
+    chats_incluidos: null,
+    beneficios: ["Atiende y vende 24/7", "Gestiona citas o reservas", "Integra tienda y calendarios", "Reportes de ventas, citas y conversaciones"],
+    etiqueta: "Todo en uno",
+    activo: true,
+    orden: 4
+  },
+  {
+    id: "nextfor-signature",
+    nombre: "Nextfor Signature",
+    descripcion: "Solución a la medida de cada empresa, con procesos, canales e integraciones personalizados.",
+    bot_id: null,
+    precio_setup: 0,
+    precio_mensual: 0,
+    chats_incluidos: null,
+    beneficios: ["Propuesta personalizada", "Integraciones a medida", "Alcance definido con el cliente"],
+    etiqueta: "A definir",
+    activo: true,
+    orden: 5
+  }
+];
 
 function text(value, max) {
   return String(value == null ? "" : value).trim().slice(0, max || 500);
@@ -70,7 +137,9 @@ function validatePlanInput(input) {
   const botId = text(input.bot_id, 64).toLowerCase();
   if (botId && !ID_PATTERN.test(botId)) throw new CatalogError("invalid_bot_id", 400);
 
-  const precioSetup = intOrZero(input.precio_setup);
+  // NextforIA ya no cobra setup cost. Conservamos el campo por compatibilidad
+  // del contrato/API, pero siempre se guarda en 0.
+  const precioSetup = 0;
   const precioMensual = intOrZero(input.precio_mensual);
   if (precioSetup < 0 || precioMensual < 0) throw new CatalogError("invalid_price", 400);
 
@@ -268,11 +337,9 @@ class SupabaseCatalogStore {
 class InMemoryCatalogStore {
   constructor(options) {
     options = options || {};
-    this.plans = options.plans || [
-      { id: "starter", nombre: "Starter", descripcion: "", bot_id: null, precio_setup: 0, precio_mensual: 0, chats_incluidos: null, beneficios: [], etiqueta: null, activo: true, orden: 1 },
-      { id: "growth", nombre: "Growth", descripcion: "", bot_id: null, precio_setup: 0, precio_mensual: 0, chats_incluidos: null, beneficios: [], etiqueta: null, activo: true, orden: 2 },
-      { id: "scale", nombre: "Scale", descripcion: "", bot_id: null, precio_setup: 0, precio_mensual: 0, chats_incluidos: null, beneficios: [], etiqueta: null, activo: true, orden: 3 }
-    ];
+    this.plans = options.plans || NEXTFOR_PRICING_JULY_2026.map(function (plan) {
+      return Object.assign({}, plan);
+    });
     this.bots = options.bots || [
       { id: "atencion-cliente", nombre: "Atención al cliente", descripcion: "", activo: true, orden: 1 },
       { id: "agendamiento", nombre: "Agendamiento", descripcion: "", activo: true, orden: 2 },
@@ -521,7 +588,7 @@ function createCatalogService(options) {
 function contractedPriceSnapshot(plan, now) {
   if (!plan) return {};
   return {
-    precio_setup_contratado: intOrZero(plan.precio_setup),
+    precio_setup_contratado: 0,
     precio_mensual_contratado: intOrZero(plan.precio_mensual),
     plan_contratado_en: (now instanceof Date ? now : new Date()).toISOString()
   };
@@ -540,6 +607,7 @@ module.exports = {
   SupabaseCatalogStore,
   TENANT_STATUSES,
   LEGACY_STATUS_ALIASES,
+  NEXTFOR_PRICING_JULY_2026,
   contractedPriceSnapshot,
   createCatalogService,
   formatCop,

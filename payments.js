@@ -456,7 +456,7 @@ function createPaymentService(options) {
       plan_name: selected.plan.nombre || selected.plan.name || selected.plan.id,
       bot_id: selected.bot.id,
       bot_name: selected.bot.nombre || selected.bot.name || selected.bot.id,
-      contracted_setup_price: nonNegativeMoney(selected.plan.precio_setup),
+      contracted_setup_price: 0,
       contracted_monthly_price: nonNegativeMoney(selected.plan.precio_mensual)
     });
   }

@@ -74,7 +74,7 @@ function signedEvent(transaction, timestamp) {
     plan_id: "growth",
     bot_id: "atencion-cliente"
   });
-  assert.strictEqual(contractA.contracted_setup_price, 300000);
+  assert.strictEqual(contractA.contracted_setup_price, 0);
   assert.strictEqual(contractA.contracted_monthly_price, 180000);
   assert.strictEqual(contractA.payment_provider, "wompi");
   assert.strictEqual(contractA.ready_for_bot_creation, false);
@@ -88,7 +88,7 @@ function signedEvent(transaction, timestamp) {
     actor: "a@example.com"
   });
   assert.strictEqual(checkoutA.environment, "test");
-  assert.strictEqual(checkoutA.amount_charged, 480000);
+  assert.strictEqual(checkoutA.amount_charged, 180000);
   assert(checkoutA.checkout_url.startsWith("https://checkout.wompi.co/p/?"));
   assert(checkoutA.checkout_url.includes("public-key=pub_test_nextforia"));
   assert(!checkoutA.checkout_url.includes("test_integrity_nextforia"));
@@ -100,7 +100,7 @@ function signedEvent(transaction, timestamp) {
     id: "wompi-approved-a",
     reference: checkoutA.reference,
     status: "APPROVED",
-    amount_in_cents: 48000000,
+    amount_in_cents: 18000000,
     created_at: "2026-07-25T15:00:02.000Z",
     finalized_at: "2026-07-25T15:00:04.000Z"
   });
@@ -110,9 +110,9 @@ function signedEvent(transaction, timestamp) {
   assert.strictEqual(billingA.payment_status, "paid");
   assert.strictEqual(billingA.subscription_status, "active");
   assert.strictEqual(billingA.ready_for_bot_creation, true);
-  assert.strictEqual(billingA.provider_fee, 13920);
+  assert.strictEqual(billingA.provider_fee, 5220);
   assert.strictEqual(billingA.provider_fee_type, "estimated");
-  assert.strictEqual(billingA.net_amount, 466080);
+  assert.strictEqual(billingA.net_amount, 174780);
   assert.strictEqual(billingA.history.length, 1);
 
   const repeated = await service.processWebhook(approvedEvent, approvedEvent.signature.checksum);
@@ -151,11 +151,11 @@ function signedEvent(transaction, timestamp) {
     id: "wompi-failed-b",
     reference: checkoutB.reference,
     status: "DECLINED",
-    amount_in_cents: 40000000,
+    amount_in_cents: 15000000,
     created_at: "2026-07-25T15:10:00.000Z"
   }, 1753456200);
   const wrongAmountEvent = signedEvent(Object.assign({}, failedEvent.data.transaction, {
-    amount_in_cents: 39999900
+    amount_in_cents: 14999900
   }), 1753456150);
   await assert.rejects(
     service.processWebhook(wrongAmountEvent, wrongAmountEvent.signature.checksum),

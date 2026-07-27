@@ -239,6 +239,11 @@ class InMemoryCustomerAccessStore {
   constructor(options) {
     options = options || {};
     this.plans = options.plans || [
+      { id: "nextfor-uno", name: "Nextfor Uno", active: true },
+      { id: "nextfor-aura", name: "Nextfor Aura", active: true },
+      { id: "nextfor-tempo", name: "Nextfor Tempo", active: true },
+      { id: "nextfor-atlas", name: "Nextfor Atlas", active: true },
+      { id: "nextfor-signature", name: "Nextfor Signature", active: true },
       { id: "starter", name: "Starter", active: true },
       { id: "growth", name: "Growth", active: true },
       { id: "scale", name: "Scale", active: true }

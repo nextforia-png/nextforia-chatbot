@@ -136,7 +136,7 @@ function asJson(base, cookie) {
     });
     assert.strictEqual(created.status, 200, JSON.stringify(created.body));
     assert.strictEqual(created.body.plan.id, "bot-agendamiento-de-citas");
-    assert.strictEqual(created.body.plan.precio_setup, 990000, "el precio se guarda en entero, sin decimales");
+    assert.strictEqual(created.body.plan.precio_setup, 0, "setup cost queda eliminado aunque llegue desde clientes viejos");
     assert.strictEqual(created.body.plan.precio_mensual, 299900);
     assert.deepStrictEqual(created.body.plan.beneficios, ["Atención 24/7", "Confirmación automática"]);
 

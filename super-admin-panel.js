@@ -326,7 +326,7 @@ function renderSuperAdminPanel(res, options) {
   // desde /admin/panel/catalogs en vez de tener los planes escritos a mano.
   const catalogView = customerAccessV2Enabled ? `
   <section class="view" data-panel="catalogs"><div class="stack">
-    <div class="callout info-callout" style="margin-top:0"><div><strong>Esta pantalla define lo que ven tus clientes</strong><p>Los precios que cargues aquí aparecen en el Panel de Cliente. Los precios se guardan en pesos colombianos, sin decimales. Un plan desactivado deja de ofrecerse a clientes nuevos, pero los que ya lo tienen conservan el suyo.</p></div><span class="badge info">Catálogo</span></div>
+    <div class="callout info-callout" style="margin-top:0"><div><strong>Esta pantalla define lo que ven tus clientes</strong><p>Los precios que cargues aquí aparecen en el Panel de Cliente. NextforIA ya no cobra setup cost: todos los planes se guardan con instalación $0. Signature se muestra como precio a definir con el cliente.</p></div><span class="badge info">Catálogo</span></div>
     <div>
       <div class="section-title"><h2>Planes</h2><span>lo que se vende y a qué precio</span><button class="button primary" type="button" onclick="openPlanEditor()" style="margin-left:auto">Nuevo plan</button></div>
       <section class="card table-card"><div id="planRows"><div class="invite-loading">Cargando catálogo…</div></div></section>
@@ -338,12 +338,12 @@ function renderSuperAdminPanel(res, options) {
   </div></section>` : "";
 
   const catalogModals = customerAccessV2Enabled ? `
-  <div class="modal-layer" id="planEditorModal" aria-hidden="true"><button class="modal-scrim" type="button" aria-label="Cerrar plan" onclick="closePlanEditor()"></button><section class="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="planEditorTitle"><div class="modal-head"><div><span class="eyebrow">CATÁLOGO</span><h2 id="planEditorTitle">Nuevo plan</h2><p>Los precios se muestran formateados al cliente; aquí se escriben en números.</p></div><button class="close-button" type="button" onclick="closePlanEditor()" aria-label="Cerrar">${icon("close", 19)}</button></div><form id="planEditorForm" class="customer-form" novalidate>
+  <div class="modal-layer" id="planEditorModal" aria-hidden="true"><button class="modal-scrim" type="button" aria-label="Cerrar plan" onclick="closePlanEditor()"></button><section class="modal-card wide" role="dialog" aria-modal="true" aria-labelledby="planEditorTitle"><div class="modal-head"><div><span class="eyebrow">CATÁLOGO</span><h2 id="planEditorTitle">Nuevo plan</h2><p>Escribe el mensual en COP. Si el precio se define con el cliente, deja el mensual en blanco o 0 y usa la etiqueta “A definir”.</p></div><button class="close-button" type="button" onclick="closePlanEditor()" aria-label="Cerrar">${icon("close", 19)}</button></div><form id="planEditorForm" class="customer-form" novalidate>
     <input type="hidden" id="planEditorOriginalId" value="">
     <div class="form-grid"><div><label for="planNombre">Nombre del plan</label><input id="planNombre" name="nombre" maxlength="120" placeholder="Bot Agendamiento de citas" required></div><div><label for="planIdField">Identificador</label><input id="planIdField" name="id" maxlength="64" placeholder="se genera solo"></div></div>
     <label for="planDescripcion">Descripción de la tarjeta</label><input id="planDescripcion" name="descripcion" maxlength="400" placeholder="Agenda, confirma y reprograma citas por WhatsApp.">
     <div class="form-grid"><div><label for="planBotId">Bot incluido</label><select id="planBotId" name="bot_id"><option value="">Sin bot asignado</option></select></div><div><label for="planEtiqueta">Etiqueta</label><input id="planEtiqueta" name="etiqueta" maxlength="40" placeholder="Mejor valor"></div></div>
-    <div class="form-grid three"><div><label for="planPrecioSetup">Precio de instalación (COP)</label><input id="planPrecioSetup" name="precio_setup" inputmode="numeric" placeholder="990000"></div><div><label for="planPrecioMensual">Precio mensual (COP)</label><input id="planPrecioMensual" name="precio_mensual" inputmode="numeric" placeholder="299900"></div><div><label for="planChats">Chats incluidos</label><input id="planChats" name="chats_incluidos" inputmode="numeric" placeholder="dejar vacío = por definir"></div></div>
+    <div class="form-grid three"><div><label for="planPrecioMensual">Precio mensual (COP)</label><input id="planPrecioMensual" name="precio_mensual" inputmode="numeric" placeholder="299900 o 0 si es a definir"></div><div><label for="planChats">Chats incluidos</label><input id="planChats" name="chats_incluidos" inputmode="numeric" placeholder="dejar vacío = por definir"></div><div><label>Setup cost</label><div class="form-note">Eliminado para todos los planes: $0.</div></div></div>
     <label for="planBeneficios">Beneficios <span class="label-hint">uno por línea</span></label><textarea id="planBeneficios" name="beneficios" rows="4" maxlength="3200" placeholder="Atención 24/7&#10;Respuestas en menos de 5 segundos&#10;Reportes mensuales"></textarea>
     <div class="form-grid"><div><label for="planOrden">Orden</label><input id="planOrden" name="orden" inputmode="numeric" value="0"></div><div></div></div>
     <div class="form-error" id="planEditorError" role="alert" aria-live="assertive"></div><div class="modal-actions"><button class="button" type="button" onclick="closePlanEditor()">Cancelar</button><button class="button primary" id="planEditorSubmit" type="submit">Guardar plan</button></div>
@@ -894,6 +894,10 @@ var search=document.getElementById("clientSearch");search.addEventListener("inpu
 /* ── Catálogo de planes y bots ─────────────────────────────────────── */
 var catalogCache={plans:[],bots:[]};
 function copMoney(value){if(value==null||value==="")return "—";var n=parseInt(String(value).replace(/[^\\d-]/g,""),10);if(!isFinite(n))return "—";return "$"+String(n).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}
+function customPricePlan(plan){return !!(plan&&(String(plan.id||"").indexOf("signature")>=0||String(plan.etiqueta||"").toLowerCase().indexOf("definir")>=0)&&Number(plan.precio_mensual||0)===0);}
+function planMonthlyLabel(plan){return customPricePlan(plan)?"A definir":copMoney(plan&&plan.precio_mensual);}
+function planDisplayName(planId){var plan=catalogCache.plans.filter(function(item){return item.id===planId;})[0];return plan?(plan.nombre||plan.name||plan.id):(planId||"Sin plan");}
+function planDisplayLine(planId,monthlyValue){var plan=catalogCache.plans.filter(function(item){return item.id===planId;})[0];if(plan)return planMonthlyLabel(plan)+" /mes";return monthlyValue==null?"Precio no definido":copMoney(monthlyValue)+" /mes";}
 function catalogErrorLabel(code){var map={plan_name_required:"El plan necesita un nombre.",bot_name_required:"El bot necesita un nombre.",invalid_plan_id:"El identificador solo admite minúsculas, números, guion y guion bajo.",invalid_bot_id:"Ese bot no existe en el catálogo.",invalid_price:"Los precios no pueden ser negativos.",invalid_included_chats:"Los chats incluidos no pueden ser negativos.",plan_not_found:"Ese plan ya no existe.",tenant_not_found:"Ese cliente ya no existe.",tenant_not_suspended:"Primero hay que suspender al cliente.",company_name_mismatch:"El nombre de la empresa no coincide.",invalid_status:"Ese estado no es válido.",final_confirmation_required:"Falta marcar la confirmación final.",unauthorized:"Tu sesión expiró. Volvé a entrar.",catalog_unavailable:"No se pudo conectar con el catálogo."};return map[code]||"No se pudo completar la operación.";}
 function el(tag,cls,txt){var node=document.createElement(tag);if(cls)node.className=cls;if(txt!=null)node.textContent=txt;return node;}
 function fmtNum(value){if(value==null||!isFinite(Number(value)))return"—";return String(Math.round(Number(value))).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}
@@ -921,7 +925,7 @@ function billingDate(value){if(!value)return"—";var date=new Date(value);retur
 function billingStatus(value){return({pending:"Pendiente",paid:"Pagado",failed:"Fallido",refunded:"Reembolsado",trial:"Trial",active:"Activa",past_due:"Vencida",suspended:"Suspendida",cancelled:"Cancelada",pilot:"Piloto"})[value]||"Sin iniciar";}
 function billingMetric(label,value){var box=el("div","billing-metric");box.appendChild(el("small",null,label));box.appendChild(el("strong",null,value));return box;}
 function renderBillingAdmin(rows){var root=document.getElementById("billingAdminRows"),badge=document.getElementById("billingNavCount");if(badge)badge.textContent=String((rows||[]).filter(function(row){return row.payment_status==="pending"||row.payment_status==="failed";}).length);if(!root)return;root.textContent="";if(!rows.length){root.appendChild(el("div","invite-loading","Aún no hay contratos preparados. Aparecerán cuando un cliente elija bot y plan."));return;}rows.forEach(function(row){var card=el("article","billing-card"),head=el("div","billing-card-head"),who=el("div");who.appendChild(el("strong",null,row.customer||row.tenant_id));who.appendChild(el("small",null,row.tenant_id+" · "+(row.bot_name||row.bot_id)+" · "+(row.plan_name||row.plan_id)));head.appendChild(who);var actions=el("div","billing-bypass");if(!["active","trial","pilot"].includes(row.subscription_status)){var trial=el("button","button","Aprobar trial");trial.type="button";trial.addEventListener("click",function(){approveBillingBypass(row.tenant_id,"trial");});var pilot=el("button","button","Aprobar piloto");pilot.type="button";pilot.addEventListener("click",function(){approveBillingBypass(row.tenant_id,"pilot");});actions.append(trial,pilot);}else actions.appendChild(el("span","badge success",row.ready_for_bot_creation?"Listo para crear bot":"No listo"));head.appendChild(actions);card.appendChild(head);var metrics=el("div","billing-metrics");metrics.append(
-billingMetric("Setup contratado",copMoney(row.contracted_setup_price)),
+billingMetric("Plan",row.plan_name||row.plan_id||"—"),
 billingMetric("Mensual contratado",copMoney(row.contracted_monthly_price)),
 billingMetric("Proveedor",row.payment_provider||"—"),
 billingMetric("Pago",billingStatus(row.payment_status)),
@@ -943,8 +947,8 @@ if(plan.descripcion)main.appendChild(el("span",null,plan.descripcion));
 main.appendChild(el("code",null,plan.id));
 if(plan.beneficios&&plan.beneficios.length){var bl=el("div","catalog-benefits");plan.beneficios.slice(0,4).forEach(function(b){bl.appendChild(el("span",null,b));});main.appendChild(bl);}
 row.appendChild(main);
-var setup=el("div","catalog-price",copMoney(plan.precio_setup));setup.appendChild(el("small",null,"instalación"));row.appendChild(setup);
-var mensual=el("div","catalog-price",copMoney(plan.precio_mensual));mensual.appendChild(el("small",null,"mensual"));row.appendChild(mensual);
+var mensual=el("div","catalog-price",planMonthlyLabel(plan));mensual.appendChild(el("small",null,customPricePlan(plan)?"mensual personalizado":"mensual"));row.appendChild(mensual);
+var setup=el("div","catalog-price","$0");setup.appendChild(el("small",null,"sin setup"));row.appendChild(setup);
 var chats=el("div","catalog-price",plan.chats_incluidos==null?"—":String(plan.chats_incluidos));chats.appendChild(el("small",null,plan.chats_incluidos==null?"por definir":"chats"));row.appendChild(chats);
 var actions=el("div","catalog-actions");
 var badge=el("span","badge "+(plan.activo?"success":"neutral")+" dot",plan.activo?"Activo":"Inactivo");actions.appendChild(badge);
@@ -963,7 +967,7 @@ var edit=el("button","button","Editar");edit.type="button";edit.addEventListener
 row.appendChild(actions);botRoot.appendChild(row);});
 var select=document.getElementById("planBotId");if(select){var current=select.value;select.textContent="";var blank=document.createElement("option");blank.value="";blank.textContent="Sin bot asignado";select.appendChild(blank);
 catalogCache.bots.forEach(function(bot){var opt=document.createElement("option");opt.value=bot.id;opt.textContent=bot.nombre||bot.name||bot.id;select.appendChild(opt);});select.value=current;}}
-function loadCatalog(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/catalogs",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){catalogCache={plans:body.plans||[],bots:body.bots||[]};renderCatalog();}).catch(function(error){var root=document.getElementById("planRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
+function loadCatalog(){if(!customerAccessV2Enabled)return Promise.resolve();return fetch("/admin/catalogs",{headers:{accept:"application/json"}}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});}).then(function(body){catalogCache={plans:body.plans||[],bots:body.bots||[]};renderCatalog();if(typeof renderTenants==="function"&&tenantCache&&tenantCache.length)renderTenants();}).catch(function(error){var root=document.getElementById("planRows");if(root){root.textContent="";root.appendChild(el("div","invite-loading",catalogErrorLabel(error.message)));}});}
 function openPlanEditor(planId){var plan=planId?catalogCache.plans.filter(function(p){return p.id===planId;})[0]:null;
 document.getElementById("planEditorTitle").textContent=plan?"Editar plan":"Nuevo plan";
 document.getElementById("planEditorOriginalId").value=plan?plan.id:"";
@@ -972,7 +976,6 @@ document.getElementById("planIdField").value=plan?plan.id:"";
 document.getElementById("planIdField").readOnly=!!plan;
 document.getElementById("planDescripcion").value=plan?(plan.descripcion||""):"";
 document.getElementById("planEtiqueta").value=plan?(plan.etiqueta||""):"";
-document.getElementById("planPrecioSetup").value=plan?(plan.precio_setup==null?"":plan.precio_setup):"";
 document.getElementById("planPrecioMensual").value=plan?(plan.precio_mensual==null?"":plan.precio_mensual):"";
 document.getElementById("planChats").value=plan&&plan.chats_incluidos!=null?plan.chats_incluidos:"";
 document.getElementById("planBeneficios").value=plan&&plan.beneficios?plan.beneficios.join("\\n"):"";
@@ -1085,7 +1088,7 @@ function saveSetupReview(action){if(!setupReviewCurrent||!setupReviewCurrent.ten
 function togglePlan(id,activo){postJson("/admin/catalogs/plans/"+encodeURIComponent(id)+"/toggle",{activo:activo}).then(function(){showToast(activo?"Plan activado.":"Plan desactivado. Los clientes que ya lo tienen no se ven afectados.");return loadCatalog();}).catch(function(error){showToast(catalogErrorLabel(error.message));});}
 function bindCatalogForms(){var planForm=document.getElementById("planEditorForm");
 if(planForm)planForm.addEventListener("submit",function(event){event.preventDefault();var button=document.getElementById("planEditorSubmit"),errorBox=document.getElementById("planEditorError");errorBox.textContent="";button.disabled=true;button.textContent="Guardando…";
-postJson("/admin/catalogs/plans",{id:document.getElementById("planIdField").value||document.getElementById("planEditorOriginalId").value,nombre:document.getElementById("planNombre").value,descripcion:document.getElementById("planDescripcion").value,bot_id:document.getElementById("planBotId").value,precio_setup:document.getElementById("planPrecioSetup").value,precio_mensual:document.getElementById("planPrecioMensual").value,chats_incluidos:document.getElementById("planChats").value,beneficios:document.getElementById("planBeneficios").value,etiqueta:document.getElementById("planEtiqueta").value,orden:document.getElementById("planOrden").value})
+postJson("/admin/catalogs/plans",{id:document.getElementById("planIdField").value||document.getElementById("planEditorOriginalId").value,nombre:document.getElementById("planNombre").value,descripcion:document.getElementById("planDescripcion").value,bot_id:document.getElementById("planBotId").value,precio_setup:0,precio_mensual:document.getElementById("planPrecioMensual").value,chats_incluidos:document.getElementById("planChats").value,beneficios:document.getElementById("planBeneficios").value,etiqueta:document.getElementById("planEtiqueta").value,orden:document.getElementById("planOrden").value})
 .then(function(){closePlanEditor();showToast("Plan guardado. Ya se refleja en el Panel de Cliente.");return loadCatalog();})
 .catch(function(error){errorBox.textContent=catalogErrorLabel(error.message);})
 .finally(function(){button.disabled=false;button.textContent="Guardar plan";});});
@@ -1102,7 +1105,7 @@ function renderTenants(){var root=document.getElementById("tenantLifecycleRows")
 if(!tenantCache.length){root.appendChild(el("div","invite-loading","Todavía no hay clientes creados."));return;}
 tenantCache.forEach(function(tenant){var line=el("div","invite-row");
 var who=el("div");who.appendChild(el("strong",null,tenant.company_name));who.appendChild(el("small",null,tenant.id));line.appendChild(who);
-var plan=el("div");plan.appendChild(el("strong",null,copMoney(tenant.precio_mensual_contratado)+" /mes"));plan.appendChild(el("small",null,tenant.plan_id+" · instalación "+copMoney(tenant.precio_setup_contratado)));line.appendChild(plan);
+var plan=el("div");plan.appendChild(el("strong",null,planDisplayName(tenant.plan_id)));plan.appendChild(el("small",null,planDisplayLine(tenant.plan_id,tenant.precio_mensual_contratado)+" · "+(tenant.assigned_bot_id||"sin bot")));line.appendChild(plan);
 var state=el("div");state.appendChild(statusPill(tenant.status));line.appendChild(state);
 var users=el("div");users.appendChild(el("strong",null,String(tenant.usuarios_activos==null?"—":tenant.usuarios_activos)));users.appendChild(el("small",null,"con acceso"));line.appendChild(users);
 var actions=el("div","catalog-actions");

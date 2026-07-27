@@ -210,7 +210,7 @@ function transactionEvent(input) {
     assert.strictEqual(response.status, 200);
     let payload = await response.json();
     const checkoutA = payload.checkout;
-    assert.strictEqual(checkoutA.amount_charged, 480000);
+    assert.strictEqual(checkoutA.amount_charged, 180000);
     assert.strictEqual(checkoutA.reference.includes("payments-a"), true,
       "checkout must remain bound to the authenticated tenant and its catalog selection");
     assert(checkoutA.checkout_url.startsWith("https://checkout.wompi.co/p/?"));
@@ -219,7 +219,7 @@ function transactionEvent(input) {
     payload = await response.json();
 	    assert.strictEqual(payload.billing.payment_status, "pending");
 	    assert.strictEqual(payload.billing.ready_for_bot_creation, false);
-	    assert.strictEqual(payload.billing.contracted_setup_price, 300000);
+	    assert.strictEqual(payload.billing.contracted_setup_price, 0);
 
 	    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: cookieA } });
 	    const pendingPanelHtml = await response.text();
@@ -234,7 +234,7 @@ function transactionEvent(input) {
       id: "e2e-approved-a",
       reference: checkoutA.reference,
       status: "APPROVED",
-      amount_in_cents: 48000000,
+      amount_in_cents: 18000000,
       timestamp: 1753459200
     });
     response = await fetch(base + "/webhooks/wompi", {
@@ -257,8 +257,8 @@ function transactionEvent(input) {
     assert.strictEqual(payload.billing.subscription_status, "active");
     assert.strictEqual(payload.billing.ready_for_bot_creation, true);
     assert.strictEqual(payload.billing.provider_fee_type, "estimated");
-	    assert.strictEqual(payload.billing.provider_fee, 14400);
-	    assert.strictEqual(payload.billing.net_amount, 465600);
+	    assert.strictEqual(payload.billing.provider_fee, 5400);
+	    assert.strictEqual(payload.billing.net_amount, 174600);
 	    assert.strictEqual(payload.billing.history.length, 1);
 
 	    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: cookieA } });
@@ -276,7 +276,7 @@ function transactionEvent(input) {
       id: "e2e-failed-b",
       reference: checkoutB.reference,
       status: "DECLINED",
-      amount_in_cents: 40000000,
+      amount_in_cents: 15000000,
       timestamp: 1753459800
     });
     response = await fetch(base + "/webhooks/wompi", {
@@ -311,7 +311,7 @@ function transactionEvent(input) {
     payload = await response.json();
     assert.strictEqual(payload.billing.length, 2);
     const adminA = payload.billing.find(function (row) { return row.tenant_id === "payments-a"; });
-    assert.strictEqual(adminA.net_amount, 465600);
+    assert.strictEqual(adminA.net_amount, 174600);
     assert.strictEqual(adminA.history.length, 1);
 
     response = await fetch(base + "/admin/panel?tab=plan", { headers: { cookie: cookieA } });

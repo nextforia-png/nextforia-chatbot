@@ -31,9 +31,11 @@ module.exports = function renderClientOnboarding(res, options) {
     { id: "appointments", nombre: "Bot de Agendamiento", descripcion: "Organiza disponibilidad, confirma citas y ayuda a reducir ausencias." }
   ];
   const demoPlans = [
-    { id: "starter", bot_id: "customer_service", nombre: "Nextfor Aura", etiqueta: "Atención", descripcion: "Tu negocio siempre presente. Cada conversación, una oportunidad.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Aprende tus productos, tono y forma de vender", "Convierte conversaciones en ventas", "Conecta productos, precios y pedidos"] },
-    { id: "agenda-growth", bot_id: "appointments", nombre: "Nextfor Tempo", etiqueta: "Agenda", descripcion: "Más citas y reservas. Menos tiempo coordinando.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Agenda 24/7 por todos tus canales", "Agenda, reprograma y confirma por ti", "Recordatorios que reducen ausencias"] },
-    { id: "growth", bot_id: "", nombre: "Nextfor Atlas", etiqueta: "Todo en uno", descripcion: "Atiende, vende y agenda. Todo en un solo lugar.", precio_setup: 0, precio_mensual: 499900, beneficios: ["Atiende y vende 24/7", "Vende y agenda en una sola conversación", "Integra tienda, pedidos y calendarios"] }
+    { id: "nextfor-uno", bot_id: "customer_service", nombre: "Nextfor Uno", etiqueta: "Desde $49.900", descripcion: "Atención automática por WhatsApp 24/7 para preguntas repetitivas.", precio_setup: 0, precio_mensual: 49900, beneficios: ["WhatsApp 24/7", "Captura de interesados", "Panel básico"] },
+    { id: "nextfor-aura", bot_id: "customer_service", nombre: "Nextfor Aura", etiqueta: "Atención + ventas", descripcion: "Atiende, orienta y vende por tus canales.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Ventas conversacionales", "Historial de clientes", "Métricas del panel"] },
+    { id: "nextfor-tempo", bot_id: "appointments", nombre: "Nextfor Tempo", etiqueta: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Agenda 24/7", "Recordatorios", "Conexión con calendario"] },
+    { id: "nextfor-atlas", bot_id: "", nombre: "Nextfor Atlas", etiqueta: "Todo en uno", descripcion: "Atiende, vende y agenda en un solo lugar.", precio_setup: 0, precio_mensual: 499900, beneficios: ["Atención 24/7", "Ventas", "Citas y reservas"] },
+    { id: "nextfor-signature", bot_id: "", nombre: "Nextfor Signature", etiqueta: "A definir", descripcion: "Solución personalizada para procesos, canales e integraciones a la medida.", precio_setup: 0, precio_mensual: 0, beneficios: ["Propuesta personalizada", "Integraciones a medida", "Alcance definido con el cliente"] }
   ];
   const plans = Array.isArray(options.plans) && options.plans.length ? options.plans : (plan ? [plan] : (demo ? demoPlans : []));
   const bots = Array.isArray(options.bots) && options.bots.length ? options.bots : (bot ? [bot] : (demo ? demoBots : []));
@@ -79,12 +81,15 @@ module.exports = function renderClientOnboarding(res, options) {
   function planVisualKey(item, index) {
     const raw = String((item && (item.visual_key || item.slug || item.id || item.nombre || item.name)) || "").toLowerCase();
     const botId = String(item && item.bot_id || "").toLowerCase();
+    if (raw.indexOf("signature") >= 0) return "atlas";
     if (raw.indexOf("tempo") >= 0 || raw.indexOf("agenda") >= 0 || botId.indexOf("agenda") >= 0 || botId.indexOf("appointment") >= 0) return "tempo";
     if (raw.indexOf("atlas") >= 0 || raw.indexOf("scale") >= 0 || raw.indexOf("growth") >= 0 || raw.indexOf("todo") >= 0 || raw.indexOf("all") >= 0) return "atlas";
     if (raw.indexOf("aura") >= 0 || raw.indexOf("starter") >= 0 || botId.indexOf("customer") >= 0 || botId.indexOf("cliente") >= 0) return "aura";
     return index === 1 ? "tempo" : index === 2 ? "atlas" : "aura";
   }
   function priceLine(item, fallbackKey) {
+    const custom = !!(item && (String(item.id || "").indexOf("signature") >= 0 || String(item.etiqueta || "").toLowerCase().indexOf("definir") >= 0));
+    if (custom) return "A definir con cliente";
     const amount = Number(item && item.precio_mensual);
     if (Number.isFinite(amount) && amount > 0) return formatCop(amount);
     if (fallbackKey === "atlas") return "$499.900";
@@ -110,10 +115,12 @@ module.exports = function renderClientOnboarding(res, options) {
     const keys = planBullets(item, visual, 3);
     const includes = (Array.isArray(item.incluye) && item.incluye.length ? item.incluye : visual.includes).slice(0, 8);
     const excludes = (Array.isArray(item.no_incluye) && item.no_incluye.length ? item.no_incluye : visual.excludes).slice(0, 4);
+    const priceText = priceLine(item, visualKey);
+    const priceSuffix = priceText.toLowerCase().indexOf("definir") >= 0 ? "" : "<em>/mes</em>";
     return '<label class="planChoice nxPlanCard" data-plan-id="' + escapeHtml(id) + '" data-plan-key="' + escapeHtml(visualKey) + '" data-plan-goal="' + escapeHtml(recommendedGoal) + '" data-plan-bot="' + escapeHtml(item.bot_id || "") + '"><input type="radio" name="selected_plan" value="' + escapeHtml(id) + '"' +
       (selected ? " checked" : "") + '><span class="planChoiceBody nxPlanCardBody"><span class="nxRecommended" data-recommended-badge>✧ Recomendado para ti</span><span class="nxPlanHead"><span class="nxRadio" aria-hidden="true">✓</span><span class="nxPlanTitle"><strong>' +
       escapeHtml(name) + '</strong><small>' + escapeHtml(item.descripcion || visual.tagline || "Plan disponible para tu asistente.") + '</small></span><img src="' + escapeHtml(visual.mascot) + '" alt="Lumen ' + escapeHtml(name) + '"></span><span class="nxPlanPrice"><b>' +
-      escapeHtml(priceLine(item, visualKey)) + '</b><em>/mes</em></span><span class="nxPlanChannels">' +
+      escapeHtml(priceText) + '</b>' + priceSuffix + '</span><span class="nxPlanChannels">' +
       channels.map(function (channel) { return '<i>' + escapeHtml(channel) + '</i>'; }).join("") +
       '</span><button type="button" class="planCardCta" data-plan-cta="' + escapeHtml(id) + '">' + (selected ? "Continuar →" : "Elegir este plan") + '</button><span class="nxDivider"></span><span class="nxPlanKeys">' +
       keys.map(function (benefit) { return '<span><i>✓</i>' + escapeHtml(benefit) + '</span>'; }).join("") +

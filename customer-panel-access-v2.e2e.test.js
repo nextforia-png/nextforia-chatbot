@@ -153,7 +153,7 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(response.status, 201);
     const publicSignup = await response.json();
     assert.strictEqual(publicSignup.user.email, "publica@example.com");
-    assert.strictEqual(publicSignup.tenant.plan_id, "starter");
+    assert.strictEqual(publicSignup.tenant.plan_id, "nextfor-uno");
     assert.strictEqual(publicSignup.tenant.assigned_bot_id, "atencion-cliente");
     assert.strictEqual(publicSignup.lead.contact_phone, "+57 311 222 3333");
     assert.strictEqual(publicSignup.lead.onboarding_draft_saved, true);

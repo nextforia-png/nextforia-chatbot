@@ -1,5 +1,5 @@
 const COMMERCIAL_READINESS = {
-  version: "2026-07-07",
+  version: "2026-07-24",
   stages: [
     {
       id: "sales_qualification",
@@ -41,11 +41,11 @@ const COMMERCIAL_READINESS = {
     },
     {
       id: "meta_whatsapp",
-      label: "Meta WhatsApp",
+      label: "Meta WhatsApp - app aprobada",
       owner: "Meta/Cliente",
-      status: "waiting_meta",
+      status: "ready",
       items: [
-        "Aprobacion de app NexforIA para permisos de WhatsApp.",
+        "App NexforIA aprobada para whatsapp_business_messaging y whatsapp_business_management.",
         "Revision de nombre visible del cliente.",
         "Verificacion del numero por SMS o llamada.",
         "Carga y aprobacion de plantillas iniciales.",

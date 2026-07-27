@@ -45,6 +45,10 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `TENANT_FOREIGN_NUMBER_CHECK_ENABLED` | Confirma el país atendido cuando un número extranjero aún no tiene respuesta; usa `0` para desactivar |
 | `WA_TOKEN` | Token permanente de Meta WhatsApp |
 | `PHONE_NUMBER_ID` | ID del número WhatsApp registrado en Meta |
+| `TENANT_DISPLAY_PHONE` | Número visible que debe quedar conectado al tenant; RAV usa `+57 301 587 2708` |
+| `META_APP_REVIEW_STATUS` | Estado público de App Review para el panel; RAV está en `approved` |
+| `META_APP_REVIEW_APPROVED_AT` | Fecha de aprobación mostrada por la integración, sin consultar secretos |
+| `WA_LIVE_ENABLED` | Gate explícito del número real; mantener `0` hasta completar verificación y prueba end-to-end |
 | `VERIFY_TOKEN` | Token aleatorio de verificación del webhook (requerido en producción, mínimo 24 caracteres) |
 | `IG_ACCESS_TOKEN` | Token del Instagram Professional account autorizado en Meta |
 | `IG_USER_ID` | ID del Instagram Professional account que enviará respuestas |
@@ -55,6 +59,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `MESSENGER_PAGE_ID` | ID de la Página de Facebook que enviará las respuestas |
 | `MESSENGER_VERIFY_TOKEN` | Token para verificar `/messenger/webhook`; usa `VERIFY_TOKEN` si se omite |
 | `META_APP_SECRET` | App Secret de Meta para validar la firma `X-Hub-Signature-256` de WhatsApp, Instagram y Messenger |
+| `META_APP_ID` | App ID usada por los flujos oficiales de autorización Meta del Customer Panel |
+| `META_WHATSAPP_CONFIG_ID` | Configuration ID de WhatsApp Embedded Signup creado para NextforIA |
 | `MESSENGER_APP_SECRET` | Alias heredado de `META_APP_SECRET` |
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
 | `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
@@ -76,6 +82,13 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
 | `SUPABASE_TENANT_COLUMNS_ENABLED` | Activa escritura y filtrado por tenant después de aplicar la migración Phase A |
+| `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
+| `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de la pantalla simple de conexiones: WhatsApp primero, Instagram opcional; solo Staging hasta aprobación explícita |
+| `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
+| `CUSTOMER_INVITE_TTL_HOURS` | Vigencia de la invitación privada (default `24`, máximo `168`) |
+| `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |
+| `CUSTOMER_INVITE_FROM_EMAIL` | Remitente verificado del entorno de Staging |
+| `RESEND_API_KEY` | API key exclusiva de Staging para entregar invitaciones; nunca se registra ni se devuelve |
 | `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |
 | `ELEVENLABS_DERCO_AGENT_ID` | ID del agente de DERCO; lo vincula al tenant `grupo-derco` |
 | `ELEVENLABS_AGENT_TENANT_MAP` | Mapa JSON opcional `agent_id -> tenant_id` para más clientes |
@@ -97,13 +110,15 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `POST /admin/logout` | Cierra la sesión del dashboard |
 | `GET /admin/session` | Devuelve usuario/rol activo del dashboard |
 | `GET /admin/super-admin/login` | Entrada independiente de plataforma por correo/usuario; incluye recuperación mediante la clave maestra de Render |
-| `POST /admin/customer-invite` | Super admin: genera una invitación firmada de 24 horas para crear el primer acceso |
-| `GET/POST /admin/setup/rav-toys` | Formulario y creación segura del usuario administrador del cliente |
+| `POST /admin/customer-invite` | Super admin: crea tenant, membresía admin pendiente y envía la invitación privada |
+| `GET /admin/customer-access/catalogs` | Super admin: catálogos activos de planes y bots para el alta |
+| `GET /admin/customer-invitations` | Super admin: estados de entrega, vencimiento, uso y revocación sin tokens |
+| `POST /admin/customer-invitations/:id/revoke` | Super admin: revoca una invitación no consumida |
+| `GET/POST /admin/setup/:tenantId` | Validación y consumo atómico de la invitación; el cliente crea su contraseña sin username |
 | `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/super-admin` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/super-admin/login` | Entrada interna y separada para usuarios Super Admin de NexforIA |
-| `GET /admin/platform-goals` | Super admin: consulta las metas configuradas de la plataforma |
-| `PUT /admin/platform-goals/:goalId` | Super admin: actualiza una meta validada y auditada; inicialmente `customers` |
+| `GET /admin/integrations/rav/test` | Super admin: prueba segura de la integración #1 sin enviar mensajes reales |
 | `GET /admin/health` | Estado mínimo público; con sesión o `X-Dashboard-Key` incluye Shopify/Meta/Supabase y readiness |
 | `GET /admin/stats` | Snapshot protegido del estado: handoffs activos, ratings pendientes, carritos en curso |
 | `GET /admin/conversations?limit=N` | Conversaciones recientes protegidas desde Supabase si está disponible |
@@ -179,15 +194,18 @@ alto. El panel muestra prioridad, intereses y condición recurrente cuando exist
 memoria solo se crea con una señal comercial fuerte o un hito de compra; no conserva
 cédula, dirección, teléfono de checkout ni método de pago.
 
-### Primer cliente: RAV Toys
+### Alta privada de clientes
 
-RAV Toys es el cliente #1 y usa el tenant actual `rav-toys`. El super admin genera una
-invitación desde `/admin/super-admin` con **Crear acceso RAV**. El cliente abre el enlace,
-elige su usuario y contraseña, y entra con rol `admin`. La invitación vence en 24 horas y
-deja de funcionar cuando la cuenta queda creada. La contraseña nunca se guarda en texto
-plano: se almacena como un hash `scrypt` con salt dentro del registro interno persistente.
-La pantalla de ingreso es genérica de Nextfor IA: el nombre del comercio solo aparece
-después de autenticar, de modo que el mismo acceso pueda servir a más clientes en el futuro.
+RAV Toys sigue siendo el tenant legado default `rav-toys`. Con
+`CUSTOMER_ACCESS_V2_ENABLED=1` únicamente en Staging, el Super Admin usa **Crear cliente**
+e ingresa empresa, correo administrador, plan y bot. El servidor crea tenant y membresía
+pendiente en una transacción, guarda solo el hash de un token aleatorio y envía el enlace
+exclusivamente al correo indicado. El cliente no elige username ni se registra públicamente:
+acepta la invitación y define una contraseña que se almacena con `scrypt` y salt. El gate
+apagado conserva sin cambios el flujo legado de producción.
+
+Contrato compartido: [`docs/customer-access-contract.md`](docs/customer-access-contract.md).
+Activación y rollback de Staging: [`docs/staging-customer-access-v2.md`](docs/staging-customer-access-v2.md).
 
 **Uso típico antes de un cambio:** abrir `/admin/health` para ver que todo está OK, después `/admin/test-search?q=carros+montables` para verificar búsquedas.
 
@@ -394,7 +412,6 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v73 | Configuración guiada de NexforIA y memoria comercial del cliente |
 | v80 | Super Admin Panel rediseñado desde el handoff NexforIA: navegación de plataforma, clientes registrados, salud, readiness y estados futuros sin datos ficticios |
 | v81 | Entrada Super Admin separada del acceso de clientes, con cambio seguro de sesión y validación estricta del rol de plataforma |
-| v89 | Tarjeta de Lumen editable y metas persistentes de plataforma, con acceso exclusivo para Super Admin |
 | v74 | Ventas asistidas y cierres por confirmar en el resumen del cliente |
 
 ---

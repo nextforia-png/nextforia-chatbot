@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v169-production-shopify-pairing";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v170-production-auto-enable-setup";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -269,12 +269,12 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
-const CUSTOMER_ACCESS_V2_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
+const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
-const PAYMENTS_V1_ENABLED = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
+const PAYMENTS_V1_GATE = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_ENV = String(process.env.PAYMENTS_ENV || "").trim().toLowerCase();
 const WOMPI_PUBLIC_KEY = String(process.env.WOMPI_PUBLIC_KEY || "").trim();
 const WOMPI_INTEGRITY_SECRET = String(process.env.WOMPI_INTEGRITY_SECRET || "").trim();
@@ -308,6 +308,25 @@ const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED !== "0"
+  && process.env.NODE_ENV === "production"
+  && SUPABASE_ENABLED
+  && !!DATA_ENCRYPTION_KEY
+  && !!CUSTOMER_PANEL_BASE_URL
+  && CUSTOMER_ACCESS_EMAIL_PROVIDER === "resend"
+  && !!RESEND_API_KEY
+  && !!CUSTOMER_INVITE_FROM_EMAIL;
+const CUSTOMER_ACCESS_V2_ENABLED = CUSTOMER_ACCESS_V2_GATE || CUSTOMER_ACCESS_TEST_MODE || CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED;
+const PAYMENTS_PRODUCTION_AUTO_ENABLED = process.env.PAYMENTS_V1_ENABLED !== "0"
+  && process.env.NODE_ENV === "production"
+  && CUSTOMER_ACCESS_V2_ENABLED
+  && PAYMENTS_ENV === "staging"
+  && SUPABASE_ENABLED
+  && !!PUBLIC_BASE_URL
+  && /^pub_test_/.test(WOMPI_PUBLIC_KEY)
+  && /^test_integrity_/.test(WOMPI_INTEGRITY_SECRET)
+  && /^test_events_/.test(WOMPI_EVENT_SECRET);
+const PAYMENTS_V1_ENABLED = PAYMENTS_V1_GATE || PAYMENTS_TEST_MODE || PAYMENTS_PRODUCTION_AUTO_ENABLED;
 const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
 const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });

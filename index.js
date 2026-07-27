@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v161-production-safer-client-actions";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v162-production-setup-super-admin-bridge";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4107,7 +4107,12 @@ async function listSetupReviewTenants() {
   const tenants = [];
   const seen = new Set();
   function add(tenant) {
-    if (!tenant || !tenant.id || seen.has(tenant.id)) return;
+    if (!tenant || !tenant.id) return;
+    if (seen.has(tenant.id)) {
+      const index = tenants.findIndex(function (row) { return row.id === tenant.id; });
+      if (index >= 0) tenants[index] = Object.assign({}, tenants[index], tenant);
+      return;
+    }
     seen.add(tenant.id);
     tenants.push(tenant);
   }
@@ -4789,16 +4794,16 @@ function leadNextAction(stage) {
 
 async function buildSuperAdminLeadsPipeline() {
   const empty = { kpis: { active: 0, won: 0, demos: 0, conversion: 0 }, sources: [], rows: [], customers: [] };
-  if (!CUSTOMER_ACCESS_V2_ENABLED || !catalogService) return empty;
   let tenants = [];
-  try {
-    tenants = await catalogService.listTenants();
-  } catch (error) {
-    console.error("lead pipeline tenants error:", error.message);
-    return empty;
+  if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
+    try {
+      tenants = await catalogService.listTenants();
+    } catch (error) {
+      console.error("lead pipeline tenants error:", error.message);
+    }
   }
   let invitations = [];
-  if (customerAccessService && customerAccessService.listInvitations) {
+  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && customerAccessService.listInvitations) {
     try { invitations = await customerAccessService.listInvitations(); }
     catch (error) { console.error("lead pipeline invitations error:", error.message); }
   }
@@ -4841,6 +4846,7 @@ async function buildSuperAdminLeadsPipeline() {
   } catch (error) {
     console.error("lead pipeline onboarding scan error:", error.message);
   }
+  if (!tenants.length && !onboardingRecordByTenant.size) return empty;
   const rows = [];
   const customers = [];
   for (const tenant of tenants || []) {

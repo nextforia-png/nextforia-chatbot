@@ -175,6 +175,43 @@ renderSuperAdminPanel({
 assert.doesNotMatch(hiddenLegacyHtml, /Grupo Jurídico DERCO/);
 assert.match(hiddenLegacyHtml, /RAV Toys/);
 
+let setupBridgeHtml = "";
+renderSuperAdminPanel({
+  setHeader: function () {},
+  send: function (body) { setupBridgeHtml = body; }
+}, {
+  auth: { username: "root", name: "Root", role: "super_admin" },
+  botVersion: "v-test",
+  tenant: { id: "rav-toys", name: "RAV Toys", status: "active", customer_number: 1 },
+  registeredClients: [],
+  commercialReadiness: { stages: [], requiredTenantFields: [] },
+  accessModel: { roles: [], future_panels: [] },
+  integration: { status: "activation_pending", label: "Activacion pendiente", app_review: {} },
+  leads: {
+    kpis: { active: 1, won: 0, demos: 0, conversion: 0 },
+    sources: [{ name: "Setup", paid: false, leads: 1, won: 0 }],
+    rows: [{
+      tenant_id: "mi-empresa",
+      company_name: "Mi Empresa QA",
+      admin_email: "qa@example.com",
+      contact_phone: "+57 300 000 0000",
+      stage: "setup_completed",
+      stage_label: "Setup completo · falta pago/trial",
+      next_action: "Activar pago, trial o piloto aprobado.",
+      completion: 100,
+      setup_completed: true,
+      plan_id: "nextfor-uno",
+      assigned_bot_id: "atencion-cliente",
+      updated_at: "2026-07-27T18:00:00.000Z"
+    }],
+    customers: []
+  }
+});
+assert.match(setupBridgeHtml, /Cuentas nuevas del setup/);
+assert.match(setupBridgeHtml, /Mi Empresa QA/);
+assert.match(setupBridgeHtml, /100% setup/);
+assert.match(setupBridgeHtml, /Setup completo/);
+
 // Con fuente financiera conectada el diseño pinta desglose, tabla y Pareto.
 let richHtml = "";
 renderSuperAdminPanel({

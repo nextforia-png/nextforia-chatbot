@@ -307,6 +307,24 @@ function renderSuperAdminPanel(res, options) {
     }).join("");
   }
   const leadRows = renderLeadRows(leadsData && leadsData.rows);
+  const setupClientRows = (function () {
+    const seen = new Set();
+    const source = []
+      .concat(leadsData && Array.isArray(leadsData.customers) ? leadsData.customers : [])
+      .concat(leadsData && Array.isArray(leadsData.rows) ? leadsData.rows : []);
+    return source.filter(function (row) {
+      const id = String(row && row.tenant_id || row && row.admin_email || "").trim().toLowerCase();
+      if (!id || seen.has(id)) return false;
+      const completed = row && (row.setup_completed === true || Number(row.completion) >= 100 || row.stage === "customer");
+      if (!completed) return false;
+      seen.add(id);
+      return true;
+    });
+  })();
+  const setupClientSection = setupClientRows.length ? `
+  <section class="card table-card"><div class="list-head lead-list-head"><div><h2>Cuentas nuevas del setup</h2><span class="badge success">${setupClientRows.length}</span></div></div><div class="table-scroll"><div class="invite-head lead-table-head" aria-hidden="true"><span>Empresa</span><span>Contacto</span><span>Estado</span><span>Plan / bot</span><span>Fecha</span><span>Próximo paso</span></div>${setupClientRows.map(function (row) {
+    return '<div class="lead-row"><div><strong>' + escapeHtml(row.company_name || row.tenant_id) + '</strong><small>' + escapeHtml(row.tenant_id || "—") + '</small></div><div><strong>' + escapeHtml(row.admin_email || "—") + '</strong><small>' + escapeHtml(row.contact_phone || "Sin teléfono") + '</small></div><div><span class="badge ' + (row.stage === "customer" ? "success" : "warning") + ' dot">' + escapeHtml(row.stage_label || "Setup completo") + '</span><small>' + num(row.completion || 0) + '% setup</small></div><div><strong>' + escapeHtml(row.plan_id || "Plan inicial") + '</strong><small>' + escapeHtml(row.assigned_bot_id || "Bot inicial") + '</small></div><div><strong>' + escapeHtml(leadDisplayDate(row)) + '</strong><small>' + (row.updated_at ? 'actualizado' : 'creado') + '</small></div><div><small>' + escapeHtml(row.next_action || "Revisar y aprobar setup.") + '</small></div></div>';
+  }).join("")}</div></section>` : "";
 
   const customerAccessPanel = customerAccessV2Enabled ? `
   <section class="card access-card" aria-labelledby="customerAccessTitle"><div class="card-head"><div><h2 id="customerAccessTitle">Altas e invitaciones</h2><p>Clientes creados por Nextfor IA. El enlace privado se envía únicamente al correo administrador.</p></div><button class="button" type="button" onclick="loadCustomerInvitations()">${icon("refresh", 15)} Actualizar</button></div>
@@ -792,7 +810,7 @@ function renderSuperAdminPanel(res, options) {
   <div class="two-col" style="margin-top:0"><section class="card"><div class="card-head"><div><h2>Embudo real</h2><p>Estados actuales del alta automática.</p></div></div><ol class="steps"><li><span class="step-number">1</span><div><strong>Cuenta creada</strong><p>Email + clave guardados. Ya es lead.</p></div></li><li><span class="step-number">2</span><div><strong>Setup iniciado</strong><p>El cliente empieza a llenar su información.</p></div></li><li><span class="step-number">3</span><div><strong>Setup completo</strong><p>NextforIA revisa y activa pago, trial o piloto.</p></div></li><li><span class="step-number">4</span><div><strong>Cliente</strong><p>Setup completo + pago/trial/piloto listo.</p></div></li></ol></section><section class="card"><div class="card-head"><div><h2>Datos guardados hoy</h2><p>Sin secretos, solo información útil para venta y seguimiento.</p></div></div><div class="fields"><code>company_name</code><code>admin_email</code><code>contact_phone</code><code>tenant_id</code><code>setup_completion</code><code>plan_id</code><code>assigned_bot_id</code><code>stage</code></div></section></div>
 </div></section>
 
-<section class="view" data-panel="clients"><div class="stack">${legacyRegistrySection}${tenantLifecyclePanel}${customerAccessPanel}<div class="callout"><div><strong>Clientes visibles</strong><p>Usa Eliminar para quitar de esta vista los registros heredados. Cuando Customer Access v2 esté activo, aquí también se administrará la base nueva de clientes.</p></div><span class="badge info">${currentClients} de ${currentClients}</span></div></div></section>
+<section class="view" data-panel="clients"><div class="stack">${setupClientSection}${legacyRegistrySection}${tenantLifecyclePanel}${customerAccessPanel}<div class="callout"><div><strong>Clientes visibles</strong><p>Los setups completados aparecen arriba como cuentas nuevas. Usa Eliminar solo para quitar de esta vista los registros heredados.</p></div><span class="badge info">${currentClients + setupClientRows.length} visibles</span></div></div></section>
 
 <section class="view" data-panel="agendamiento"><div class="stack">
   <section class="card"><div class="empty"><img class="empty-lumen" src="/admin/assets/lumen.png" alt="" aria-hidden="true"><h2>El módulo de Agendamiento se activa con datos del bot</h2><p>Mostrará citas del mes, tasa de confirmación, calendarios conectados, consentimientos y clientes con el bot activo. Hoy el piloto de citas vive en el panel del cliente; aquí se consolidará toda la flota.</p></div></section>
@@ -916,7 +934,7 @@ function catalogErrorLabel(code){var map={plan_name_required:"El plan necesita u
 function el(tag,cls,txt){var node=document.createElement(tag);if(cls)node.className=cls;if(txt!=null)node.textContent=txt;return node;}
 function fmtNum(value){if(value==null||!isFinite(Number(value)))return"—";return String(Math.round(Number(value))).replace(/\\B(?=(\\d{3})+(?!\\d))/g,".");}
 function leadStageClass(stage){return stage==="setup_completed"?"warning":stage==="setup_started"?"info":"neutral";}
-function pipelineCustomerCount(){return baseClientCount+((leadsPipeline&&leadsPipeline.customers)||[]).length;}
+function pipelineCustomerCount(){var done=(leadsPipeline&&leadsPipeline.rows||[]).filter(function(row){return row&& (row.setup_completed===true||Number(row.completion)>=100);}).length;return baseClientCount+((leadsPipeline&&leadsPipeline.customers)||[]).length+done;}
 function leadSearchText(row){return[String(row.company_name||""),String(row.admin_email||""),String(row.contact_phone||""),String(row.tenant_id||""),String(row.plan_id||""),String(row.assigned_bot_id||""),String(row.stage_label||"")].join(" ").toLowerCase();}
 function leadDateValue(row){var raw=row&&(row.updated_at||row.created_at);var time=Date.parse(raw||"");return isNaN(time)?0:time;}
 function leadDateText(row){var raw=row&&(row.updated_at||row.created_at)||"";return String(raw).slice(0,10)||"Sin fecha";}

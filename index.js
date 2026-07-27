@@ -36,6 +36,7 @@ const {
 } = require("./platform-catalogs");
 const {
   InMemoryPaymentStore,
+  integritySignature,
   PaymentError,
   SupabasePaymentStore,
   createPaymentService
@@ -203,7 +204,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v145-staging-prelive-setup-checklist";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v146-staging-wompi-setup-gate";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6149,9 +6150,53 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     demo: true,
     apiPath: "",
     completionPath: "/admin/panel-demo?tab=channels&from=onboarding",
-    paymentsV1Enabled: PAYMENTS_V1_ENABLED,
+    paymentsV1Enabled: true,
+    demoPaymentPath: "/admin/client-onboarding-demo/payment",
     questionnaire
   });
+});
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char];
+  });
+}
+
+function renderDemoPaymentStep(res, options) {
+  options = options || {};
+  const nextPath = options.nextPath || "/admin/panel-demo?tab=channels&from=onboarding";
+  const checkoutUrl = options.checkoutUrl || "";
+  const unavailableReason = options.unavailableReason || "";
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pago Wompi · Nextfor IA</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Sora:wght@700;800&display=swap" rel="stylesheet"><style>:root{--navy:#071632;--cyan:#16AEEF;--line:#DDE7F2;--muted:#66758D;--green:#14A971}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#F4F8FC;color:#071632;font-family:"Plus Jakarta Sans",sans-serif;display:grid;place-items:center;padding:24px}.card{width:min(780px,100%);background:#fff;border:1px solid var(--line);border-radius:28px;box-shadow:0 20px 55px rgba(7,22,50,.12);overflow:hidden}.hero{display:grid;grid-template-columns:1fr 170px;gap:20px;align-items:center;padding:34px;background:linear-gradient(135deg,#071632,#0E3A69);color:#fff}.hero img{width:150px;justify-self:center;filter:drop-shadow(0 18px 28px rgba(22,174,239,.28))}.hero small{color:#65D4FF;font-weight:800;letter-spacing:.14em}.hero h1{margin:10px 0 8px;font:800 clamp(30px,5vw,44px)/1.05 Sora,sans-serif;letter-spacing:-.04em}.hero p{margin:0;color:#C5D6EC;line-height:1.6}.body{padding:30px 34px}.steps{display:grid;gap:12px;margin:0 0 22px}.step{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1px solid var(--line);border-radius:16px;background:#F8FBFE}.step b{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--cyan);color:#fff}.step strong{display:block;font-size:14px}.step span{display:block;margin-top:3px;color:var(--muted);font-size:13px;line-height:1.45}.actions{display:flex;gap:12px;flex-wrap:wrap}.btn{height:48px;border-radius:14px;padding:0 18px;border:1px solid var(--line);background:#fff;color:#071632;font-weight:800;text-decoration:none;display:inline-grid;place-items:center}.btn.primary{border:0;background:linear-gradient(135deg,#27B8F2,#009FEF);color:#fff;box-shadow:0 12px 30px rgba(22,174,239,.24)}.notice{margin-top:16px;padding:13px 14px;border-radius:14px;background:#FFF8E8;color:#745119;font-size:12px;line-height:1.5}@media(max-width:680px){.hero{grid-template-columns:1fr;text-align:center}.hero img{order:-1}.body{padding:24px 18px}.actions .btn{width:100%}}</style></head><body><main class="card"><section class="hero"><div><small>✧ WOMPI SANDBOX</small><h1>Ahora registra el pago para activar tu panel.</h1><p>El entrenamiento ya quedó guardado. El Customer Panel operativo se abre después de completar el paso de Wompi.</p></div><img src="/admin/assets/lumen-entrenando.png" alt="Lumen entrenando"></section><section class="body"><div class="steps"><article class="step"><b>1</b><div><strong>Entrenamiento completo</strong><span>Nextfor ya tiene las instrucciones de tu negocio.</span></div></article><article class="step"><b>2</b><div><strong>Pago con Wompi</strong><span>${checkoutUrl ? "Abriremos Wompi Sandbox para registrar el pago de prueba." : "Wompi Sandbox no está configurado en este ambiente; usa la simulación segura para revisar el flujo."}</span></div></article><article class="step"><b>3</b><div><strong>Panel desbloqueado</strong><span>En real, esto ocurre cuando Wompi confirma el pago por webhook o el contrato queda listo.</span></div></article></div><div class="actions">${checkoutUrl ? `<a class="btn primary" href="${escapeHtml(checkoutUrl)}">Abrir Wompi Sandbox →</a>` : `<a class="btn primary" href="/admin/client-onboarding-demo/payment-return?demo_payment=approved&next=${encodeURIComponent(nextPath)}">Simular registro en Wompi →</a>`}<a class="btn" href="${escapeHtml(nextPath)}">Saltar solo en demo</a></div>${unavailableReason ? `<div class="notice"><strong>Modo demo:</strong> ${escapeHtml(unavailableReason)}</div>` : ""}</section></main></body></html>`);
+}
+
+app.get("/admin/client-onboarding-demo/payment", (req, res) => {
+  const nextPath = String(req.query.next || "/admin/panel-demo?tab=channels&from=onboarding");
+  let checkoutUrl = "";
+  let unavailableReason = "";
+  if (/^pub_test_/.test(WOMPI_PUBLIC_KEY) && /^test_integrity_/.test(WOMPI_INTEGRITY_SECRET) && PUBLIC_BASE_URL) {
+    const reference = "nexfor-demo-" + Date.now().toString(36) + "-" + crypto.randomBytes(4).toString("hex");
+    const amountInCents = 500000;
+    const query = new URLSearchParams({
+      "public-key": WOMPI_PUBLIC_KEY,
+      currency: "COP",
+      "amount-in-cents": String(amountInCents),
+      reference,
+      "signature:integrity": integritySignature(reference, amountInCents, WOMPI_INTEGRITY_SECRET),
+      "redirect-url": PUBLIC_BASE_URL + "/admin/client-onboarding-demo/payment-return?next=" + encodeURIComponent(nextPath)
+    });
+    checkoutUrl = "https://checkout.wompi.co/p/?" + query.toString();
+  } else {
+    unavailableReason = "Render Staging todavía no tiene activadas las credenciales sandbox de Wompi para abrir checkout real. La simulación solo valida el orden del journey.";
+  }
+  renderDemoPaymentStep(res, { nextPath, checkoutUrl, unavailableReason });
+});
+
+app.get("/admin/client-onboarding-demo/payment-return", (req, res) => {
+  const nextPath = String(req.query.next || "/admin/panel-demo?tab=channels&from=onboarding");
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pago registrado · Nextfor IA</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#F4F8FC;color:#071632;font-family:ui-sans-serif,system-ui,sans-serif;padding:24px}.card{max-width:620px;background:#fff;border:1px solid #DDE7F2;border-radius:24px;padding:32px;box-shadow:0 20px 55px rgba(7,22,50,.12);text-align:center}.badge{display:inline-block;padding:8px 12px;border-radius:999px;background:#E7F7F0;color:#087B51;font-weight:900;font-size:12px}h1{font-size:34px;margin:18px 0 10px;letter-spacing:-.04em}p{color:#66758D;line-height:1.6}.btn{height:50px;margin-top:14px;border-radius:14px;padding:0 18px;background:linear-gradient(135deg,#27B8F2,#009FEF);color:#fff;font-weight:900;text-decoration:none;display:inline-grid;place-items:center}</style></head><body><main class="card"><span class="badge">Pago registrado</span><h1>Listo. Ahora sí puedes continuar al panel.</h1><p>En el flujo real, NextforIA desbloquea el panel cuando Wompi confirma el pago por webhook. En este demo continuamos para que revises el resto del journey.</p><a class="btn" href="${escapeHtml(nextPath)}">Ir al Customer Panel →</a></main></body></html>`);
 });
 
 app.get("/admin/create-account-demo", (req, res) => {
@@ -7526,12 +7571,17 @@ app.get("/admin/panel", async (req, res) => {
     setDashboardSessionCookie(req, res, auth);
   }
   let customerSetupCompleted = false;
+  let paymentGateRequired = false;
   if (auth.version === 2) {
     try {
       const onboarding = await loadClientOnboarding(false, panelTenantId);
       if (!onboarding.setup_completed) {
         res.redirect("/admin/client-onboarding");
         return;
+      }
+      if (PAYMENTS_V1_ENABLED && paymentService) {
+        const billing = await paymentService.tenantBilling(panelTenantId);
+        paymentGateRequired = !billingMakesCustomer(billing);
       }
       customerSetupCompleted = true;
     } catch (error) {
@@ -7543,6 +7593,7 @@ app.get("/admin/panel", async (req, res) => {
   const capabilities = customerPanelCapabilities(auth.role);
   const channelConnectionsVisibleForCustomer = customerChannelConnectionsVisibleForAuth(auth);
   let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  if (paymentGateRequired) initialTab = "plan";
   if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
@@ -7554,6 +7605,7 @@ app.get("/admin/panel", async (req, res) => {
     tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
+    paymentGateRequired,
     channelConnectionsV1Enabled: channelConnectionsVisibleForCustomer,
     botVersion: BOT_VERSION
   });

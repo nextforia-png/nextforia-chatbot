@@ -86,12 +86,13 @@ module.exports = function renderCustomerPanel(res, options) {
   const demoMode = !!options.demoMode;
   const panelContext = customerPanelContext(options);
   const botVersion = options.botVersion || "dev";
-  const channelConnectionsV1Enabled = !!options.channelConnectionsV1Enabled;
+  const paymentGateRequired = !!options.paymentGateRequired;
+  const channelConnectionsV1Enabled = !!options.channelConnectionsV1Enabled && !paymentGateRequired;
   const channelConnectionsDemo = options.channelConnectionsDemo || null;
   const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(options.initialTab)
     ? options.initialTab
     : "summary";
-  const requestedInitialTab = requestedTab === "human" ? "conversations" : requestedTab;
+  const requestedInitialTab = paymentGateRequired ? "plan" : (requestedTab === "human" ? "conversations" : requestedTab);
   const initialTab = panelContext.v2 && panelContext.appointments && ["summary", "conversations", "retargeting"].includes(requestedInitialTab)
     ? "appointments"
     : (panelContext.v2 && panelContext.support && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
@@ -118,10 +119,10 @@ module.exports = function renderCustomerPanel(res, options) {
   }).join("");
   const supportBotName = panelContext.v2 ? panelContext.assignedBotName : "Atención al cliente";
   const appointmentBotName = panelContext.v2 ? panelContext.assignedBotName : "Agendamiento";
-  const supportBotButton = panelContext.support ? '<button class="botCard active" id="bot-support" type="button" onclick="selectBot(\'support\')"><span class="botIcon">' + PANEL_ICONS.bot + '</span><span class="botMeta"><strong>' + escapeHtml(supportBotName) + '</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>' : "";
-  const appointmentBotButton = panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
-  const mobileSupportBotButton = panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
-  const mobileAppointmentBotButton = panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
+  const supportBotButton = !paymentGateRequired && panelContext.support ? '<button class="botCard active" id="bot-support" type="button" onclick="selectBot(\'support\')"><span class="botIcon">' + PANEL_ICONS.bot + '</span><span class="botMeta"><strong>' + escapeHtml(supportBotName) + '</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>' : "";
+  const appointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
+  const mobileSupportBotButton = !paymentGateRequired && panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
+  const mobileAppointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
   const activeBotCount = panelContext.v2 ? 1 : 2;
   const assignedModuleDescription = panelContext.appointments
     ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
@@ -1068,12 +1069,12 @@ ${customerAppointments.styles}
       ${supportBotButton}
       ${appointmentBotButton}
     </div>
-    <nav class="nav" id="navSupport"${panelContext.support ? "" : ' style="display:none"'} aria-label="Secciones de Atención al cliente">
+    <nav class="nav" id="navSupport"${panelContext.support && !paymentGateRequired ? "" : ' style="display:none"'} aria-label="Secciones de Atención al cliente">
       <button class="navItem" id="nav-summary" type="button" onclick="showTab('summary')"><span class="navIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
       <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
       <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
-    <nav class="nav" id="navAppointments" style="display:${panelContext.appointments && initialTab === "appointments" ? "grid" : "none"}" aria-label="Secciones de Agendamiento">
+    <nav class="nav" id="navAppointments" style="display:${panelContext.appointments && !paymentGateRequired && initialTab === "appointments" ? "grid" : "none"}" aria-label="Secciones de Agendamiento">
       <button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
       <button class="navItem" data-appt-nav="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button>
       <button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab('appointments');showAppointmentSection('reminders')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
@@ -1082,7 +1083,7 @@ ${customerAppointments.styles}
       <div class="footTitle">Cuenta</div>
       ${planNav}
       ${channelsNav}
-      <button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>
+      ${paymentGateRequired ? "" : `<button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>`}
       <button class="navItem logoutItem" id="nav-logout" type="button" onclick="logoutCustomerPanel()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></button>
       <div class="whatsappCard">
         <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>
@@ -1155,6 +1156,12 @@ ${customerAppointments.styles}
 
       <section class="${viewClass('panel-plan')}" id="panel-plan">
         <div class="planView">
+          ${paymentGateRequired ? `<section class="planBlock">
+            <h3>Completa Wompi para activar tu panel</h3>
+            <p>Tu entrenamiento ya quedó guardado. El panel operativo se desbloquea cuando Wompi confirma el pago o tu contrato queda listo para crear el bot.</p>
+            <div class="planCatalogNotice">Estás en el paso correcto: revisa la facturación y usa el botón de Wompi cuando esté disponible.</div>
+          </section>` : ""}
+
           <section class="planHero">
             <div>
               <span class="planPill ok">Activo</span>

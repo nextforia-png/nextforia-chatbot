@@ -185,9 +185,18 @@ function transactionEvent(input) {
     assert.strictEqual(response.status, 200);
     const setupHtml = await response.text();
     assert(setupHtml.includes("Elige el bot para tu empresa"));
-    assert(setupHtml.includes("Elige cómo activar tu plan"));
-    assert(setupHtml.includes("Pagar con Wompi"));
-    assert(setupHtml.includes("Los precios provienen del catálogo central."));
+	    assert(setupHtml.includes("Elige cómo activar tu plan"));
+	    assert(setupHtml.includes("Pagar con Wompi"));
+	    assert(setupHtml.includes("Los precios provienen del catálogo central."));
+
+	    response = await fetch(base + "/admin/client-onboarding-demo?step=setup");
+	    const demoSetupHtml = await response.text();
+	    assert(demoSetupHtml.includes("Pagar con Wompi"));
+	    assert(demoSetupHtml.includes("DEMO_PAYMENT_PATH"));
+	    response = await fetch(base + "/admin/client-onboarding-demo/payment?next=/admin/panel-demo?tab=channels");
+	    const demoPaymentHtml = await response.text();
+	    assert(demoPaymentHtml.includes("Abrir Wompi Sandbox"));
+	    assert(demoPaymentHtml.includes("checkout.wompi.co/p/?"));
 
     response = await fetch(base + "/admin/panel/billing/checkout", {
       method: "POST",
@@ -208,9 +217,14 @@ function transactionEvent(input) {
 
     response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieA } });
     payload = await response.json();
-    assert.strictEqual(payload.billing.payment_status, "pending");
-    assert.strictEqual(payload.billing.ready_for_bot_creation, false);
-    assert.strictEqual(payload.billing.contracted_setup_price, 300000);
+	    assert.strictEqual(payload.billing.payment_status, "pending");
+	    assert.strictEqual(payload.billing.ready_for_bot_creation, false);
+	    assert.strictEqual(payload.billing.contracted_setup_price, 300000);
+
+	    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: cookieA } });
+	    const pendingPanelHtml = await response.text();
+	    assert(pendingPanelHtml.includes("Completa Wompi para activar tu panel"));
+	    assert(pendingPanelHtml.includes('id="navSupport" style="display:none"'));
 
     response = await fetch(base + "/admin/panel/billing", { headers: { cookie: cookieB } });
     payload = await response.json();
@@ -243,9 +257,14 @@ function transactionEvent(input) {
     assert.strictEqual(payload.billing.subscription_status, "active");
     assert.strictEqual(payload.billing.ready_for_bot_creation, true);
     assert.strictEqual(payload.billing.provider_fee_type, "estimated");
-    assert.strictEqual(payload.billing.provider_fee, 14400);
-    assert.strictEqual(payload.billing.net_amount, 465600);
-    assert.strictEqual(payload.billing.history.length, 1);
+	    assert.strictEqual(payload.billing.provider_fee, 14400);
+	    assert.strictEqual(payload.billing.net_amount, 465600);
+	    assert.strictEqual(payload.billing.history.length, 1);
+
+	    response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: cookieA } });
+	    const paidPanelHtml = await response.text();
+	    assert(!paidPanelHtml.includes("Completa Wompi para activar tu panel"));
+	    assert(paidPanelHtml.includes("Resumen"));
 
     response = await fetch(base + "/admin/panel/billing/checkout", {
       method: "POST",

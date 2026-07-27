@@ -207,7 +207,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v166-production-meta-channel-readiness";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v167-production-meta-channel-live";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -299,7 +299,6 @@ const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
   );
 const CHANNEL_CONNECTIONS_PRODUCTION_READY = process.env.CHANNEL_CONNECTIONS_V1_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
-  && CUSTOMER_ACCESS_V2_ENABLED
   && SUPABASE_ENABLED
   && !!DATA_ENCRYPTION_KEY;
 const CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW = !CHANNEL_CONNECTIONS_V1_ENABLED && CHANNEL_CONNECTIONS_PRODUCTION_READY;
@@ -436,7 +435,6 @@ if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLE
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
-if (CHANNEL_CONNECTIONS_V1_VISIBLE && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when channel connections are visible");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");

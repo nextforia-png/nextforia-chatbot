@@ -91,6 +91,7 @@ const {
   isStopMessage
 } = require("./retargeting");
 const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
+const { cleanShopifyShop, createPairingToken } = require("./commerce/pairing-token");
 const { AppointmentRegistry } = require("./appointments");
 const {
   DERCO_TENANT_ID,
@@ -207,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v168-production-setup-channel-note";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v169-production-shopify-pairing";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -372,6 +373,7 @@ const SHOPIFY_STORE_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STORE_
 const SHOPIFY_STOREFRONT_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STOREFRONT_DOMAIN) || SHOPIFY_STORE_DOMAIN;
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
+const SHOPIFY_APP_INSTALL_URL = safeExternalHttpsUrl(process.env.SHOPIFY_APP_INSTALL_URL);
 const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.env.SHOPIFY_ORDER_PREFIX || "RAV")
   .split(",")
   .map(s => s.trim().replace(/[^A-Za-z0-9-]/g, "").replace(/-+$/g, ""))
@@ -6541,9 +6543,65 @@ app.get("/admin/client-onboarding", async (req, res) => {
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     demo: false,
     apiPath: "/admin/client-onboarding/data",
+    shopifyConnectPath: "/admin/integrations/shopify/connect",
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
     questionnaire
   });
+});
+
+app.get("/admin/integrations/shopify/connect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || !customerPanelAuthOk(req, "admin")) {
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/integrations/shopify/connect" });
+    else renderAdminLogin(res, "/admin/integrations/shopify/connect");
+    return;
+  }
+  if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
+
+  const tenant = customerBusinessForAuth(auth);
+  const tenantId = customerTenantForAuth(auth);
+  const record = await loadClientOnboarding(false, tenantId);
+  const answers = JSON.parse(JSON.stringify(record.answers || defaultClientOnboarding()));
+  const commerce = answers.commerce || {};
+  const shop = cleanShopifyShop(commerce.store_url);
+  const card = function (status, title, body, href, label) {
+    res.status(status).setHeader("content-type", "text/html; charset=utf-8");
+    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Nextfor IA</title><style>body{margin:0;background:#F6F8FB;color:#313C50;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:680px;margin:0 auto;padding:48px 22px}.card{background:#fff;border:1px solid #DFE6F0;border-radius:22px;padding:28px;box-shadow:0 18px 46px rgba(10,24,54,.1)}h1{margin:0;color:#0A1836;font-size:28px;line-height:1.12}p{line-height:1.6;color:#66758D;font-size:15px}a{display:inline-flex;margin-top:10px;height:44px;align-items:center;padding:0 16px;border-radius:13px;background:#00A0F0;color:#fff;text-decoration:none;font-weight:800}</style></head><body><main class="wrap"><section class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p><a href="${escapeHtml(href || "/admin/client-onboarding?edit=1")}">${escapeHtml(label || "Volver al setup")}</a></section></main></body></html>`);
+  };
+  if (commerce.platform !== "shopify") {
+    card(409, "Primero elige Shopify", "Para conectar la app, selecciona Shopify como plataforma de comercio en el setup de " + (tenant.name || "tu negocio") + ".", "/admin/client-onboarding?edit=1", "Volver al setup");
+    return;
+  }
+  if (!SHOPIFY_APP_INSTALL_URL) {
+    card(503, "Shopify casi listo", "Tu negocio ya tiene el paso de Shopify preparado. Falta activar la URL privada de instalación de la app en producción.", "/admin/client-onboarding", "Volver al setup");
+    return;
+  }
+  let pairingToken;
+  try {
+    pairingToken = createPairingToken({
+      tenant_id: tenantId,
+      bot_id: tenant.assigned_bot_id || "commerce",
+      shop
+    });
+  } catch (error) {
+    card(503, "Falta configurar seguridad", "Para producción falta configurar NEXFORIA_PAIRING_SECRET con al menos 32 caracteres. Sin eso no generamos conexiones Shopify reales.", "/admin/client-onboarding?edit=1", "Volver al setup");
+    return;
+  }
+
+  answers.commerce = Object.assign({}, commerce, {
+    platform: "shopify",
+    integration_intent: "yes",
+    integration_status: "pending_customer",
+    shopify_shop: shop,
+    shopify_pairing_started_at: new Date().toISOString()
+  });
+  await persistClientOnboarding(answers, record.status || "draft", auth, tenantId);
+
+  const destination = new URL(SHOPIFY_APP_INSTALL_URL);
+  destination.searchParams.set("pairing_token", pairingToken);
+  destination.searchParams.set("tenant_id", tenantId);
+  if (shop) destination.searchParams.set("shop", shop);
+  res.redirect(destination.href);
 });
 
 app.get("/admin/client-onboarding/data", async (req, res) => {
@@ -8510,6 +8568,8 @@ async function buildAdminHealthResult() {
       phone_number_id: PHONE_NUMBER_ID,
       shopify_domain: SHOPIFY_STORE_DOMAIN,
       shopify_admin_api_version: SHOPIFY_ADMIN_API_VERSION,
+      shopify_app_install_url_configured: !!SHOPIFY_APP_INSTALL_URL,
+      shopify_pairing_secret_configured: String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32,
       notification_phones_count: NOTIFICATION_PHONES.length,
       dashboard_users_count: DASHBOARD_USERS.length
     },
@@ -8547,6 +8607,9 @@ async function buildAdminHealthResult() {
   } catch (e) {
     result.checks.shopify_storefront = `error: ${e.message}`;
   }
+  result.checks.shopify_app_install = SHOPIFY_APP_INSTALL_URL
+    ? (String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32 ? "ok" : "missing_pairing_secret")
+    : "missing_install_url";
   // Probar Meta WhatsApp API (verifica que el token siga válido)
   try {
     const r = await axios.get(`https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}`, {
@@ -8603,6 +8666,9 @@ async function buildAdminHealthResult() {
   if (!PHONE_NUMBER_ID) blockers.push("missing_phone_number_id");
   if (result.checks.meta_whatsapp !== "ok") blockers.push("meta_whatsapp_not_ok");
   if (result.checks.shopify_storefront !== "ok") blockers.push("shopify_storefront_not_ok");
+  if (result.checks.shopify_app_install !== "ok") blockers.push("shopify_app_install_not_ready");
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE) blockers.push("channel_connections_not_visible");
+  if (CHANNEL_CONNECTIONS_V1_VISIBLE && !result.channel_connections.meta_authorization_available.whatsapp) blockers.push("meta_whatsapp_oauth_not_ready");
   if (result.checks.supabase_conversation_logs !== "ok") blockers.push("supabase_not_ok");
   result.production_readiness = {
     infrastructure_ready: blockers.length === 0,

@@ -1498,14 +1498,14 @@ function renderConnectionHub(){
   if(commerceRoot){
     if(!commerceRequested){
       var canRequest=SERVER_ROLE==="admin";
-      commerceRoot.innerHTML='<article class="channelConnectCard comingSoon"><span class="channelConnectIcon">NX</span><div class="channelConnectCopy"><h4>¿También vendes online?</h4><p>Si se te pasó en el setup, activa aquí el conector que necesitas. Lo guardaremos para que NextforIA y Commerce Connectors continúen sin hacerte repetir formularios.</p><div class="channelAccount">Opcional · puedes seguir sin tienda conectada</div></div><div class="channelConnectActions"><span class="channelState">Opcional</span>'+(canRequest?'<button class="primaryBtn" type="button" data-platform="shopify" onclick="requestCommerceConnector(this.dataset.platform)">Solicitar Shopify</button><button class="ghostBtn" type="button" data-platform="woocommerce" onclick="requestCommerceConnector(this.dataset.platform)">Solicitar WooCommerce</button>':'<span class="channelAccount">Pide a un administrador que lo solicite.</span>')+'</div></article>';
+      commerceRoot.innerHTML='<article class="channelConnectCard comingSoon"><span class="channelConnectIcon">NX</span><div class="channelConnectCopy"><h4>¿También vendes online?</h4><p>Si se te pasó en el setup, puedes activar Shopify desde aquí. WooCommerce queda solicitado para cuando el conector esté disponible.</p><div class="channelAccount">Opcional · puedes seguir sin tienda conectada</div></div><div class="channelConnectActions"><span class="channelState">Opcional</span>'+(canRequest?'<button class="primaryBtn" type="button" data-platform="shopify" onclick="requestCommerceConnector(this.dataset.platform,true)">Conectar Shopify</button><button class="ghostBtn" type="button" data-platform="woocommerce" onclick="requestCommerceConnector(this.dataset.platform)">Solicitar WooCommerce</button>':'<span class="channelAccount">Pide a un administrador que lo active.</span>')+'</div></article>';
       return;
     }
-    var icon=commercePlatform==="shopify"?"SH":commercePlatform==="woocommerce"?"WC":"EC",title=commercePlatformLabel(commercePlatform),description=commercePlatform==="shopify"?"Conector opcional para catálogo, productos y datos comerciales. Se activará desde Commerce Connectors cuando esté habilitado para esta cuenta.":commercePlatform==="woocommerce"?"Conector opcional para WordPress + WooCommerce. Queda preparado para el equipo de Commerce Connectors.":"Conector opcional según la plataforma indicada en el setup.";
-    commerceRoot.innerHTML='<article class="channelConnectCard recommended"><span class="channelConnectIcon">'+esc(icon)+'</span><div class="channelConnectCopy"><h4>'+esc(title)+'</h4><p>'+esc(description)+'</p><div class="channelAccount">'+esc(setupShort(commerce.store_url,"URL pendiente"))+'</div></div><div class="channelConnectActions"><span class="channelState '+attr(commerceStatus==="connected"?"connected":commerceStatus==="failed"?"needs_attention":"connecting")+'">'+esc(commerceStatusLabel(commerceStatus))+'</span><button class="ghostBtn" type="button" onclick="showTab(&quot;setup&quot;)">Ver datos guardados</button></div></article>';
+    var icon=commercePlatform==="shopify"?"SH":commercePlatform==="woocommerce"?"WC":"EC",title=commercePlatformLabel(commercePlatform),description=commercePlatform==="shopify"?"Conecta la app segura de Shopify para catálogo, productos y datos comerciales.":commercePlatform==="woocommerce"?"Conector opcional para WordPress + WooCommerce. Queda preparado para el equipo de Commerce Connectors.":"Conector opcional según la plataforma indicada en el setup.",connectAction=commercePlatform==="shopify"&&commerceStatus!=="connected"?'<a class="primaryBtn" href="/admin/integrations/shopify/connect">Conectar Shopify</a>':"";
+    commerceRoot.innerHTML='<article class="channelConnectCard recommended"><span class="channelConnectIcon">'+esc(icon)+'</span><div class="channelConnectCopy"><h4>'+esc(title)+'</h4><p>'+esc(description)+'</p><div class="channelAccount">'+esc(setupShort(commerce.store_url,"URL pendiente"))+'</div></div><div class="channelConnectActions"><span class="channelState '+attr(commerceStatus==="connected"?"connected":commerceStatus==="failed"?"needs_attention":"connecting")+'">'+esc(commerceStatusLabel(commerceStatus))+'</span>'+connectAction+'<button class="ghostBtn" type="button" onclick="showTab(&quot;setup&quot;)">Ver datos guardados</button></div></article>';
   }
 }
-function requestCommerceConnector(platform){
+function requestCommerceConnector(platform,connectNow){
   platform=String(platform||"").toLowerCase();
   if(["shopify","woocommerce"].indexOf(platform)<0)return;
   setChannelConnectionMessage("Guardando solicitud de "+commercePlatformLabel(platform)+"…");
@@ -1517,12 +1517,14 @@ function requestCommerceConnector(platform){
     state.onboarding=payload;
     renderOnboardingSummary(payload);
     setChannelConnectionMessage("Listo. Dejamos "+commercePlatformLabel(platform)+" solicitado para continuar después.","success");
+    if(connectNow&&platform==="shopify")location.href="/admin/integrations/shopify/connect";
     return;
   }
   api("/admin/panel/commerce-connector",{method:"POST",body:JSON.stringify({platform:platform})}).then(function(body){
     state.onboarding=Object.assign({},state.onboarding||{}, {onboarding:body.onboarding});
     renderOnboardingSummary(state.onboarding);
     setChannelConnectionMessage("Listo. Dejamos "+commercePlatformLabel(platform)+" solicitado para Commerce Connectors.","success");
+    if(connectNow&&platform==="shopify")location.href="/admin/integrations/shopify/connect";
   }).catch(function(error){
     setChannelConnectionMessage(error.body&&error.body.message||"No pudimos guardar el conector. Intenta de nuevo.","error");
   });

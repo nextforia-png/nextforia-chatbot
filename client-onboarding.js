@@ -375,7 +375,7 @@ function normalizeOnboarding(input) {
     ["not_requested", "requested", "pending_customer", "connected", "needs_review", "failed"],
     "not_requested"
   );
-  const commerceIntegrationStatus = commerceStoredStatus === "connected" || commerceStoredStatus === "needs_review" || commerceStoredStatus === "failed"
+  const commerceIntegrationStatus = commerceStoredStatus !== "not_requested"
     ? commerceStoredStatus
     : commerceIntent === "yes"
       ? "requested"
@@ -434,7 +434,10 @@ function normalizeOnboarding(input) {
       integration_status: commerceIntegrationStatus,
       requested_from: choice(commerce.requested_from, ["onboarding", "customer_panel", "super_admin"], ""),
       requested_at: text(commerce.requested_at, 80),
-      last_requested_at: text(commerce.last_requested_at, 80)
+      last_requested_at: text(commerce.last_requested_at, 80),
+      shopify_shop: text(commerce.shopify_shop, 180),
+      shopify_pairing_started_at: text(commerce.shopify_pairing_started_at, 80),
+      shopify_connected_at: text(commerce.shopify_connected_at, 80)
     },
     operations: {
       primary_country: text(operations.primary_country, 120) || "Colombia",

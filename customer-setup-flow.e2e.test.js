@@ -219,7 +219,9 @@ function bothBotAnswers(company, email) {
       CUSTOMER_ACCESS_V2_ENABLED: "1",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
-      CUSTOMER_PANEL_BASE_URL: "https://customer-panel.staging.example"
+      CUSTOMER_PANEL_BASE_URL: "https://customer-panel.staging.example",
+      SHOPIFY_APP_INSTALL_URL: "https://apps.shopify.com/nexforia-commerce",
+      NEXFORIA_PAIRING_SECRET: "customer-setup-pairing-secret-2026"
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -255,6 +257,8 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("WordPress + WooCommerce"));
     assert(setupHtml.includes("WordPress sin tienda"));
     assert(setupHtml.includes("¿Quieres conectar esta tienda con NextforIA?"));
+    assert(setupHtml.includes("Conectar Shopify"));
+    assert(setupHtml.includes('/admin/integrations/shopify/connect'));
     assert(setupHtml.includes("No escribas contraseñas, tokens ni claves privadas aquí"));
     assert(setupHtml.includes("commerce.integration_intent"));
     assert(setupHtml.includes("Atención al cliente: clientes atendidos al mes"));
@@ -310,6 +314,22 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.answers.operations.services_products, "Servicios A");
     assert.strictEqual(payload.selected_plan_id, "nextfor-uno");
     assert(payload.onboarding.last_updated_at);
+
+    response = await fetch(base + "/admin/integrations/shopify/connect?tenant_id=tenant-returning-b", {
+      headers: { cookie: cookieA },
+      redirect: "manual"
+    });
+    assert.strictEqual(response.status, 302, "Shopify connect must redirect to the app install URL");
+    const shopifyLocation = new URL(response.headers.get("location"));
+    assert.strictEqual(shopifyLocation.origin + shopifyLocation.pathname, "https://apps.shopify.com/nexforia-commerce");
+    assert.strictEqual(shopifyLocation.searchParams.get("tenant_id"), "tenant-setup-a");
+    assert.strictEqual(shopifyLocation.searchParams.get("shop"), "store-a.myshopify.com");
+    assert(String(shopifyLocation.searchParams.get("pairing_token") || "").startsWith("nexforia-pairing-v1."));
+
+    response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.answers.commerce.shopify_shop, "store-a.myshopify.com");
+    assert.strictEqual(payload.onboarding.answers.commerce.integration_status, "pending_customer");
 
     response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
     payload = await response.json();

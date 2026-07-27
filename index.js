@@ -6189,14 +6189,14 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
 app.get("/admin/client-onboarding-demo", (req, res) => {
   if (String(req.query.step || "") !== "setup") {
     renderCustomerPublicSignup(res, {
-      businessHint: req.query.business || "Comercio piloto",
+      businessHint: req.query.business || "",
       demoMode: true,
       demoNextPath: "/admin/client-onboarding-demo?step=setup"
     });
     return;
   }
   const answers = defaultClientOnboarding();
-  answers.business.brand_name = "Comercio piloto";
+  answers.business.brand_name = "Nombre de mi marca aquí";
   answers.business.contact_name = "Responsable del proyecto";
   answers.business.contact_email = "contacto@comercio.com";
   answers.meta.whatsapp_number = "+57 300 000 0000";
@@ -6206,7 +6206,7 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
   const questionnaire = normalizeCustomerSetupQuestionnaire({ questions: CUSTOMER_SETUP_QUESTIONS }, "NexforIA", null);
   const record = createOnboardingRecord(answers, { tenant_id: "pilot-demo", status: "draft", updated_by: "NexforIA", questionnaire });
   renderClientOnboarding(res, {
-    tenant: { id: "pilot-demo", name: "Comercio piloto" },
+    tenant: { id: "pilot-demo", name: "Nombre de mi marca aquí" },
     record,
     actor: "NexforIA",
     demo: true,
@@ -6263,7 +6263,7 @@ app.get("/admin/client-onboarding-demo/payment-return", (req, res) => {
 
 app.get("/admin/create-account-demo", (req, res) => {
   renderCustomerPublicSignup(res, {
-    businessHint: req.query.business || "Comercio piloto",
+    businessHint: req.query.business || "",
     demoMode: true,
     demoNextPath: "/admin/client-onboarding-demo?step=setup"
   });

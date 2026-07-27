@@ -6081,7 +6081,11 @@ app.post("/admin/customer-invite", async (req, res) => {
 
 app.get("/admin/create-account", async (req, res) => {
   if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService) {
-    res.status(404).send("Not found");
+    renderCustomerPublicSignup(res, {
+      businessHint: req.query.business || "",
+      demoMode: true,
+      demoNextPath: "/admin/client-onboarding-demo?step=setup"
+    });
     return;
   }
   const auth = dashboardAuth(req);

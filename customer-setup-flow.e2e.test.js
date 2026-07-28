@@ -373,6 +373,28 @@ function bothBotAnswers(company, email) {
       redirect: "manual"
     });
     assert.strictEqual(response.status, 302);
+    response = await fetch(base + "/internal/shopify/sessions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer customer-setup-commerce-service-secret-2026"
+      },
+      body: JSON.stringify({
+        session: [
+          ["id", "offline_store-a.myshopify.com"],
+          ["shop", "store-a.myshopify.com"],
+          ["isOnline", false],
+          ["accessToken", "private-shopify-token"],
+          ["scope", "read_products,read_inventory,read_orders"]
+        ]
+      })
+    });
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.answers.commerce.integration_status, "connected", "panel data reconciles a completed Shopify install");
+    assert.strictEqual(payload.onboarding.answers.commerce.shopify_shop, "store-a.myshopify.com");
+
     response = await fetch(base + "/internal/shopify/pairings/claim", {
       method: "POST",
       headers: {

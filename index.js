@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v213-conversation-internal-filter";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v214-shopify-panel-ready";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -7430,6 +7430,22 @@ async function connectShopifyOnboardingRecord(record, shop, botId) {
   };
 }
 
+async function reconcileShopifyOnboardingConnection(record) {
+  const commerce = record && record.answers && record.answers.commerce || {};
+  if (commerce.platform !== "shopify" || commerce.integration_status === "connected") return record;
+  const shop = cleanShopifyShop(commerce.shopify_shop || commerce.store_url);
+  if (!shop) return record;
+  try {
+    const sessions = await findShopifySessionsByShop(shop);
+    if (!sessions.length) return record;
+    await connectShopifyOnboardingRecord(record, shop, commerce.shopify_pairing_bot_id);
+    return await loadClientOnboarding(false, record.tenant_id);
+  } catch (error) {
+    console.error("shopify onboarding reconciliation error:", error.message);
+    return record;
+  }
+}
+
 app.post("/internal/shopify/pairings", async (req, res) => {
   if (!requireCommerceService(req, res)) return;
   try {
@@ -7611,7 +7627,7 @@ app.get("/admin/client-onboarding/data", async (req, res) => {
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
   const questionnaire = await loadCustomerSetupQuestionnaire(true);
-  const onboarding = await loadClientOnboarding(false, tenantId);
+  const onboarding = await reconcileShopifyOnboardingConnection(await loadClientOnboarding(false, tenantId));
   res.json({
     ok: true,
     tenant: customerBusinessForAuth(auth),
@@ -8526,7 +8542,7 @@ app.get("/admin/panel/data", async (req, res) => {
   });
   if (auth.version === 2) {
     try {
-      const onboarding = await loadClientOnboarding(false, tenantId);
+      const onboarding = await reconcileShopifyOnboardingConnection(await loadClientOnboarding(false, tenantId));
       const questionnaire = await loadCustomerSetupQuestionnaire(false);
       snapshot.nextfor_notifications = buildNextforNotifications(onboarding, questionnaire);
     } catch (error) {

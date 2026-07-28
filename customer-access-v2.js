@@ -139,7 +139,11 @@ function mapStoreError(error) {
   };
   const key = Object.keys(known).find(function (candidate) { return source.includes(candidate); });
   if (key) return new CustomerAccessError(known[key][0], known[key][1]);
-  return new CustomerAccessError("customer_access_unavailable", 503);
+  return new CustomerAccessError("customer_access_unavailable", 503, {
+    store_error: source.slice(0, 160) || "unknown_store_error",
+    store_details: String(error && error.details || "").slice(0, 240) || undefined,
+    store_hint: String(error && error.hint || "").slice(0, 240) || undefined
+  });
 }
 
 class SupabaseCustomerAccessStore {
@@ -824,7 +828,9 @@ function createCustomerAccessService(options) {
             updated_at: directUser.updated_at || createdAt.toISOString()
           };
         } catch (error) {
-          throw mapStoreError(error && error.response && error.response.data || error);
+          const mapped = mapStoreError(error && error.response && error.response.data || error);
+          mapped.details = Object.assign({ stage: "public_signup_direct" }, mapped.details || {});
+          throw mapped;
         }
       }
       let created;
@@ -838,7 +844,9 @@ function createCustomerAccessService(options) {
           created_by: "public_signup"
         }));
       } catch (error) {
-        throw mapStoreError(error);
+        const mapped = mapStoreError(error);
+        mapped.details = Object.assign({ stage: "public_signup_create_invitation" }, mapped.details || {});
+        throw mapped;
       }
       let user;
       try {
@@ -849,7 +857,9 @@ function createCustomerAccessService(options) {
           password_salt: passwordSalt
         });
       } catch (error) {
-        throw mapStoreError(error);
+        const mapped = mapStoreError(error);
+        mapped.details = Object.assign({ stage: "public_signup_consume_invitation" }, mapped.details || {});
+        throw mapped;
       }
       return {
         user_id: user.user_id,

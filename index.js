@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v184-production-customer-access-forced-zero-state";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v185-production-public-signup-debug";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4943,7 +4943,11 @@ function publicSignupDefaults(catalogs) {
   const bots = (catalogs && catalogs.bots || []).filter(active).filter(function (item) { return id(item.id); });
   const plans = (catalogs && catalogs.plans || []).filter(active).filter(function (item) { return id(item.id); });
   const preferredBot = bots.find(function (item) { return id(item.id) === "atencion-cliente"; }) || bots[0] || null;
-  if (!preferredBot || !plans.length) throw new CustomerAccessError("customer_access_unavailable", 503);
+  if (!preferredBot || !plans.length) throw new CustomerAccessError("customer_access_unavailable", 503, {
+    stage: "public_signup_defaults",
+    active_bots: bots.length,
+    active_plans: plans.length
+  });
   const preferredBotId = id(preferredBot.id);
   const compatiblePlans = plans.filter(function (item) {
     const botId = id(item.bot_id);

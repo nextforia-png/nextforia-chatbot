@@ -4,7 +4,8 @@ import { Session } from "@shopify/shopify-api";
 import {
   RemoteSessionStorage,
   claimPendingPairingWithBackend,
-  confirmPairingWithBackend
+  confirmPairingWithBackend,
+  preparePairingWithBackend
 } from "./remote-session-storage.server.js";
 
 function response(status, payload) {
@@ -101,6 +102,31 @@ test("authenticated Shopify shop can claim its pending Nextfor connection withou
   assert.equal(request.url, "https://nextforia.com/internal/shopify/pairings/claim");
   assert.match(request.options.headers.Authorization, /^Bearer /);
   assert.doesNotMatch(request.options.body, /pairing_token/);
+  assert.match(request.options.body, /store\.myshopify\.com/);
+});
+
+test("merchant shop entry securely binds the signed Nextfor tenant before Shopify login", async () => {
+  let request;
+  const result = await preparePairingWithBackend({
+    baseUrl: "https://nextforia.com",
+    secret: "s".repeat(64),
+    pairingToken: "signed-token",
+    shop: "store.myshopify.com",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return response(200, {
+        ok: true,
+        tenant_id: "tenant-a",
+        bot_id: "atencion-cliente",
+        shop: "store.myshopify.com",
+        status: "pending_customer"
+      });
+    }
+  });
+  assert.equal(result.tenant_id, "tenant-a");
+  assert.equal(request.url, "https://nextforia.com/internal/shopify/pairings/prepare");
+  assert.match(request.options.headers.Authorization, /^Bearer /);
+  assert.match(request.options.body, /signed-token/);
   assert.match(request.options.body, /store\.myshopify\.com/);
 });
 

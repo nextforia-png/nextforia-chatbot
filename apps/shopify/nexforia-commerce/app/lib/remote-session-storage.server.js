@@ -100,6 +100,32 @@ export async function confirmPairingWithBackend(options = {}) {
   return payload;
 }
 
+export async function preparePairingWithBackend(options = {}) {
+  const baseUrl = required(options.baseUrl, "backend_url").replace(/\/$/, "");
+  const secret = required(options.secret, "commerce_service_secret");
+  const response = await (options.fetchImpl || fetch)(
+    baseUrl + "/internal/shopify/pairings/prepare",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${secret}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        pairing_token: required(options.pairingToken, "pairing_token"),
+        shop: required(options.shop, "shop")
+      })
+    }
+  );
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok !== true) {
+    const error = new Error(payload.error || `backend_status_${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
 export async function claimPendingPairingWithBackend(options = {}) {
   const baseUrl = required(options.baseUrl, "backend_url").replace(/\/$/, "");
   const secret = required(options.secret, "commerce_service_secret");

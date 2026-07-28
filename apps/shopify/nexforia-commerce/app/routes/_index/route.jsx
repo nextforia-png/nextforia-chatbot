@@ -4,14 +4,24 @@ import {
   pairingCookieHeader,
   pairingTokenFromUrl,
 } from "../../lib/pairing-cookie.server";
+import { preparePairingWithBackend } from "../../lib/remote-session-storage.server";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const pairingToken = pairingTokenFromUrl(url);
   const pairingCookie = pairingCookieHeader(pairingToken);
+  const shop = String(url.searchParams.get("shop") || "").trim().toLowerCase();
 
-  if (url.searchParams.get("shop")) {
+  if (shop) {
+    if (pairingToken) {
+      await preparePairingWithBackend({
+        baseUrl: process.env.NEXFORIA_BACKEND_URL,
+        secret: process.env.NEXFORIA_COMMERCE_SERVICE_SECRET,
+        pairingToken,
+        shop,
+      });
+    }
     url.searchParams.delete("pairing_token");
     const headers = pairingCookie ? { "Set-Cookie": pairingCookie } : undefined;
     throw redirect(`/app?${url.searchParams.toString()}`, { headers });
@@ -64,7 +74,7 @@ export default function App() {
             <li><span>4</span><p>Copia la dirección que termina en <strong>.myshopify.com</strong>.</p></li>
           </ol>
           {showForm && (
-            <Form className={styles.form} method="post" action="/auth/login">
+            <Form className={styles.form} method="post" action="/connect">
               <label className={styles.label}>
                 <span>Tu dominio de Shopify</span>
                 <input

@@ -106,8 +106,21 @@ function waitForServer(child, port) {
     const token = createPairingToken({
       tenant_id: "tenant-a",
       bot_id: "atencion-cliente",
-      shop: "rav-toys.myshopify.com"
     }, { secret: pairingSecret });
+    response = await fetch(base + "/internal/shopify/pairings/prepare", {
+      method: "POST",
+      headers: Object.assign({ "content-type": "application/json" }, authorization),
+      body: JSON.stringify({
+        pairing_token: token,
+        shop: "rav-toys.myshopify.com"
+      })
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.tenant_id, "tenant-a");
+    assert.strictEqual(body.shop, "rav-toys.myshopify.com");
+    assert.strictEqual(body.status, "pending_customer");
+
     response = await fetch(base + "/internal/shopify/pairings", {
       method: "POST",
       headers: Object.assign({ "content-type": "application/json" }, authorization),
@@ -131,6 +144,21 @@ function waitForServer(child, port) {
       })
     });
     assert.strictEqual(response.status, 422);
+
+    const otherShopToken = createPairingToken({
+      tenant_id: "tenant-a",
+      bot_id: "atencion-cliente",
+      shop: "rav-toys.myshopify.com"
+    }, { secret: pairingSecret });
+    response = await fetch(base + "/internal/shopify/pairings/prepare", {
+      method: "POST",
+      headers: Object.assign({ "content-type": "application/json" }, authorization),
+      body: JSON.stringify({
+        pairing_token: otherShopToken,
+        shop: "other.myshopify.com"
+      })
+    });
+    assert.strictEqual(response.status, 409, "a signed tenant intent cannot be rebound to a different shop");
 
     response = await fetch(base + "/internal/shopify/sessions/offline_rav-toys.myshopify.com", {
       method: "DELETE",

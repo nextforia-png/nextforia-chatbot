@@ -225,7 +225,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v210-meta-public-origin";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v211-shopify-tenant-binding";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -7400,6 +7400,47 @@ app.post("/internal/shopify/pairings", async (req, res) => {
       shop,
       verified.bot_id
     )));
+  } catch (error) {
+    const code = error && error.code || "invalid_pairing_token";
+    res.status(code === "expired_pairing_token" ? 410 : 422).json({ ok: false, error: code });
+  }
+});
+
+app.post("/internal/shopify/pairings/prepare", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  try {
+    const verified = verifyPairingToken(req.body && req.body.pairing_token);
+    const shop = cleanShopifyShop(req.body && req.body.shop);
+    if (!shop || verified.shop && verified.shop !== shop) {
+      return res.status(409).json({ ok: false, error: "pairing_shop_mismatch" });
+    }
+    const record = await loadClientOnboarding(false, verified.tenant_id);
+    const answers = JSON.parse(JSON.stringify(record.answers || defaultClientOnboarding()));
+    const commerce = answers.commerce || {};
+    answers.commerce = Object.assign({}, commerce, {
+      platform: "shopify",
+      integration_intent: "yes",
+      integration_status: "pending_customer",
+      store_url: shop,
+      shopify_shop: shop,
+      shopify_pairing_started_at: new Date().toISOString(),
+      shopify_pairing_expires_at: new Date(Math.min(
+        Number(verified.exp) * 1000,
+        Date.now() + 15 * 60 * 1000
+      )).toISOString(),
+      shopify_pairing_bot_id: verified.bot_id
+    });
+    await persistClientOnboarding(answers, record.status || "draft", {
+      name: "NexforIA Commerce",
+      username: "shopify-service"
+    }, verified.tenant_id);
+    res.json({
+      ok: true,
+      tenant_id: verified.tenant_id,
+      bot_id: verified.bot_id,
+      shop,
+      status: "pending_customer"
+    });
   } catch (error) {
     const code = error && error.code || "invalid_pairing_token";
     res.status(code === "expired_pairing_token" ? 410 : 422).json({ ok: false, error: code });

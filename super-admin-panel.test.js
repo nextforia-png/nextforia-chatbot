@@ -218,6 +218,8 @@ assert.match(setupBridgeHtml, /100% setup/);
 assert.match(setupBridgeHtml, /Setup completo/);
 assert.match(setupBridgeHtml, /Ver ficha\/setup/);
 assert.match(setupBridgeHtml, /openTenantSetup/);
+assert.match(setupBridgeHtml, />Suspender<\/button>/);
+assert.match(setupBridgeHtml, /openTenantDelete/);
 
 // Con fuente financiera conectada el diseño pinta desglose, tabla y Pareto.
 let richHtml = "";

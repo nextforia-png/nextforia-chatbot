@@ -371,8 +371,8 @@ class InMemoryCustomerAccessStore {
       plan_id: cleanIdentifier(input.plan_id) || "nextfor-uno",
       assigned_bot_id: cleanIdentifier(input.assigned_bot_id) || "atencion-cliente",
       status: cleanIdentifier(input.tenant_status) || "setup",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      created_at: input.created_at || new Date().toISOString(),
+      updated_at: input.updated_at || input.created_at || new Date().toISOString()
     };
     if (!this.tenants.some(function (row) { return row.id === tenantId; })) this.tenants.push(tenant);
     const suppliedSalt = String(input.password_salt || "");
@@ -387,8 +387,8 @@ class InMemoryCustomerAccessStore {
       active: input.active !== false,
       password_hash: suppliedHash || hashPassword(password, salt),
       password_salt: salt.toString("base64url"),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      created_at: input.created_at || new Date().toISOString(),
+      updated_at: input.updated_at || input.created_at || new Date().toISOString()
     };
     this.users.push(user);
     return Object.assign({}, user, { company_name: companyName });
@@ -790,7 +790,9 @@ function createCustomerAccessService(options) {
         company_name: user.company_name || null,
         plan_id: user.plan_id || null,
         assigned_bot_id: user.assigned_bot_id || null,
-        tenant_status: user.tenant_status || null
+        tenant_status: user.tenant_status || null,
+        created_at: user.created_at || null,
+        updated_at: user.updated_at || null
       };
     },
 

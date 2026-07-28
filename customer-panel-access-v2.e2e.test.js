@@ -54,6 +54,7 @@ async function login(base, body, expectedStatus) {
 function signedSessionCookie(secret, user) {
   const payload = Buffer.from(JSON.stringify({
     v: 2,
+    rst: "customer-access-hard-reset-2026-07-28",
     uid: user.user_id,
     e: user.email,
     n: user.email,
@@ -79,7 +80,8 @@ function signedSessionCookie(secret, user) {
   const fixtures = [
     { user_id: "11111111-1111-4111-8111-111111111111", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" },
     { user_id: "22222222-2222-4222-8222-222222222222", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", plan_id: "nextfor-uno", assigned_bot_id: "atencion-cliente" },
-    { user_id: "33333333-3333-4333-8333-333333333333", tenant_id: "tenant-disabled", company_name: "Empresa Disabled", email: "disabled@example.com", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", active: false }
+    { user_id: "33333333-3333-4333-8333-333333333333", tenant_id: "tenant-disabled", company_name: "Empresa Disabled", email: "disabled@example.com", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", active: false },
+    { user_id: "44444444-4444-4444-8444-444444444444", tenant_id: "tenant-before-reset", company_name: "Empresa Vieja", email: "ventas@ravtoys.com", password: fixturePassword, password_salt: fixtureSalt, password_hash: fixtureHash, role: "admin", created_at: "2026-07-28T01:00:00.000Z" }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
     cwd: __dirname,
@@ -96,6 +98,7 @@ function signedSessionCookie(secret, user) {
       SUPABASE_KEY: "",
       CUSTOMER_ACCESS_V2_ENABLED: "1",
       CUSTOMER_PUBLIC_SIGNUP_ENABLED: "1",
+      CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T01:55:00.000Z",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_ACCESS_TEST_INVITATIONS: JSON.stringify([
@@ -359,6 +362,13 @@ function signedSessionCookie(secret, user) {
     const disabledCookie = signedSessionCookie(sessionSecret, fixtures[2]);
     response = await fetch(base + "/admin/session", { headers: { cookie: disabledCookie } });
     assert.strictEqual(response.status, 401, "an inactive membership invalidates an otherwise correctly signed session");
+
+    const oldLogin = await login(base, { email: "ventas@ravtoys.com", password: fixturePassword }, 401);
+    assert.strictEqual(oldLogin.body.error, "invalid_credentials", "pre-reset customer users cannot login after the clean slate");
+    const oldCookie = signedSessionCookie(sessionSecret, { user_id: fixtures[3].user_id, email: fixtures[3].email, tenant_id: fixtures[3].tenant_id });
+    response = await fetch(base + "/admin/session", { headers: { cookie: oldCookie } });
+    assert.strictEqual(response.status, 401, "a correctly signed pre-reset session is invalidated by membership age");
+    assert.match(String(response.headers.get("set-cookie") || ""), /Max-Age=0/);
 
     for (const route of ["/signup", "/register", "/admin/signup", "/admin/register"]) {
       response = await fetch(base + route, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: "{}" });

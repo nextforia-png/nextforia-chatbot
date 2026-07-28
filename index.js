@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v228-super-admin-latest-setup-filter";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v229-super-admin-delete-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4359,6 +4359,8 @@ async function markSetupReviewTenantDeleted(tenant, onboarding, auth, confirmati
     deleted_by: String(actor).slice(0, 160),
     company_name: companyName,
     backup_generated: true,
+    deleted_setup_completed: !!(onboarding && onboarding.setup_completed),
+    deleted_completion: Number(onboarding && onboarding.completion) || 0,
     setup_review: {
       status: "incomplete",
       updated_at: deletedAt,
@@ -4467,6 +4469,7 @@ async function listRecentClientOnboardingRecords(limit) {
     if (!tenantId || seen.has(tenantId)) return;
     const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
     if (!record || !record.answers) return;
+    if (record.setup_deleted === true && typeof record.deleted_setup_completed !== "boolean") return;
     seen.add(tenantId);
     records.push(record);
   }

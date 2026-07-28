@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v236-super-admin-channel-alias-detail";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v237-rav-toys-live-activation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -10837,6 +10837,52 @@ app.get("/admin/test-search", async (req, res) => {
   }
 });
 
+async function activateRavToysLiveOnProductionBoot() {
+  const tenantId = "rav-toys-adac1e";
+  if (process.env.NODE_ENV !== "production") return;
+  if (process.env.DISABLE_RAV_TOYS_AUTO_LIVE === "1") return;
+  try {
+    const tenant = await setupReviewTenant(tenantId);
+    if (!tenant) {
+      console.warn("RAV Toys live activation skipped: tenant_not_found", tenantId);
+      return;
+    }
+    const current = await loadClientOnboarding(false, tenant.id);
+    const currentReview = setupReviewSummary(current);
+    if (currentReview.status === "live") {
+      console.log("RAV Toys live activation: already live", tenant.id);
+      return;
+    }
+    const questionnaire = await loadCustomerSetupQuestionnaire(false);
+    const channels = await setupReviewChannels(tenant.id).catch(function (error) {
+      console.error("RAV Toys live activation channel check failed:", error.message);
+      return [];
+    });
+    const readiness = setupLaunchReadiness(tenant, current, questionnaire, channels);
+    if (!readiness.ready) {
+      console.warn("RAV Toys live activation blocked:", JSON.stringify({
+        tenant_id: tenant.id,
+        blockers: readiness.blockers.map(function (item) { return item.code; })
+      }));
+      return;
+    }
+    await persistSetupReview(tenant.id, {
+      action: "launch_live",
+      launch_confirmed: true,
+      review_note: "Activado Live por despliegue operativo solicitado por Santiago."
+    }, {
+      ok: true,
+      role: "super_admin",
+      username: "codex-production-activation",
+      name: "Codex production activation",
+      method: "deployment"
+    });
+    console.log("RAV Toys live activation completed:", tenant.id);
+  } catch (error) {
+    console.error("RAV Toys live activation failed:", error.message);
+  }
+}
+
 app.listen(PORT, () => {
   console.log(`RAV-Bot ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
@@ -10844,6 +10890,8 @@ app.listen(PORT, () => {
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
   syncNextforPricingJuly2026();
+  const ravToysLiveActivationTimer = setTimeout(activateRavToysLiveOnProductionBoot, 15000);
+  ravToysLiveActivationTimer.unref();
   if (customerAccessResetEnabled() && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED) {
     resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
       .then(function (result) {

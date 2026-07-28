@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v222-super-admin-setup-delete";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v223-super-admin-setup-tombstone";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -640,6 +640,7 @@ const instagramRuntimeState = {
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 const clientOnboardingCacheByTenant = new Map();
+const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
@@ -4297,6 +4298,70 @@ async function fetchClientOnboardingAuditFallback(tenantId) {
   }
 }
 
+async function fetchSetupReviewDeletedTenantIds() {
+  const deleted = new Set(Array.from(setupReviewDeletedTenantIdsMemory));
+  if (!SUPABASE_ENABLED) return deleted;
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+      headers: SB_HEADERS,
+      params: {
+        select: "tenant_id,metadata,action,created_at",
+        action: "eq.tenant_deleted",
+        order: "created_at.desc",
+        limit: 1000
+      },
+      timeout: 8000
+    });
+    (Array.isArray(response.data) ? response.data : []).forEach(function (row) {
+      const metadata = row && row.metadata || {};
+      const tenantId = cleanTenantId(row && row.tenant_id) || cleanTenantId(metadata.tenant_id);
+      if (tenantId) deleted.add(tenantId);
+    });
+  } catch (error) {
+    console.error("setup review deleted tenant fetch error:", error.message);
+  }
+  return deleted;
+}
+
+async function markSetupReviewTenantDeleted(tenant, onboarding, auth, confirmation) {
+  const tenantId = cleanTenantId(tenant && tenant.id);
+  if (!tenantId) throw new CatalogError("tenant_not_found", 404);
+  const companyName = tenant.company_name || tenant.name || tenantId;
+  if (String(confirmation || "").trim() !== String(companyName || "").trim()) {
+    throw new CatalogError("company_name_mismatch", 400);
+  }
+  const actor = auth && (auth.email || auth.username || auth.name || auth.user_id) || "super_admin";
+  const deletedAt = new Date().toISOString();
+  const backup = {
+    generado_en: deletedAt,
+    tenant: tenant,
+    onboarding: onboarding || null,
+    deletion_scope: "setup_review"
+  };
+  setupReviewDeletedTenantIdsMemory.add(tenantId);
+  clientOnboardingCacheByTenant.delete(tenantId);
+  if (SUPABASE_ENABLED) {
+    await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+      tenant_id: tenantId,
+      invitation_id: null,
+      actor: String(actor).slice(0, 160),
+      action: "tenant_deleted",
+      metadata: {
+        tenant_id: tenantId,
+        company_name: companyName,
+        eliminado_en: deletedAt,
+        deletion_scope: "setup_review",
+        source: "super_admin_setup_review",
+        backup
+      }
+    }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 10000 });
+  }
+  return {
+    result: { ok: true, tenant_id: tenantId, company_name: companyName, deletion_scope: "setup_review" },
+    backup
+  };
+}
+
 async function loadClientOnboarding(force, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
@@ -4514,7 +4579,10 @@ async function listSetupReviewTenants() {
   } catch (error) {
     console.error("setup review onboarding fallback error:", error.message);
   }
-  return tenants;
+  const deletedTenantIds = await fetchSetupReviewDeletedTenantIds();
+  return tenants.filter(function (tenant) {
+    return tenant && tenant.id && !deletedTenantIds.has(cleanTenantId(tenant.id));
+  });
 }
 
 async function setupReviewTenant(tenantId) {
@@ -5692,11 +5760,13 @@ async function buildSuperAdminLeadsPipeline() {
     console.error("lead pipeline onboarding scan error:", error.message);
   }
   if (!tenants.length && !onboardingRecordByTenant.size) return empty;
+  const deletedTenantIds = await fetchSetupReviewDeletedTenantIds();
   const rows = [];
   const customers = [];
   for (const tenant of tenants || []) {
     const tenantId = cleanTenantId(tenant && tenant.id);
     if (!tenantId || tenant.status === "archivado") continue;
+    if (deletedTenantIds.has(tenantId)) continue;
     const activeUsers = Number(tenant.usuarios_activos);
     const onboardingFromScan = onboardingRecordByTenant.get(tenantId) || null;
     const accountCreated = activeUsers > 0 || invitationAccountByTenant.has(tenantId) || !!(onboardingFromScan && onboardingFromScan.updated_at);
@@ -6770,15 +6840,27 @@ app.post("/admin/tenants/:tenantId/delete", async (req, res) => {
   const auth = catalogSuperAdminGuard(req, res);
   if (!auth) return;
   try {
-    const outcome = await catalogService.deleteTenant({
-      tenant_id: req.params.tenantId,
-      company_name_confirmacion: req.body && req.body.company_name_confirmacion,
-      confirmacion_final: req.body && req.body.confirmacion_final === true
-    }, auth);
+    let outcome;
+    try {
+      outcome = await catalogService.deleteTenant({
+        tenant_id: req.params.tenantId,
+        company_name_confirmacion: req.body && req.body.company_name_confirmacion,
+        confirmacion_final: req.body && req.body.confirmacion_final === true
+      }, auth);
+    } catch (error) {
+      const code = error && (error.code || error.message);
+      if (!["catalog_unavailable", "tenant_not_found"].includes(code)) throw error;
+      if (!req.body || req.body.confirmacion_final !== true) throw error;
+      const tenant = await setupReviewTenant(req.params.tenantId);
+      if (!tenant) throw error;
+      const onboarding = await loadClientOnboarding(true, tenant.id);
+      outcome = await markSetupReviewTenantDeleted(tenant, onboarding, auth, req.body.company_name_confirmacion);
+    }
     console.log("[tenant-eliminado]", JSON.stringify({
       actor: auth.username || auth.email || "super_admin",
       tenant_id: outcome.result && outcome.result.tenant_id,
       company_name: outcome.result && outcome.result.company_name,
+      deletion_scope: outcome.result && outcome.result.deletion_scope || "catalog",
       at: new Date().toISOString()
     }));
     res.json({ ok: true, deleted: outcome.result, backup: outcome.backup });

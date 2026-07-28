@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v223-super-admin-setup-tombstone";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v224-super-admin-setup-delete-fallback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6849,8 +6849,8 @@ app.post("/admin/tenants/:tenantId/delete", async (req, res) => {
       }, auth);
     } catch (error) {
       const code = error && (error.code || error.message);
-      if (!["catalog_unavailable", "tenant_not_found"].includes(code)) throw error;
       if (!req.body || req.body.confirmacion_final !== true) throw error;
+      if (["company_name_mismatch", "final_confirmation_required"].includes(code)) throw error;
       const tenant = await setupReviewTenant(req.params.tenantId);
       if (!tenant) throw error;
       const onboarding = await loadClientOnboarding(true, tenant.id);

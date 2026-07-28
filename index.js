@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v218-super-admin-operational-launch";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v219-strict-module-entitlements";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5369,6 +5369,15 @@ function customerChannelConnectionsVisibleForAuth(auth) {
   return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
 }
 
+function customerHasAppointmentModule(auth) {
+  if (!auth || auth.version !== 2) return true;
+  const planId = String(auth.plan_id || "").trim().toLowerCase();
+  if (["nextfor-uno", "nextfor-aura"].includes(planId)) return false;
+  if (["nextfor-tempo", "nextfor-atlas"].includes(planId)) return true;
+  const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
+  return ["agendamiento", "appointments", "appointment", "duo", "both"].includes(assignedBotId);
+}
+
 function channelConnectionCallbackUrlForRequest(req) {
   const fallbackOrigin = CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL;
   const forwardedOrigin = configuredHttpsOrigin(
@@ -8829,6 +8838,10 @@ app.get("/admin/panel/appointments-data", async (req, res) => {
     return;
   }
   const auth = dashboardAuth(req);
+  if (!customerHasAppointmentModule(auth)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
   const tenantId = customerTenantForAuth(auth);
   const persistent = await hydrateAppointmentsForTenant(tenantId);
   const snapshot = appointmentRegistry.snapshot(tenantId);

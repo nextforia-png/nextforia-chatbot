@@ -137,6 +137,13 @@ module.exports = function renderCustomerPanel(res, options) {
   const mobileAppointmentTabs = panelContext.appointments && !paymentGateRequired
     ? '<button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'agenda\')"><span class="mobileNavIcon">' + PANEL_ICONS.calendar + '</span><span>Agenda</span></button><button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="chats" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'chats\')"><span class="mobileNavIcon">' + PANEL_ICONS.conversaciones + '</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button>'
     : "";
+  const appointmentNav = panelContext.appointments && !paymentGateRequired
+    ? '<nav class="nav" id="navAppointments" style="display:' + (initialTab === "appointments" ? "grid" : "none") + '" aria-label="Secciones de Agendamiento"><button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'agenda\')"><span class="navIcon">' + PANEL_ICONS.calendar + '</span><span>Citas</span></button><button class="navItem" data-appt-nav="chats" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'chats\')"><span class="navIcon">' + PANEL_ICONS.conversaciones + '</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button><button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'reminders\')"><span class="navIcon">' + PANEL_ICONS.clock + '</span><span>Recordatorios</span></button></nav>'
+    : "";
+  const appointmentPanelSection = panelContext.appointments && !paymentGateRequired
+    ? '<section class="' + viewClass("panel-appointments") + '" id="panel-appointments">' + customerAppointments.markup + '</section>'
+    : "";
+  const appointmentClientScript = panelContext.appointments && !paymentGateRequired ? customerAppointments.clientScript : "";
   const activeBotCount = panelContext.v2 ? ((panelContext.support ? 1 : 0) + (panelContext.appointments ? 1 : 0) || 1) : 2;
   const assignedModuleDescription = panelContext.appointments
     ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
@@ -1110,11 +1117,7 @@ ${customerAppointments.styles}
       <button class="navItem" id="nav-conversations" type="button" onclick="showTab('conversations')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge" id="navConvCount"></span></button>
       <button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>Seguimientos</span><span class="navBadge" id="navRtgCount"></span></button>
     </nav>
-    <nav class="nav" id="navAppointments" style="display:${panelContext.appointments && !paymentGateRequired && initialTab === "appointments" ? "grid" : "none"}" aria-label="Secciones de Agendamiento">
-      <button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="navIcon">${PANEL_ICONS.calendar}</span><span>Citas</span></button>
-      <button class="navItem" data-appt-nav="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="navIcon">${PANEL_ICONS.conversaciones}</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button>
-      <button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab('appointments');showAppointmentSection('reminders')"><span class="navIcon">${PANEL_ICONS.clock}</span><span>Recordatorios</span></button>
-    </nav>
+    ${appointmentNav}
     <div class="sidebarFoot">
       <div class="footTitle">Cuenta</div>
       ${planNav}
@@ -1187,9 +1190,7 @@ ${customerAppointments.styles}
         </div>
       </section>
 
-      <section class="${viewClass('panel-appointments')}" id="panel-appointments">
-        ${customerAppointments.markup}
-      </section>
+      ${appointmentPanelSection}
 
       <section class="${viewClass('panel-plan')}" id="panel-plan">
         <div class="planView">
@@ -1519,7 +1520,7 @@ var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEX
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
-function syncBotSidebar(){var support=state.bot==="support",s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=support?"none":"grid";[[bs,support],[ba,!support],[mbs,support],[mba,!support]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");button.style.display=scope==="account"||scope===state.bot?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",String((support?5:4)+(PANEL_CHANNEL_CONNECTIONS_ENABLED?1:0)));}
+function syncBotSidebar(){if(PANEL_CONTEXT.v2&&!PANEL_CONTEXT.appointments&&state.bot==="appointments")state.bot=PANEL_CONTEXT.support?"support":"account";var support=state.bot==="support",appointments=state.bot==="appointments"&&(!PANEL_CONTEXT.v2||PANEL_CONTEXT.appointments),s=document.getElementById("navSupport"),a=document.getElementById("navAppointments"),bs=document.getElementById("bot-support"),ba=document.getElementById("bot-appointments"),mbs=document.getElementById("mobile-bot-support"),mba=document.getElementById("mobile-bot-appointments"),bar=document.getElementById("mobileTabbar");if(s)s.style.display=support?"grid":"none";if(a)a.style.display=appointments?"grid":"none";[[bs,support],[ba,appointments],[mbs,support],[mba,appointments]].forEach(function(row){if(!row[0])return;row[0].classList.toggle("active",row[1]);row[0].setAttribute("aria-pressed",row[1]?"true":"false");});document.querySelectorAll("#mobileTabbar [data-bot]").forEach(function(button){var scope=button.getAttribute("data-bot");var allowed=scope==="account"||scope===state.bot;if(PANEL_CONTEXT.v2&&scope==="appointments"&&!PANEL_CONTEXT.appointments)allowed=false;if(PANEL_CONTEXT.v2&&scope==="support"&&!PANEL_CONTEXT.support)allowed=false;button.style.display=allowed?"grid":"none";});if(bar)bar.style.setProperty("--mobile-tabs",String((support?5:appointments?4:3)+(PANEL_CHANNEL_CONNECTIONS_ENABLED?1:0)));}
 function selectBot(bot){var next=bot==="appointments"?"appointments":"support";if(PANEL_CONTEXT.v2&&!PANEL_CONTEXT[next])return;state.bot=next;syncBotSidebar();showTab(state.bot==="support"?"summary":"appointments");}
 function openProfile(){var modal=document.getElementById("profileModal"),name=document.getElementById("brandName"),input=document.getElementById("profileNameInput");if(!modal)return;if(input)input.value=name?(name.textContent||"").trim():PANEL_CONTEXT.businessName;modal.classList.add("open");if(input)input.focus();}
 function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");}
@@ -1812,7 +1813,7 @@ function setSetupBusy(busy,action){var save=document.getElementById("saveSetupBt
 function saveBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),save=document.getElementById("saveSetupBtn"),feedback="";setSetupBusy(true,"save");text("setupMessage","Guardando tu avance…");api("/admin/bot-setup",{method:"PUT",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setupDirty=false;fillSetupForm();feedback="✓ Avance guardado. El bot activo todavía no cambió.";}).catch(function(error){feedback="No se pudo guardar: "+error.message;}).finally(function(){setSetupBusy(false,"save");text("setupMessage",feedback||"Completa la información a tu ritmo.");if(feedback.indexOf("✓")===0&&save){save.textContent="Avance guardado ✓";setTimeout(function(){save.textContent="Guardar avance";},2000);}});}
 function publishBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),feedback="";setSetupBusy(true,"publish");text("setupMessage","Validando y personalizando tu bot…");api("/admin/bot-setup/publish",{method:"POST",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setup.published={status:"published",completion:result.setup.completion,updated_at:result.setup.updated_at,published_at:result.setup.published_at};state.setupDirty=false;state.setupActivated=true;fillSetupForm();feedback="✓ Configuración activa. Se aplicará a los mensajes nuevos.";}).catch(function(error){var detail=error.body&&error.body.completion!=null?" Vas en "+error.body.completion+"%.":"";feedback=(error.body&&error.body.message||"No se pudo activar la configuración.")+detail;}).finally(function(){setSetupBusy(false,"publish");text("setupMessage",feedback||"Revisa la configuración e intenta nuevamente.");});}
 function logoutCustomerPanel(){fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin/panel";});}
-${customerAppointments.clientScript}
+${appointmentClientScript}
 var reply=document.getElementById("replyText");if(reply)reply.addEventListener("keydown",function(event){if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();sendReply();}});document.addEventListener("click",function(event){if(!event.target.closest(".emojiControl"))closeEmojiPickers();});document.addEventListener("keydown",function(event){if(event.key==="Escape")closeEmojiPickers();});var searchForm=document.getElementById("searchTestForm");if(searchForm)searchForm.addEventListener("submit",runProductTest);var orderForm=document.getElementById("orderTestForm");if(orderForm)orderForm.addEventListener("submit",runOrderTest);
 try{var initialView=new URL(location.href).searchParams.get("view");if(["agenda","chats","reminders"].includes(initialView))state.appointmentSection=initialView;}catch(e){}
 renderChannelStrips();showTab(INITIAL_TAB);loadBotSetup();loadClientOnboardingSummary();loadPanelData(false);loadPanelHealth();if(INITIAL_TAB==="plan")loadBilling(false);setInterval(function(){if(!DEMO_MODE&&!state.metaDirty)loadPanelData(false);},30000);setInterval(loadPanelHealth,120000);

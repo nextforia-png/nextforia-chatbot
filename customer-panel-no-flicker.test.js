@@ -23,6 +23,7 @@ const chatbotOnly = renderPanel({ id: "b", company_name: "Empresa B", plan_id: "
 assert.strictEqual(pick(chatbotOnly, /id="pageTitle">([^<]*)</), "Resumen", "un tenant de Atención debe pintar Resumen de una vez");
 assert.strictEqual(activeView(chatbotOnly), "panel-summary", "la sección de resumen ya viene activa desde el servidor");
 assert.ok(!chatbotOnly.includes('id="bot-appointments"'), "la release inicial no muestra bot de Agendamiento");
+assert.ok(!chatbotOnly.includes('id="panel-appointments"'), "la release inicial no renderiza el panel de Agendamiento");
 
 // ── Tenant de Atención: arranca en Resumen ──
 const atencion = renderPanel({ id: "a", company_name: "Empresa A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" });

@@ -346,6 +346,8 @@ function signedSessionCookie(secret, user) {
     assert(shellA.includes("Plan Nextfor Aura"));
     assert(shellA.includes('id="bot-support"'));
     assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
+    assert(!shellA.includes('id="navAppointments"'), "tenant A must not receive appointments navigation");
+    assert(!shellA.includes('id="panel-appointments"'), "tenant A must not receive appointments panel markup");
     assert(shellA.includes("1 bot activo"));
     assert(shellA.includes('id="nav-logout"'));
     assert(shellA.includes('id="nav-notifications"'));
@@ -368,6 +370,8 @@ function signedSessionCookie(secret, user) {
     assert(shellB.includes('<h1 id="brandName">Empresa B</h1>'));
     assert(shellB.includes("Plan Nextfor Uno"));
     assert(!shellB.includes('id="bot-appointments"'));
+    assert(!shellB.includes('id="navAppointments"'));
+    assert(!shellB.includes('id="panel-appointments"'));
     assert(shellB.includes('id="bot-support"'), "tenant B must receive the assigned support bot switch");
     assert(shellB.includes("1 bot activo"));
     assert(shellB.includes('INITIAL_TAB="summary"'), "chatbot-only tenants must open summary");
@@ -375,11 +379,9 @@ function signedSessionCookie(secret, user) {
     assert(!shellB.includes(">Empresa A<"));
 
     response = await fetch(base + "/admin/panel/appointments-data?tenant_id=tenant-a", { headers: { cookie: userB.cookie } });
-    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.status, 403);
     const appointmentsB = await response.json();
-    assert.strictEqual(appointmentsB.business.id, "tenant-b");
-    assert.strictEqual(appointmentsB.business.name, "Empresa B");
-    assert(!JSON.stringify(appointmentsB).includes("Empresa A"));
+    assert.strictEqual(appointmentsB.error, "module_not_contracted");
 
     const usernameAttempt = await login(base, { username: "admin@a.example", password: fixturePassword }, 401);
     assert.strictEqual(usernameAttempt.body.error, "invalid_credentials", "v2 customer login requires the email field");

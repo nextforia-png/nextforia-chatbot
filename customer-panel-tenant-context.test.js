@@ -33,6 +33,8 @@ assert(tenantA.includes("<title>Panel de control · Empresa A</title>"));
 assert(tenantA.includes('<h1 id="brandName">Empresa A</h1>'));
 assert(tenantA.includes('id="bot-support"'));
 assert(!tenantA.includes('id="bot-appointments"'));
+assert(!tenantA.includes('id="navAppointments"'));
+assert(!tenantA.includes('id="panel-appointments"'));
 assert(tenantA.includes("1 bot activo"));
 assert(tenantA.includes("Atención al cliente · Plan Nextfor Aura"));
 assert(tenantA.includes("Versión v-test-panel"));
@@ -48,6 +50,8 @@ assert(tenantB.includes("<title>Panel de control · Empresa B</title>"));
 assert(tenantB.includes('<h1 id="brandName">Empresa B</h1>'));
 assert(tenantB.includes('id="bot-support"'));
 assert(!tenantB.includes('id="bot-appointments"'));
+assert(!tenantB.includes('id="navAppointments"'));
+assert(!tenantB.includes('id="panel-appointments"'));
 assert(tenantB.includes("Atención al cliente · Plan Nextfor Uno"));
 assert(tenantB.includes('INITIAL_TAB="summary"'));
 assert(!tenantB.includes(">Empresa A<"));
@@ -62,6 +66,8 @@ assert(!staleCombinedBot.includes('id="bot-appointments"'));
 assert(!staleCombinedBot.includes('id="mobile-bot-appointments"'));
 assert(!staleCombinedBot.includes('id="mnav-appointments"'));
 assert(!staleCombinedBot.includes('id="mnav-appointment-chats"'));
+assert(!staleCombinedBot.includes('id="navAppointments"'));
+assert(!staleCombinedBot.includes('id="panel-appointments"'));
 assert(staleCombinedBot.includes('INITIAL_TAB="summary"'));
 
 const escaped = render({

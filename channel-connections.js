@@ -152,6 +152,7 @@ function createOAuthState(secret, input, now) {
     channel: cleanChannel(input && input.channel),
     actor_id: cleanText(input && input.actor_id, 200),
     actor: cleanText(input && input.actor, 200),
+    redirect_uri: cleanText(input && input.redirect_uri, 500),
     nonce: crypto.randomBytes(24).toString("base64url"),
     exp: Number(now || Date.now()) + 10 * 60 * 1000
   })).toString("base64url");
@@ -169,6 +170,7 @@ function readOAuthState(secret, token, now) {
     if (payload.v !== 1 || !payload.exp || payload.exp < Number(now || Date.now())) return null;
     payload.tenant_id = cleanTenantId(payload.tenant_id);
     payload.channel = cleanChannel(payload.channel);
+    payload.redirect_uri = cleanText(payload.redirect_uri, 500);
     if (!payload.tenant_id || !payload.channel || !payload.nonce || !payload.actor_id) return null;
     return payload;
   } catch (_) {
@@ -402,9 +404,11 @@ class MetaChannelProvider {
     return channel !== "whatsapp" || !!this.whatsappConfigId;
   }
 
-  authorizationUrl(channel, state) {
+  authorizationUrl(channel, state, options) {
     channel = cleanChannel(channel);
     if (!this.configured(channel)) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
+    const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
+    if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
     const scopes = {
       whatsapp: ["business_management", "whatsapp_business_management", "whatsapp_business_messaging"],
       instagram: ["pages_show_list", "pages_read_engagement", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"],
@@ -412,7 +416,7 @@ class MetaChannelProvider {
     }[channel];
     const url = new URL(this.dialogOrigin + "/" + this.graphVersion + "/dialog/oauth");
     url.searchParams.set("client_id", this.appId);
-    url.searchParams.set("redirect_uri", this.redirectUri);
+    url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("state", state);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", scopes.join(","));
@@ -434,13 +438,15 @@ class MetaChannelProvider {
     }, settings));
   }
 
-  async exchangeCode(code) {
+  async exchangeCode(code, options) {
+    const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
+    if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
     try {
       const response = await this.axios.get(this.graphOrigin + "/" + this.graphVersion + "/oauth/access_token", {
         params: {
           client_id: this.appId,
           client_secret: this.appSecret,
-          redirect_uri: this.redirectUri,
+          redirect_uri: redirectUri,
           code: cleanText(code, 2000)
         },
         timeout: 10000
@@ -824,7 +830,7 @@ function createChannelConnectionService(options) {
       });
     },
 
-    async begin(tenantId, channel, actor, state) {
+    async begin(tenantId, channel, actor, state, options) {
       const clean = assertTenantChannel(tenantId, channel);
       if (!provider || !provider.configured(clean.channel)) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
       const legacy = legacyFor(clean.tenantId, clean.channel);
@@ -842,13 +848,13 @@ function createChannelConnectionService(options) {
         actor: actorLabel(actor),
         details: {}
       });
-      return provider.authorizationUrl(clean.channel, state);
+      return provider.authorizationUrl(clean.channel, state, options);
     },
 
     async completeAuthorization(input) {
       const clean = assertTenantChannel(input && input.tenant_id, input && input.channel);
       try {
-        const accessToken = await provider.exchangeCode(input.code);
+        const accessToken = await provider.exchangeCode(input.code, { redirectUri: input && input.redirect_uri });
         const candidates = await provider.discoverAssets(clean.channel, accessToken);
         if (!candidates.length) throw new ChannelConnectionError("no_eligible_assets", 422);
         if (candidates.length === 1) {

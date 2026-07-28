@@ -70,7 +70,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v198-production-setup-catalog-refresh"));
+    assert((await response.text()).includes("v208-meta-panel-origin"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

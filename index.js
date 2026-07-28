@@ -194,6 +194,20 @@ function isSameOriginRequestFromAny(req, configuredOrigins) {
   return configuredOrigins.some(function (origin) { return isSameOriginRequest(req, origin); });
 }
 
+function firstForwardedHeader(value) {
+  return String(value || "").split(",")[0].trim();
+}
+
+function requestHeaderOrigin(value) {
+  const header = firstForwardedHeader(value);
+  if (!header) return "";
+  try {
+    return configuredHttpsOrigin(new URL(header).origin);
+  } catch (_) {
+    return "";
+  }
+}
+
 const app = express();
 app.disable("x-powered-by");
 // Every deployed environment (Production and Staging) runs behind Cloudflare + Render.
@@ -211,7 +225,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v205-shopify-guided-connect";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v208-meta-panel-origin";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5146,6 +5160,24 @@ function customerChannelConnectionsVisibleForAuth(auth) {
   return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
 }
 
+function channelConnectionCallbackUrlForRequest(req) {
+  const fallbackOrigin = CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL;
+  const forwardedOrigin = configuredHttpsOrigin(
+    (firstForwardedHeader(req.get("x-forwarded-proto")) || req.protocol || "https") +
+    "://" +
+    (firstForwardedHeader(req.get("x-forwarded-host")) || req.get("host") || "")
+  );
+  const requestOrigin = requestHeaderOrigin(req.get("x-nextforia-panel-origin")) ||
+    requestHeaderOrigin(req.get("origin")) ||
+    requestHeaderOrigin(req.get("referer")) ||
+    forwardedOrigin;
+  const allowedOrigins = Array.from(new Set(ADMIN_ALLOWED_BASE_URLS.filter(Boolean)));
+  const origin = requestOrigin && allowedOrigins.includes(requestOrigin)
+    ? requestOrigin
+    : fallbackOrigin;
+  return origin ? origin + "/admin/channel-connections/meta/callback" : CHANNEL_CONNECTION_CALLBACK_URL;
+}
+
 function customerSetupCompletionPath(auth, source) {
   const cleanSource = String(source || "onboarding").replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || "onboarding";
   return customerChannelConnectionsVisibleForAuth(auth)
@@ -8101,13 +8133,17 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   const channel = cleanChannel(req.params.channel);
   const tenantId = customerTenantForAuth(auth);
   try {
+    const redirectUri = channelConnectionCallbackUrlForRequest(req);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenantId,
       channel,
       actor_id: auth.user_id || auth.username,
-      actor: channelConnectionActor(auth)
+      actor: channelConnectionActor(auth),
+      redirect_uri: redirectUri
     });
-    const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state);
+    const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state, {
+      redirectUri
+    });
     res.json({ ok: true, authorization_url: authorizationUrl });
   } catch (error) {
     console.error("customer channel connect start error:", error.message);
@@ -8141,6 +8177,7 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
       tenant_id: state.tenant_id,
       channel: state.channel,
       actor: state.actor,
+      redirect_uri: state.redirect_uri || channelConnectionCallbackUrlForRequest(req),
       code: req.query.error ? "" : req.query.code
     });
     res.redirect("/admin/panel?tab=channels&connection=" +

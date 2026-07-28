@@ -78,7 +78,8 @@ async function login(base, body) {
       CUSTOMER_ACCESS_V2_ENABLED: "1",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
-      CUSTOMER_PANEL_BASE_URL: "https://staging.nextforia.com",
+      PUBLIC_BASE_URL: "https://nextforia.com",
+      CUSTOMER_PANEL_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
       CHANNEL_CONNECTIONS_TEST_MODE: "1",
       META_APP_ID: "123456789",
@@ -137,13 +138,21 @@ async function login(base, body) {
 
     response = await fetch(base + "/admin/panel/channel-connections/instagram/connect", {
       method: "POST",
-      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      headers: {
+        "content-type": "application/json",
+        origin: "https://nextforia.com",
+        "x-nextforia-panel-origin": "https://nextforia.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "nextforia.com",
+        cookie: userA.cookie
+      },
       body: JSON.stringify({ tenant_id: "tenant-b" })
     });
     assert.strictEqual(response.status, 200);
     body = await response.json();
     const authorization = new URL(body.authorization_url);
     assert.strictEqual(authorization.hostname, "www.facebook.com");
+    assert.strictEqual(authorization.searchParams.get("redirect_uri"), "https://nextforia.com/admin/channel-connections/meta/callback");
     assert(authorization.searchParams.get("scope").includes("instagram_manage_messages"));
     assert(!body.authorization_url.includes("channel-e2e-meta-app-secret-value"));
 

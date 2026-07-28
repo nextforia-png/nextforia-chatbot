@@ -3,6 +3,7 @@
 const assert = require("assert");
 const {
   CUSTOMER_SETUP_QUESTIONS,
+  CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS,
   SETUP_REVIEW_STATUSES,
   buildCustomerServiceSystemPrompt,
   buildCoverageConversationContext,
@@ -143,6 +144,12 @@ assert.strictEqual(generatedConfiguration.commerce_integration_status, "requeste
 assert.match(generatedConfiguration.system_prompt, /empresa-completa\.myshopify\.com/);
 assert.match(generatedConfiguration.system_prompt, /No gestiones citas/);
 assert.match(generatedConfiguration.system_prompt, /Empresa Completa/);
+assert.match(generatedConfiguration.deployment_instructions, /Venta con y sin envío/);
+assert.match(generatedConfiguration.deployment_instructions, /setup_goal = both/);
+assert.doesNotMatch(generatedConfiguration.deployment_instructions, /RAV Toys/);
+assert.match(generatedConfiguration.system_prompt, /DESPLIEGUE Y QA/);
+assert.match(generatedConfiguration.system_prompt, /Crear respaldo de la base de datos/);
+assert.strictEqual(CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS, generatedConfiguration.deployment_instructions);
 assert.doesNotMatch(JSON.stringify(generatedConfiguration), /APPOINTMENT-SECRET-MARKER/);
 assert.doesNotMatch(JSON.stringify(generatedConfiguration), /APPOINTMENT-ONLY-RULE/);
 const editedConfiguration = normalizeCustomerServiceConfiguration(Object.assign({}, generatedConfiguration, {

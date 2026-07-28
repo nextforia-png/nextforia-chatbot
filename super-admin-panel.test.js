@@ -83,6 +83,7 @@ assert.match(html, /espera aprobación de Super Admin/);
 assert.match(html, /Construir configuración/);
 assert.match(html, /Aprobar para Testing/);
 assert.match(html, /Borrador de Customer Service/);
+assert.match(html, /Despliegue y QA/);
 assert.match(html, /Appointment Setup queda reservado exclusivamente/);
 assert.match(html, /Shopify y WordPress/);
 assert.match(html, /Estado del catálogo/);

@@ -172,6 +172,11 @@ configuración que ya estaba en `Testing` la devuelven a `Building` y exigen otr
 aprobación. Este flujo no ofrece acción `Live` ni publica instrucciones en
 conversaciones reales.
 
+El borrador de Customer Service incluye la sección interna `Despliegue y QA`, que
+se muestra a Super Admin y pasa al prompt/configuración revisada del bot. Esta
+sección es genérica para cualquier cliente y no contiene referencias a un tenant
+piloto.
+
 ## Integración comercial en el setup
 
 Customer Service pregunta si el negocio usa Shopify, WordPress + WooCommerce,
@@ -195,6 +200,53 @@ transaccional de pedidos requiere WooCommerce u otra integración de pedidos.
 orden, estado activo, obligatoriedad, tipo y etiqueta. Esto permite que Super Admin
 pueda administrar preguntas en una fase posterior sin cambiar la forma de las
 respuestas existentes.
+
+## 14. Despliegue a Staging y Producción
+
+Implementar primero en **Staging** para validar que los cambios funcionan correctamente
+y no afectan el onboarding existente.
+
+### Pruebas obligatorias en Staging
+
+- Venta con y sin envío.
+- Diferentes medios de pago.
+- Recepción de comprobantes pendientes de validación.
+- Producto agotado.
+- Pedido no encontrado.
+- Cliente fuera de cobertura.
+- Escalamiento sin humano disponible.
+- Flujo `setup_goal = both`.
+- Ausencia de preguntas duplicadas.
+- Guardado automático y recuperación del progreso.
+- Consentimiento de datos.
+- Edición del resumen final.
+- Compatibilidad con datos existentes.
+
+### Paso a Producción
+
+Cuando todas las pruebas sean satisfactorias:
+
+1. Crear respaldo de la base de datos y configuración actual.
+2. Ejecutar las migraciones necesarias de forma segura.
+3. Desplegar el onboarding actualizado a **Producción**.
+4. Probar nuevamente el recorrido completo en Producción.
+5. Confirmar que el Customer Panel y los flujos existentes siguen funcionando.
+6. Mantener un procedimiento de rollback disponible.
+
+**Esta instrucción autoriza el despliegue a Producción una vez superadas las pruebas
+de Staging.**
+
+### Entrega final
+
+Reportar:
+
+- URL de Staging.
+- URL de Producción.
+- Cambios realizados.
+- Variables creadas o modificadas.
+- Migraciones ejecutadas.
+- Pruebas realizadas.
+- Riesgos, limitaciones o pendientes encontrados.
 
 ## Próximo trabajo de Super Admin
 

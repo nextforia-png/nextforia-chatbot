@@ -1104,6 +1104,7 @@ var CUSTOMER_SERVICE_CONFIG_FIELDS=[
 ["handoff_cases","Cuándo escalar","textarea"],["handoff_contact","Contacto humano","textarea"],["support_hours","Horario humano","textarea"],
 ["commerce_platform","Plataforma de comercio","text"],["store_url","Tienda o sitio","text"],["catalog_ready","Estado del catálogo","text"],
 ["commerce_integration_intent","Intención de conexión","text"],["commerce_integration_status","Estado de conexión","text"],["commerce_access_owner","Responsable de autorización","text"],["channels","Canales","text"],
+["deployment_instructions","Despliegue y QA","textarea"],
 ["foreign_number_location_check","Confirmar ubicación de números extranjeros","checkbox"],["orders_required","Consultar pedidos cuando aplique","checkbox"]
 ];
 function setupConfigurationInput(definition,configuration){var key=definition[0],labelText=definition[1],type=definition[2],field=el("div","setup-review-field "+(type==="textarea"?"wide":""));field.appendChild(el("label",null,labelText));var input=document.createElement(type==="textarea"?"textarea":"input");if(type==="checkbox"){input.type="checkbox";input.checked=configuration[key]!==false;}else{input.type="text";input.value=key==="channels"?(configuration.channels||[]).join(", "):(configuration[key]==null?"":String(configuration[key]));}input.dataset.configField=key;field.appendChild(input);return field;}

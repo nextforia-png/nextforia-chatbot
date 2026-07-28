@@ -218,6 +218,45 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
 const QUESTION_TYPES = Object.freeze(["text", "number", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
 const SETUP_REVIEW_STATUSES = Object.freeze(["incomplete", "ready", "building", "testing", "live"]);
 const CUSTOMER_SERVICE_CONFIGURATION_VERSION = 1;
+const CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS = [
+  "14. Despliegue a Staging y Producción",
+  "",
+  "Implementar primero en Staging para validar que los cambios funcionan correctamente y no afectan el onboarding existente.",
+  "",
+  "Pruebas obligatorias en Staging:",
+  "- Venta con y sin envío.",
+  "- Diferentes medios de pago.",
+  "- Recepción de comprobantes pendientes de validación.",
+  "- Producto agotado.",
+  "- Pedido no encontrado.",
+  "- Cliente fuera de cobertura.",
+  "- Escalamiento sin humano disponible.",
+  "- Flujo setup_goal = both.",
+  "- Ausencia de preguntas duplicadas.",
+  "- Guardado automático y recuperación del progreso.",
+  "- Consentimiento de datos.",
+  "- Edición del resumen final.",
+  "- Compatibilidad con datos existentes.",
+  "",
+  "Paso a Producción:",
+  "1. Crear respaldo de la base de datos y configuración actual.",
+  "2. Ejecutar las migraciones necesarias de forma segura.",
+  "3. Desplegar el onboarding actualizado a Producción.",
+  "4. Probar nuevamente el recorrido completo en Producción.",
+  "5. Confirmar que el Customer Panel y los flujos existentes siguen funcionando.",
+  "6. Mantener un procedimiento de rollback disponible.",
+  "",
+  "Esta instrucción autoriza el despliegue a Producción una vez superadas las pruebas de Staging.",
+  "",
+  "Entrega final:",
+  "- URL de Staging.",
+  "- URL de Producción.",
+  "- Cambios realizados.",
+  "- Variables creadas o modificadas.",
+  "- Migraciones ejecutadas.",
+  "- Pruebas realizadas.",
+  "- Riesgos, limitaciones o pendientes encontrados."
+].join("\n");
 const QUESTION_SECTIONS = Object.freeze([
   "goal",
   "business",
@@ -645,6 +684,9 @@ function buildCustomerServiceSystemPrompt(configuration) {
     ["Consulta de pedidos solicitada", config.orders_required ? "Sí" : "No"],
     ["Canales", Array.isArray(config.channels) ? config.channels.join(", ") : ""]
   ]);
+  addConfigurationSection(lines, "DESPLIEGUE Y QA", [
+    ["Instrucciones", config.deployment_instructions]
+  ]);
   return lines.join("\n");
 }
 
@@ -696,6 +738,7 @@ function normalizeCustomerServiceConfiguration(input, meta) {
     commerce_access_owner: text(source.commerce_access_owner, 160),
     orders_required: source.orders_required !== false,
     channels,
+    deployment_instructions: text(source.deployment_instructions, 10000) || CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS,
     generated_at: text(source.generated_at, 40) || now,
     updated_at: now,
     updated_by: text(meta && meta.actor != null ? meta.actor : source.updated_by, 160),
@@ -747,7 +790,8 @@ function generateCustomerServiceConfiguration(input, meta) {
     commerce_integration_status: answers.commerce.integration_status,
     commerce_access_owner: answers.commerce.access_owner,
     orders_required: answers.commerce.orders_required,
-    channels: enabledChannels
+    channels: enabledChannels,
+    deployment_instructions: CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS
   }, {
     actor: meta && meta.actor,
     lifecycle: "draft",
@@ -951,6 +995,7 @@ function buildCoverageConversationContext(record) {
 
 module.exports = {
   CUSTOMER_SERVICE_CONFIGURATION_VERSION,
+  CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS,
   CUSTOMER_SETUP_QUESTIONS,
   DEFAULT_ONBOARDING,
   QUESTION_SECTIONS,

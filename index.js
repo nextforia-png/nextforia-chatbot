@@ -209,7 +209,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v197-production-channel-commerce-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v198-production-setup-catalog-refresh";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6981,7 +6981,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
   const tenantId = customerTenantForAuth(auth);
   const record = await loadClientOnboarding(false, tenantId);
-  const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const questionnaire = await loadCustomerSetupQuestionnaire(true);
   const reviewStatus = record.setup_review && record.setup_review.status || "";
   if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
     res.redirect(await customerPanelNextPathAfterSetup(auth, record, "onboarding"));
@@ -7087,7 +7087,7 @@ app.get("/admin/client-onboarding/data", async (req, res) => {
   }
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
-  const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const questionnaire = await loadCustomerSetupQuestionnaire(true);
   const onboarding = await loadClientOnboarding(false, tenantId);
   res.json({
     ok: true,
@@ -7319,7 +7319,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
 	      tenant_id: tenantId,
 	      status: requestedStatus,
 	      updated_by: auth.name || auth.username,
-	      questionnaire: await loadCustomerSetupQuestionnaire(false)
+	      questionnaire: await loadCustomerSetupQuestionnaire(true)
 	    });
 	    ensureChatbotOnlyOnboardingAnswers(candidate.answers);
     tenantId = onboardingTenantIdForSave(auth, candidate.answers);
@@ -7328,7 +7328,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
         tenant_id: tenantId,
         status: requestedStatus,
         updated_by: auth.name || auth.username,
-        questionnaire: await loadCustomerSetupQuestionnaire(false)
+        questionnaire: await loadCustomerSetupQuestionnaire(true)
       });
       ensureChatbotOnlyOnboardingAnswers(candidate.answers);
     }

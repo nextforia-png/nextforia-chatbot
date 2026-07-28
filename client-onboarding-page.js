@@ -36,8 +36,8 @@ module.exports = function renderClientOnboarding(res, options) {
   ];
   const demoBots = chatbotOnlyRelease ? allDemoBots.filter(function (item) { return visibleBotIds.indexOf(String(item.id).toLowerCase()) >= 0; }) : allDemoBots;
   const allDemoPlans = [
-    { id: "nextfor-uno", bot_id: "customer_service", nombre: "Nextfor Uno", etiqueta: "Desde $49.900", descripcion: "Atención automática por WhatsApp 24/7 para preguntas repetitivas.", precio_setup: 0, precio_mensual: 49900, beneficios: ["WhatsApp 24/7", "Captura de interesados", "Panel básico"] },
-    { id: "nextfor-aura", bot_id: "customer_service", nombre: "Nextfor Aura", etiqueta: "Atención + ventas", descripcion: "Atiende, orienta y vende por tus canales.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Ventas conversacionales", "Historial de clientes", "Métricas del panel"] },
+    { id: "nextfor-uno", bot_id: "atencion-cliente", nombre: "Nextfor Uno", etiqueta: "Desde $49.900", descripcion: "Atención automática por WhatsApp 24/7 para preguntas repetitivas.", precio_setup: 0, precio_mensual: 49900, beneficios: ["WhatsApp 24/7", "Captura de interesados", "Panel básico"] },
+    { id: "nextfor-aura", bot_id: "atencion-cliente", nombre: "Nextfor Aura", etiqueta: "Atención + ventas", descripcion: "Atiende, orienta y vende por tus canales.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Ventas conversacionales", "Historial de clientes", "Métricas del panel"] },
     { id: "nextfor-tempo", bot_id: "appointments", nombre: "Nextfor Tempo", etiqueta: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", precio_setup: 0, precio_mensual: 299900, beneficios: ["Agenda 24/7", "Recordatorios", "Conexión con calendario"] },
     { id: "nextfor-atlas", bot_id: "", nombre: "Nextfor Atlas", etiqueta: "Todo en uno", descripcion: "Atiende, vende y agenda en un solo lugar.", precio_setup: 0, precio_mensual: 499900, beneficios: ["Atención 24/7", "Ventas", "Citas y reservas"] },
     { id: "nextfor-signature", bot_id: "", nombre: "Nextfor Signature", etiqueta: "A definir", descripcion: "Solución personalizada para procesos, canales e integraciones a la medida.", precio_setup: 0, precio_mensual: 0, beneficios: ["Propuesta personalizada", "Integraciones a medida", "Alcance definido con el cliente"] }
@@ -45,7 +45,10 @@ module.exports = function renderClientOnboarding(res, options) {
   const demoPlans = chatbotOnlyRelease ? allDemoPlans.filter(function (item) { return visiblePlanIds.indexOf(String(item.id).toLowerCase()) >= 0; }) : allDemoPlans;
   const rawPlans = Array.isArray(options.plans) && options.plans.length ? options.plans : (plan ? [plan] : (demo ? demoPlans : []));
   const rawBots = Array.isArray(options.bots) && options.bots.length ? options.bots : (bot ? [bot] : (demo ? demoBots : []));
-  const plans = chatbotOnlyRelease ? rawPlans.filter(function (item) { return visiblePlanIds.indexOf(String(item && item.id || "").toLowerCase()) >= 0; }) : rawPlans;
+  const plans = chatbotOnlyRelease ? visiblePlanIds.map(function (id) {
+    return rawPlans.find(function (item) { return String(item && item.id || "").toLowerCase() === id; })
+      || allDemoPlans.find(function (item) { return String(item && item.id || "").toLowerCase() === id; });
+  }).filter(Boolean) : rawPlans;
   const bots = chatbotOnlyRelease ? rawBots.filter(function (item) { return visibleBotIds.indexOf(String(item && item.id || "").toLowerCase()) >= 0; }) : rawBots;
   function isUnoPlan(item) {
     const raw = String((item && (item.id || item.slug || item.nombre || item.name)) || "").toLowerCase();

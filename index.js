@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v234-meta-oauth-nextforia-callback";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v235-super-admin-channel-alias";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4800,7 +4800,13 @@ function setupChannelIsConnected(channels, channel) {
 
 async function setupReviewChannels(tenantId) {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) return [];
-  return channelConnectionService.listTenant(tenantId);
+  const cleanTenant = cleanTenantId(tenantId);
+  const internalTenantId = CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES.get(cleanTenant);
+  // Customer Panel already uses this restricted alias so RAV's new account can
+  // reuse the protected legacy WhatsApp/Instagram/Messenger connections. Super
+  // Admin must read the same physical channel state before deciding Live.
+  const channelTenantId = internalTenantId === DEFAULT_TENANT_ID ? internalTenantId : cleanTenant;
+  return channelConnectionService.listTenant(channelTenantId);
 }
 
 function launchChecklistItem(ok, code, label, detail, type) {

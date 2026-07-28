@@ -747,6 +747,7 @@ body.conversations-view .toolbar .periods{display:none}
 body.conversations-view .convImpact{display:inline-flex}
 body.conversations-view .content{padding:0;max-width:none}
 body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;grid-template-columns:372px minmax(440px,1fr) 296px;border:0;border-radius:0;box-shadow:none}
+body.conversations-view .listColumn,body.conversations-view .chatColumn,body.conversations-view .profileColumn{min-width:0;overflow:hidden}
 .convListControls{padding:16px 16px 12px;display:grid;gap:12px;border-bottom:1px solid var(--line)}
 .convListControls .searchBox{height:44px;padding:0 13px;border:1.5px solid var(--slate-300);border-radius:12px;background:#F8FAFC;display:flex;align-items:center;gap:9px}
 .convListControls .searchBox input{border:0;background:transparent;padding:0;font-size:14px;min-width:0}
@@ -778,6 +779,7 @@ body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;
 .contactAvatar.big{width:64px;height:64px;border-radius:18px;font-size:20px}
 .threadIdentity{min-width:0;flex:1}
 .threadTop strong{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.threadTop time{flex:0 0 auto}
 .thread p{font-size:12.5px;margin-top:2px}
 .threadStatus{display:flex;align-items:center;gap:8px;margin-top:10px;padding-left:55px;min-width:0}
 .threadStatus small{color:var(--slate-500);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -796,15 +798,15 @@ body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;
 .liveDot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px rgba(18,168,244,.18)}
 .chatHead{padding:15px 22px;background:#fff;gap:13px;flex-wrap:nowrap}
 .chatIdentity{flex:1;min-width:0}
-.chatIdentity h3{font-size:16px}
-.chatIdentity p{display:flex;align-items:center;gap:6px;font-size:12.5px}
+.chatIdentity h3{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chatIdentity p{display:flex;align-items:center;gap:6px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .chatIdentity p:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green-500)}
-.chatStatusPill{font-size:12px;padding:5px 12px}
+.chatStatusPill{font-size:12px;padding:5px 12px;flex:0 0 auto}
 .chatCloseButton{width:38px;height:38px;display:grid;place-items:center;flex:0 0 auto;border:1px solid var(--line);border-radius:11px;background:#fff;color:var(--slate-500);font-size:22px;line-height:1;cursor:pointer;transition:background .16s ease,color .16s ease,border-color .16s ease}
 .chatCloseButton:hover{background:var(--slate-100);border-color:var(--slate-300);color:var(--navy-800)}
 .chatCloseButton:focus-visible{outline:3px solid rgba(18,168,244,.2);outline-offset:2px}
-.messages{padding:22px;background:#F8FAFC;gap:14px}
-.bubble{max-width:74%;padding:11px 15px;font-size:14px;line-height:1.5;border-radius:16px;box-shadow:0 3px 10px rgba(8,22,52,.04)}
+.messages{padding:22px;background:#F8FAFC;gap:14px;min-width:0}
+.bubble{max-width:74%;padding:11px 15px;font-size:14px;line-height:1.5;border-radius:16px;box-shadow:0 3px 10px rgba(8,22,52,.04);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 .bubble.customer{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
 .bubble.bot{align-self:flex-end;background:var(--cyan-100);border:1px solid #CDEBFB;border-bottom-right-radius:4px;color:var(--navy-800)}
 .bubble.human{align-self:flex-end;background:linear-gradient(135deg,var(--navy-700),var(--cyan-500));border-bottom-right-radius:4px;color:#fff}
@@ -855,8 +857,8 @@ body.conversations-view .inboxShell{height:calc(100vh - 108px);min-height:600px;
 .statusLine{padding:6px 0 0;min-height:20px}
 .profile{padding:22px 20px;gap:20px}
 .profileIdentity{display:flex;flex-direction:column;align-items:center;text-align:center;gap:7px}
-.profileIdentity h3{font-size:17px;font-weight:950}
-.profileIdentity p{color:var(--slate-500);font-size:12.5px}
+.profileIdentity h3{font-size:17px;font-weight:950;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.profileIdentity p{color:var(--slate-500);font-size:12.5px;max-width:100%;overflow-wrap:anywhere}
 .copyContact{border:1px solid var(--slate-300);background:#fff;border-radius:999px;color:var(--navy-700);padding:6px 13px;font-size:12.5px;font-weight:800}
 .relationshipCard{padding:15px 16px;border-radius:16px;background:linear-gradient(135deg,var(--cyan-050),#EAF7FE);border:1px solid #CDEBFB}
 .relationshipCard>span,.aiUnderstood>span{display:block;font-size:11px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;color:#057BB6;margin-bottom:7px}

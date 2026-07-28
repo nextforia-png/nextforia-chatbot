@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v212-rav-channel-alias";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v213-conversation-internal-filter";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1168,8 +1168,28 @@ function isCustomerMemoryTurn(turn) {
   return tools.includes(CUSTOMER_MEMORY_TOOL);
 }
 
+function isChannelConnectionStateTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(CHANNEL_CONNECTION_STATE_TOOL);
+}
+
+function isShopifySessionStateTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(SHOPIFY_SESSION_STATE_TOOL);
+}
+
 function isInternalAdminTurn(turn) {
-  return isCustomerMetaTurn(turn) || isDashboardCustomerUserTurn(turn) || isBotSetupTurn(turn) || isClientOnboardingTurn(turn) || isCustomerSetupQuestionnaireTurn(turn) || isLegacyClientVisibilityTurn(turn) || isRetargetingEventTurn(turn) || isInstagramProfileTurn(turn) || isCustomerMemoryTurn(turn);
+  return isCustomerMetaTurn(turn) ||
+    isDashboardCustomerUserTurn(turn) ||
+    isBotSetupTurn(turn) ||
+    isClientOnboardingTurn(turn) ||
+    isCustomerSetupQuestionnaireTurn(turn) ||
+    isLegacyClientVisibilityTurn(turn) ||
+    isRetargetingEventTurn(turn) ||
+    isInstagramProfileTurn(turn) ||
+    isCustomerMemoryTurn(turn) ||
+    isChannelConnectionStateTurn(turn) ||
+    isShopifySessionStateTurn(turn);
 }
 
 function normalizeCustomerTags(tags) {

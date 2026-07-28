@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v172-production-generic-setup-deployment";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v173-production-customer-access-reset";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -308,6 +308,9 @@ const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const CUSTOMER_PUBLIC_SIGNUP_ENABLED = process.env.CUSTOMER_PUBLIC_SIGNUP_ENABLED === "1" && process.env.NODE_ENV !== "production";
+const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "2026-07-28T01:05:00.000Z";
+const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-reset-2026-07-28";
 const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && SUPABASE_ENABLED
@@ -3661,10 +3664,22 @@ function signDashboardPayload(payload) {
   return crypto.createHmac("sha256", DASHBOARD_SESSION_SECRET).update(payload).digest("base64url");
 }
 
+function customerAccessResetEnabled() {
+  return process.env.NODE_ENV === "production" || !!process.env.CUSTOMER_ACCESS_RESET_CUTOFF;
+}
+
+function customerAccessCreatedAfterReset(user) {
+  if (!customerAccessResetEnabled()) return true;
+  const cutoff = Date.parse(CUSTOMER_ACCESS_RESET_CUTOFF_ISO);
+  const created = Date.parse(user && user.created_at || "");
+  return Number.isFinite(cutoff) && Number.isFinite(created) && created >= cutoff;
+}
+
 function createDashboardSession(user) {
   if (CUSTOMER_ACCESS_V2_ENABLED && user.user_id && user.email && user.tenant_id) {
     const payloadV2 = Buffer.from(JSON.stringify({
       v: 2,
+      rst: CUSTOMER_ACCESS_SESSION_RESET_VERSION,
       uid: String(user.user_id),
       e: normalizeDashboardUsername(user.email),
       n: normalizeDashboardUsername(user.email),
@@ -3698,6 +3713,7 @@ function readDashboardSession(req) {
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!session.exp || session.exp < Date.now()) return null;
     if (session.v === 2) {
+      if (customerAccessResetEnabled() && session.rst !== CUSTOMER_ACCESS_SESSION_RESET_VERSION) return null;
       const email = normalizeDashboardUsername(session.e);
       const tenantId = cleanTenantId(session.t);
       const userId = String(session.uid || "");
@@ -4162,7 +4178,7 @@ async function listSetupReviewTenants() {
     try {
       const invitations = await customerAccessService.listInvitations();
       invitations.filter(function (invitation) {
-        return invitation && invitation.status === "used" && invitation.tenant_id;
+        return invitation && invitation.tenant_id;
       }).forEach(function (invitation) {
         add({
           id: cleanTenantId(invitation.tenant_id),
@@ -4592,6 +4608,7 @@ async function dashboardUserFromCredentials(username, password, options) {
   if (environmentUser) return environmentUser;
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
     const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    if (customerAccessUser && !customerAccessCreatedAfterReset(customerAccessUser)) return null;
     if (customerAccessUser) return customerAccessUser;
   }
   const customerUser = await loadDashboardCustomerUser(false);
@@ -4932,9 +4949,32 @@ async function buildSuperAdminLeadsPipeline() {
     try { invitations = await customerAccessService.listInvitations(); }
     catch (error) { console.error("lead pipeline invitations error:", error.message); }
   }
-  const usedInvitationByTenant = new Set((invitations || []).filter(function (row) {
-    return row && row.status === "used" && row.tenant_id;
+  const invitationByTenant = new Map();
+  (invitations || []).forEach(function (row) {
+    const tenantId = cleanTenantId(row && row.tenant_id);
+    if (tenantId && !invitationByTenant.has(tenantId)) invitationByTenant.set(tenantId, row);
+  });
+  const invitationAccountByTenant = new Set((invitations || []).filter(function (row) {
+    return row && row.tenant_id;
   }).map(function (row) { return cleanTenantId(row.tenant_id); }));
+  if (invitationByTenant.size) {
+    const existingTenantIds = new Set((tenants || []).map(function (tenant) { return cleanTenantId(tenant && tenant.id); }));
+    invitationByTenant.forEach(function (invitation, tenantId) {
+      if (!tenantId || existingTenantIds.has(tenantId)) return;
+      tenants.push({
+        id: tenantId,
+        company_name: invitation.company_name || tenantId,
+        name: invitation.company_name || tenantId,
+        plan_id: invitation.plan_id || null,
+        assigned_bot_id: invitation.assigned_bot_id || null,
+        status: "setup",
+        admin_email: invitation.admin_email || invitation.email_normalized || null,
+        created_at: invitation.created_at || null,
+        updated_at: invitation.used_at || invitation.delivered_at || invitation.created_at || null
+      });
+      existingTenantIds.add(tenantId);
+    });
+  }
   let billingByTenant = new Map();
   if (PAYMENTS_V1_ENABLED && paymentService) {
     try {
@@ -4979,7 +5019,7 @@ async function buildSuperAdminLeadsPipeline() {
     if (!tenantId || tenant.status === "archivado") continue;
     const activeUsers = Number(tenant.usuarios_activos);
     const onboardingFromScan = onboardingRecordByTenant.get(tenantId) || null;
-    const accountCreated = activeUsers > 0 || usedInvitationByTenant.has(tenantId) || !!(onboardingFromScan && onboardingFromScan.updated_at);
+    const accountCreated = activeUsers > 0 || invitationAccountByTenant.has(tenantId) || !!(onboardingFromScan && onboardingFromScan.updated_at);
     if (!accountCreated) continue;
     let onboarding = onboardingFromScan;
     try { onboarding = onboarding || await loadClientOnboarding(false, tenantId); }
@@ -6080,6 +6120,11 @@ app.post("/admin/customer-invite", async (req, res) => {
 });
 
 app.get("/admin/create-account", async (req, res) => {
+  if (!CUSTOMER_PUBLIC_SIGNUP_ENABLED) {
+    res.status(403).setHeader("content-type", "text/html; charset=utf-8");
+    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Acceso por invitación · Nextfor IA</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#F4F7FB;color:#071832;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px}.card{max-width:620px;background:#fff;border:1px solid #DFE6F0;border-radius:24px;padding:32px;box-shadow:0 24px 60px rgba(7,24,50,.12)}small{color:#00A0F0;font-weight:800;letter-spacing:.12em;text-transform:uppercase}h1{margin:10px 0 12px;font-size:30px;line-height:1.12}p{color:#647289;line-height:1.6}a{display:inline-flex;margin-top:8px;color:#00A0F0;font-weight:800;text-decoration:none}</style></head><body><main class="card"><small>Acceso privado</small><h1>Las cuentas se crean por invitación de NextforIA.</h1><p>No hay registro público. Un Super Admin debe crear el cliente, asignar plan y bot, y enviar la invitación al correo administrador.</p><a href="/admin/panel">Volver al ingreso</a></main></body></html>`);
+    return;
+  }
   if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService) {
     renderCustomerPublicSignup(res, {
       businessHint: req.query.business || "",
@@ -6104,6 +6149,10 @@ app.get("/admin/create-account", async (req, res) => {
 });
 
 app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
+  if (!CUSTOMER_PUBLIC_SIGNUP_ENABLED) {
+    res.status(403).json({ ok: false, error: "public_signup_disabled" });
+    return;
+  }
   if (!CUSTOMER_ACCESS_V2_ENABLED || !customerAccessService || !customerAccessService.createPublicSignup) {
     res.status(404).json({ ok: false, error: "not_found" });
     return;

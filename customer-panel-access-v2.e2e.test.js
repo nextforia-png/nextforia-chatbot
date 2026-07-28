@@ -111,19 +111,11 @@ function signedSessionCookie(secret, user) {
   try {
     await waitForServer(child, port);
     let response = await fetch(base + "/admin/create-account?business=Cl%C3%ADnica%20Demo");
-    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.status, 403);
     const publicSignupHtml = await response.text();
-    assert(publicSignupHtml.includes("Crea tu cuenta"));
-    assert(publicSignupHtml.includes("Clínica Demo"));
-    assert(publicSignupHtml.includes("/admin/create-account"));
-    assert(!publicSignupHtml.includes('id="username"'));
-    assert(!publicSignupHtml.includes('id="bot"'), "public account creation must not ask for bot type");
-    assert(!publicSignupHtml.includes('id="plan"'), "public account creation must not ask for plan");
-    assert(publicSignupHtml.includes('id="contactPhone"'));
-    assert(publicSignupHtml.includes("Tu teléfono o WhatsApp"));
-    assert(publicSignupHtml.includes("El WhatsApp del negocio lo configuramos después."));
-    assert(publicSignupHtml.includes("Estoy listo para que me entrenes"));
-    assert(publicSignupHtml.includes("/admin/assets/lumen-entrenando.png"));
+    assert(publicSignupHtml.includes("Las cuentas se crean por invitación de NextforIA."));
+    assert(!publicSignupHtml.includes('id="contactPhone"'));
+    assert(!publicSignupHtml.includes("Estoy listo para que me entrenes"));
 
     response = await fetch(base + "/admin/client-onboarding-demo");
     assert.strictEqual(response.status, 200);
@@ -150,43 +142,8 @@ function signedSessionCookie(secret, user) {
         password_confirmation: "PublicPassword2026"
       })
     });
-    assert.strictEqual(response.status, 201);
-    const publicSignup = await response.json();
-    assert.strictEqual(publicSignup.user.email, "publica@example.com");
-    assert.strictEqual(publicSignup.tenant.plan_id, "nextfor-uno");
-    assert.strictEqual(publicSignup.tenant.assigned_bot_id, "atencion-cliente");
-    assert.strictEqual(publicSignup.lead.contact_phone, "+57 311 222 3333");
-    assert.strictEqual(publicSignup.lead.onboarding_draft_saved, true);
-    assert.strictEqual(publicSignup.redirect, "/admin/client-onboarding");
-    const publicCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
-    assert.match(publicCookie, /^rav_dashboard_session=/);
-
-    response = await fetch(base + "/admin/client-onboarding/data", {
-      headers: { cookie: publicCookie }
-    });
-    assert.strictEqual(response.status, 200);
-    const publicOnboarding = await response.json();
-    assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_email, "publica@example.com");
-    assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_phone, "+57 311 222 3333");
-    assert.strictEqual(publicOnboarding.onboarding.answers.meta.whatsapp_number, "+57 311 222 3333");
-
-    const publicLogin = await login(base, { email: "publica@example.com", password: "PublicPassword2026" });
-    assert.strictEqual(publicLogin.body.redirect, "/admin/client-onboarding");
-    assert.strictEqual(publicLogin.body.user.tenant_id, publicSignup.tenant.id);
-
-    response = await fetch(base + "/admin/create-account", {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: base },
-      body: JSON.stringify({
-        company_name: "Empresa Pública Duplicada",
-        admin_email: "publica@example.com",
-        contact_phone: "+57 311 222 3333",
-        password: "PublicPassword2026",
-        password_confirmation: "PublicPassword2026"
-      })
-    });
-    assert.strictEqual(response.status, 409);
-    assert.strictEqual((await response.json()).error, "customer_already_exists");
+    assert.strictEqual(response.status, 403);
+    assert.strictEqual((await response.json()).error, "public_signup_disabled");
 
     response = await fetch(base + "/admin/setup/setup-tenant?invite=" + validInviteToken);
     assert.strictEqual(response.status, 200);

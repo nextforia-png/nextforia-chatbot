@@ -22,8 +22,10 @@ assert.match(page.html, /id="email" type="email"/);
 assert.match(page.html, /JSON\.stringify\(\{email:/);
 assert.doesNotMatch(page.html, /id="username"/);
 assert.doesNotMatch(page.html, /Crear una cuenta nueva/);
-assert.match(page.html, /Crea tu cuenta/);
-assert.match(page.html, /\/admin\/create-account/);
+assert.doesNotMatch(page.html, /Crea tu cuenta/);
+assert.doesNotMatch(page.html, /\/admin\/create-account/);
+assert.match(page.html, /Las cuentas nuevas se crean únicamente por invitación de NextforIA/);
+assert.match(page.html, /Solicita una invitación a NextforIA/);
 assert.match(page.html, /\/admin\/panel\?tab=summary/);
 
 const escapedTarget = render({ targetPath: "</script><script>alert(1)</script>" });

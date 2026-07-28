@@ -215,8 +215,10 @@ class SupabaseCustomerAccessStore {
     const rows = await this.rpc("platform_active_tenant_user_by_email_v2", { p_email: normalizeEmail(email) });
     const user = rows[0] || null;
     if (!user || !user.tenant_id) return user;
+    let membership = null;
     try {
-      const response = await this.axios.get(this.url + "/rest/v1/tenants", {
+      const [tenantResponse, membershipResponse] = await Promise.all([
+        this.axios.get(this.url + "/rest/v1/tenants", {
         params: {
           select: "id,company_name,plan_id,assigned_bot_id,status",
           id: "eq." + cleanIdentifier(user.tenant_id),
@@ -224,14 +226,28 @@ class SupabaseCustomerAccessStore {
         },
         headers: this.headers,
         timeout: 8000
-      });
-      const tenant = Array.isArray(response.data) ? response.data[0] : null;
+        }),
+        this.axios.get(this.url + "/rest/v1/tenant_users", {
+          params: {
+            select: "user_id,tenant_id,email_normalized,status,active,created_at,updated_at",
+            user_id: "eq." + user.user_id,
+            tenant_id: "eq." + cleanIdentifier(user.tenant_id),
+            limit: 1
+          },
+          headers: this.headers,
+          timeout: 8000
+        }).catch(function () { return { data: [] }; })
+      ]);
+      const tenant = Array.isArray(tenantResponse.data) ? tenantResponse.data[0] : null;
+      membership = Array.isArray(membershipResponse.data) ? membershipResponse.data[0] : null;
       if (!tenant || tenant.id !== user.tenant_id) throw new Error("tenant_context_unavailable");
       return Object.assign({}, user, {
         company_name: tenant.company_name,
         plan_id: tenant.plan_id,
         assigned_bot_id: tenant.assigned_bot_id,
-        tenant_status: tenant.status
+        tenant_status: tenant.status,
+        created_at: membership && membership.created_at || user.created_at || null,
+        updated_at: membership && membership.updated_at || user.updated_at || null
       });
     } catch (error) {
       throw mapStoreError(error && error.response && error.response.data || error);
@@ -546,7 +562,9 @@ function createCustomerAccessService(options) {
       company_name: user.company_name || null,
       plan_id: user.plan_id || null,
       assigned_bot_id: user.assigned_bot_id || null,
-      tenant_status: user.tenant_status || null
+      tenant_status: user.tenant_status || null,
+      created_at: user.created_at || null,
+      updated_at: user.updated_at || null
     };
   }
 

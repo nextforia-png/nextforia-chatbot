@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v227-super-admin-strict-delete-filter";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v228-super-admin-latest-setup-filter";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4632,12 +4632,18 @@ async function listSetupReviewTenants() {
       console.error("setup review invitation fallback error:", error.message);
     }
   }
+  const latestDeletedTenantIds = new Set();
   try {
     const onboardingRecords = await listRecentClientOnboardingRecords(200);
     onboardingRecords.forEach(function (record) {
+      const tenantId = cleanTenantId(record.tenant_id);
+      if (record.setup_deleted === true) {
+        if (tenantId) latestDeletedTenantIds.add(tenantId);
+        return;
+      }
       const answers = record.answers || {};
       add({
-        id: cleanTenantId(record.tenant_id),
+        id: tenantId,
         company_name: answers.business && answers.business.brand_name || record.tenant_id,
         name: answers.business && answers.business.brand_name || record.tenant_id,
         plan_id: null,
@@ -4649,9 +4655,8 @@ async function listSetupReviewTenants() {
   } catch (error) {
     console.error("setup review onboarding fallback error:", error.message);
   }
-  const deletedTenantIds = await fetchSetupReviewDeletedTenantIds();
   return tenants.filter(function (tenant) {
-    return tenant && tenant.id && !deletedTenantIds.has(cleanTenantId(tenant.id));
+    return tenant && tenant.id && !latestDeletedTenantIds.has(cleanTenantId(tenant.id));
   });
 }
 
@@ -5805,12 +5810,15 @@ async function buildSuperAdminLeadsPipeline() {
   let onboardingRecordByTenant = new Map();
   try {
     const onboardingRecords = await listRecentClientOnboardingRecords(200);
-    onboardingRecordByTenant = new Map(onboardingRecords.map(function (record) {
+    onboardingRecordByTenant = new Map(onboardingRecords.filter(function (record) {
+      return !(record && record.setup_deleted === true);
+    }).map(function (record) {
       return [cleanTenantId(record.tenant_id), record];
     }).filter(function (entry) { return !!entry[0]; }));
     const existingTenantIds = new Set((tenants || []).map(function (tenant) { return cleanTenantId(tenant && tenant.id); }));
     onboardingRecords.forEach(function (record) {
       const tenantId = cleanTenantId(record.tenant_id);
+      if (record.setup_deleted === true) return;
       if (!tenantId || existingTenantIds.has(tenantId)) return;
       const answers = record.answers || {};
       tenants.push({
@@ -5830,13 +5838,11 @@ async function buildSuperAdminLeadsPipeline() {
     console.error("lead pipeline onboarding scan error:", error.message);
   }
   if (!tenants.length && !onboardingRecordByTenant.size) return empty;
-  const deletedTenantIds = await fetchSetupReviewDeletedTenantIds();
   const rows = [];
   const customers = [];
   for (const tenant of tenants || []) {
     const tenantId = cleanTenantId(tenant && tenant.id);
     if (!tenantId || tenant.status === "archivado") continue;
-    if (deletedTenantIds.has(tenantId)) continue;
     const activeUsers = Number(tenant.usuarios_activos);
     const onboardingFromScan = onboardingRecordByTenant.get(tenantId) || null;
     const accountCreated = activeUsers > 0 || invitationAccountByTenant.has(tenantId) || !!(onboardingFromScan && onboardingFromScan.updated_at);

@@ -1,6 +1,6 @@
 /* eslint-env node */
 
-import { Form, useActionData, useLoaderData } from "react-router";
+import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
@@ -11,6 +11,7 @@ import {
   pairingErrorMessage,
   verifyPairingToken,
 } from "../lib/pairing.server";
+import { pairingTokenFromCookie } from "../lib/pairing-cookie.server";
 import {
   confirmPairingWithBackend,
   loadPairingFromBackend,
@@ -40,15 +41,7 @@ function pairingTokenFromRequest(request) {
   const url = new URL(request.url);
   const direct = String(url.searchParams.get("pairing_token") || "").trim();
   if (direct) return direct;
-  const match = String(request.headers.get("cookie") || "").match(
-    /(?:^|;\s*)nexforia_pairing=([^;]+)/,
-  );
-  if (!match) return "";
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return "";
-  }
+  return pairingTokenFromCookie(request.headers.get("cookie"));
 }
 
 export const loader = async ({ request }) => {
@@ -100,30 +93,8 @@ export const loader = async ({ request }) => {
           pairedAt: pairing.connected_at,
         }
       : null,
-    pairingToken,
     pairingNotice,
   };
-};
-
-export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const formData = await request.formData();
-  const pairingToken = String(formData.get("pairingToken") || "").trim();
-
-  try {
-    const pairing = await pairShopToBot(session, pairingToken);
-
-    return {
-      status: "success",
-      message: "Store connected to the NexforIA bot.",
-      pairing,
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      message: pairingErrorMessage(error),
-    };
-  }
 };
 
 export default function Index() {
@@ -134,69 +105,69 @@ export default function Index() {
     catalogStatus,
     catalogMessage,
     pairing,
-    pairingToken,
     pairingNotice,
   } = useLoaderData();
-  const actionData = useActionData();
 
   const enabledCapabilities = Object.entries(capabilities)
     .filter(([, enabled]) => enabled)
     .map(([name]) => name.replaceAll("_", " "));
 
   return (
-    <s-page heading="NexforIA Commerce">
-      <s-section heading="Shopify connection">
+    <s-page heading="Nextfor IA · Shopify">
+      <s-banner tone={pairing ? "success" : "info"}>
+        {pairing
+          ? "Tu tienda ya está conectada con Nextfor."
+          : "Autoriza Shopify y Nextfor completará la conexión automáticamente."}
+      </s-banner>
+
+      <s-section heading="Tu tienda">
         <s-stack direction="block" gap="base">
           <s-paragraph>
-            Store: <s-text>{shop}</s-text>
+            Tienda: <s-text>{shop}</s-text>
           </s-paragraph>
           <s-paragraph>
-            Catalog: <s-text>{catalogStatus}</s-text>
+            Catálogo: <s-text>{catalogStatus === "Connected" ? "Conectado" : "Requiere revisión"}</s-text>
           </s-paragraph>
-          <s-paragraph>{catalogMessage}</s-paragraph>
+          <s-paragraph>
+            {catalogStatus === "Connected"
+              ? "Shopify confirmó el acceso seguro al catálogo."
+              : catalogMessage}
+          </s-paragraph>
         </s-stack>
       </s-section>
 
-      <s-section heading="NexforIA bot pairing">
+      <s-section heading="Conexión con tu agente">
         <s-stack direction="block" gap="base">
           {pairing ? (
             <>
               <s-paragraph>
-                Connected bot: <s-text>{pairing.botId}</s-text>
+                Estado: <s-text>Conectado</s-text>
               </s-paragraph>
               <s-paragraph>
-                Tenant: <s-text>{pairing.tenantId}</s-text>
+                Nextfor ya puede usar el catálogo y consultar pedidos de esta
+                tienda para atender a tus clientes.
               </s-paragraph>
             </>
           ) : (
             <s-paragraph>
-              Paste the pairing code from NexforIA to connect this store to the
-              customer bot.
+              No necesitas copiar ni solicitar ningún código. Vuelve a Nextfor
+              y usa el botón “Conectar Shopify” para iniciar una conexión nueva
+              y segura.
             </s-paragraph>
           )}
-          {pairingNotice || actionData?.message ? (
-            <s-paragraph>{pairingNotice || actionData.message}</s-paragraph>
+          {pairingNotice ? (
+            <s-paragraph>{pairingNotice}</s-paragraph>
           ) : null}
-          <Form method="post">
-            <s-stack direction="block" gap="base">
-              <s-text-field
-                label="Pairing code"
-                name="pairingToken"
-                defaultValue={pairingToken}
-                autocomplete="off"
-              />
-              <s-button variant="primary" submit>
-                Connect bot
-              </s-button>
-            </s-stack>
-          </Form>
+          <s-link href="https://nextforia.com/admin/panel?tab=channels" target="_top">
+            {pairing ? "Volver al Customer Panel" : "Volver a Nextfor y reintentar"}
+          </s-link>
         </s-stack>
       </s-section>
 
-      <s-section heading="Bot capabilities">
+      <s-section heading="Qué queda habilitado">
         <s-paragraph>
-          This installation prepares NexforIA to search products, check stock,
-          and validate order status without editing store data.
+          Esta instalación permite consultar productos, disponibilidad y estado
+          de pedidos sin editar información de tu tienda.
         </s-paragraph>
         <s-unordered-list>
           {enabledCapabilities.map((capability) => (
@@ -205,17 +176,17 @@ export default function Index() {
         </s-unordered-list>
       </s-section>
 
-      <s-section heading="Permissions">
+      <s-section heading="Permisos">
         <s-paragraph>
-          Granted scopes: {grantedScopes.join(", ") || "Waiting for install"}
+          Permisos autorizados: {grantedScopes.join(", ") || "Esperando autorización"}
         </s-paragraph>
       </s-section>
 
-      <s-section slot="aside" heading="Next step">
+      <s-section slot="aside" heading="Siguiente paso">
         <s-paragraph>
           {pairing
-            ? "Test product search and order tracking from the NexforIA bot dashboard."
-            : "Create a pairing code in NexforIA, then connect this store."}
+            ? "Regresa a Nextfor para continuar la activación de tu agente."
+            : "Regresa al Customer Panel y vuelve a pulsar Conectar Shopify."}
         </s-paragraph>
       </s-section>
     </s-page>

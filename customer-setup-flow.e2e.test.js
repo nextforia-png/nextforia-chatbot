@@ -259,6 +259,8 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("¿Quieres conectar esta tienda con NextforIA?"));
     assert(setupHtml.includes("Conectar Shopify"));
     assert(setupHtml.includes('/admin/integrations/shopify/connect'));
+    assert(setupHtml.includes("Configuración → Dominios"));
+    assert(setupHtml.includes(".myshopify.com"));
     assert(setupHtml.includes("No escribas contraseñas, tokens ni claves privadas aquí"));
     assert(setupHtml.includes("commerce.integration_intent"));
     assert(setupHtml.includes("Atención al cliente: clientes atendidos al mes"));

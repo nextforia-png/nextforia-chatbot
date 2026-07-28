@@ -129,16 +129,16 @@ export function verifyPairingToken(token, options = {}) {
 export function pairingErrorMessage(error) {
   switch (error?.code || error?.message) {
     case "pairing_secret_not_configured":
-      return "Pairing is not configured yet. Add NEXFORIA_PAIRING_SECRET in production.";
+      return "La conexión automática todavía no está configurada.";
     case "expired_pairing_token":
-      return "This pairing code expired. Create a new one from NexforIA.";
+      return "La conexión segura venció. Regresa a Nextfor y pulsa “Conectar Shopify” nuevamente.";
     case "invalid_pairing_signature":
     case "invalid_pairing_payload":
     case "invalid_pairing_token":
-      return "This pairing code is invalid. Create a new one from NexforIA.";
+      return "La conexión segura no es válida. Regresa a Nextfor y vuelve a iniciarla.";
     case "pairing_shop_mismatch":
-      return "This pairing code belongs to a different Shopify store.";
+      return "La tienda no coincide con la elegida en Nextfor. Revisa el dominio .myshopify.com.";
     default:
-      return "Pairing failed. Create a new code from NexforIA and try again.";
+      return "No pudimos completar la conexión. Regresa a Nextfor y vuelve a intentarlo.";
   }
 }

@@ -139,6 +139,75 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   assert.strictEqual(persistedSelection.plan_id, "scale");
   assert.deepStrictEqual(calls.map(function (call) { return call.method; }), ["patch", "get"]);
 
+  // Si la función RPC de Supabase no existe/falla en producción, el respaldo cae
+  // a REST sin exponer token_hash ni hashes de contraseña.
+  const backupCalls = [];
+  const fallbackBackupStore = new SupabaseCatalogStore({
+    url: "https://supabase.example",
+    headers: { apikey: "service-role-test" },
+    axiosClient: {
+      post: async function (url) {
+        backupCalls.push({ method: "post", url: url });
+        throw new Error("PLATFORM_SERVICE_ROLE_REQUIRED");
+      },
+      get: async function (url, options) {
+        backupCalls.push({ method: "get", url: url, params: options.params });
+        if (/\/tenants$/.test(url)) return { data: [{ id: "rav-toys", company_name: "RAV Toys", status: "activo" }] };
+        if (/\/tenant_users$/.test(url)) return { data: [{ user_id: "u1", email_normalized: "ventas@ravtoys.com", role: "admin", status: "active", active: true }] };
+        if (/\/tenant_invitations$/.test(url)) return { data: [{ id: "inv1", email_normalized: "ventas@ravtoys.com", role: "admin", delivery_status: "delivered" }] };
+        if (/\/tenant_access_audit$/.test(url)) return { data: [{ id: 1, action: "invitation_created" }] };
+        return { data: [] };
+      }
+    }
+  });
+  const fallbackBackup = await fallbackBackupStore.tenantBackup("rav-toys");
+  assert.strictEqual(fallbackBackup.tenant.company_name, "RAV Toys");
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(fallbackBackup.invitaciones[0], "token_hash"), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(fallbackBackup.usuarios[0], "password_hash"), false);
+  assert.ok(backupCalls.some(function (call) {
+    return call.method === "get" && /tenant_invitations$/.test(call.url) && !/token_hash/.test(call.params.select);
+  }), "el fallback no pide token_hash al respaldar invitaciones");
+
+  // El borrado también tiene fallback REST: registra auditoría, suelta referencias
+  // y borra invitaciones/usuarios/tenant en orden seguro.
+  const deleteCalls = [];
+  const fallbackDeleteStore = new SupabaseCatalogStore({
+    url: "https://supabase.example",
+    headers: { apikey: "service-role-test" },
+    axiosClient: {
+      post: async function (url, body, options) {
+        deleteCalls.push({ method: "post", url: url, body: body, params: options && options.params });
+        if (/\/rpc\//.test(url)) throw new Error("PLATFORM_SERVICE_ROLE_REQUIRED");
+        return { data: [Object.assign({ id: 99 }, body)] };
+      },
+      get: async function (url, options) {
+        deleteCalls.push({ method: "get", url: url, params: options.params });
+        if (/\/tenants$/.test(url)) return { data: [{ id: "rav-toys", company_name: "RAV Toys", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente", status: "suspendido" }] };
+        if (/\/tenant_invitations$/.test(url)) return { data: [{ id: "inv-a" }, { id: "inv-b" }] };
+        return { data: [] };
+      },
+      patch: async function (url, body, options) {
+        deleteCalls.push({ method: "patch", url: url, body: body, params: options.params });
+        return { data: [] };
+      },
+      delete: async function (url, options) {
+        deleteCalls.push({ method: "delete", url: url, params: options.params });
+        return { data: [] };
+      }
+    }
+  });
+  const fallbackDelete = await fallbackDeleteStore.deleteTenant("rav-toys", "RAV Toys", "santiago");
+  assert.deepStrictEqual(fallbackDelete, { ok: true, tenant_id: "rav-toys", company_name: "RAV Toys" });
+  assert.ok(deleteCalls.some(function (call) {
+    return call.method === "post" && /tenant_access_audit$/.test(call.url) && call.body.action === "tenant_deleted";
+  }), "el fallback audita el borrado");
+  assert.ok(deleteCalls.some(function (call) {
+    return call.method === "patch" && /tenant_access_audit$/.test(call.url) && call.params.invitation_id === "in.(inv-a,inv-b)";
+  }), "el fallback suelta auditoría que apunta a invitaciones");
+  assert.deepStrictEqual(deleteCalls.filter(function (call) { return call.method === "delete"; }).map(function (call) {
+    return call.url.replace("https://supabase.example/rest/v1/", "");
+  }), ["tenant_invitations", "tenant_users", "tenants"]);
+
   await service.upsertPlan({ id: "solo-agenda", nombre: "Solo agenda", bot_id: "agendamiento" }, actor);
   await assert.rejects(function () {
     return service.selectTenantPlan("panaderia-espiga", "solo-agenda", "atencion-cliente", { username: "duenio@espiga.example" });

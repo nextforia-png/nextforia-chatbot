@@ -228,6 +228,58 @@ class SupabaseCatalogStore {
     this.axios = options.axiosClient;
   }
 
+  async restGet(table, params) {
+    try {
+      const response = await this.axios.get(this.url + "/rest/v1/" + table, {
+        params: params || {},
+        headers: this.headers,
+        timeout: 8000
+      });
+      return Array.isArray(response.data) ? response.data : response.data == null ? [] : [response.data];
+    } catch (error) {
+      throw mapStoreError((error && error.response && error.response.data) || error);
+    }
+  }
+
+  async restPatch(table, body, params) {
+    try {
+      const response = await this.axios.patch(this.url + "/rest/v1/" + table, body || {}, {
+        params: params || {},
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      return Array.isArray(response.data) ? response.data : response.data == null ? [] : [response.data];
+    } catch (error) {
+      throw mapStoreError((error && error.response && error.response.data) || error);
+    }
+  }
+
+  async restPost(table, body, params) {
+    try {
+      const response = await this.axios.post(this.url + "/rest/v1/" + table, body || {}, {
+        params: params || {},
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      return Array.isArray(response.data) ? response.data : response.data == null ? [] : [response.data];
+    } catch (error) {
+      throw mapStoreError((error && error.response && error.response.data) || error);
+    }
+  }
+
+  async restDelete(table, params) {
+    try {
+      const response = await this.axios.delete(this.url + "/rest/v1/" + table, {
+        params: params || {},
+        headers: this.headers,
+        timeout: 8000
+      });
+      return Array.isArray(response.data) ? response.data : response.data == null ? [] : [response.data];
+    } catch (error) {
+      throw mapStoreError((error && error.response && error.response.data) || error);
+    }
+  }
+
   async rpc(name, payload) {
     try {
       const response = await this.axios.post(this.url + "/rest/v1/rpc/" + name, payload, {
@@ -336,17 +388,104 @@ class SupabaseCatalogStore {
   }
 
   async tenantBackup(tenantId) {
-    const rows = await this.rpc("platform_tenant_backup_v1", { p_tenant_id: tenantId });
-    return rows[0] || null;
+    try {
+      const rows = await this.rpc("platform_tenant_backup_v1", { p_tenant_id: tenantId });
+      return rows[0] || null;
+    } catch (error) {
+      if (error instanceof CatalogError && error.code !== "catalog_unavailable") throw error;
+      return this.tenantBackupDirect(tenantId);
+    }
+  }
+
+  async tenantBackupDirect(tenantId) {
+    const tenants = await this.restGet("tenants", { select: "*", id: "eq." + tenantId, limit: 1 });
+    const tenant = tenants[0] || null;
+    if (!tenant) throw new CatalogError("tenant_not_found", 404);
+
+    const usuarios = await this.restGet("tenant_users", {
+      select: "user_id,email_normalized,role,status,active,created_at,updated_at",
+      tenant_id: "eq." + tenantId,
+      order: "created_at.asc"
+    });
+    const invitaciones = await this.restGet("tenant_invitations", {
+      select: "id,email_normalized,role,delivery_status,created_at,updated_at,expires_at,used_at,revoked_at",
+      tenant_id: "eq." + tenantId,
+      order: "created_at.asc"
+    });
+    const auditoria = await this.restGet("tenant_access_audit", {
+      select: "id,tenant_id,invitation_id,actor,action,metadata,created_at",
+      tenant_id: "eq." + tenantId,
+      order: "created_at.asc"
+    });
+    return {
+      generado_en: new Date().toISOString(),
+      tenant: tenant,
+      usuarios: usuarios,
+      invitaciones: invitaciones,
+      auditoria: auditoria
+    };
   }
 
   async deleteTenant(tenantId, companyNameConfirmation, actor) {
-    const rows = await this.rpc("platform_delete_tenant_v1", {
-      p_tenant_id: tenantId,
-      p_company_name_confirmacion: companyNameConfirmation,
-      p_actor: actor
+    try {
+      const rows = await this.rpc("platform_delete_tenant_v1", {
+        p_tenant_id: tenantId,
+        p_company_name_confirmacion: companyNameConfirmation,
+        p_actor: actor
+      });
+      return rows[0] || null;
+    } catch (error) {
+      if (error instanceof CatalogError && error.code !== "catalog_unavailable") throw error;
+      return this.deleteTenantDirect(tenantId, companyNameConfirmation, actor);
+    }
+  }
+
+  async deleteTenantDirect(tenantId, companyNameConfirmation, actor) {
+    const rows = await this.restGet("tenants", {
+      select: "id,company_name,plan_id,assigned_bot_id,status",
+      id: "eq." + tenantId,
+      limit: 1
     });
-    return rows[0] || null;
+    const tenant = rows[0] || null;
+    if (!tenant) throw new CatalogError("tenant_not_found", 404);
+    if (["suspendido", "archivado"].indexOf(normalizeStatus(tenant.status) || tenant.status) < 0) {
+      throw new CatalogError("tenant_not_suspended", 409);
+    }
+    if (String(companyNameConfirmation || "").trim() !== String(tenant.company_name || "").trim()) {
+      throw new CatalogError("company_name_mismatch", 400);
+    }
+
+    const invitationRows = await this.restGet("tenant_invitations", {
+      select: "id",
+      tenant_id: "eq." + tenantId
+    });
+    const invitationIds = invitationRows.map(function (row) { return row && row.id; }).filter(Boolean);
+    const deletedAt = new Date().toISOString();
+
+    await this.restPost("tenant_access_audit", {
+      tenant_id: null,
+      actor: actor || "desconocido",
+      action: "tenant_deleted",
+      metadata: {
+        tenant_id: tenant.id,
+        company_name: tenant.company_name,
+        plan_id: tenant.plan_id,
+        assigned_bot_id: tenant.assigned_bot_id,
+        eliminado_en: deletedAt
+      }
+    });
+
+    await this.restPatch("tenant_access_audit", { tenant_id: null }, { tenant_id: "eq." + tenantId });
+    if (invitationIds.length > 0) {
+      await this.restPatch("tenant_access_audit", { invitation_id: null }, {
+        invitation_id: "in.(" + invitationIds.join(",") + ")"
+      });
+    }
+    await this.restDelete("tenant_invitations", { tenant_id: "eq." + tenantId });
+    await this.restDelete("tenant_users", { tenant_id: "eq." + tenantId });
+    await this.restDelete("tenants", { id: "eq." + tenantId });
+
+    return { ok: true, tenant_id: tenant.id, company_name: tenant.company_name };
   }
 }
 

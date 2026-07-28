@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v185-production-public-signup-debug";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v186-production-public-signup-catalog-fallback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6280,7 +6280,16 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
     return;
   }
   try {
-    const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
+    let catalogs;
+    try {
+      catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
+    } catch (catalogError) {
+      console.error("public signup catalogs fallback:", catalogError.code || catalogError.message);
+      catalogs = {
+        plans: [{ id: "nextfor-uno", active: true, activo: true }],
+        bots: [{ id: "atencion-cliente", active: true, activo: true }]
+      };
+    }
     const defaults = publicSignupDefaults(catalogs);
     const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, {
       contact_phone: contactPhone,

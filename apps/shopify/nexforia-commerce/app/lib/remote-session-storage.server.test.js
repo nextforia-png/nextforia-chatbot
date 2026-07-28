@@ -53,7 +53,9 @@ test("remote storage recreates sessions and handles missing sessions", async () 
     baseUrl: "https://nextforia.com",
     secret: "s".repeat(64),
     fetchImpl: async (url) =>
-      url.includes("missing") ? response(404, { error: "not_found" }) : response(200, { session: entries })
+      url.includes("missing")
+        ? response(404, { error: "not_found" })
+        : response(200, { ok: true, session: entries })
   });
 
   const loaded = await storage.loadSession("offline_store.myshopify.com");
@@ -76,4 +78,16 @@ test("pairing callback is server-to-server and tenant result comes from the sign
   assert.equal(result.tenant_id, "tenant-a");
   assert.equal(request.url, "https://nextforia.com/internal/shopify/pairings");
   assert.match(request.options.body, /signed-token/);
+});
+
+test("remote storage rejects a public HTML fallback even when it returns HTTP 200", async () => {
+  const storage = new RemoteSessionStorage({
+    baseUrl: "https://nextforia.com",
+    secret: "s".repeat(64),
+    fetchImpl: async () => response(200, {})
+  });
+  await assert.rejects(
+    () => storage.loadSession("offline_store.myshopify.com"),
+    /backend_status_200/
+  );
 });

@@ -23,7 +23,7 @@ export class RemoteSessionStorage {
       body: options.body === undefined ? undefined : JSON.stringify(options.body)
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
+    if (!response.ok || payload.ok !== true) {
       const error = new Error(payload.error || `backend_status_${response.status}`);
       error.status = response.status;
       throw error;
@@ -92,7 +92,7 @@ export async function confirmPairingWithBackend(options = {}) {
     }
   );
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  if (!response.ok || payload.ok !== true) {
     const error = new Error(payload.error || `backend_status_${response.status}`);
     error.status = response.status;
     throw error;
@@ -113,7 +113,7 @@ export async function loadPairingFromBackend(options = {}) {
     }
   );
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
+  if (!response.ok || payload.ok !== true) {
     const error = new Error(payload.error || `backend_status_${response.status}`);
     error.status = response.status;
     throw error;

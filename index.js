@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v226-super-admin-setup-delete-storage";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v227-super-admin-strict-delete-filter";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4303,7 +4303,7 @@ async function fetchSetupReviewDeletedTenantIds() {
   async function collectFromTurns(turns) {
     (turns || []).map(normalizeTurnRow).forEach(function (turn) {
       const record = parseAnyClientOnboardingTurn(turn);
-      if (record && (record.setup_deleted === true || record.deleted_at)) {
+      if (record && record.setup_deleted === true) {
         const tenantId = cleanTenantId(record.tenant_id);
         if (tenantId) deleted.add(tenantId);
       }

@@ -17,6 +17,20 @@ function renderCustomerPublicSignup(res, options) {
   const demoNextPath = options.demoNextPath || "/admin/client-onboarding-demo?step=setup";
   const panelHref = demoMode ? "/admin/panel-demo" : "/admin/panel";
   const demoBadge = demoMode ? '<div class="demoBadge">Modo demo · no crea una cuenta real</div>' : "";
+  if (options.accessRequestOnly) {
+    const businessContext = businessHint
+      ? '<p class="context">Solicitud para <strong>' + businessHint + '</strong></p>'
+      : "";
+    res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+    res.send(`<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Solicita tu acceso · Nextfor IA</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@700;800&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap');
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(145deg,#ECF4FB,#F8FAFD);font-family:"Plus Jakarta Sans",sans-serif;color:#071832;display:grid;place-items:center;padding:28px}.card{width:min(760px,100%);background:#fff;border:1px solid #DFE6F0;border-radius:28px;padding:38px;box-shadow:0 28px 70px -38px rgba(7,24,50,.42)}.brand{display:flex;align-items:center;gap:12px;margin-bottom:28px}.mark{width:52px;height:52px;border-radius:16px;background:linear-gradient(145deg,#25BFFF,#00A0F0);display:grid;place-items:center;color:#fff;font:800 15px Sora,sans-serif}.brand strong{display:block;font:800 18px Sora,sans-serif}.brand span{display:block;color:#647289;font-size:12px;margin-top:2px}.eyebrow{color:#0788C7;font-weight:900;letter-spacing:.14em;font-size:12px;text-transform:uppercase}h1{font:800 clamp(32px,6vw,54px)/1.02 Sora,sans-serif;letter-spacing:-.05em;margin:12px 0}p{color:#647289;font-size:16px;line-height:1.65;margin:0 0 22px}.notice{border:1px solid #BFEAFF;background:#F0FAFF;border-radius:18px;padding:18px;color:#244363;line-height:1.55}.actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:24px}.btn{min-height:52px;border-radius:14px;padding:0 20px;border:0;text-decoration:none;display:inline-grid;place-items:center;font-weight:900}.btn.primary{background:linear-gradient(135deg,#25BFFF,#00A0F0);color:#fff}.btn.secondary{background:#EEF3F8;color:#071832}@media(max-width:560px){body{padding:14px}.card{padding:24px;border-radius:22px}.actions .btn{width:100%}}
+</style></head><body><main class="card"><div class="brand"><div class="mark">NIA</div><div><strong>Nextfor IA</strong><span>Acceso privado por empresa</span></div></div><div class="eyebrow">Acceso controlado</div><h1>Tu cuenta se crea desde Nextfor IA.</h1>${businessContext}<p>Por seguridad, ningún cliente puede crear acceso directo al Customer Panel sin quedar registrado en Super Admin.</p><div class="notice"><strong>Qué sigue:</strong> pide a tu contacto de Nextfor IA que cree tu empresa y te envíe la invitación privada. Con ese enlace defines tu contraseña, completas el setup y todo queda visible en Super Admin.</div><div class="actions"><a class="btn primary" href="/admin/panel">Ya tengo acceso</a><a class="btn secondary" href="/">Volver</a></div></main></body></html>`);
+    return;
+  }
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
   res.send(`<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

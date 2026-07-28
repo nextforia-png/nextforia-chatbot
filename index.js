@@ -317,6 +317,7 @@ const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_E
   && !!DATA_ENCRYPTION_KEY
   && !!CUSTOMER_PANEL_BASE_URL;
 const CUSTOMER_ACCESS_V2_ENABLED = CUSTOMER_ACCESS_V2_GATE || CUSTOMER_ACCESS_TEST_MODE || CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED;
+const LEGACY_CUSTOMER_PANEL_USERS_ENABLED = !CUSTOMER_ACCESS_V2_ENABLED || process.env.NODE_ENV === "test" || process.env.LEGACY_CUSTOMER_PANEL_USERS_ENABLED === "1";
 const PAYMENTS_PRODUCTION_AUTO_ENABLED = process.env.PAYMENTS_V1_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && CUSTOMER_ACCESS_V2_ENABLED
@@ -4605,12 +4606,13 @@ async function dashboardUserFromCredentials(username, password, options) {
     normalizeDashboardUsername(user.username) === normalizedUser ||
     (user.email && user.email === normalizedUser)
   ) && safeEqualText(user.password, cleanPass));
-  if (environmentUser) return environmentUser;
+  if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
     const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
     if (customerAccessUser && !customerAccessCreatedAfterReset(customerAccessUser)) return null;
     if (customerAccessUser) return customerAccessUser;
   }
+  if (!LEGACY_CUSTOMER_PANEL_USERS_ENABLED) return null;
   const customerUser = await loadDashboardCustomerUser(false);
   if (!customerUser || customerUser.username !== normalizedUser) return null;
   let candidate = "";
@@ -4633,6 +4635,49 @@ function sendCustomerAccessError(res, error) {
   const payload = { ok: false, error: problem.code };
   if (problem.details && typeof problem.details === "object") Object.assign(payload, problem.details);
   res.status(problem.status).json(payload);
+}
+
+async function resetCustomerPanelAccess(actor) {
+  if (!SUPABASE_ENABLED) throw new CustomerAccessError("persistent_user_store_unavailable", 503);
+  const now = new Date().toISOString();
+  const patchHeaders = Object.assign({ Prefer: "return=representation" }, SB_HEADERS);
+  const disabledUsers = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_users?active=eq.true", {
+    active: false,
+    status: "disabled",
+    updated_at: now
+  }, { headers: patchHeaders, timeout: 10000 }).then(function (response) {
+    return Array.isArray(response.data) ? response.data : [];
+  });
+  const revokedInvitations = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_invitations?used_at=is.null&revoked_at=is.null", {
+    revoked_at: now,
+    updated_at: now
+  }, { headers: patchHeaders, timeout: 10000 }).then(function (response) {
+    return Array.isArray(response.data) ? response.data : [];
+  });
+  try {
+    await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+      tenant_id: null,
+      invitation_id: null,
+      actor: String(actor && (actor.email || actor.username || actor.user_id) || "super_admin").slice(0, 160),
+      action: "tenant_status_changed",
+      metadata: {
+        reset: "customer_panel_access",
+        disabled_users: disabledUsers.length,
+        revoked_invitations: revokedInvitations.length,
+        legacy_customer_panel_users_enabled: LEGACY_CUSTOMER_PANEL_USERS_ENABLED,
+        public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
+      }
+    }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 10000 });
+  } catch (error) {
+    console.error("customer access reset audit error:", error.message);
+  }
+  dashboardCustomerUserCache = { loaded_at: 0, user: null };
+  return {
+    disabled_users: disabledUsers.length,
+    revoked_invitations: revokedInvitations.length,
+    disabled_user_emails: disabledUsers.map(function (row) { return row.email_normalized; }).filter(Boolean),
+    revoked_invitation_emails: revokedInvitations.map(function (row) { return row.email_normalized; }).filter(Boolean)
+  };
 }
 
 function createDashboardCustomerInvite() {
@@ -6187,6 +6232,24 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
       lead: { contact_phone: contactPhone, onboarding_draft_saved: !!onboardingDraft },
       redirect
     });
+  } catch (error) {
+    sendCustomerAccessError(res, error);
+  }
+});
+
+app.post("/admin/customer-access/reset", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const confirmation = String(req.body && req.body.confirmation || "");
+  if (confirmation !== "RESET_CUSTOMER_PANEL_ACCESS") {
+    res.status(400).json({ ok: false, error: "confirmation_required" });
+    return;
+  }
+  try {
+    res.json({ ok: true, reset: await resetCustomerPanelAccess(auth) });
   } catch (error) {
     sendCustomerAccessError(res, error);
   }

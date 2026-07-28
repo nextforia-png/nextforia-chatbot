@@ -33,7 +33,13 @@ const normalized = normalizeOnboarding({
   business: { brand_name: "  Tienda Piloto  ", contact_email: "ADMIN@EXAMPLE.COM" },
   meta: { number_status: "invalid", whatsapp_integration_intent: "yes" },
   channels: { instagram: true, other: true, other_details: "Marketplace" },
-  commerce: { platform: "other", other_platform: "Sistema propio", orders_required: false },
+  commerce: {
+    platform: "other",
+    other_platform: "Sistema propio",
+    orders_required: false,
+    shopify_pairing_expires_at: "2026-07-28T18:00:00.000Z",
+    shopify_pairing_bot_id: "atencion-cliente"
+  },
   confirmations: { owns_information: true }
 });
 assert.strictEqual(normalized.business.brand_name, "Tienda Piloto");
@@ -45,6 +51,8 @@ assert.strictEqual(normalized.channels.instagram, true);
 assert.strictEqual(normalized.channels.other_details, "Marketplace");
 assert.strictEqual(normalized.commerce.other_platform, "Sistema propio");
 assert.strictEqual(normalized.commerce.orders_required, false);
+assert.strictEqual(normalized.commerce.shopify_pairing_expires_at, "2026-07-28T18:00:00.000Z");
+assert.strictEqual(normalized.commerce.shopify_pairing_bot_id, "atencion-cliente");
 assert.strictEqual(normalized.confirmations.owns_information, true);
 
 const record = createOnboardingRecord(normalized, { tenant_id: "pilot-2", status: "submitted", updated_by: "Admin" });

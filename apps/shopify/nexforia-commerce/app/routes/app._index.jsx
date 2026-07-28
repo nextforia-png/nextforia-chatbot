@@ -13,6 +13,7 @@ import {
 } from "../lib/pairing.server";
 import { pairingTokenFromCookie } from "../lib/pairing-cookie.server";
 import {
+  claimPendingPairingWithBackend,
   confirmPairingWithBackend,
   loadPairingFromBackend,
 } from "../lib/remote-session-storage.server";
@@ -67,6 +68,26 @@ export const loader = async ({ request }) => {
     });
   } catch (error) {
     pairingNotice = pairingNotice || pairingErrorMessage(error);
+  }
+  if (!pairing) {
+    try {
+      const claimed = await claimPendingPairingWithBackend({
+        baseUrl: process.env.NEXFORIA_BACKEND_URL,
+        secret: process.env.NEXFORIA_COMMERCE_SERVICE_SECRET,
+        shop: session.shop,
+      });
+      pairing = {
+        tenant_id: claimed.tenant_id,
+        bot_id: claimed.bot_id,
+        status: claimed.status || "active",
+        connected_at: claimed.connected_at,
+      };
+      pairingNotice = "Shopify quedó conectado automáticamente con tu empresa en Nextfor.";
+    } catch (error) {
+      if (!["pending_pairing_not_found", "pending_pairing_ambiguous"].includes(error?.message)) {
+        pairingNotice = pairingNotice || pairingErrorMessage(error);
+      }
+    }
   }
 
   try {

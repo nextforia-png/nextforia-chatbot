@@ -3,6 +3,7 @@ import test from "node:test";
 import { Session } from "@shopify/shopify-api";
 import {
   RemoteSessionStorage,
+  claimPendingPairingWithBackend,
   confirmPairingWithBackend
 } from "./remote-session-storage.server.js";
 
@@ -78,6 +79,29 @@ test("pairing callback is server-to-server and tenant result comes from the sign
   assert.equal(result.tenant_id, "tenant-a");
   assert.equal(request.url, "https://nextforia.com/internal/shopify/pairings");
   assert.match(request.options.body, /signed-token/);
+});
+
+test("authenticated Shopify shop can claim its pending Nextfor connection without a browser cookie", async () => {
+  let request;
+  const result = await claimPendingPairingWithBackend({
+    baseUrl: "https://nextforia.com",
+    secret: "s".repeat(64),
+    shop: "store.myshopify.com",
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return response(200, {
+        ok: true,
+        tenant_id: "tenant-a",
+        bot_id: "atencion-cliente",
+        shop: "store.myshopify.com"
+      });
+    }
+  });
+  assert.equal(result.tenant_id, "tenant-a");
+  assert.equal(request.url, "https://nextforia.com/internal/shopify/pairings/claim");
+  assert.match(request.options.headers.Authorization, /^Bearer /);
+  assert.doesNotMatch(request.options.body, /pairing_token/);
+  assert.match(request.options.body, /store\.myshopify\.com/);
 });
 
 test("remote storage rejects a public HTML fallback even when it returns HTTP 200", async () => {

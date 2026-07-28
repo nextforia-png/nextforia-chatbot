@@ -221,7 +221,8 @@ function bothBotAnswers(company, email) {
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_PANEL_BASE_URL: "https://customer-panel.staging.example",
       SHOPIFY_APP_INSTALL_URL: "https://apps.shopify.com/nexforia-commerce",
-      NEXFORIA_PAIRING_SECRET: "customer-setup-pairing-secret-2026"
+      NEXFORIA_PAIRING_SECRET: "customer-setup-pairing-secret-2026",
+      NEXFORIA_COMMERCE_SERVICE_SECRET: "customer-setup-commerce-service-secret-2026"
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -367,6 +368,28 @@ function bothBotAnswers(company, email) {
     assert(payload.onboarding.last_updated_at);
     assert.strictEqual(payload.redirect, "/admin/panel?tab=setup&from=onboarding");
 
+    response = await fetch(base + "/admin/integrations/shopify/connect", {
+      headers: { cookie: cookieA },
+      redirect: "manual"
+    });
+    assert.strictEqual(response.status, 302);
+    response = await fetch(base + "/internal/shopify/pairings/claim", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer customer-setup-commerce-service-secret-2026"
+      },
+      body: JSON.stringify({ shop: "store-a.myshopify.com" })
+    });
+    assert.strictEqual(response.status, 200, "the authenticated Shopify app must finish pairing without a browser cookie");
+    payload = await response.json();
+    assert.strictEqual(payload.tenant_id, "tenant-setup-a");
+    assert.strictEqual(payload.bot_id, "atencion-cliente");
+    response = await fetch(base + "/admin/client-onboarding/data", { headers: { cookie: cookieA } });
+    payload = await response.json();
+    assert.strictEqual(payload.onboarding.answers.commerce.integration_status, "connected");
+    assert.strictEqual(payload.onboarding.answers.commerce.shopify_shop, "store-a.myshopify.com");
+
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
       headers: { cookie: superAdminCookie }
     });
@@ -414,7 +437,7 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "draft");
     assert.strictEqual(payload.onboarding.customer_service_configuration.source_record, "client-onboarding");
     assert.strictEqual(payload.onboarding.customer_service_configuration.commerce_platform, "shopify");
-    assert.strictEqual(payload.onboarding.customer_service_configuration.commerce_integration_status, "requested");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.commerce_integration_status, "connected");
     assert.match(payload.onboarding.customer_service_configuration.system_prompt, /No gestiones citas/);
 
     const editedConfiguration = payload.onboarding.customer_service_configuration;

@@ -225,7 +225,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v208-meta-panel-origin";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v209-shopify-auto-pair";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -7346,6 +7346,38 @@ app.get("/internal/shopify/pairings/by-shop", async (req, res) => {
   });
 });
 
+async function connectShopifyOnboardingRecord(record, shop, botId) {
+  const tenantId = cleanTenantId(record && record.tenant_id);
+  if (!tenantId) {
+    const error = new Error("invalid_tenant");
+    error.code = "invalid_tenant";
+    throw error;
+  }
+  const answers = JSON.parse(JSON.stringify(record.answers || defaultClientOnboarding()));
+  const connectedAt = new Date().toISOString();
+  answers.commerce = Object.assign({}, answers.commerce || {}, {
+    platform: "shopify",
+    integration_intent: "yes",
+    integration_status: "connected",
+    store_url: shop,
+    shopify_shop: shop,
+    shopify_connected_at: connectedAt,
+    shopify_pairing_expires_at: null
+  });
+  const updated = await persistClientOnboarding(answers, record.status || "completed", {
+    name: "NexforIA Commerce",
+    username: "shopify-service"
+  }, tenantId);
+  return {
+    tenant_id: tenantId,
+    bot_id: botId || answers.commerce.shopify_pairing_bot_id ||
+      record.assigned_bot_id || answers.selected_bot_id || "commerce",
+    shop,
+    status: "active",
+    connected_at: updated && updated.updated_at || connectedAt
+  };
+}
+
 app.post("/internal/shopify/pairings", async (req, res) => {
   if (!requireCommerceService(req, res)) return;
   try {
@@ -7355,28 +7387,69 @@ app.post("/internal/shopify/pairings", async (req, res) => {
       return res.status(409).json({ ok: false, error: "pairing_shop_mismatch" });
     }
     const record = await loadClientOnboarding(false, verified.tenant_id);
-    const answers = JSON.parse(JSON.stringify(record.answers || defaultClientOnboarding()));
-    answers.commerce = Object.assign({}, answers.commerce || {}, {
-      platform: "shopify",
-      integration_intent: "yes",
-      integration_status: "connected",
-      store_url: shop,
-      shopify_shop: shop,
-      shopify_connected_at: new Date().toISOString()
-    });
-    await persistClientOnboarding(answers, record.status || "completed", {
-      name: "NexforIA Commerce",
-      username: "shopify-service"
-    }, verified.tenant_id);
-    res.json({
-      ok: true,
-      tenant_id: verified.tenant_id,
-      bot_id: verified.bot_id,
-      shop
-    });
+    res.json(Object.assign({ ok: true }, await connectShopifyOnboardingRecord(
+      record,
+      shop,
+      verified.bot_id
+    )));
   } catch (error) {
     const code = error && error.code || "invalid_pairing_token";
     res.status(code === "expired_pairing_token" ? 410 : 422).json({ ok: false, error: code });
+  }
+});
+
+app.post("/internal/shopify/pairings/claim", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  const shop = cleanShopifyShop(req.body && req.body.shop);
+  if (!shop) return res.status(400).json({ ok: false, error: "invalid_shop" });
+  try {
+    const records = await listRecentClientOnboardingRecords(1000);
+    const connected = records.find(function (record) {
+      const commerce = record && record.answers && record.answers.commerce || {};
+      return commerce.integration_status === "connected" &&
+        cleanShopifyShop(commerce.shopify_shop || commerce.store_url) === shop;
+    });
+    if (connected) {
+      return res.json(Object.assign({ ok: true, already_connected: true }, {
+        tenant_id: connected.tenant_id,
+        bot_id: connected.answers && connected.answers.commerce &&
+          connected.answers.commerce.shopify_pairing_bot_id ||
+          connected.assigned_bot_id || connected.answers && connected.answers.selected_bot_id || "commerce",
+        shop,
+        status: "active",
+        connected_at: connected.answers && connected.answers.commerce &&
+          connected.answers.commerce.shopify_connected_at || connected.updated_at
+      }));
+    }
+
+    const now = Date.now();
+    const candidates = records.filter(function (record) {
+      const commerce = record && record.answers && record.answers.commerce || {};
+      if (commerce.platform !== "shopify" || commerce.integration_intent !== "yes") return false;
+      if (commerce.integration_status !== "pending_customer") return false;
+      if (cleanShopifyShop(commerce.shopify_shop || commerce.store_url) !== shop) return false;
+      const explicitExpiry = Date.parse(commerce.shopify_pairing_expires_at || "");
+      const startedAt = Date.parse(commerce.shopify_pairing_started_at || "");
+      const expiresAt = Number.isFinite(explicitExpiry)
+        ? explicitExpiry
+        : startedAt + 30 * 60 * 1000;
+      return Number.isFinite(expiresAt) && expiresAt >= now;
+    });
+    if (!candidates.length) {
+      return res.status(404).json({ ok: false, error: "pending_pairing_not_found" });
+    }
+    if (candidates.length > 1) {
+      return res.status(409).json({ ok: false, error: "pending_pairing_ambiguous" });
+    }
+    res.json(Object.assign({ ok: true }, await connectShopifyOnboardingRecord(
+      candidates[0],
+      shop,
+      candidates[0].answers && candidates[0].answers.commerce &&
+        candidates[0].answers.commerce.shopify_pairing_bot_id
+    )));
+  } catch (error) {
+    console.error("shopify pending pairing claim error:", error.message);
+    res.status(503).json({ ok: false, error: "pairing_claim_unavailable" });
   }
 });
 
@@ -7424,7 +7497,9 @@ app.get("/admin/integrations/shopify/connect", async (req, res) => {
     integration_intent: "yes",
     integration_status: "pending_customer",
     shopify_shop: shop,
-    shopify_pairing_started_at: new Date().toISOString()
+    shopify_pairing_started_at: new Date().toISOString(),
+    shopify_pairing_expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    shopify_pairing_bot_id: tenant.assigned_bot_id || "commerce"
   });
   await persistClientOnboarding(answers, record.status || "draft", auth, tenantId);
 

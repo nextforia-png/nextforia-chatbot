@@ -500,6 +500,8 @@ function normalizeOnboarding(input) {
       last_requested_at: text(commerce.last_requested_at, 80),
       shopify_shop: text(commerce.shopify_shop, 180),
       shopify_pairing_started_at: text(commerce.shopify_pairing_started_at, 80),
+      shopify_pairing_expires_at: text(commerce.shopify_pairing_expires_at, 80),
+      shopify_pairing_bot_id: text(commerce.shopify_pairing_bot_id, 80),
       shopify_connected_at: text(commerce.shopify_connected_at, 80)
     },
     operations: {

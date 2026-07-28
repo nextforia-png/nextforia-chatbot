@@ -216,6 +216,8 @@ assert.match(setupBridgeHtml, /Cuentas nuevas del setup/);
 assert.match(setupBridgeHtml, /Mi Empresa QA/);
 assert.match(setupBridgeHtml, /100% setup/);
 assert.match(setupBridgeHtml, /Setup completo/);
+assert.match(setupBridgeHtml, /Ver ficha\/setup/);
+assert.match(setupBridgeHtml, /openTenantSetup/);
 
 // Con fuente financiera conectada el diseño pinta desglose, tabla y Pareto.
 let richHtml = "";
@@ -297,6 +299,7 @@ assert.match(accessV2Html, /data-view="catalogs"/);
 assert.match(accessV2Html, /Planes y bots/);
 assert.match(accessV2Html, /id="planEditorModal"/);
 assert.match(accessV2Html, /id="botEditorModal"/);
+assert.match(accessV2Html, /row\.name\|\|row\.nombre\|\|row\.id/);
 assert.doesNotMatch(accessV2Html, /name="precio_setup"/);
 assert.match(accessV2Html, /Setup cost/);
 assert.match(accessV2Html, /name="precio_mensual"/);
@@ -308,6 +311,9 @@ assert.match(accessV2Html, /Clientes reales/);
 assert.doesNotMatch(accessV2Html, /Registro heredado/);
 assert.doesNotMatch(accessV2Html, /escrito en código/);
 assert.match(accessV2Html, /id="tenantDeleteModal"/);
+assert.match(accessV2Html, /Ver ficha\/setup/);
+assert.match(accessV2Html, /Servicios globales, no conexión del cliente/);
+assert.match(accessV2Html, /La operación real vive por cliente/);
 assert.match(accessV2Html, /Escribe el nombre exacto de la empresa/);
 assert.match(accessV2Html, /Se descarga un respaldo antes de borrar/);
 assert.match(accessV2Html, /El acceso se corta automáticamente/);

@@ -209,7 +209,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v193-production-questionnaire-notifications";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v194-production-super-admin-client-setup-fixes";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -257,8 +257,10 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL, process.env.RENDER_EXTERNAL_URL);
-const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT === "1"
-  || (PUBLIC_BASE_URL && new URL(PUBLIC_BASE_URL).hostname === "staging.nextforia.com");
+const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT !== "0" && (
+  process.env.NEXTFOR_PRICING_SYNC_ON_BOOT === "1"
+  || (PUBLIC_BASE_URL && ["nextforia.com", "staging.nextforia.com"].includes(new URL(PUBLIC_BASE_URL).hostname))
+);
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
 const SUPABASE_URL = normalizedSupabaseUrl && (
@@ -6117,9 +6119,12 @@ app.get("/admin/customer-access/catalogs", async (req, res) => {
     return;
   }
   try {
-    res.json(Object.assign({ ok: true }, await customerAccessService.catalogs()));
+    const catalogs = catalogService
+      ? catalogWithDefaults(await catalogService.activeCatalogs(), true)
+      : catalogWithDefaults(await customerAccessService.catalogs(), true);
+    res.json(Object.assign({ ok: true }, catalogs));
   } catch (error) {
-    sendCustomerAccessError(res, error);
+    res.json(Object.assign({ ok: true, warning: "catalog_store_unavailable" }, catalogWithDefaults(null, true)));
   }
 });
 
@@ -6166,6 +6171,34 @@ function sendCatalogError(res, error) {
   res.status(problem.status).json({ ok: false, error: problem.code });
 }
 
+function defaultPlatformCatalogs(customerVisibleOnly) {
+  const bots = [
+    { id: "atencion-cliente", name: "Atención al cliente", nombre: "Atención al cliente", descripcion: "Atiende, orienta, responde preguntas y escala casos a humanos.", active: true, activo: true, orden: 1 },
+    { id: "agendamiento", name: "Agendamiento", nombre: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", active: true, activo: true, orden: 2 },
+    { id: "commerce", name: "Commerce", nombre: "Commerce", descripcion: "Consulta productos, precios, disponibilidad y pedidos cuando aplique.", active: true, activo: true, orden: 3 }
+  ];
+  const plans = NEXTFOR_PRICING_JULY_2026.map(function (plan) {
+    return Object.assign({}, plan, {
+      name: plan.nombre,
+      active: plan.activo !== false,
+      activo: plan.activo !== false
+    });
+  });
+  if (!customerVisibleOnly) return { plans, bots };
+  return {
+    plans: plans.filter(function (plan) { return CUSTOMER_VISIBLE_PLAN_IDS.includes(plan.id); }),
+    bots: bots.filter(function (bot) { return CUSTOMER_VISIBLE_BOT_IDS.includes(bot.id); })
+  };
+}
+
+function catalogWithDefaults(catalogs, customerVisibleOnly) {
+  catalogs = catalogs || {};
+  const fallback = defaultPlatformCatalogs(customerVisibleOnly);
+  const plans = Array.isArray(catalogs.plans) && catalogs.plans.length ? catalogs.plans : fallback.plans;
+  const bots = Array.isArray(catalogs.bots) && catalogs.bots.length ? catalogs.bots : fallback.bots;
+  return { plans, bots, fallback_catalog: plans === fallback.plans || bots === fallback.bots };
+}
+
 function catalogSuperAdminGuard(req, res) {
   if (!CUSTOMER_ACCESS_V2_ENABLED) {
     res.status(404).json({ ok: false, error: "not_found" });
@@ -6183,9 +6216,9 @@ app.get("/admin/catalogs", async (req, res) => {
   const auth = catalogSuperAdminGuard(req, res);
   if (!auth) return;
   try {
-    res.json(Object.assign({ ok: true }, await catalogService.adminCatalogs()));
+    res.json(Object.assign({ ok: true }, catalogWithDefaults(await catalogService.adminCatalogs(), false)));
   } catch (error) {
-    sendCatalogError(res, error);
+    res.json(Object.assign({ ok: true, warning: "catalog_store_unavailable" }, catalogWithDefaults(null, false)));
   }
 });
 
@@ -6232,9 +6265,9 @@ app.get("/admin/panel/catalogs", async (req, res) => {
     return;
   }
   try {
-    res.json(Object.assign({ ok: true }, await catalogService.activeCatalogs()));
+    res.json(Object.assign({ ok: true }, catalogWithDefaults(await catalogService.activeCatalogs(), true)));
   } catch (error) {
-    sendCatalogError(res, error);
+    res.json(Object.assign({ ok: true, warning: "catalog_store_unavailable" }, catalogWithDefaults(null, true)));
   }
 });
 
@@ -6956,8 +6989,8 @@ app.get("/admin/client-onboarding", async (req, res) => {
   }
   let catalogs = { plans: [], bots: [] };
   if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
-    try { catalogs = await catalogService.activeCatalogs(); }
-    catch (_) {}
+    try { catalogs = catalogWithDefaults(await catalogService.activeCatalogs(), true); }
+    catch (_) { catalogs = catalogWithDefaults(null, true); }
   }
   const business = customerBusinessForAuth(auth);
   const plan = (catalogs.plans || []).find(function (item) { return item.id === business.plan_id; }) || null;

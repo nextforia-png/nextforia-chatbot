@@ -70,7 +70,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v167-production-meta-channel-live"));
+    assert((await response.text()).includes("v196-production-channel-commerce-recovery"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");
@@ -79,6 +79,9 @@ function waitForServer(child, port) {
     assert.strictEqual(response.status, 200);
     const html = await response.text();
     assert(html.includes("Finaliza el entrenamiento de tu Nextfor"));
+    assert(html.includes('id="commerceConnectorCards"'));
+    assert(html.includes("Conecta tu tienda"));
+    assert(html.includes("fallbackChannelConnections"));
     assert(html.includes("WhatsApp"));
     assert(html.includes("Instagram"));
     assert(html.includes("Facebook Messenger"));

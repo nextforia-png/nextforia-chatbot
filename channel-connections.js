@@ -230,6 +230,74 @@ class InMemoryChannelConnectionStore {
   }
 }
 
+class AppendOnlyChannelConnectionStore {
+  constructor(options) {
+    options = options || {};
+    this.loadLatest = options.loadLatest;
+    this.loadAll = options.loadAll;
+    this.append = options.append;
+    if (typeof this.loadLatest !== "function" || typeof this.loadAll !== "function" || typeof this.append !== "function") {
+      throw new Error("append_only_channel_store_callbacks_required");
+    }
+  }
+
+  recordId(tenantId, channel) {
+    return "channel-connection:" + cleanTenantId(tenantId) + ":" + cleanChannel(channel);
+  }
+
+  async listTenant(tenantId) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const rows = await Promise.all(SUPPORTED_CHANNELS.map((channel) => this.get(cleanTenant, channel)));
+    return rows.filter(Boolean);
+  }
+
+  async listAll() {
+    const rows = await this.loadAll();
+    const seen = new Set();
+    return (Array.isArray(rows) ? rows : [])
+      .filter(function (row) {
+        const tenantId = cleanTenantId(row && row.tenant_id);
+        const channel = cleanChannel(row && row.channel);
+        const key = tenantId + ":" + channel;
+        if (!tenantId || !channel || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(function (row) {
+        return Object.assign(emptyConnection(row.tenant_id, row.channel), row, {
+          tenant_id: cleanTenantId(row.tenant_id),
+          channel: cleanChannel(row.channel)
+        });
+      });
+  }
+
+  async get(tenantId, channel) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const clean = cleanChannel(channel);
+    if (!cleanTenant || !clean) return null;
+    const row = await this.loadLatest(this.recordId(cleanTenant, clean), cleanTenant, clean);
+    if (!row) return null;
+    return Object.assign(emptyConnection(cleanTenant, clean), row, {
+      tenant_id: cleanTenant,
+      channel: clean
+    });
+  }
+
+  async upsert(input, event) {
+    const tenantId = cleanTenantId(input && input.tenant_id);
+    const channel = cleanChannel(input && input.channel);
+    if (!tenantId || !channel) throw new ChannelConnectionError("invalid_channel_request", 400);
+    const current = await this.get(tenantId, channel);
+    const row = Object.assign(emptyConnection(tenantId, channel), current || {}, input || {}, {
+      tenant_id: tenantId,
+      channel,
+      updated_at: input && input.updated_at || new Date().toISOString()
+    });
+    await this.append(this.recordId(tenantId, channel), row, event || null);
+    return row;
+  }
+}
+
 class SupabaseChannelConnectionStore {
   constructor(options) {
     this.url = String(options && options.url || "").replace(/\/$/, "");
@@ -926,6 +994,7 @@ module.exports = {
   CONNECTION_STATUSES,
   SUPPORTED_CHANNELS,
   ChannelConnectionError,
+  AppendOnlyChannelConnectionStore,
   InMemoryChannelConnectionStore,
   MetaChannelProvider,
   SupabaseChannelConnectionStore,

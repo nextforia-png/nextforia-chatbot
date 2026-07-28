@@ -108,6 +108,7 @@ const {
 } = require("./tenant-config");
 const { buildRavIntegration } = require("./nextfor-integration");
 const {
+  AppendOnlyChannelConnectionStore,
   ChannelConnectionError,
   InMemoryChannelConnectionStore,
   MetaChannelProvider,
@@ -210,7 +211,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v199-production-questionnaire-history-restore";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v200-production-channel-storage-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -419,6 +420,7 @@ const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":publi
 const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:global";
+const CHANNEL_CONNECTION_STATE_TOOL = "tenant_channel_connection_state_v1";
 const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
 const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
@@ -676,10 +678,61 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
   : null;
 const channelConnectionsPreviewOnly = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHANNEL_CONNECTIONS_V1_ENABLED;
 const channelConnectionsMemoryPreview = channelConnectionsPreviewOnly && !CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW;
+function parseAppendOnlyChannelConnectionTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(CHANNEL_CONNECTION_STATE_TOOL)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[ChannelConnectionState\]\s*/, "");
+  try {
+    const payload = JSON.parse(raw);
+    const record = payload && payload.record;
+    const tenantId = cleanTenantId(record && record.tenant_id);
+    const channel = cleanChannel(record && record.channel);
+    if (!tenantId || !channel) return null;
+    return Object.assign({}, record, { tenant_id: tenantId, channel });
+  } catch (_) {
+    return null;
+  }
+}
+const appendOnlyChannelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHANNEL_CONNECTIONS_TEST_MODE && !channelConnectionsMemoryPreview
+  ? new AppendOnlyChannelConnectionStore({
+      loadLatest: async function (recordId, tenantId) {
+        const rows = await supabaseFetchUserRecent(recordId, 1, tenantId);
+        return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyChannelConnectionTurn).find(Boolean) || null;
+      },
+      loadAll: async function () {
+        const rows = await supabaseFetchToolRecent(CHANNEL_CONNECTION_STATE_TOOL, 3000, { allTenants: true });
+        return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyChannelConnectionTurn).filter(Boolean);
+      },
+      append: async function (recordId, record, event) {
+        await supabaseInsertStrict({
+          ts: record.updated_at || new Date().toISOString(),
+          tenantId: record.tenant_id,
+          userId: recordId,
+          userMessage: "",
+          botReply: "[ChannelConnectionState] " + JSON.stringify({
+            version: 1,
+            record,
+            event: event ? {
+              action: String(event.action || "").slice(0, 80),
+              actor: String(event.actor || "").slice(0, 200),
+              details: event.details || {}
+            } : null
+          }),
+          tools: [CHANNEL_CONNECTION_STATE_TOOL],
+          zeroResultQueries: [],
+          handoff: false,
+          rating: null,
+          numTools: 1,
+          status: "ok",
+          eval: { skip: true, reason: CHANNEL_CONNECTION_STATE_TOOL }
+        });
+      }
+    })
+  : null;
 const channelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsMemoryPreview
       ? new InMemoryChannelConnectionStore()
-      : new SupabaseChannelConnectionStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+      : appendOnlyChannelConnectionStore)
   : null;
 const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? new MetaChannelProvider({
@@ -898,13 +951,17 @@ async function supabaseFetchUserToolRecent(userId, toolName, limit) {
     return r.data;
   } catch (e) { console.error("supabaseFetchUserToolRecent error:", e.message); return null; }
 }
-async function supabaseFetchToolRecent(toolName, limit) {
+async function supabaseFetchToolRecent(toolName, limit, options) {
   if (!SUPABASE_ENABLED) return null;
   try {
+    options = options || {};
     const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE;
     const r = await axios.get(url, {
       params: {
         select: "*",
+        ...((SUPABASE_TENANT_COLUMNS_ENABLED && !options.allTenants)
+          ? { tenant_id: "eq." + (cleanTenantId(options.tenantId) || DEFAULT_TENANT_ID) }
+          : {}),
         tools: "cs." + JSON.stringify([toolName]),
         order: "ts.desc",
         limit: limit || 100

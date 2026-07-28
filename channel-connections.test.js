@@ -3,6 +3,7 @@
 const assert = require("assert");
 const crypto = require("crypto");
 const {
+  AppendOnlyChannelConnectionStore,
   ChannelConnectionError,
   InMemoryChannelConnectionStore,
   MetaChannelProvider,
@@ -185,6 +186,49 @@ function expectCode(promise, code) {
   assert.strictEqual(failedMessenger.status, "needs_attention");
   assert.strictEqual(failedMessenger.last_error, "OAuth code invalid");
   assert(!JSON.stringify(all).includes("secret-page-token"));
+
+  const appendRows = [];
+  const appendOnlyStore = new AppendOnlyChannelConnectionStore({
+    loadLatest: async function (recordId) {
+      const found = appendRows.filter(function (row) { return row.record_id === recordId; }).at(-1);
+      return found ? found.record : null;
+    },
+    loadAll: async function () {
+      return appendRows.slice().reverse().map(function (row) { return row.record; });
+    },
+    append: async function (recordId, record, event) {
+      appendRows.push({
+        record_id: recordId,
+        record: JSON.parse(JSON.stringify(record)),
+        event: event && JSON.parse(JSON.stringify(event))
+      });
+    }
+  });
+  await appendOnlyStore.upsert({
+    tenant_id: "tenant-a",
+    channel: "whatsapp",
+    status: "connecting",
+    pending_assets: []
+  }, { action: "oauth_started", actor: "a@example.com" });
+  await appendOnlyStore.upsert({
+    tenant_id: "tenant-b",
+    channel: "whatsapp",
+    status: "connected",
+    account_label: "Empresa B"
+  }, { action: "connected", actor: "b@example.com" });
+  await appendOnlyStore.upsert({
+    tenant_id: "tenant-a",
+    channel: "whatsapp",
+    status: "connected",
+    account_label: "Empresa A"
+  }, { action: "connected", actor: "a@example.com" });
+  assert.strictEqual((await appendOnlyStore.get("tenant-a", "whatsapp")).account_label, "Empresa A");
+  assert.strictEqual((await appendOnlyStore.get("tenant-b", "whatsapp")).account_label, "Empresa B");
+  assert.strictEqual((await appendOnlyStore.listTenant("tenant-a")).length, 1);
+  const appendAll = await appendOnlyStore.listAll();
+  assert.strictEqual(appendAll.length, 2);
+  assert.strictEqual(appendAll.find(function (row) { return row.tenant_id === "tenant-a"; }).account_label, "Empresa A");
+  assert.strictEqual(appendRows.filter(function (row) { return row.event && row.event.actor === "a@example.com"; }).length, 2);
 
   const legacyStore = new InMemoryChannelConnectionStore();
   const legacy = createLegacyConnections({

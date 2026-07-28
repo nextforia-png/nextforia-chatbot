@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v214-shopify-panel-ready";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v215-super-admin-one-click-live";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4529,6 +4529,132 @@ function setupReviewFailure(code, status) {
   return error;
 }
 
+function setupWantsWhatsApp(answers) {
+  const meta = answers && answers.meta || {};
+  return !!(meta.whatsapp_number || meta.whatsapp_integration_intent === "yes" || meta.whatsapp_integration_status === "requested");
+}
+
+function setupWantsShopify(answers) {
+  const commerce = answers && answers.commerce || {};
+  return commerce.platform === "shopify" &&
+    (commerce.integration_intent === "yes" || commerce.integration_status === "requested" || commerce.store_url);
+}
+
+function setupChannelIsConnected(channels, channel) {
+  return (Array.isArray(channels) ? channels : []).some(function (row) {
+    return row && row.channel === channel && row.status === "connected";
+  });
+}
+
+async function setupReviewChannels(tenantId) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) return [];
+  return channelConnectionService.listTenant(tenantId);
+}
+
+function launchChecklistItem(ok, code, label, detail, type) {
+  return {
+    ok: !!ok,
+    code,
+    label,
+    detail,
+    type: type || (ok ? "ok" : "blocker")
+  };
+}
+
+function setupLaunchReadiness(tenant, record, questionnaire, channels) {
+  const answers = record && record.answers || {};
+  const review = setupReviewSummary(record);
+  const pendingRequired = pendingQuestionnaireItems(answers, questionnaire, {
+    includeOptionalCustom: true
+  }).filter(function (question) { return question.required; });
+  const blockers = [];
+  const warnings = [];
+  const checks = [];
+  function addBlock(code, label, detail) {
+    const item = launchChecklistItem(false, code, label, detail, "blocker");
+    blockers.push(item);
+    checks.push(item);
+  }
+  function addWarning(code, label, detail) {
+    const item = launchChecklistItem(true, code, label, detail, "warning");
+    warnings.push(item);
+    checks.push(item);
+  }
+  function addOk(code, label, detail) {
+    checks.push(launchChecklistItem(true, code, label, detail, "ok"));
+  }
+
+  if (!record || !record.setup_completed) {
+    addBlock("setup_not_completed", "Setup incompleto", "El cliente todavía no ha terminado el formulario.");
+  } else {
+    addOk("setup_completed", "Setup completo", "El cliente terminó el formulario.");
+  }
+
+  if ((answers.setup_goal || "unknown") !== "customer_service") {
+    addBlock("only_customer_service_live_supported", "Solo Chatbot en esta etapa", "Producción inicial activa únicamente Atención al cliente / Ventas 24/7.");
+  } else {
+    addOk("customer_service_selected", "Bot correcto", "Este cliente eligió Chatbot de atención al cliente.");
+  }
+
+  if (pendingRequired.length > 0) {
+    addBlock("required_setup_answers_missing", "Faltan respuestas obligatorias", pendingRequired.slice(0, 3).map(function (item) {
+      return item.label;
+    }).join(", ") + (pendingRequired.length > 3 ? " +" + (pendingRequired.length - 3) + " más" : ""));
+  } else {
+    addOk("required_answers_complete", "Preguntas obligatorias completas", "No hay campos requeridos pendientes.");
+  }
+
+  if (review.status === "incomplete") {
+    addBlock("setup_changes_requested", "Hay cambios pendientes", "Primero corrige o aprueba el setup.");
+  } else {
+    addOk("review_not_blocked", "Revisión sin bloqueo", "El setup no está marcado como cambios solicitados.");
+  }
+
+  if (setupWantsWhatsApp(answers)) {
+    if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
+      if (setupChannelIsConnected(channels, "whatsapp")) {
+        addOk("whatsapp_connected", "WhatsApp conectado", "Hay una conexión técnica de WhatsApp para este tenant.");
+      } else {
+        addBlock("whatsapp_connection_required", "Falta conectar WhatsApp", "El cliente solicitó WhatsApp, pero todavía no hay conexión técnica activa.");
+      }
+    } else {
+      addWarning("whatsapp_connection_not_auditable", "WhatsApp no verificable desde el panel", "El módulo de canales no está visible en este ambiente.");
+    }
+  } else {
+    addWarning("whatsapp_not_requested", "WhatsApp no solicitado", "El cliente no dejó WhatsApp como canal inicial.");
+  }
+
+  if (setupWantsShopify(answers)) {
+    const commerce = answers.commerce || {};
+    if (commerce.integration_status === "connected") {
+      addOk("shopify_connected", "Shopify conectado", "La tienda ya está emparejada con NextforIA.");
+    } else {
+      addBlock("shopify_connection_required", "Falta conectar Shopify", "El cliente solicitó Shopify, pero la tienda sigue pendiente de conexión.");
+    }
+  } else {
+    addWarning("shopify_not_requested", "Shopify no solicitado", "El cliente no pidió conexión Shopify para este bot.");
+  }
+
+  if (record && record.customer_service_configuration) {
+    if (record.customer_service_configuration.lifecycle === "approved_for_testing") {
+      addOk("configuration_testing_ready", "Configuración aprobada para Testing", "El borrador interno ya fue aprobado para pruebas.");
+    } else {
+      addWarning("configuration_auto_testing", "Configuración se aprobará automáticamente", "Al aceptar, Super Admin usará el borrador actual y lo dejará aprobado.");
+    }
+  } else if (answers.setup_goal === "customer_service") {
+    addWarning("configuration_auto_build", "Configuración se generará automáticamente", "Al aceptar, Super Admin construirá el prompt desde el setup del cliente.");
+  }
+
+  return {
+    ready: blockers.length === 0,
+    tenant_id: tenant && tenant.id || record && record.tenant_id || "",
+    status: review.status,
+    blockers,
+    warnings,
+    checks
+  };
+}
+
 async function persistSetupReview(tenantId, input, auth) {
   const tenant = await setupReviewTenant(tenantId);
   if (!tenant) {
@@ -4596,8 +4722,43 @@ async function persistSetupReview(tenantId, input, auth) {
     );
     cleanStatus = "testing";
     configurationLifecycle = "approved_for_testing";
-  } else if (action === "mark_live" || String(input && input.review_status || "").toLowerCase() === "live") {
-    throw setupReviewFailure("public_activation_requires_separate_approval", 403);
+  } else if (action === "launch_live" || action === "mark_live" || String(input && input.review_status || "").toLowerCase() === "live") {
+    if (input && input.launch_confirmed !== true) {
+      throw setupReviewFailure("launch_confirmation_required", 400);
+    }
+    const candidateRecord = createOnboardingRecord(answers, {
+      tenant_id: tenant.id,
+      status: previous.status || "completed",
+      updated_by: actor,
+      previous,
+      questionnaire,
+      review_status: fallbackStatus,
+      review_actor: actor,
+      customer_service_configuration: configuration,
+      configuration_lifecycle: configurationLifecycle
+    });
+    const channels = await setupReviewChannels(tenant.id).catch(function () { return []; });
+    const readiness = setupLaunchReadiness(tenant, candidateRecord, questionnaire, channels);
+    if (!readiness.ready) {
+      const error = setupReviewFailure("launch_blocked", 409);
+      error.details = readiness;
+      throw error;
+    }
+    configuration = normalizeCustomerServiceConfiguration(
+      input.customer_service_configuration && typeof input.customer_service_configuration === "object"
+        ? input.customer_service_configuration
+        : (configuration || generateCustomerServiceConfiguration(answers, {
+          actor,
+          source_setup_updated_at: previous.last_updated_at || previous.updated_at
+        })),
+      { actor, lifecycle: "approved_for_testing" }
+    );
+    if (!configuration) throw setupReviewFailure("customer_service_not_selected");
+    if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
+      await catalogService.setTenantStatus(tenant.id, "activo", auth);
+    }
+    cleanStatus = "live";
+    configurationLifecycle = "approved_for_testing";
   }
   const record = createOnboardingRecord(answers, {
     tenant_id: tenant.id,
@@ -7740,13 +7901,15 @@ app.get("/admin/customer-setups/:tenantId", async (req, res) => {
       try { channels = await channelConnectionService.listTenant(tenant.id); }
       catch (error) { console.error("customer setup channel summary error:", tenant.id, error.message); }
     }
+    const questionnaire = await loadCustomerSetupQuestionnaire(false);
     res.json({
       ok: true,
       tenant,
       onboarding,
       review: setupReviewSummary(onboarding),
-      questionnaire: await loadCustomerSetupQuestionnaire(false),
+      questionnaire,
       channels,
+      launch: setupLaunchReadiness(tenant, onboarding, questionnaire, channels),
       statuses: SETUP_REVIEW_STATUSES
     });
   } catch (error) {
@@ -7814,10 +7977,14 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
   }
   try {
     const record = await persistSetupReview(req.params.tenantId, req.body || {}, auth);
+    const tenant = await setupReviewTenant(req.params.tenantId);
+    const questionnaire = await loadCustomerSetupQuestionnaire(false);
+    const channels = tenant ? await setupReviewChannels(tenant.id).catch(function () { return []; }) : [];
     res.json({
       ok: true,
       onboarding: record,
-      review: setupReviewSummary(record)
+      review: setupReviewSummary(record),
+      launch: tenant ? setupLaunchReadiness(tenant, record, questionnaire, channels) : null
     });
   } catch (error) {
     console.error("customer setup review save error:", error.message);
@@ -7828,11 +7995,13 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
       "customer_service_not_selected",
       "configuration_not_building",
       "configuration_required",
-      "public_activation_requires_separate_approval"
+      "launch_confirmation_required",
+      "launch_blocked"
     ];
     res.status(error.status || 503).json({
       ok: false,
-      error: expectedErrors.includes(error.message) ? error.message : "setup_review_unavailable"
+      error: expectedErrors.includes(error.message) ? error.message : "setup_review_unavailable",
+      details: error.details || null
     });
   }
 });

@@ -494,10 +494,26 @@ function bothBotAnswers(company, email) {
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
-      body: JSON.stringify({ action: "mark_live", review_status: "live" })
+      body: JSON.stringify({ action: "launch_live", review_status: "live" })
     });
-    assert.strictEqual(response.status, 403);
-    assert.strictEqual((await response.json()).error, "public_activation_requires_separate_approval");
+    assert.strictEqual(response.status, 400);
+    assert.strictEqual((await response.json()).error, "launch_confirmation_required");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({
+        action: "launch_live",
+        launch_confirmed: true,
+        customer_service_configuration: payload.onboarding.customer_service_configuration
+      })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.review.status, "live");
+    assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "active");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "approved_for_testing");
+    assert.strictEqual(payload.launch.ready, true);
 
     response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },

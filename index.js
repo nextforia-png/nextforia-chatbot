@@ -185,6 +185,18 @@ function configuredHttpsOrigins(value) {
   }).filter(Boolean);
 }
 
+function configuredTenantAliases(value) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+    return new Map(Object.entries(parsed).map(function (entry) {
+      return [cleanTenantId(entry[0]), cleanTenantId(entry[1])];
+    }).filter(function (entry) { return entry[0] && entry[1]; }));
+  } catch (_) {
+    return new Map();
+  }
+}
+
 function isSameOriginRequestFromAny(req, configuredOrigins) {
   // Local/test environments may intentionally omit a public base URL. Preserve
   // the original same-host validation in that case instead of rejecting every
@@ -225,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v211-shopify-tenant-binding";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v212-rav-channel-alias";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -308,6 +320,9 @@ const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL
 const CHANNEL_CONNECTION_PUBLIC_ORIGINS = configuredHttpsOrigins(
   process.env.CHANNEL_CONNECTION_PUBLIC_ORIGINS ||
   "https://nextforia.com,https://staging.nextforia.com"
+);
+const CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES = configuredTenantAliases(
+  process.env.CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES
 );
 const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
 const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
@@ -5099,6 +5114,15 @@ function customerTenantForAuth(auth) {
   return DEFAULT_TENANT_ID;
 }
 
+function customerChannelTenantForAuth(auth) {
+  const customerTenantId = customerTenantForAuth(auth);
+  const internalTenantId = CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES.get(customerTenantId);
+  // Internal aliases may only point at the protected legacy tenant. This lets
+  // RAV's new Customer Panel account reuse its existing live connections
+  // without allowing arbitrary cross-tenant aliases.
+  return internalTenantId === DEFAULT_TENANT_ID ? internalTenantId : customerTenantId;
+}
+
 function customerPanelAuthOk(req, minRole = "viewer") {
   const auth = dashboardAuth(req);
   if (auth.version !== 2) return adminAuthOk(req, minRole);
@@ -8224,7 +8248,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
     return;
   }
   try {
-    const tenantId = customerTenantForAuth(auth);
+    const tenantId = customerChannelTenantForAuth(auth);
     res.json({
       ok: true,
       channels: await channelConnectionService.listTenant(tenantId),
@@ -8255,7 +8279,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
     return;
   }
   const channel = cleanChannel(req.params.channel);
-  const tenantId = customerTenantForAuth(auth);
+  const tenantId = customerChannelTenantForAuth(auth);
   try {
     const redirectUri = channelConnectionCallbackUrlForRequest(req);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
@@ -8287,7 +8311,7 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
   }
   const session = dashboardAuth(req);
   if (session.ok && session.version === 2 &&
-      (customerTenantForAuth(session) !== state.tenant_id ||
+      (customerChannelTenantForAuth(session) !== state.tenant_id ||
        String(session.user_id || session.username) !== String(state.actor_id))) {
     res.redirect("/admin/panel?tab=channels&connection=error");
     return;
@@ -8328,7 +8352,7 @@ app.post("/admin/panel/channel-connections/:channel/select", async (req, res) =>
   }
   try {
     const connection = await channelConnectionService.selectAsset(
-      customerTenantForAuth(auth),
+      customerChannelTenantForAuth(auth),
       req.params.channel,
       req.body && req.body.asset_id,
       auth
@@ -8356,7 +8380,7 @@ app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res
   }
   try {
     const connection = await channelConnectionService.disconnect(
-      customerTenantForAuth(auth),
+      customerChannelTenantForAuth(auth),
       req.params.channel,
       auth
     );

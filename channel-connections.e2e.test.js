@@ -57,7 +57,8 @@ async function login(base, body) {
   const fixtures = [
     { user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: "TenantPassword2026", role: "admin" },
     { user_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: "TenantPassword2026", role: "admin" },
-    { user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tenant_id: "tenant-c", company_name: "Agenda C", email: "admin@c.example", password: "TenantPassword2026", role: "admin", assigned_bot_id: "agendamiento" }
+    { user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tenant_id: "tenant-c", company_name: "Agenda C", email: "admin@c.example", password: "TenantPassword2026", role: "admin", assigned_bot_id: "agendamiento" },
+    { user_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", tenant_id: "rav-customer-account", company_name: "RAV Toys", email: "admin@ravtoys.example", password: "TenantPassword2026", role: "admin" }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
     cwd: __dirname,
@@ -82,6 +83,9 @@ async function login(base, body) {
       CUSTOMER_PANEL_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
       CHANNEL_CONNECTIONS_TEST_MODE: "1",
+      CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES: JSON.stringify({
+        "rav-customer-account": "rav-toys"
+      }),
       META_APP_ID: "123456789",
       META_APP_SECRET: "channel-e2e-meta-app-secret-value",
       META_WHATSAPP_CONFIG_ID: "channel-e2e-whatsapp-config",
@@ -105,6 +109,7 @@ async function login(base, body) {
     const userA = await login(base, { email: "admin@a.example", password: "TenantPassword2026" });
     const userB = await login(base, { email: "admin@b.example", password: "TenantPassword2026" });
     const appointmentUser = await login(base, { email: "admin@c.example", password: "TenantPassword2026" });
+    const ravCustomer = await login(base, { email: "admin@ravtoys.example", password: "TenantPassword2026" });
     const superAdmin = await login(base, { username: "owner@nextforia.test", password: "OwnerPassword2026" });
     response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
@@ -135,6 +140,31 @@ async function login(base, body) {
     ]);
     assert(body.channels.every(function (row) { return row.tenant_id === "tenant-a"; }));
     assert(!JSON.stringify(body).includes("tenant-b"));
+
+    response = await fetch(base + "/admin/panel/channel-connections", {
+      headers: { cookie: ravCustomer.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    const ravWhatsapp = body.channels.find(function (row) { return row.channel === "whatsapp"; });
+    assert.strictEqual(ravWhatsapp.status, "connected");
+    assert.strictEqual(ravWhatsapp.account_label, "+57 301 000 0000");
+    assert.strictEqual(ravWhatsapp.connect_available, false);
+    assert.strictEqual(ravWhatsapp.disconnect_available, false);
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://nextforia.com",
+        "x-nextforia-panel-origin": "https://nextforia.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "nextforia.com",
+        cookie: ravCustomer.cookie
+      },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 409, "RAV reuses its protected live WhatsApp connection");
 
     response = await fetch(base + "/admin/panel/channel-connections/instagram/connect", {
       method: "POST",

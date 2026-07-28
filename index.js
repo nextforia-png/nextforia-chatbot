@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v224-super-admin-setup-delete-fallback";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v225-super-admin-setup-delete-audit";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4342,7 +4342,7 @@ async function markSetupReviewTenantDeleted(tenant, onboarding, auth, confirmati
   clientOnboardingCacheByTenant.delete(tenantId);
   if (SUPABASE_ENABLED) {
     await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
-      tenant_id: tenantId,
+      tenant_id: null,
       invitation_id: null,
       actor: String(actor).slice(0, 160),
       action: "tenant_deleted",

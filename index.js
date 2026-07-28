@@ -225,7 +225,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v209-shopify-auto-pair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v210-meta-public-origin";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -305,6 +305,10 @@ const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24,
 const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
 const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
 const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL, CUSTOMER_PANEL_FALLBACK_BASE_URLS).filter(Boolean);
+const CHANNEL_CONNECTION_PUBLIC_ORIGINS = configuredHttpsOrigins(
+  process.env.CHANNEL_CONNECTION_PUBLIC_ORIGINS ||
+  "https://nextforia.com,https://staging.nextforia.com"
+);
 const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
 const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
 const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
@@ -5171,7 +5175,11 @@ function channelConnectionCallbackUrlForRequest(req) {
     requestHeaderOrigin(req.get("origin")) ||
     requestHeaderOrigin(req.get("referer")) ||
     forwardedOrigin;
-  const allowedOrigins = Array.from(new Set(ADMIN_ALLOWED_BASE_URLS.filter(Boolean)));
+  // Meta must return to the public Customer Panel domain. The service can run
+  // behind Render while the signed customer session originates at nextforia.com.
+  const allowedOrigins = Array.from(new Set(
+    ADMIN_ALLOWED_BASE_URLS.concat(CHANNEL_CONNECTION_PUBLIC_ORIGINS).filter(Boolean)
+  ));
   const origin = requestOrigin && allowedOrigins.includes(requestOrigin)
     ? requestOrigin
     : fallbackOrigin;

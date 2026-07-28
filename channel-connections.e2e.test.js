@@ -78,7 +78,7 @@ async function login(base, body) {
       CUSTOMER_ACCESS_V2_ENABLED: "1",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
-      PUBLIC_BASE_URL: "https://nextforia.com",
+      PUBLIC_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
       CUSTOMER_PANEL_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
       CHANNEL_CONNECTIONS_TEST_MODE: "1",

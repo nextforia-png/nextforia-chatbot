@@ -79,6 +79,7 @@ assert.match(html, /Testing/);
 assert.match(html, /Live/);
 assert.match(html, /Pedir cambios/);
 assert.match(html, /Aprobar setup/);
+assert.match(html, /Eliminar cliente/);
 assert.match(html, /espera aprobación de Super Admin/);
 assert.match(html, /Construir configuración/);
 assert.match(html, /Aprobar para Testing/);

@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v176-production-public-signup-leads";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v177-production-customer-access-full-reset";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6284,6 +6284,13 @@ app.post("/admin/setup/:tenantId", async (req, res) => {
         password: req.body.password,
         password_confirmation: req.body.password_confirmation
       });
+      const activeUser = customerAccessService.authenticate
+        ? await customerAccessService.authenticate(user.email, req.body.password)
+        : user;
+      if (activeUser && !customerAccessCreatedAfterReset(activeUser)) {
+        res.status(403).json({ ok: false, error: "customer_access_reset_required" });
+        return;
+      }
       const redirect = await customerPanelEntryRedirect(user);
       setDashboardSessionCookie(req, res, user);
       res.status(201).json({
@@ -6304,6 +6311,10 @@ app.post("/admin/setup/:tenantId", async (req, res) => {
             token: invite,
             password: req.body.password
           });
+          if (user && !customerAccessCreatedAfterReset(user)) {
+            res.status(403).json({ ok: false, error: "customer_access_reset_required" });
+            return;
+          }
           const redirect = await customerPanelEntryRedirect(user);
           setDashboardSessionCookie(req, res, user);
           res.status(200).json({

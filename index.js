@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v189-production-public-signup-log-fallback";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v190-production-public-signup-ready-clean";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -309,12 +309,12 @@ const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
 const CUSTOMER_PUBLIC_SIGNUP_ENABLED = process.env.CUSTOMER_PUBLIC_SIGNUP_ENABLED !== "0";
-const CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO = "2026-07-28T02:22:36.000Z";
+const CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO = "2026-07-28T02:51:06.000Z";
 const CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "";
 const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = Date.parse(CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO) > Date.parse(CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO)
   ? CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO
   : CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO;
-const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-forced-zero-state-2026-07-28";
+const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-ready-clean-2026-07-28";
 const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && SUPABASE_ENABLED

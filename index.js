@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v233-super-admin-tenant-id-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v234-meta-oauth-nextforia-callback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5642,7 +5642,14 @@ function customerHasAppointmentModule(auth) {
 }
 
 function channelConnectionCallbackUrlForRequest(req) {
-  const fallbackOrigin = CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL;
+  const publicPanelOrigin = CHANNEL_CONNECTION_PUBLIC_ORIGINS.find(function (origin) {
+    try { return new URL(origin).hostname === "nextforia.com"; }
+    catch (_) { return false; }
+  }) || "";
+  const fallbackOrigin = CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL || publicPanelOrigin;
+  const safeFallbackOrigin = fallbackOrigin && !/\.onrender\.com$/i.test(new URL(fallbackOrigin).hostname)
+    ? fallbackOrigin
+    : (publicPanelOrigin || fallbackOrigin);
   const forwardedOrigin = configuredHttpsOrigin(
     (firstForwardedHeader(req.get("x-forwarded-proto")) || req.protocol || "https") +
     "://" +
@@ -5659,7 +5666,7 @@ function channelConnectionCallbackUrlForRequest(req) {
   ));
   const origin = requestOrigin && allowedOrigins.includes(requestOrigin)
     ? requestOrigin
-    : fallbackOrigin;
+    : safeFallbackOrigin;
   return origin ? origin + "/admin/channel-connections/meta/callback" : CHANNEL_CONNECTION_CALLBACK_URL;
 }
 

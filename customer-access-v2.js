@@ -836,7 +836,12 @@ function createCustomerAccessService(options) {
       let created;
       try {
         if (store && typeof store.releaseSignupConflicts === "function") {
-          await store.releaseSignupConflicts(Object.assign({}, clean, { before: body.reset_conflicts_before }));
+          try {
+            await store.releaseSignupConflicts(Object.assign({}, clean, { before: body.reset_conflicts_before }));
+          } catch (releaseError) {
+            const releaseSource = String(releaseError && releaseError.details && releaseError.details.store_error || releaseError && (releaseError.code || releaseError.message) || "");
+            if (releaseSource !== "PGRST205" && releaseSource !== "ERR_BAD_REQUEST") throw releaseError;
+          }
         }
         created = await store.createInvitation(Object.assign({}, clean, {
           token_hash: hashInvitationToken(token),

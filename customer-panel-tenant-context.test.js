@@ -53,6 +53,17 @@ assert(tenantB.includes('INITIAL_TAB="summary"'));
 assert(!tenantB.includes(">Empresa A<"));
 assert(!tenantB.includes(">RAV Toys<"));
 
+const staleCombinedBot = render({
+  tenantContext: { id: "tenant-c", company_name: "Empresa C", plan_id: "nextfor-aura", assigned_bot_id: "both", status: "live" }
+});
+assert(staleCombinedBot.includes("Atención al cliente · Plan Nextfor Aura"));
+assert(staleCombinedBot.includes("1 bot activo"));
+assert(!staleCombinedBot.includes('id="bot-appointments"'));
+assert(!staleCombinedBot.includes('id="mobile-bot-appointments"'));
+assert(!staleCombinedBot.includes('id="mnav-appointments"'));
+assert(!staleCombinedBot.includes('id="mnav-appointment-chats"'));
+assert(staleCombinedBot.includes('INITIAL_TAB="summary"'));
+
 const escaped = render({
   tenantContext: { id: "unsafe", company_name: "<script>alert(1)</script>", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }
 });

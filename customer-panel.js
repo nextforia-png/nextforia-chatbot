@@ -35,7 +35,13 @@ function customerPanelContext(options) {
   }
   const businessName = String(tenant.company_name || tenant.name || tenant.id || "Tu empresa").trim();
   const planId = String(tenant.plan_id || "").trim().toLowerCase();
-  const assignedBotId = String(tenant.assigned_bot_id || "").trim().toLowerCase();
+  const rawAssignedBotId = String(tenant.assigned_bot_id || "").trim().toLowerCase();
+  const supportOnlyPlans = ["nextfor-uno", "nextfor-aura"];
+  const appointmentOnlyPlans = ["nextfor-tempo"];
+  const combinedPlans = ["nextfor-atlas"];
+  const assignedBotId = supportOnlyPlans.includes(planId)
+    ? "atencion-cliente"
+    : (appointmentOnlyPlans.includes(planId) ? "agendamiento" : (combinedPlans.includes(planId) ? "both" : rawAssignedBotId));
   const planNames = { starter: "Starter", growth: "Growth", scale: "Scale", "nextfor-uno": "Nextfor Uno", "nextfor-aura": "Nextfor Aura" };
   const botNames = { "atencion-cliente": "Atención al cliente", agendamiento: "Agendamiento", commerce: "Commerce", duo: "Atención al cliente + Agendamiento", both: "Atención al cliente + Agendamiento" };
   const supportBots = ["atencion-cliente", "commerce", "duo", "both"];
@@ -128,6 +134,9 @@ module.exports = function renderCustomerPanel(res, options) {
   const appointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
   const mobileSupportBotButton = !paymentGateRequired && panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
   const mobileAppointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
+  const mobileAppointmentTabs = panelContext.appointments && !paymentGateRequired
+    ? '<button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'agenda\')"><span class="mobileNavIcon">' + PANEL_ICONS.calendar + '</span><span>Agenda</span></button><button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="chats" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'chats\')"><span class="mobileNavIcon">' + PANEL_ICONS.conversaciones + '</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button>'
+    : "";
   const activeBotCount = panelContext.v2 ? ((panelContext.support ? 1 : 0) + (panelContext.appointments ? 1 : 0) || 1) : 2;
   const assignedModuleDescription = panelContext.appointments
     ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
@@ -1482,8 +1491,7 @@ ${customerAppointments.styles}
     <button id="mnav-summary" data-bot="support" type="button" onclick="showTab('summary')"><span class="mobileNavIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
     <button id="mnav-conversations" data-bot="support" type="button" onclick="showTab('conversations')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span></button>
     <button id="mnav-retargeting" data-bot="support" type="button" onclick="showTab('retargeting')"><span class="mobileNavIcon">${PANEL_ICONS.gift}</span><span>Seguim.</span></button>
-    <button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab('appointments');showAppointmentSection('agenda')"><span class="mobileNavIcon">${PANEL_ICONS.calendar}</span><span>Agenda</span></button>
-    <button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="chats" type="button" onclick="showTab('appointments');showAppointmentSection('chats')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button>
+    ${mobileAppointmentTabs}
     ${planMobileNav}
     ${channelsMobileNav}
     <button id="mnav-setup" data-bot="account" type="button" onclick="showTab('setup')"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Config.</span></button>

@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v179-production-public-signup-clean-slate";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v180-production-public-signup-clean-reset";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -6221,7 +6221,10 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
   try {
     const catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
     const defaults = publicSignupDefaults(catalogs);
-    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, { contact_phone: contactPhone }, defaults));
+    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, {
+      contact_phone: contactPhone,
+      reset_conflicts_before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO
+    }, defaults));
     let onboardingDraft = null;
     try {
       onboardingDraft = await persistPublicSignupLeadDraft(user, Object.assign({}, req.body, { contact_phone: contactPhone }));
@@ -6544,6 +6547,10 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
 });
 
 app.get("/admin/client-onboarding-demo", (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    res.redirect(302, "/admin/create-account" + (req.query.business ? "?business=" + encodeURIComponent(req.query.business) : ""));
+    return;
+  }
   if (String(req.query.step || "") !== "setup") {
     renderCustomerPublicSignup(res, {
       businessHint: req.query.business || "",

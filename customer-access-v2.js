@@ -181,6 +181,68 @@ class SupabaseCustomerAccessStore {
     return rows[0];
   }
 
+  async releaseSignupConflicts(input) {
+    const email = normalizeEmail(input && input.admin_email);
+    const companyName = String(input && input.company_name || "").trim().replace(/\s+/g, " ");
+    const before = input && input.before ? String(input.before) : "";
+    const beforeDate = Date.parse(before);
+    if (!Number.isFinite(beforeDate)) return { users: 0, tenants: 0 };
+    const marker = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14) + "-" + crypto.randomBytes(4).toString("hex");
+    const patchHeaders = Object.assign({ Prefer: "return=representation" }, this.headers);
+    let releasedUsers = 0;
+    let releasedTenants = 0;
+    if (email) {
+      const users = await this.axios.get(this.url + "/rest/v1/tenant_users", {
+        params: { select: "user_id,tenant_id,email_normalized,created_at", email_normalized: "eq." + email, created_at: "lt." + before },
+        headers: this.headers,
+        timeout: 8000
+      }).then(function (response) { return Array.isArray(response.data) ? response.data : []; });
+      for (const user of users) {
+        const resetEmail = "reset+" + marker + "-" + String(user.user_id || "").slice(0, 8) + "@nextforia.local";
+        await this.axios.patch(this.url + "/rest/v1/tenant_users", {
+          email_normalized: resetEmail,
+          active: false,
+          status: "disabled",
+          updated_at: new Date().toISOString()
+        }, {
+          params: { user_id: "eq." + user.user_id },
+          headers: patchHeaders,
+          timeout: 8000
+        });
+        releasedUsers += 1;
+      }
+      await this.axios.patch(this.url + "/rest/v1/tenant_invitations", {
+        email_normalized: "reset+" + marker + "@nextforia.local",
+        revoked_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }, {
+        params: { email_normalized: "eq." + email, revoked_at: "is.null", created_at: "lt." + before },
+        headers: patchHeaders,
+        timeout: 8000
+      }).catch(function () {});
+    }
+    if (companyName) {
+      const tenants = await this.axios.get(this.url + "/rest/v1/tenants", {
+        params: { select: "id,company_name,status,created_at", company_name: "ilike." + companyName, created_at: "lt." + before },
+        headers: this.headers,
+        timeout: 8000
+      }).then(function (response) { return Array.isArray(response.data) ? response.data : []; });
+      for (const tenant of tenants) {
+        await this.axios.patch(this.url + "/rest/v1/tenants", {
+          company_name: String(tenant.company_name || tenant.id) + " · reset " + marker,
+          status: "archivado",
+          updated_at: new Date().toISOString()
+        }, {
+          params: { id: "eq." + tenant.id },
+          headers: patchHeaders,
+          timeout: 8000
+        });
+        releasedTenants += 1;
+      }
+    }
+    return { users: releasedUsers, tenants: releasedTenants };
+  }
+
   async updateDelivery(input) {
     const rows = await this.rpc("platform_update_invitation_delivery_v2", {
       p_invitation_id: input.invitation_id,
@@ -624,6 +686,9 @@ function createCustomerAccessService(options) {
       const expiresAt = new Date(createdAt.getTime() + ttlHours * 60 * 60 * 1000).toISOString();
       let created;
       try {
+        if (store && typeof store.releaseSignupConflicts === "function") {
+          await store.releaseSignupConflicts(Object.assign({}, clean, { before: body.reset_conflicts_before }));
+        }
         created = await store.createInvitation(Object.assign({}, clean, {
           token_hash: hashInvitationToken(token),
           expires_at: expiresAt,

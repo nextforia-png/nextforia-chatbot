@@ -54,7 +54,7 @@ async function login(base, body, expectedStatus) {
 function signedSessionCookie(secret, user) {
   const payload = Buffer.from(JSON.stringify({
     v: 2,
-    rst: "customer-access-full-reset-2026-07-28",
+    rst: "customer-access-zero-state-2026-07-28",
     uid: user.user_id,
     e: user.email,
     n: user.email,
@@ -98,7 +98,7 @@ function signedSessionCookie(secret, user) {
       SUPABASE_KEY: "",
       CUSTOMER_ACCESS_V2_ENABLED: "1",
       CUSTOMER_PUBLIC_SIGNUP_ENABLED: "1",
-      CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T02:02:19.000Z",
+      CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T02:10:19.000Z",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_ACCESS_TEST_INVITATIONS: JSON.stringify([
@@ -191,6 +191,24 @@ function signedSessionCookie(secret, user) {
     });
     assert.strictEqual(response.status, 409);
     assert.strictEqual((await response.json()).error, "customer_already_exists");
+
+    response = await fetch(base + "/admin/create-account", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({
+        company_name: "Empresa Vieja",
+        admin_email: "ventas@ravtoys.com",
+        contact_phone: "+57 300 444 5555",
+        password: "ResetPassword2026",
+        password_confirmation: "ResetPassword2026"
+      })
+    });
+    assert.strictEqual(response.status, 201, "a pre-reset email/company can start over from zero");
+    const resetSignup = await response.json();
+    assert.strictEqual(resetSignup.user.email, "ventas@ravtoys.com");
+    assert.strictEqual(resetSignup.tenant.company_name, "Empresa Vieja");
+    const resetLogin = await login(base, { email: "ventas@ravtoys.com", password: "ResetPassword2026" });
+    assert.strictEqual(resetLogin.body.user.tenant_id, resetSignup.tenant.id);
 
     response = await fetch(base + "/admin/setup/setup-tenant?invite=" + validInviteToken);
     assert.strictEqual(response.status, 200);

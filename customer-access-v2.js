@@ -463,6 +463,48 @@ class InMemoryCustomerAccessStore {
     return Object.assign({}, invitation, { tenant_status: tenant.status, membership_status: user.status });
   }
 
+  async releaseSignupConflicts(input) {
+    const email = normalizeEmail(input && input.admin_email);
+    const companyName = String(input && input.company_name || "").trim().replace(/\s+/g, " ");
+    const before = input && input.before ? String(input.before) : "";
+    const beforeDate = Date.parse(before);
+    if (!Number.isFinite(beforeDate)) return { users: 0, tenants: 0 };
+    const marker = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14) + "-" + crypto.randomBytes(4).toString("hex");
+    let releasedUsers = 0;
+    let releasedTenants = 0;
+    if (email) {
+      this.users.forEach(function (user) {
+        const created = Date.parse(user.created_at || "");
+        if (user.email_normalized === email && Number.isFinite(created) && created < beforeDate) {
+          user.email_normalized = "reset+" + marker + "-" + String(user.user_id || "").slice(0, 8) + "@nextforia.local";
+          user.active = false;
+          user.status = "disabled";
+          user.updated_at = new Date().toISOString();
+          releasedUsers += 1;
+        }
+      });
+      this.invitations.forEach(function (invitation) {
+        const created = Date.parse(invitation.created_at || "");
+        if (invitation.email_normalized === email && Number.isFinite(created) && created < beforeDate) {
+          invitation.email_normalized = "reset+" + marker + "-" + String(invitation.id || "").slice(0, 8) + "@nextforia.local";
+          invitation.revoked_at = invitation.revoked_at || new Date().toISOString();
+        }
+      });
+    }
+    if (companyName) {
+      this.tenants.forEach(function (tenant) {
+        const created = Date.parse(tenant.created_at || "");
+        if (String(tenant.company_name || "").toLowerCase() === companyName.toLowerCase() && Number.isFinite(created) && created < beforeDate) {
+          tenant.company_name = String(tenant.company_name || tenant.id) + " · reset " + marker;
+          tenant.status = "archivado";
+          tenant.updated_at = new Date().toISOString();
+          releasedTenants += 1;
+        }
+      });
+    }
+    return { users: releasedUsers, tenants: releasedTenants };
+  }
+
   async updateDelivery(input) {
     const row = this.invitations.find(function (item) { return item.id === input.invitation_id; });
     if (!row) throw new CustomerAccessError("invalid_invitation", 403);

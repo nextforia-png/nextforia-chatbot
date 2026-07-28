@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v182-production-customer-access-full-reset";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v183-production-customer-access-zero-state";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -309,8 +309,8 @@ const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
 const CUSTOMER_PUBLIC_SIGNUP_ENABLED = process.env.CUSTOMER_PUBLIC_SIGNUP_ENABLED !== "0";
-const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "2026-07-28T02:02:19.000Z";
-const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-full-reset-2026-07-28";
+const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "2026-07-28T02:10:19.000Z";
+const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-zero-state-2026-07-28";
 const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && SUPABASE_ENABLED
@@ -4647,22 +4647,67 @@ async function resetCustomerPanelAccess(actor, options) {
   if (!SUPABASE_ENABLED) throw new CustomerAccessError("persistent_user_store_unavailable", 503);
   const now = new Date().toISOString();
   const before = options && options.before ? String(options.before) : "";
-  const beforeFilter = before ? "&created_at=lt." + encodeURIComponent(before) : "";
+  const beforeParam = before ? { created_at: "lt." + before } : {};
   const patchHeaders = Object.assign({ Prefer: "return=representation" }, SB_HEADERS);
-  const disabledUsers = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_users?active=eq.true" + beforeFilter, {
-    active: false,
-    status: "disabled",
-    updated_at: now
-  }, { headers: patchHeaders, timeout: 10000 }).then(function (response) {
-    return Array.isArray(response.data) ? response.data : [];
-  });
-  const revokedInvitations = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_invitations?used_at=is.null&revoked_at=is.null" + beforeFilter, {
-    revoked_at: now,
-    updated_at: now
-  }, { headers: patchHeaders, timeout: 10000 }).then(function (response) {
-    return Array.isArray(response.data) ? response.data : [];
-  });
-  if (disabledUsers.length || revokedInvitations.length) {
+  const resetMarker = now.replace(/[^0-9]/g, "").slice(0, 14) + "-" + crypto.randomBytes(4).toString("hex");
+  const oldUsers = await axios.get(SUPABASE_URL + "/rest/v1/tenant_users", {
+    params: Object.assign({ select: "user_id,email_normalized,created_at", limit: 1000 }, beforeParam),
+    headers: SB_HEADERS,
+    timeout: 10000
+  }).then(function (response) { return Array.isArray(response.data) ? response.data : []; });
+  const disabledUsers = [];
+  for (const user of oldUsers) {
+    const resetEmail = "reset+" + resetMarker + "-" + String(user.user_id || "").slice(0, 8) + "@nextforia.local";
+    const rows = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_users", {
+      email_normalized: resetEmail,
+      active: false,
+      status: "disabled",
+      updated_at: now
+    }, {
+      params: { user_id: "eq." + user.user_id },
+      headers: patchHeaders,
+      timeout: 10000
+    }).then(function (response) { return Array.isArray(response.data) ? response.data : []; });
+    disabledUsers.push.apply(disabledUsers, rows);
+  }
+  const oldInvitations = await axios.get(SUPABASE_URL + "/rest/v1/tenant_invitations", {
+    params: Object.assign({ select: "id,email_normalized,created_at,used_at,revoked_at", limit: 1000 }, beforeParam),
+    headers: SB_HEADERS,
+    timeout: 10000
+  }).then(function (response) { return Array.isArray(response.data) ? response.data : []; }).catch(function () { return []; });
+  const revokedInvitations = [];
+  for (const invitation of oldInvitations) {
+    const resetInviteEmail = "reset+" + resetMarker + "-" + String(invitation.id || "").slice(0, 8) + "@nextforia.local";
+    const rows = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_invitations", {
+      email_normalized: resetInviteEmail,
+      revoked_at: invitation.revoked_at || now,
+      updated_at: now
+    }, {
+      params: { id: "eq." + invitation.id },
+      headers: patchHeaders,
+      timeout: 10000
+    }).then(function (response) { return Array.isArray(response.data) ? response.data : []; });
+    revokedInvitations.push.apply(revokedInvitations, rows);
+  }
+  const oldTenants = await axios.get(SUPABASE_URL + "/rest/v1/tenants", {
+    params: Object.assign({ select: "id,company_name,status,created_at", limit: 1000 }, beforeParam),
+    headers: SB_HEADERS,
+    timeout: 10000
+  }).then(function (response) { return Array.isArray(response.data) ? response.data : []; }).catch(function () { return []; });
+  const archivedTenants = [];
+  for (const tenant of oldTenants) {
+    const rows = await axios.patch(SUPABASE_URL + "/rest/v1/tenants", {
+      company_name: String(tenant.company_name || tenant.id) + " · reset " + resetMarker,
+      status: "archivado",
+      updated_at: now
+    }, {
+      params: { id: "eq." + tenant.id },
+      headers: patchHeaders,
+      timeout: 10000
+    }).then(function (response) { return Array.isArray(response.data) ? response.data : []; });
+    archivedTenants.push.apply(archivedTenants, rows);
+  }
+  if (disabledUsers.length || revokedInvitations.length || archivedTenants.length) {
     try {
       await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
         tenant_id: null,
@@ -4674,6 +4719,7 @@ async function resetCustomerPanelAccess(actor, options) {
           before: before || null,
           disabled_users: disabledUsers.length,
           revoked_invitations: revokedInvitations.length,
+          archived_tenants: archivedTenants.length,
           legacy_customer_panel_users_enabled: LEGACY_CUSTOMER_PANEL_USERS_ENABLED,
           public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
         }
@@ -4686,6 +4732,7 @@ async function resetCustomerPanelAccess(actor, options) {
   return {
     disabled_users: disabledUsers.length,
     revoked_invitations: revokedInvitations.length,
+    archived_tenants: archivedTenants.length,
     disabled_user_emails: disabledUsers.map(function (row) { return row.email_normalized; }).filter(Boolean),
     revoked_invitation_emails: revokedInvitations.map(function (row) { return row.email_normalized; }).filter(Boolean)
   };
@@ -9364,11 +9411,12 @@ app.listen(PORT, () => {
   if (customerAccessResetEnabled() && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED) {
     resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
       .then(function (result) {
-        if ((result.disabled_users || 0) || (result.revoked_invitations || 0)) {
+        if ((result.disabled_users || 0) || (result.revoked_invitations || 0) || (result.archived_tenants || 0)) {
           console.log("Customer access clean slate:", JSON.stringify({
             before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO,
             disabled_users: result.disabled_users,
             revoked_invitations: result.revoked_invitations,
+            archived_tenants: result.archived_tenants,
             public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
           }));
         } else {

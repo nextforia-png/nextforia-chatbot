@@ -328,6 +328,74 @@ class SupabaseCustomerAccessStore {
     if (!rows[0]) throw new CustomerAccessError("invalid_invitation", 403);
     return rows[0];
   }
+
+  async createPublicSignupDirect(input) {
+    const now = new Date().toISOString();
+    const slug = String(input.company_name || "cliente").normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 45) || "cliente";
+    const tenantId = slug + "-" + crypto.randomBytes(3).toString("hex");
+    const headers = Object.assign({ Prefer: "return=representation" }, this.headers);
+    const tenant = await this.axios.post(this.url + "/rest/v1/tenants", {
+      id: tenantId,
+      company_name: input.company_name,
+      plan_id: input.plan_id,
+      assigned_bot_id: input.assigned_bot_id,
+      status: "setup"
+    }, { headers: headers, timeout: 10000 }).then(function (response) {
+      return Array.isArray(response.data) ? response.data[0] : response.data;
+    });
+    const user = await this.axios.post(this.url + "/rest/v1/tenant_users", {
+      tenant_id: tenantId,
+      email_normalized: input.admin_email,
+      role: "admin",
+      status: "active",
+      active: true,
+      password_hash: input.password_hash,
+      password_salt: input.password_salt
+    }, { headers: headers, timeout: 10000 }).then(function (response) {
+      return Array.isArray(response.data) ? response.data[0] : response.data;
+    });
+    let invitation = null;
+    try {
+      invitation = await this.axios.post(this.url + "/rest/v1/tenant_invitations", {
+        tenant_id: tenantId,
+        tenant_user_id: user.user_id,
+        email_normalized: input.admin_email,
+        role: "admin",
+        token_hash: input.token_hash,
+        delivery_status: "pending",
+        expires_at: input.expires_at,
+        used_at: now,
+        created_by: input.created_by || "public_signup"
+      }, { headers: headers, timeout: 10000 }).then(function (response) {
+        return Array.isArray(response.data) ? response.data[0] : response.data;
+      });
+    } catch (_) {
+      invitation = null;
+    }
+    try {
+      await this.axios.post(this.url + "/rest/v1/tenant_access_audit", {
+        tenant_id: tenantId,
+        invitation_id: invitation && invitation.id || null,
+        actor: "public_signup",
+        action: "tenant_invitation_created",
+        metadata: { source: "public_signup_direct", plan_id: input.plan_id, assigned_bot_id: input.assigned_bot_id, admin_email: input.admin_email }
+      }, { headers: Object.assign({ Prefer: "return=minimal" }, this.headers), timeout: 8000 });
+    } catch (_) {}
+    return {
+      user_id: user.user_id,
+      tenant_id: tenantId,
+      email_normalized: input.admin_email,
+      role: user.role || "admin",
+      company_name: tenant && tenant.company_name || input.company_name,
+      created_at: user.created_at || now,
+      updated_at: user.updated_at || now
+    };
+  }
 }
 
 class InMemoryCustomerAccessStore {
@@ -726,6 +794,39 @@ function createCustomerAccessService(options) {
       const token = crypto.randomBytes(32).toString("base64url");
       const createdAt = now();
       const expiresAt = new Date(createdAt.getTime() + ttlHours * 60 * 60 * 1000).toISOString();
+      const salt = crypto.randomBytes(16);
+      const passwordHash = hashPassword(password, salt);
+      const passwordSalt = salt.toString("base64url");
+      if (store && typeof store.createPublicSignupDirect === "function") {
+        try {
+          if (typeof store.releaseSignupConflicts === "function") {
+            await store.releaseSignupConflicts(Object.assign({}, clean, { before: body.reset_conflicts_before }));
+          }
+          const directUser = await store.createPublicSignupDirect(Object.assign({}, clean, {
+            token_hash: hashInvitationToken(token),
+            expires_at: expiresAt,
+            password_hash: passwordHash,
+            password_salt: passwordSalt,
+            created_by: "public_signup"
+          }));
+          return {
+            user_id: directUser.user_id,
+            email: directUser.email_normalized,
+            username: directUser.email_normalized,
+            name: directUser.email_normalized,
+            role: directUser.role || "admin",
+            tenant_id: directUser.tenant_id,
+            company_name: directUser.company_name || clean.company_name,
+            plan_id: clean.plan_id,
+            assigned_bot_id: clean.assigned_bot_id,
+            tenant_status: "setup",
+            created_at: directUser.created_at || createdAt.toISOString(),
+            updated_at: directUser.updated_at || createdAt.toISOString()
+          };
+        } catch (error) {
+          throw mapStoreError(error && error.response && error.response.data || error);
+        }
+      }
       let created;
       try {
         if (store && typeof store.releaseSignupConflicts === "function") {
@@ -739,14 +840,13 @@ function createCustomerAccessService(options) {
       } catch (error) {
         throw mapStoreError(error);
       }
-      const salt = crypto.randomBytes(16);
       let user;
       try {
         user = await store.consumeInvitation({
           tenant_id: created.tenant_id,
           token_hash: hashInvitationToken(token),
-          password_hash: hashPassword(password, salt),
-          password_salt: salt.toString("base64url")
+          password_hash: passwordHash,
+          password_salt: passwordSalt
         });
       } catch (error) {
         throw mapStoreError(error);

@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v188-production-public-signup-ignore-rest-release";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v189-production-public-signup-log-fallback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -505,6 +505,22 @@ app.use("/admin", async function revalidateCustomerSession(req, res, next) {
   const session = readDashboardSession(req);
   if (!session || session.version !== 2) return next();
   req.dashboardSessionChecked = true;
+  if (session.fallback_access) {
+    try {
+      const activeUser = await validatePublicCustomerAccessSession(session);
+      if (activeUser) {
+        req.dashboardVerifiedSession = Object.assign({}, session, activeUser, { ok: true, version: 2, session_version: 2, method: "session" });
+      } else {
+        clearDashboardSessionCookie(req, res);
+        req.dashboardVerifiedSession = null;
+      }
+      return next();
+    } catch (_) {
+      clearDashboardSessionCookie(req, res);
+      req.dashboardVerifiedSession = null;
+      return next();
+    }
+  }
   try {
     const activeUser = await customerAccessService.validateSession(session);
     if (activeUser && !customerAccessCreatedAfterReset(activeUser)) {
@@ -3696,6 +3712,7 @@ function createDashboardSession(user) {
       n: normalizeDashboardUsername(user.email),
       r: cleanDashboardRole(user.role),
       t: cleanTenantId(user.tenant_id),
+      fb: !!user.fallback_access,
       exp: Date.now() + DASHBOARD_SESSION_TTL_HOURS * 60 * 60 * 1000
     })).toString("base64url");
     return payloadV2 + "." + signDashboardPayload(payloadV2);
@@ -3739,6 +3756,7 @@ function readDashboardSession(req) {
         name: email,
         role: cleanDashboardRole(session.r),
         tenant_id: tenantId,
+        fallback_access: !!session.fb,
         method: "session"
       };
     }
@@ -3825,6 +3843,119 @@ async function loadDashboardCustomerUser(force, requirePersistentRead) {
 
 function hashDashboardPassword(password, salt) {
   return crypto.scryptSync(String(password || ""), salt, 64).toString("base64url");
+}
+
+const PUBLIC_CUSTOMER_ACCESS_TOOL = "public_customer_access_user";
+function publicCustomerAccessRecordId(email) {
+  return "customer-access-public:" + normalizeDashboardUsername(email).replace(/[^a-z0-9@._-]/g, "");
+}
+
+function parsePublicCustomerAccessTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(PUBLIC_CUSTOMER_ACCESS_TOOL)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[PublicCustomerAccess\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || !parsed.user_id || !parsed.tenant_id || !validEmailIdentity(parsed.email)) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function loadPublicCustomerAccessUser(email) {
+  const recordId = publicCustomerAccessRecordId(email);
+  let turns = [];
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(recordId, 20);
+    if (rows) turns = rows.map(normalizeTurnRow);
+  } else {
+    turns = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === recordId; });
+  }
+  return turns.map(parsePublicCustomerAccessTurn).find(function (user) { return user && user.active !== false; }) || null;
+}
+
+async function persistPublicCustomerAccessUser(input) {
+  const email = normalizeDashboardUsername(input.admin_email);
+  if (!validEmailIdentity(email)) throw new CustomerAccessError("invalid_email", 400);
+  const existing = await loadPublicCustomerAccessUser(email);
+  if (existing && customerAccessCreatedAfterReset(existing)) throw new CustomerAccessError("customer_already_exists", 409);
+  const salt = crypto.randomBytes(16);
+  const createdAt = new Date().toISOString();
+  const slug = String(input.company_name || "cliente").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 45) || "cliente";
+  const stored = {
+    version: 1,
+    fallback_access: true,
+    user_id: crypto.randomUUID(),
+    tenant_id: slug + "-" + crypto.randomBytes(3).toString("hex"),
+    company_name: String(input.company_name || "").trim().slice(0, 120),
+    email,
+    role: "admin",
+    plan_id: input.plan_id || "nextfor-uno",
+    assigned_bot_id: input.assigned_bot_id || "atencion-cliente",
+    password_hash: hashDashboardPassword(input.password, salt),
+    password_salt: salt.toString("base64url"),
+    active: true,
+    created_at: createdAt,
+    updated_at: createdAt
+  };
+  const rec = {
+    ts: createdAt,
+    userId: publicCustomerAccessRecordId(email),
+    tenantId: DEFAULT_TENANT_ID,
+    userMessage: "",
+    botReply: "[PublicCustomerAccess] " + JSON.stringify(stored),
+    tools: [PUBLIC_CUSTOMER_ACCESS_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: PUBLIC_CUSTOMER_ACCESS_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  return {
+    user_id: stored.user_id,
+    email: stored.email,
+    username: stored.email,
+    name: stored.email,
+    role: stored.role,
+    tenant_id: stored.tenant_id,
+    company_name: stored.company_name,
+    plan_id: stored.plan_id,
+    assigned_bot_id: stored.assigned_bot_id,
+    tenant_status: "setup",
+    created_at: stored.created_at,
+    updated_at: stored.updated_at,
+    fallback_access: true
+  };
+}
+
+async function authenticatePublicCustomerAccessUser(email, password) {
+  const stored = await loadPublicCustomerAccessUser(email);
+  if (!stored || !stored.password_hash || !stored.password_salt || !customerAccessCreatedAfterReset(stored)) return null;
+  let candidate = "";
+  try { candidate = hashDashboardPassword(password, Buffer.from(stored.password_salt, "base64url")); }
+  catch (_) { return null; }
+  if (!safeEqualText(candidate, stored.password_hash)) return null;
+  return Object.assign({}, stored, {
+    username: stored.email,
+    name: stored.email,
+    fallback_access: true
+  });
+}
+
+async function validatePublicCustomerAccessSession(session) {
+  const stored = await loadPublicCustomerAccessUser(session && session.email);
+  if (!stored || !customerAccessCreatedAfterReset(stored)) return null;
+  if (String(stored.user_id) !== String(session && session.user_id)) return null;
+  if (cleanTenantId(stored.tenant_id) !== cleanTenantId(session && session.tenant_id)) return null;
+  return Object.assign({}, stored, {
+    username: stored.email,
+    name: stored.email,
+    fallback_access: true
+  });
 }
 
 async function persistDashboardCustomerUser(input) {
@@ -4618,9 +4749,16 @@ async function dashboardUserFromCredentials(username, password, options) {
   ) && safeEqualText(user.password, cleanPass));
   if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
-    const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    let customerAccessUser = null;
+    try {
+      customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    } catch (error) {
+      customerAccessUser = null;
+    }
     if (customerAccessUser && !customerAccessCreatedAfterReset(customerAccessUser)) return null;
     if (customerAccessUser) return customerAccessUser;
+    const fallbackUser = await authenticatePublicCustomerAccessUser(normalizedUser, cleanPass);
+    if (fallbackUser) return fallbackUser;
   }
   if (!LEGACY_CUSTOMER_PANEL_USERS_ENABLED) return null;
   const customerUser = await loadDashboardCustomerUser(false);
@@ -6291,10 +6429,24 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
       };
     }
     const defaults = publicSignupDefaults(catalogs);
-    const user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, {
-      contact_phone: contactPhone,
-      reset_conflicts_before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO
-    }, defaults));
+    let user;
+    try {
+      user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, {
+        contact_phone: contactPhone,
+        reset_conflicts_before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO
+      }, defaults));
+    } catch (signupError) {
+      const missingAccessRpc = signupError instanceof CustomerAccessError
+        && signupError.code === "customer_access_unavailable"
+        && String(signupError.details && signupError.details.store_error || "").includes("PGRST202");
+      if (!missingAccessRpc) throw signupError;
+      console.error("public signup fallback store enabled: missing customer access RPC");
+      user = await persistPublicCustomerAccessUser(Object.assign({}, req.body, {
+        contact_phone: contactPhone,
+        plan_id: defaults.plan_id,
+        assigned_bot_id: defaults.assigned_bot_id
+      }));
+    }
     let onboardingDraft = null;
     try {
       onboardingDraft = await persistPublicSignupLeadDraft(user, Object.assign({}, req.body, { contact_phone: contactPhone }));

@@ -70,6 +70,7 @@ const {
   generateCustomerServiceConfiguration,
   normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
+  mergeCustomerSetupQuestionnaireHistory,
   pendingQuestionnaireItems
 } = require("./client-onboarding");
 const {
@@ -209,7 +210,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v198-production-setup-catalog-refresh";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v199-production-questionnaire-history-restore";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4522,13 +4523,16 @@ async function loadCustomerSetupQuestionnaire(force) {
   }
   let questionnaire = customerSetupQuestionnaireCache.questionnaire;
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID, 1);
-    if (rows) questionnaire = rows.map(normalizeTurnRow).map(parseCustomerSetupQuestionnaireTurn).find(Boolean) || questionnaire;
+    const rows = await supabaseFetchUserRecent(CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID, 25);
+    const snapshots = rows ? rows.map(normalizeTurnRow).map(parseCustomerSetupQuestionnaireTurn).filter(Boolean) : [];
+    if (snapshots.length) questionnaire = mergeCustomerSetupQuestionnaireHistory(snapshots, snapshots[0].updated_by || "", snapshots[0].updated_at) || questionnaire;
   } else {
-    questionnaire = conversationLogs.slice().reverse()
+    const snapshots = conversationLogs.slice().reverse()
       .filter(function (turn) { return turn.userId === CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID; })
       .map(parseCustomerSetupQuestionnaireTurn)
-      .find(Boolean) || questionnaire;
+      .filter(Boolean)
+      .slice(0, 25);
+    if (snapshots.length) questionnaire = mergeCustomerSetupQuestionnaireHistory(snapshots, snapshots[0].updated_by || "", snapshots[0].updated_at) || questionnaire;
   }
   if (!questionnaire) questionnaire = normalizeCustomerSetupQuestionnaire({ questions: CUSTOMER_SETUP_QUESTIONS }, "", null);
   customerSetupQuestionnaireCache = { loaded_at: now, questionnaire };

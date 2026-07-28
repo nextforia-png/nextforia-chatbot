@@ -11,6 +11,7 @@ const {
   createOnboardingRecord,
   generateCustomerServiceConfiguration,
   normalizeCustomerServiceConfiguration,
+  mergeCustomerSetupQuestionnaireHistory,
   normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
   onboardingCompletion,
@@ -227,6 +228,30 @@ Object.assign(completedWithCustom, completedAnswers);
 completedWithCustom.custom.como_medir_exito = "Retención, citas confirmadas y ventas recuperadas.";
 assert.strictEqual(onboardingCompletion(completedWithCustom, customQuestionnaire), 100);
 assert.strictEqual(pendingQuestionnaireItems(completedWithCustom, customQuestionnaire, { includeOptionalCustom: true }).length, 0);
+
+const oldQuestionnaireWithCustom = normalizeCustomerSetupQuestionnaire({
+  questions: CUSTOMER_SETUP_QUESTIONS.concat([{
+    id: "custom_pregunta_restaurada",
+    label: "Pregunta restaurada desde historial",
+    section: "business",
+    order: 87,
+    type: "textarea",
+    required: false,
+    active: true
+  }])
+}, "Root", "2026-07-27T10:00:00.000Z");
+const latestQuestionnaireWithoutCustom = normalizeCustomerSetupQuestionnaire({
+  questions: CUSTOMER_SETUP_QUESTIONS
+}, "Root", "2026-07-28T10:00:00.000Z");
+const restoredQuestionnaire = mergeCustomerSetupQuestionnaireHistory([
+  latestQuestionnaireWithoutCustom,
+  oldQuestionnaireWithCustom
+], "Root", "2026-07-28T10:00:00.000Z");
+assert(restoredQuestionnaire.questions.some(function (question) {
+  return question.id === "custom_pregunta_restaurada" &&
+    question.path === "custom.pregunta_restaurada" &&
+    question.label === "Pregunta restaurada desde historial";
+}), "custom questions from older questionnaire records must be restored");
 
 const appointmentAnswers = cloneDefaults();
 appointmentAnswers.setup_goal = "appointments";

@@ -359,6 +359,30 @@ function normalizeCustomerSetupQuestionnaire(input, actor, now) {
   };
 }
 
+function mergeCustomerSetupQuestionnaireHistory(snapshots, actor, now) {
+  const normalized = (Array.isArray(snapshots) ? snapshots : [])
+    .filter(function (snapshot) { return snapshot && typeof snapshot === "object"; })
+    .map(function (snapshot) {
+      return normalizeCustomerSetupQuestionnaire(snapshot, snapshot.updated_by || actor || "", snapshot.updated_at || now || null);
+    });
+  const latest = normalized[0] || normalizeCustomerSetupQuestionnaire({ questions: CUSTOMER_SETUP_QUESTIONS }, actor || "", now || null);
+  const questions = latest.questions.slice();
+  const seen = new Set(questions.map(function (question) { return String(question && question.id || ""); }));
+  normalized.slice(1).forEach(function (snapshot) {
+    (snapshot.questions || []).forEach(function (question) {
+      const id = String(question && question.id || "");
+      if (!question || !question.custom || !id || seen.has(id)) return;
+      seen.add(id);
+      questions.push(question);
+    });
+  });
+  return normalizeCustomerSetupQuestionnaire(
+    { version: 1, questions },
+    latest.updated_by || actor || "",
+    latest.updated_at || now || null
+  );
+}
+
 function questionAppliesToAnswers(question, answers) {
   const goal = answers && answers.setup_goal || "unknown";
   if (question.path === "setup_goal") return true;
@@ -1050,6 +1074,7 @@ module.exports = {
   generateCustomerServiceConfiguration,
   normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
+  mergeCustomerSetupQuestionnaireHistory,
   normalizeOnboarding,
   normalizeSetupReview,
   onboardingCompletion,

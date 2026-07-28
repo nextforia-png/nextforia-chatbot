@@ -881,12 +881,51 @@ function requiredPathsForAnswers(input, questionnaire) {
 
 const REQUIRED_PATHS = CUSTOMER_SERVICE_REQUIRED_PATHS;
 
+function isAnsweredValue(value) {
+  if (value === "" || value === "unknown" || value === false || value == null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return String(value).trim() !== "";
+}
+
+function pendingQuestionnaireItems(input, questionnaire, options) {
+  options = options || {};
+  const answers = normalizeOnboarding(input);
+  const requiredPaths = requiredPathsForAnswers(answers, questionnaire);
+  const byPath = {};
+  const questions = questionnaire && Array.isArray(questionnaire.questions) ? questionnaire.questions : [];
+  questions.forEach(function (question) {
+    if (question && question.path && question.active !== false) byPath[question.path] = question;
+  });
+  let paths = requiredPaths.slice();
+  if (options.includeOptionalCustom) {
+    questions.forEach(function (question) {
+      if (!question || question.active === false || !question.custom || !question.path) return;
+      if (answers.setup_goal !== "unknown" && !questionAppliesToAnswers(question, answers)) return;
+      if (!paths.includes(question.path)) paths.push(question.path);
+    });
+  }
+  return paths.filter(function (path) {
+    return !isAnsweredValue(getPath(answers, path));
+  }).map(function (path) {
+    const question = byPath[path] || {};
+    return {
+      id: question.id || path,
+      path,
+      label: question.label || path,
+      section: question.section || "general",
+      custom: !!question.custom,
+      required: requiredPaths.includes(path),
+      updated_at: questionnaire && questionnaire.updated_at || null
+    };
+  });
+}
+
 function onboardingCompletion(input, questionnaire) {
   const answers = normalizeOnboarding(input);
   const required = requiredPathsForAnswers(answers, questionnaire);
   const complete = required.filter(function (path) {
-    const value = getPath(answers, path);
-    return value !== "" && value !== "unknown" && value !== false && value != null;
+    return isAnsweredValue(getPath(answers, path));
   }).length;
   return Math.round(complete / required.length * 100);
 }
@@ -1013,5 +1052,6 @@ module.exports = {
   normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
   normalizeSetupReview,
-  onboardingCompletion
+  onboardingCompletion,
+  pendingQuestionnaireItems
 };

@@ -13,7 +13,8 @@ const {
   normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
-  onboardingCompletion
+  onboardingCompletion,
+  pendingQuestionnaireItems
 } = require("./client-onboarding");
 
 assert.strictEqual(onboardingCompletion(cloneDefaults()), 0);
@@ -216,10 +217,16 @@ assert.strictEqual(customQuestion.path, "custom.como_medir_exito");
 assert.strictEqual(customQuestion.custom, true);
 assert.strictEqual(customQuestionnaire.updated_by, "Root");
 assert.ok(onboardingCompletion(completedAnswers, customQuestionnaire) < 100);
+const pendingCustom = pendingQuestionnaireItems(completedAnswers, customQuestionnaire, { includeOptionalCustom: true });
+assert.strictEqual(pendingCustom.length, 1);
+assert.strictEqual(pendingCustom[0].label, "¿Cómo vamos a medir éxito?");
+assert.strictEqual(pendingCustom[0].custom, true);
+assert.strictEqual(pendingCustom[0].required, true);
 const completedWithCustom = cloneDefaults();
 Object.assign(completedWithCustom, completedAnswers);
 completedWithCustom.custom.como_medir_exito = "Retención, citas confirmadas y ventas recuperadas.";
 assert.strictEqual(onboardingCompletion(completedWithCustom, customQuestionnaire), 100);
+assert.strictEqual(pendingQuestionnaireItems(completedWithCustom, customQuestionnaire, { includeOptionalCustom: true }).length, 0);
 
 const appointmentAnswers = cloneDefaults();
 appointmentAnswers.setup_goal = "appointments";

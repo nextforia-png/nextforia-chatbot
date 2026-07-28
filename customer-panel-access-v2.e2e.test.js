@@ -175,6 +175,39 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_phone, "+57 311 222 3333");
     assert.strictEqual(publicOnboarding.onboarding.answers.meta.whatsapp_number, "+57 311 222 3333");
 
+    response = await fetch(base + "/admin/customer-setup-questionnaire", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-dashboard-key": "customer-panel-v2-key" },
+      body: JSON.stringify({
+        questions: [{
+          id: "custom_objetivo_retencion",
+          label: "¿Qué información nueva debe aprender Nextfor para mejorar la retención?",
+          section: "business",
+          order: 86,
+          type: "textarea",
+          required: true,
+          active: true
+        }]
+      })
+    });
+    assert.strictEqual(response.status, 200);
+    const questionnaireUpdate = await response.json();
+    assert(questionnaireUpdate.questionnaire.questions.some(function (question) {
+      return question.path === "custom.objetivo_retencion";
+    }));
+
+    response = await fetch(base + "/admin/client-onboarding/data", {
+      headers: { cookie: publicCookie }
+    });
+    assert.strictEqual(response.status, 200);
+    const publicOnboardingWithQuestion = await response.json();
+    assert(publicOnboardingWithQuestion.questionnaire.questions.some(function (question) {
+      return question.label === "¿Qué información nueva debe aprender Nextfor para mejorar la retención?";
+    }));
+    assert(publicOnboardingWithQuestion.pending_questions.some(function (question) {
+      return question.path === "custom.objetivo_retencion";
+    }), "new Super Admin questions must surface as pending setup information");
+
     response = await fetch(base + "/admin/leads", {
       headers: { "x-dashboard-key": "customer-panel-v2-key" }
     });
@@ -315,6 +348,8 @@ function signedSessionCookie(secret, user) {
     assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
     assert(shellA.includes("1 bot activo"));
     assert(shellA.includes('id="nav-logout"'));
+    assert(shellA.includes('id="nav-notifications"'));
+    assert(shellA.includes('id="panel-notifications"'));
     assert(shellA.includes("Cerrar Sesión"));
     assert(!shellA.includes(">RAV Toys<"));
     assert(!shellA.includes(">Empresa B<"));
@@ -357,6 +392,9 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(panelA.business.plan_id, "nextfor-aura");
     assert.strictEqual(panelA.business.assigned_bot_id, "atencion-cliente");
     assert.strictEqual(panelA.data_window.source, "tenant_isolated");
+    assert(panelA.nextfor_notifications.pending_questions.some(function (question) {
+      return question.path === "custom.objetivo_retencion";
+    }), "returning tenant A must see new setup questions as Nextfor notifications");
     assert(!JSON.stringify(panelA).includes("Empresa B"));
 
     response = await fetch(base + "/admin/panel/data?tenant_id=tenant-a", { headers: { cookie: userB.cookie } });

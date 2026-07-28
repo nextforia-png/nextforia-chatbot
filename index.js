@@ -69,7 +69,8 @@ const {
   createOnboardingRecord,
   generateCustomerServiceConfiguration,
   normalizeCustomerServiceConfiguration,
-  normalizeCustomerSetupQuestionnaire
+  normalizeCustomerSetupQuestionnaire,
+  pendingQuestionnaireItems
 } = require("./client-onboarding");
 const {
   INDUSTRY_PROFILES,
@@ -208,7 +209,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v192-production-questionnaire-render-fallback";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v193-production-questionnaire-notifications";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4532,6 +4533,44 @@ async function loadCustomerSetupQuestionnaire(force) {
   return questionnaire;
 }
 
+function buildNextforNotifications(onboarding, questionnaire) {
+  const pendingQuestions = pendingQuestionnaireItems(onboarding && onboarding.answers, questionnaire, {
+    includeOptionalCustom: true
+  });
+  const items = [];
+  if (pendingQuestions.length) {
+    items.push({
+      id: "setup-questionnaire-pending",
+      type: "setup_improvement",
+      priority: "high",
+      title: "Nextfor tiene una mejora para tu bot",
+      message: "Agregamos " + pendingQuestions.length + " dato" + (pendingQuestions.length === 1 ? "" : "s") + " para entrenarlo mejor. Puedes completarlo sin repetir todo el setup.",
+      action_label: "Completar información",
+      action_url: "/admin/client-onboarding?edit=1&focus=pending",
+      count: pendingQuestions.length,
+      pending_questions: pendingQuestions.slice(0, 12),
+      created_at: questionnaire && questionnaire.updated_at || onboarding && (onboarding.last_updated_at || onboarding.updated_at) || null
+    });
+  }
+  items.push({
+    id: "nextfor-news-home",
+    type: "product_update",
+    priority: "normal",
+    title: "Notificaciones Nextfor",
+    message: "Aquí verás mejoras, solicitudes de información y avisos importantes de Nextfor para tu empresa.",
+    action_label: "",
+    action_url: "",
+    created_at: new Date().toISOString()
+  });
+  return {
+    count: items.length,
+    unread_count: pendingQuestions.length ? 1 : 0,
+    pending_count: pendingQuestions.length,
+    pending_questions: pendingQuestions,
+    items
+  };
+}
+
 async function persistCustomerSetupQuestionnaire(input, auth) {
   const current = await loadCustomerSetupQuestionnaire(false);
   const incoming = input && typeof input === "object" ? input : {};
@@ -6948,7 +6987,8 @@ app.get("/admin/client-onboarding", async (req, res) => {
     apiPath: "/admin/client-onboarding/data",
     shopifyConnectPath: "/admin/integrations/shopify/connect",
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
-    questionnaire
+    questionnaire,
+    focusPending: req.query.focus === "pending"
   });
 });
 
@@ -7015,11 +7055,15 @@ app.get("/admin/client-onboarding/data", async (req, res) => {
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const onboarding = await loadClientOnboarding(false, tenantId);
   res.json({
     ok: true,
     tenant: customerBusinessForAuth(auth),
-    onboarding: await loadClientOnboarding(false, tenantId),
-    questionnaire
+    onboarding,
+    questionnaire,
+    pending_questions: pendingQuestionnaireItems(onboarding && onboarding.answers, questionnaire, {
+      includeOptionalCustom: true
+    })
   });
 });
 
@@ -7919,6 +7963,16 @@ app.get("/admin/panel/data", async (req, res) => {
     messenger_setup: { status: "pending", label: "Messenger pendiente" },
     channels: {}
   });
+  if (auth.version === 2) {
+    try {
+      const onboarding = await loadClientOnboarding(false, tenantId);
+      const questionnaire = await loadCustomerSetupQuestionnaire(false);
+      snapshot.nextfor_notifications = buildNextforNotifications(onboarding, questionnaire);
+    } catch (error) {
+      console.error("customer panel notifications error:", error.message);
+      snapshot.nextfor_notifications = { count: 0, unread_count: 0, pending_count: 0, pending_questions: [], items: [] };
+    }
+  }
   res.json(snapshot);
 });
 
@@ -8446,7 +8500,7 @@ app.get("/admin/panel", async (req, res) => {
   }
   const capabilities = customerPanelCapabilities(auth.role);
   const channelConnectionsVisibleForCustomer = customerChannelConnectionsVisibleForAuth(auth);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (paymentGateRequired) initialTab = "plan";
   if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "setup";
   if (initialTab === "tests" && !capabilities.run_tests) {
@@ -8469,7 +8523,7 @@ app.get("/admin/panel-demo", (req, res) => {
   const auth = { username: "demo", name: "Demo RAV Toys", role: "admin", method: "demo" };
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities,

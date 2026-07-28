@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v242-super-admin-customer-operations";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v243-live-customer-runtime";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -812,6 +812,204 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
     })
   : null;
 const usedChannelOAuthNonces = new Set();
+const conversationOutboundRuntime = new Map();
+const channelRuntimeCache = {
+  loaded_at: 0,
+  rows: [],
+  by_whatsapp_phone_id: new Map(),
+  by_tenant_channel: new Map()
+};
+
+function cleanRuntimeText(value, max) {
+  return String(value || "").trim().slice(0, max || 4096);
+}
+
+function runtimeTenantChannelKey(tenantId, channel) {
+  return cleanTenantId(tenantId) + ":" + cleanChannel(channel);
+}
+
+function conversationRuntimeKey(userId) {
+  return normalizeConversationUserId(userId);
+}
+
+function credentialPayloadFromConnection(record) {
+  if (!record || !record.credentials_ciphertext || !DATA_ENCRYPTION_KEY) return null;
+  try {
+    return JSON.parse(decryptStoredText(record.credentials_ciphertext, DATA_ENCRYPTION_KEY));
+  } catch (error) {
+    log("warn", "channel_credentials_unreadable", {
+      tenant_id: cleanTenantId(record.tenant_id),
+      channel: cleanChannel(record.channel),
+      error: error.message
+    });
+    return null;
+  }
+}
+
+function connectionRuntimeFromRecord(record) {
+  const channel = cleanChannel(record && record.channel);
+  const tenantId = cleanTenantId(record && record.tenant_id);
+  if (!tenantId || !channel || !record || record.status !== "connected") return null;
+  if (record.protected_legacy) {
+    if (channel !== "whatsapp") return null;
+    return {
+      tenantId,
+      tenant_id: tenantId,
+      channel,
+      phoneNumberId: cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240),
+      phone_number_id: cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240),
+      accessToken: WA_TOKEN,
+      access_token: WA_TOKEN,
+      source: "legacy"
+    };
+  }
+  const credential = credentialPayloadFromConnection(record);
+  const accessToken = cleanRuntimeText(credential && credential.access_token, 4096);
+  if (channel === "whatsapp") {
+    const phoneNumberId = cleanRuntimeText(record.phone_number_id || credential && credential.phone_number_id, 240);
+    if (!phoneNumberId || !accessToken) return null;
+    return {
+      tenantId,
+      tenant_id: tenantId,
+      channel,
+      phoneNumberId,
+      phone_number_id: phoneNumberId,
+      accessToken,
+      access_token: accessToken,
+      source: "channel_connection"
+    };
+  }
+  return null;
+}
+
+async function loadChannelRuntimeRows(force) {
+  const now = Date.now();
+  if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < 15000) return channelRuntimeCache;
+  const rows = [];
+  if (PHONE_NUMBER_ID && WA_TOKEN) {
+    rows.push({
+      tenantId: DEFAULT_TENANT_ID,
+      tenant_id: DEFAULT_TENANT_ID,
+      channel: "whatsapp",
+      phoneNumberId: PHONE_NUMBER_ID,
+      phone_number_id: PHONE_NUMBER_ID,
+      accessToken: WA_TOKEN,
+      access_token: WA_TOKEN,
+      source: "environment"
+    });
+  }
+  if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionStore && typeof channelConnectionStore.listAll === "function") {
+    try {
+      const stored = await channelConnectionStore.listAll();
+      (Array.isArray(stored) ? stored : []).forEach(function (record) {
+        const runtime = connectionRuntimeFromRecord(record);
+        if (runtime) rows.push(runtime);
+      });
+    } catch (error) {
+      log("warn", "channel_runtime_load_failed", { error: error.message });
+    }
+  }
+  const byPhone = new Map();
+  const byTenantChannel = new Map();
+  rows.forEach(function (runtime) {
+    if (runtime.channel === "whatsapp" && runtime.phoneNumberId) byPhone.set(String(runtime.phoneNumberId), runtime);
+    byTenantChannel.set(runtimeTenantChannelKey(runtime.tenantId, runtime.channel), runtime);
+  });
+  channelRuntimeCache.loaded_at = now;
+  channelRuntimeCache.rows = rows;
+  channelRuntimeCache.by_whatsapp_phone_id = byPhone;
+  channelRuntimeCache.by_tenant_channel = byTenantChannel;
+  return channelRuntimeCache;
+}
+
+function rememberConversationRuntime(userId, runtime) {
+  const key = conversationRuntimeKey(userId);
+  const channel = cleanChannel(runtime && runtime.channel) || conversationChannel(userId);
+  if (!key || !runtime || channel !== "whatsapp") return null;
+  const normalized = {
+    tenantId: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
+    tenant_id: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
+    channel,
+    phoneNumberId: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
+    phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
+    accessToken: cleanRuntimeText(runtime.accessToken || runtime.access_token || WA_TOKEN, 4096),
+    access_token: cleanRuntimeText(runtime.accessToken || runtime.access_token || WA_TOKEN, 4096),
+    source: runtime.source || "conversation"
+  };
+  conversationOutboundRuntime.set(key, normalized);
+  return normalized;
+}
+
+async function resolveWhatsAppRuntimeForTenant(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  if (!cleanTenant) return null;
+  const cache = await loadChannelRuntimeRows(false);
+  return cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, "whatsapp")) || null;
+}
+
+async function resolveWhatsAppDestinationRuntime(webhookValue) {
+  const legacy = validateWhatsAppDestination(TENANT_CONFIG, webhookValue, { requireMetadata: process.env.NODE_ENV === "production" });
+  if (legacy.ok) {
+    return Object.assign({}, legacy, {
+      accessToken: WA_TOKEN,
+      access_token: WA_TOKEN,
+      source: "legacy_destination"
+    });
+  }
+  const incomingPhoneNumberId = cleanRuntimeText(webhookValue && webhookValue.metadata && webhookValue.metadata.phone_number_id, 240);
+  if (!incomingPhoneNumberId) return legacy;
+  const cache = await loadChannelRuntimeRows(false);
+  const runtime = cache.by_whatsapp_phone_id.get(incomingPhoneNumberId);
+  if (!runtime) return legacy;
+  return {
+    ok: true,
+    reason: "channel_connection_matched",
+    tenantId: runtime.tenantId,
+    tenant_id: runtime.tenantId,
+    phoneNumberId: runtime.phoneNumberId,
+    phone_number_id: runtime.phoneNumberId,
+    accessToken: runtime.accessToken,
+    access_token: runtime.accessToken,
+    source: runtime.source
+  };
+}
+
+async function outboundRuntimeForConversation(userId, options) {
+  const recipient = parseChannelRecipient(userId);
+  if (recipient.channel !== "whatsapp") return null;
+  const key = conversationRuntimeKey(userId);
+  const suppliedTenant = cleanTenantId(options && (options.tenantId || options.tenant_id));
+  const supplied = {
+    tenantId: suppliedTenant,
+    tenant_id: suppliedTenant,
+    channel: "whatsapp",
+    phoneNumberId: cleanRuntimeText(options && (options.phoneNumberId || options.phone_number_id), 240),
+    phone_number_id: cleanRuntimeText(options && (options.phoneNumberId || options.phone_number_id), 240),
+    accessToken: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
+    access_token: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
+    source: options && options.source || "options"
+  };
+  if (supplied.tenantId && (!supplied.phoneNumberId || !supplied.accessToken)) {
+    const byTenant = await resolveWhatsAppRuntimeForTenant(supplied.tenantId);
+    if (byTenant) return rememberConversationRuntime(userId, Object.assign({}, byTenant, supplied));
+  }
+  if (supplied.phoneNumberId && supplied.accessToken) return rememberConversationRuntime(userId, supplied);
+  if (key && conversationOutboundRuntime.has(key)) return conversationOutboundRuntime.get(key);
+  if (supplied.tenantId) {
+    const byTenant = await resolveWhatsAppRuntimeForTenant(supplied.tenantId);
+    if (byTenant) return rememberConversationRuntime(userId, byTenant);
+  }
+  return {
+    tenantId: DEFAULT_TENANT_ID,
+    tenant_id: DEFAULT_TENANT_ID,
+    channel: "whatsapp",
+    phoneNumberId: PHONE_NUMBER_ID,
+    phone_number_id: PHONE_NUMBER_ID,
+    accessToken: WA_TOKEN,
+    access_token: WA_TOKEN,
+    source: "environment"
+  };
+}
 // Catálogo editable de planes y bots. Comparte el gate de customer access v2.
 const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
   ? (CUSTOMER_ACCESS_TEST_MODE
@@ -953,10 +1151,13 @@ async function supabaseInsertStrict(rec) {
     timeout: 8000
   });
 }
-async function supabaseFetchRecent(limit) {
+async function supabaseFetchRecent(limit, options) {
   if (!SUPABASE_ENABLED) return null;
   try {
-    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED ? "&tenant_id=eq." + encodeURIComponent(DEFAULT_TENANT_ID) : "";
+    options = options || {};
+    const tenantFilter = SUPABASE_TENANT_COLUMNS_ENABLED && !options.allTenants
+      ? "&tenant_id=eq." + encodeURIComponent(cleanTenantId(options.tenantId) || DEFAULT_TENANT_ID)
+      : "";
     const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=*" + tenantFilter + "&order=ts.desc&limit=" + limit, { headers: SB_HEADERS, timeout: 8000 });
     return r.data;
   } catch (e) { console.error("supabaseFetchRecent error:", e.message); return null; }
@@ -970,15 +1171,16 @@ async function supabaseFetchUserRecent(userId, limit, tenantId) {
     return r.data;
   } catch (e) { console.error("supabaseFetchUserRecent error:", e.message); return null; }
 }
-async function supabaseFetchUserToolRecent(userId, toolName, limit) {
+async function supabaseFetchUserToolRecent(userId, toolName, limit, options) {
   if (!SUPABASE_ENABLED) return null;
   try {
+    options = options || {};
     const url = SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE;
     const r = await axios.get(url, {
       params: {
         select: "*",
         user_id: "eq." + userId,
-        ...(SUPABASE_TENANT_COLUMNS_ENABLED ? { tenant_id: "eq." + DEFAULT_TENANT_ID } : {}),
+        ...(SUPABASE_TENANT_COLUMNS_ENABLED ? { tenant_id: "eq." + (cleanTenantId(options.tenantId) || DEFAULT_TENANT_ID) } : {}),
         tools: "cs." + JSON.stringify([toolName]),
         order: "ts.desc",
         limit: limit || 1
@@ -1180,6 +1382,8 @@ function isShopifySessionStateTurn(turn) {
 }
 
 function isInternalAdminTurn(turn) {
+  const botReply = String(turn && turn.botReply || "");
+  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isBotSetupTurn(turn) ||
@@ -1339,8 +1543,12 @@ function recordCustomerMemory(userId, memory) {
   const cleanUserId = normalizeConversationUserId(userId);
   const normalized = normalizeMemory(memory);
   if (!cleanUserId || !isMeaningfulMemory(normalized)) return null;
+  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
   const rec = {
     ts: new Date().toISOString(),
+    tenantId: cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID,
+    phoneNumberId: cleanRuntimeText(remembered && remembered.phoneNumberId, 240) || PHONE_NUMBER_ID || null,
+    channel: conversationChannel(cleanUserId),
     userId: cleanUserId,
     userMessage: "",
     botReply: "[CustomerMemory] " + JSON.stringify(normalized),
@@ -1362,15 +1570,17 @@ function recordCustomerMemory(userId, memory) {
 async function loadCustomerMemory(userId) {
   const cleanUserId = normalizeConversationUserId(userId);
   if (!cleanUserId) return null;
+  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+  const tenantId = cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
   const cached = customerMemoryCache.get(cleanUserId);
   if (cached && Date.now() - cached.loaded_at < CUSTOMER_MEMORY_CACHE_TTL_MS) return cached.memory;
 
   let turns = conversationLogs.filter(function (turn) { return normalizeConversationUserId(turn.userId) === cleanUserId; });
   if (SUPABASE_ENABLED) {
-    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1);
+    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1, { tenantId });
     if (memoryRows && memoryRows.length) turns = memoryRows.map(normalizeTurnRow);
     else {
-      const rows = await supabaseFetchUserRecent(cleanUserId, 60);
+      const rows = await supabaseFetchUserRecent(cleanUserId, 60, tenantId);
       if (rows) turns = rows.map(normalizeTurnRow);
     }
   }
@@ -1550,14 +1760,23 @@ async function inferRecentHandoffs(limit) {
   };
 }
 
-function recordTurn(userId, userMessage, botReply, status) {
+function recordTurn(userId, userMessage, botReply, status, meta) {
   try {
+    const cleanUserId = normalizeConversationUserId(userId) || userId;
+    const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+      cleanTenantId(remembered && remembered.tenantId) ||
+      DEFAULT_TENANT_ID;
+    const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
+      cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
+      PHONE_NUMBER_ID ||
+      null;
     const rec = {
       ts: new Date().toISOString(),
-      tenantId: DEFAULT_TENANT_ID,
-      phoneNumberId: PHONE_NUMBER_ID || null,
-      channel: conversationChannel(userId),
-      userId,
+      tenantId,
+      phoneNumberId,
+      channel: conversationChannel(cleanUserId),
+      userId: cleanUserId,
       userMessage: String(userMessage || "").slice(0, 500),
       botReply: String(botReply || "").slice(0, 1000),
       tools: turnTools.slice(),
@@ -1573,15 +1792,24 @@ function recordTurn(userId, userMessage, botReply, status) {
   } catch (e) { console.error("recordTurn error:", e.message); }
 }
 
-function recordAdminEvent(userId, tool, message, status, handoffOverride) {
+function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) {
   try {
     const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : !["admin_release", "admin_resolve"].includes(tool);
+    const cleanUserId = normalizeConversationUserId(userId) || userId;
+    const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+      cleanTenantId(remembered && remembered.tenantId) ||
+      DEFAULT_TENANT_ID;
+    const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
+      cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
+      PHONE_NUMBER_ID ||
+      null;
     const rec = {
       ts: new Date().toISOString(),
-      tenantId: DEFAULT_TENANT_ID,
-      phoneNumberId: PHONE_NUMBER_ID || null,
-      channel: conversationChannel(userId),
-      userId,
+      tenantId,
+      phoneNumberId,
+      channel: conversationChannel(cleanUserId),
+      userId: cleanUserId,
       userMessage: "",
       botReply: String(message || "").slice(0, 1000),
       tools: [tool],
@@ -2570,7 +2798,7 @@ function channelContactLabel(to) {
   return "PSID " + recipient.id;
 }
 
-async function sendText(to, text) {
+async function sendText(to, text, options) {
   // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
   // (A) EXCUSAS TÉCNICAS — INCONDICIONAL: este bot JAMÁS debe decirle al cliente que tiene
   //     un problema/técnico/despiste/lío. Si aparece, reemplazamos TODO el mensaje por una
@@ -2615,12 +2843,16 @@ async function sendText(to, text) {
       console.log(`Messenger text sent to ${maskedIdentifier(to)}`);
       return true;
     }
+    const runtime = await outboundRuntimeForConversation(to, options);
+    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
-    console.log(`Text sent to ${maskedIdentifier(to)}`);
+    console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
     return true;
   } catch (err) {
     if (recipient.channel === "instagram") {
@@ -2699,7 +2931,7 @@ async function sendTemplate(to, templateName, params) {
   }
 }
 
-async function sendImage(to, imageUrl, caption) {
+async function sendImage(to, imageUrl, caption, options) {
   const recipient = parseChannelRecipient(to);
   try {
     if (recipient.channel === "instagram") {
@@ -2726,10 +2958,14 @@ async function sendImage(to, imageUrl, caption) {
       if (caption) await sendText(to, caption);
       return true;
     }
+    const runtime = await outboundRuntimeForConversation(to, options);
+    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "image", image: { link: imageUrl, caption } },
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
     return true;
   } catch (err) {
@@ -2738,16 +2974,20 @@ async function sendImage(to, imageUrl, caption) {
   }
 }
 
-async function sendLocation(to, lat, lng, name, address) {
+async function sendLocation(to, lat, lng, name, address, options) {
   if (["instagram", "messenger"].includes(parseChannelRecipient(to).channel)) {
     await sendText(to, `${name}\n${address}\nhttps://www.google.com/maps?q=${lat},${lng}`);
     return;
   }
   try {
+    const runtime = await outboundRuntimeForConversation(to, options);
+    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to, type: "location", location: { latitude: lat, longitude: lng, name, address } },
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" } }
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
   } catch (err) {
     console.error("WA location error:", err.response?.data?.error || err.message);
@@ -3163,9 +3403,28 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   userId = normalizeConversationUserId(userId);
   userMessage = String(userMessage || "").trim();
   if (!userId || !userMessage) return;
+  const conversationRuntime = rememberConversationRuntime(userId, {
+    tenant_id: conversationMeta.tenant_id,
+    phone_number_id: conversationMeta.phone_number_id,
+    access_token: conversationMeta.access_token,
+    source: conversationMeta.source || "inbound_webhook"
+  }) || {
+    tenantId: cleanTenantId(conversationMeta.tenant_id) || DEFAULT_TENANT_ID,
+    tenant_id: cleanTenantId(conversationMeta.tenant_id) || DEFAULT_TENANT_ID,
+    channel: conversationChannel(userId),
+    phoneNumberId: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
+    phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
+    accessToken: cleanRuntimeText(conversationMeta.access_token, 4096) || WA_TOKEN,
+    access_token: cleanRuntimeText(conversationMeta.access_token, 4096) || WA_TOKEN,
+    source: conversationMeta.source || "inbound_webhook"
+  };
+  const tenantId = cleanTenantId(conversationRuntime.tenantId) || DEFAULT_TENANT_ID;
+  async function sendBotReply(message) {
+    return sendText(userId, message, conversationRuntime);
+  }
   if (userMessage.length > MAX_INBOUND_TEXT_LENGTH) {
     log("warn", "inbound_message_rejected", { user: maskedIdentifier(userId), reason: "too_long", length: userMessage.length });
-    await sendText(userId, "Tu mensaje es demasiado largo para procesarlo con seguridad. Envíalo en partes más cortas, por favor.");
+    await sendBotReply("Tu mensaje es demasiado largo para procesarlo con seguridad. Envíalo en partes más cortas, por favor.");
     return;
   }
   if (!acceptInboundMessageRate(userId)) {
@@ -3182,14 +3441,14 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${maskedIdentifier(userId)}`);
     turnHandoff = true;
     turnTools.push("human_handoff_active");
-    recordTurn(userId, userMessage, "", "ok");
+    recordTurn(userId, userMessage, "", "ok", conversationRuntime);
     return;
   }
 
   if (!conversations.has(userId) || newSession) conversations.set(userId, []);
   const history = conversations.get(userId);
   const activeBotSetup = await loadBotSetup(false);
-  const activeClientOnboarding = await loadClientOnboarding(false);
+  const activeClientOnboarding = await loadClientOnboarding(false, tenantId);
   const serviceAreaConfig = serviceAreaConfigForSetup(activeBotSetup, activeClientOnboarding);
   const phoneCheck = conversationChannel(userId) === "whatsapp"
     ? serviceAreaCheckForPhone(conversationExternalId(userId), serviceAreaConfig)
@@ -3208,7 +3467,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     history.push({ role: "assistant", content: question });
     conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
     turnTools.push("service_area_confirmation");
-    const sent = await sendText(userId, question);
+    const sent = await sendBotReply(question);
     if (sent) {
       rememberServiceAreaCheck(userId, {
         status: "pending",
@@ -3218,7 +3477,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         updatedAt: askedAt
       });
     }
-    recordTurn(userId, userMessage, question, sent ? "ok" : "error");
+    recordTurn(userId, userMessage, question, sent ? "ok" : "error", conversationRuntime);
     return;
   }
   if (serviceAreaState) {
@@ -3414,8 +3673,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       const reply = textBlock ? textBlock.text.trim() : "";
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
-      if (reply) recordTurn(userId, userMessage, reply, "ok");
-      const replySent = await sendText(userId, reply);
+      if (reply) recordTurn(userId, userMessage, reply, "ok", conversationRuntime);
+      const replySent = await sendBotReply(reply);
       if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
         await createRetargetingJobForCustomer(userId, "high_intent", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":high-intent", {
           source_at: conversationMeta.source_at || new Date().toISOString(),
@@ -3446,13 +3705,13 @@ async function handleConversation(userId, userMessage, conversationMeta) {
             } catch (alertErr) {
               console.error("Failed to send credit alert:", alertErr.message);
             }
-      recordTurn(userId, userMessage, "[error interno]", "error");
-      await sendText(userId, "Ups, tuve un problemita técnico 😅 ¿Puedes repetir?");
+      recordTurn(userId, userMessage, "[error interno]", "error", conversationRuntime);
+      await sendBotReply("Ups, tuve un problemita técnico 😅 ¿Puedes repetir?");
       return;
     }
   }
-  recordTurn(userId, userMessage, "[fallback: sin respuesta del modelo]", "fallback");
-  await sendText(userId, "Me enredé un poco 😅 ¿Qué buscas exactamente?");
+  recordTurn(userId, userMessage, "[fallback: sin respuesta del modelo]", "fallback", conversationRuntime);
+  await sendBotReply("Me enredé un poco 😅 ¿Qué buscas exactamente?");
 }
 
 // ─── WEBHOOK ─────────────────────────────────────────────────────────────────
@@ -3478,7 +3737,7 @@ app.post("/webhook", async (req, res) => {
     const value = changes?.value;
     const messages = value?.messages;
     if (!messages || messages.length === 0) return;
-    const destination = validateWhatsAppDestination(TENANT_CONFIG, value, { requireMetadata: process.env.NODE_ENV === "production" });
+    const destination = await resolveWhatsAppDestinationRuntime(value);
     if (!destination.ok) {
       log("warn", "whatsapp_destination_rejected", {
         tenant_id: DEFAULT_TENANT_ID,
@@ -3490,6 +3749,7 @@ app.post("/webhook", async (req, res) => {
     const message = messages[0];
     if (!acceptMetaEventId(message.id)) return;
     const from = message.from;
+    rememberConversationRuntime(from, destination);
     const type = message.type;
     const inboundText = type === "text" ? message.text && message.text.body || "" : "";
     await recordRetargetingSignal(from, isStopMessage(inboundText) ? "stop" : "customer_replied", message.id || "wa:" + Date.now(), "customer");
@@ -3500,6 +3760,8 @@ app.post("/webhook", async (req, res) => {
       await handleConversation(from, text, {
         tenant_id: destination.tenantId,
         phone_number_id: destination.phoneNumberId,
+        access_token: destination.accessToken,
+        source: destination.source || "webhook",
         source_event_id: message.id || "wa:" + Date.now(),
         source_at: new Date().toISOString()
       });
@@ -5698,6 +5960,11 @@ function customerPanelAuthOk(req, minRole = "viewer") {
   return !!auth.ok && !!tenantId && actual >= required && canAccessTenant(auth, tenantId);
 }
 
+function conversationActionAuthOk(req, minRole = "agent") {
+  const auth = dashboardAuth(req);
+  return auth.version === 2 ? customerPanelAuthOk(req, minRole) : adminAuthOk(req, minRole);
+}
+
 function customerBusinessForAuth(auth) {
   const tenantId = customerTenantForAuth(auth);
   if (auth && auth.version === 2) {
@@ -5712,6 +5979,31 @@ function customerBusinessForAuth(auth) {
     };
   }
   return CUSTOMER_PANEL_BUSINESS;
+}
+
+function customerBusinessForAuthAndOnboarding(auth, onboarding) {
+  const business = customerBusinessForAuth(auth);
+  if (!auth || auth.version !== 2 || !onboarding || !onboarding.answers) return business;
+  const goal = String(onboarding.answers.setup_goal || "").trim().toLowerCase();
+  if (goal === "customer_service") {
+    return Object.assign({}, business, {
+      plan_id: business.plan_id || "nextfor-aura",
+      assigned_bot_id: "atencion-cliente"
+    });
+  }
+  if (goal === "appointments") {
+    return Object.assign({}, business, {
+      plan_id: business.plan_id || "nextfor-tempo",
+      assigned_bot_id: "agendamiento"
+    });
+  }
+  if (goal === "both") {
+    return Object.assign({}, business, {
+      plan_id: business.plan_id || "nextfor-atlas",
+      assigned_bot_id: "both"
+    });
+  }
+  return business;
 }
 
 function onboardingTenantIdForSave(auth, answers) {
@@ -5754,12 +6046,37 @@ function customerChannelConnectionsVisibleForAuth(auth) {
   return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
 }
 
+function customerChannelConnectionsVisibleForBusiness(business) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
+  const assignedBotId = String(business && business.assigned_bot_id || "").trim().toLowerCase();
+  return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
+}
+
+async function customerChannelConnectionsVisibleForPanelAuth(auth) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
+  if (!auth || auth.version !== 2) return true;
+  try {
+    const business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, customerTenantForAuth(auth)));
+    return customerChannelConnectionsVisibleForBusiness(business);
+  } catch (_) {
+    return customerChannelConnectionsVisibleForAuth(auth);
+  }
+}
+
 function customerHasAppointmentModule(auth) {
   if (!auth || auth.version !== 2) return true;
   const planId = String(auth.plan_id || "").trim().toLowerCase();
   if (["nextfor-uno", "nextfor-aura"].includes(planId)) return false;
   if (["nextfor-tempo", "nextfor-atlas"].includes(planId)) return true;
   const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
+  return ["agendamiento", "appointments", "appointment", "duo", "both"].includes(assignedBotId);
+}
+
+function customerBusinessHasAppointmentModule(business) {
+  const planId = String(business && business.plan_id || "").trim().toLowerCase();
+  if (["nextfor-uno", "nextfor-aura"].includes(planId)) return false;
+  if (["nextfor-tempo", "nextfor-atlas"].includes(planId)) return true;
+  const assignedBotId = String(business && business.assigned_bot_id || "").trim().toLowerCase();
   return ["agendamiento", "appointments", "appointment", "duo", "both"].includes(assignedBotId);
 }
 
@@ -7516,7 +7833,7 @@ app.get("/admin/access-model", (req, res) => {
 });
 
 function releaseAdminConversation(req, res) {
-  if (!adminAuthOk(req, "agent")) {
+  if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -7525,9 +7842,11 @@ function releaseAdminConversation(req, res) {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
   }
+  const auth = dashboardAuth(req);
+  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
   const wasActive = humanHandoff.delete(userId);
   pendingRatings.add(userId);
-  recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.");
+  recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.", "ok", undefined, tenantMeta);
   console.log(`[ADMIN] Released ${maskedIdentifier(userId)} (was handoff: ${wasActive})`);
   res.json({ ok: true, userId, wasInHandoff: wasActive });
 }
@@ -7535,7 +7854,7 @@ function releaseAdminConversation(req, res) {
 app.post("/admin/release/:userId", releaseAdminConversation);
 
 app.post("/admin/resolve/:userId", (req, res) => {
-  if (!adminAuthOk(req, "agent")) {
+  if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -7544,14 +7863,16 @@ app.post("/admin/resolve/:userId", (req, res) => {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
   }
+  const auth = dashboardAuth(req);
+  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
   const wasActive = humanHandoff.delete(userId);
   pendingRatings.add(userId);
-  recordAdminEvent(userId, "admin_resolve", "[Humano] Conversación marcada como resuelta por el equipo.", "ok", false);
+  recordAdminEvent(userId, "admin_resolve", "[Humano] Conversación marcada como resuelta por el equipo.", "ok", false, tenantMeta);
   res.json({ ok: true, userId, wasInHandoff: wasActive, conversation_status: "resolved", resolution_source: "human" });
 });
 
 app.post("/admin/takeover/:userId", async (req, res) => {
-  if (!adminAuthOk(req, "agent")) {
+  if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -7561,13 +7882,15 @@ app.post("/admin/takeover/:userId", async (req, res) => {
     return;
   }
   humanHandoff.add(userId);
-  await recordRetargetingSignal(userId, "handoff", "admin-takeover:" + Date.now(), dashboardAuth(req).name || "admin");
-  recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.");
+  const auth = dashboardAuth(req);
+  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+  await recordRetargetingSignal(userId, "handoff", "admin-takeover:" + Date.now(), auth.name || "admin");
+  recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.", "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true });
 });
 
 app.post("/admin/send-message", async (req, res) => {
-  if (!adminAuthOk(req, "agent")) {
+  if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -7582,9 +7905,11 @@ app.post("/admin/send-message", async (req, res) => {
     return;
   }
   humanHandoff.add(userId);
-  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), dashboardAuth(req).name || "admin");
-  const sent = await sendText(userId, text);
-  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error");
+  const auth = dashboardAuth(req);
+  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
+  const sent = await sendText(userId, text, tenantMeta);
+  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error", undefined, tenantMeta);
   res.json({ ok: !!sent, userId, handoff: true, meta_sent: !!sent });
 });
 
@@ -7608,7 +7933,7 @@ app.get("/admin/customer-meta", async (req, res) => {
 });
 
 app.post("/admin/customer-meta/:userId", (req, res) => {
-  if (!adminAuthOk(req, "agent")) {
+  if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -9005,7 +9330,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
     return;
   }
   const auth = dashboardAuth(req);
-  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -9036,7 +9361,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
     return;
   }
   const auth = dashboardAuth(req);
-  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -9114,7 +9439,7 @@ app.post("/admin/panel/channel-connections/:channel/select", async (req, res) =>
     return;
   }
   const auth = dashboardAuth(req);
-  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -9142,7 +9467,7 @@ app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res
     return;
   }
   const auth = dashboardAuth(req);
-  if (!customerChannelConnectionsVisibleForAuth(auth)) {
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
   }
@@ -9298,13 +9623,13 @@ app.get("/admin/panel/data", async (req, res) => {
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
   let source = tenantId === DEFAULT_TENANT_ID ? "memory" : "tenant_isolated";
-  let turns = tenantId === DEFAULT_TENANT_ID
-    ? conversationLogs.slice().reverse()
-    : conversationLogs.filter(function (turn) { return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId; }).reverse();
-  if (SUPABASE_ENABLED && tenantId === DEFAULT_TENANT_ID) {
-    const rows = await supabaseFetchRecent(500);
+  let turns = conversationLogs.filter(function (turn) {
+    return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId;
+  }).reverse();
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchRecent(500, { tenantId });
     if (rows) {
-      source = "supabase";
+      source = tenantId === DEFAULT_TENANT_ID ? "supabase" : "tenant_supabase";
       turns = rows.map(normalizeTurnRow);
     }
   }
@@ -9314,12 +9639,36 @@ app.get("/admin/panel/data", async (req, res) => {
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
-  if (auth.version === 2) snapshot.business = Object.assign({}, snapshot.business, customerBusinessForAuth(auth), {
-    whatsapp_setup: { status: "pending", label: "WhatsApp pendiente" },
-    instagram_setup: { status: "pending", label: "Instagram pendiente" },
-    messenger_setup: { status: "pending", label: "Messenger pendiente" },
-    channels: {}
-  });
+  if (auth.version === 2) {
+    let onboardingForPanel = null;
+    try { onboardingForPanel = await loadClientOnboarding(false, tenantId); }
+    catch (_) {}
+    const business = customerBusinessForAuthAndOnboarding(auth, onboardingForPanel);
+    const channels = {};
+    if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
+      try {
+        const rows = await channelConnectionService.listTenant(customerChannelTenantForAuth(auth));
+        rows.forEach(function (row) {
+          if (!row || !row.channel) return;
+          const ready = row.status === "connected";
+          channels[row.channel] = {
+            status: ready ? "ready" : row.status || "pending",
+            label: ready ? row.name + " conectado" : row.name + " pendiente",
+            account_label: row.account_label || null,
+            conversations_count: (snapshot.business.channels[row.channel] && snapshot.business.channels[row.channel].conversations_count) || 0
+          };
+        });
+      } catch (error) {
+        console.error("customer panel channel status error:", error.message);
+      }
+    }
+    snapshot.business = Object.assign({}, snapshot.business, business, {
+      whatsapp_setup: channels.whatsapp || { status: "pending", label: "WhatsApp pendiente" },
+      instagram_setup: channels.instagram || { status: "pending", label: "Instagram pendiente" },
+      messenger_setup: channels.messenger || { status: "pending", label: "Messenger pendiente" },
+      channels
+    });
+  }
   if (auth.version === 2) {
     try {
       const onboarding = await reconcileShopifyOnboardingConnection(await loadClientOnboarding(false, tenantId));
@@ -9343,15 +9692,19 @@ app.get("/admin/panel/appointments-data", async (req, res) => {
     return;
   }
   const auth = dashboardAuth(req);
-  if (!customerHasAppointmentModule(auth)) {
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try {
+    business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  } catch (_) {}
+  if (!customerBusinessHasAppointmentModule(business)) {
     res.status(403).json({ ok: false, error: "module_not_contracted" });
     return;
   }
-  const tenantId = customerTenantForAuth(auth);
   const persistent = await hydrateAppointmentsForTenant(tenantId);
   const snapshot = appointmentRegistry.snapshot(tenantId);
   snapshot.source = persistent ? "supabase" : "memory";
-  res.json(customerAppointmentSnapshot(snapshot, customerBusinessForAuth(auth)));
+  res.json(customerAppointmentSnapshot(snapshot, business));
 });
 
 app.get("/admin/panel/demo-appointments-data", (req, res) => {
@@ -9841,9 +10194,11 @@ app.get("/admin/panel", async (req, res) => {
   }
   let customerSetupCompleted = false;
   let paymentGateRequired = false;
+  let panelBusinessContext = auth.version === 2 ? customerBusinessForAuth(auth) : null;
   if (auth.version === 2) {
     try {
       const onboarding = await loadClientOnboarding(false, panelTenantId);
+      panelBusinessContext = customerBusinessForAuthAndOnboarding(auth, onboarding);
       if (!onboarding.setup_completed) {
         res.redirect("/admin/client-onboarding");
         return;
@@ -9860,7 +10215,9 @@ app.get("/admin/panel", async (req, res) => {
     }
   }
   const capabilities = customerPanelCapabilities(auth.role);
-  const channelConnectionsVisibleForCustomer = customerChannelConnectionsVisibleForAuth(auth);
+  const channelConnectionsVisibleForCustomer = auth.version === 2
+    ? customerChannelConnectionsVisibleForBusiness(panelBusinessContext)
+    : customerChannelConnectionsVisibleForAuth(auth);
   let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (paymentGateRequired) initialTab = "plan";
   if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "setup";
@@ -9871,7 +10228,7 @@ app.get("/admin/panel", async (req, res) => {
     auth,
     capabilities,
     initialTab,
-    tenantContext: auth.version === 2 ? customerBusinessForAuth(auth) : null,
+    tenantContext: panelBusinessContext,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     paymentGateRequired,

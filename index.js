@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v178-production-customer-access-locked";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v179-production-public-signup-clean-slate";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -308,9 +308,9 @@ const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
-const CUSTOMER_PUBLIC_SIGNUP_ENABLED = process.env.CUSTOMER_PUBLIC_SIGNUP_ENABLED === "1" && process.env.NODE_ENV !== "production";
-const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "2026-07-28T01:05:00.000Z";
-const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-reset-2026-07-28";
+const CUSTOMER_PUBLIC_SIGNUP_ENABLED = process.env.CUSTOMER_PUBLIC_SIGNUP_ENABLED !== "0";
+const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "2026-07-28T01:40:30.000Z";
+const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-clean-slate-2026-07-28";
 const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && SUPABASE_ENABLED
@@ -4609,6 +4609,7 @@ async function dashboardUserFromCredentials(username, password, options) {
   if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
     const customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    if (customerAccessUser && !customerAccessCreatedAfterReset(customerAccessUser)) return null;
     if (customerAccessUser) return customerAccessUser;
   }
   if (!LEGACY_CUSTOMER_PANEL_USERS_ENABLED) return null;
@@ -9351,17 +9352,18 @@ app.listen(PORT, () => {
     resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
       .then(function (result) {
         if ((result.disabled_users || 0) || (result.revoked_invitations || 0)) {
-          console.log("Customer access auto-reset:", JSON.stringify({
+          console.log("Customer access clean slate:", JSON.stringify({
             before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO,
             disabled_users: result.disabled_users,
-            revoked_invitations: result.revoked_invitations
+            revoked_invitations: result.revoked_invitations,
+            public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
           }));
         } else {
-          console.log("Customer access auto-reset: no matching pre-cutoff access");
+          console.log("Customer access clean slate: no pre-cutoff access to reset");
         }
       })
       .catch(function (error) {
-        console.error("Customer access auto-reset failed:", error.message);
+        console.error("Customer access clean slate failed:", error.message);
       });
   }
   if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {

@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v190-production-public-signup-ready-clean";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v191-production-customer-access-resilient";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3846,6 +3846,32 @@ function hashDashboardPassword(password, salt) {
 }
 
 const PUBLIC_CUSTOMER_ACCESS_TOOL = "public_customer_access_user";
+const publicCustomerAccessCreationLocks = new Map();
+const CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE = process.env.NODE_ENV === "test"
+  && process.env.CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE === "1";
+
+function customerAccessSchemaUnavailable(error) {
+  if (!(error instanceof CustomerAccessError) || error.code !== "customer_access_unavailable") return false;
+  const details = error.details && typeof error.details === "object" ? error.details : {};
+  const source = [
+    details.store_error,
+    details.store_details,
+    details.store_hint,
+    error.message
+  ].filter(Boolean).join(" ");
+  return ["PGRST202", "PGRST205", "42P01", "42883"].some(function (code) {
+    return source.includes(code);
+  });
+}
+
+function forcedCustomerAccessSchemaError(stage) {
+  return new CustomerAccessError("customer_access_unavailable", 503, {
+    stage: stage || "test_schema_unavailable",
+    store_error: "PGRST202",
+    store_details: "Customer Access v2 schema unavailable"
+  });
+}
+
 function publicCustomerAccessRecordId(email) {
   return "customer-access-public:" + normalizeDashboardUsername(email).replace(/[^a-z0-9@._-]/g, "");
 }
@@ -3878,58 +3904,67 @@ async function loadPublicCustomerAccessUser(email) {
 async function persistPublicCustomerAccessUser(input) {
   const email = normalizeDashboardUsername(input.admin_email);
   if (!validEmailIdentity(email)) throw new CustomerAccessError("invalid_email", 400);
-  const existing = await loadPublicCustomerAccessUser(email);
-  if (existing && customerAccessCreatedAfterReset(existing)) throw new CustomerAccessError("customer_already_exists", 409);
-  const salt = crypto.randomBytes(16);
-  const createdAt = new Date().toISOString();
-  const slug = String(input.company_name || "cliente").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 45) || "cliente";
-  const stored = {
-    version: 1,
-    fallback_access: true,
-    user_id: crypto.randomUUID(),
-    tenant_id: slug + "-" + crypto.randomBytes(3).toString("hex"),
-    company_name: String(input.company_name || "").trim().slice(0, 120),
-    email,
-    role: "admin",
-    plan_id: input.plan_id || "nextfor-uno",
-    assigned_bot_id: input.assigned_bot_id || "atencion-cliente",
-    password_hash: hashDashboardPassword(input.password, salt),
-    password_salt: salt.toString("base64url"),
-    active: true,
-    created_at: createdAt,
-    updated_at: createdAt
-  };
-  const rec = {
-    ts: createdAt,
-    userId: publicCustomerAccessRecordId(email),
-    tenantId: DEFAULT_TENANT_ID,
-    userMessage: "",
-    botReply: "[PublicCustomerAccess] " + JSON.stringify(stored),
-    tools: [PUBLIC_CUSTOMER_ACCESS_TOOL],
-    zeroResultQueries: [],
-    handoff: false,
-    rating: null,
-    numTools: 1,
-    status: "ok",
-    eval: { skip: true, reason: PUBLIC_CUSTOMER_ACCESS_TOOL }
-  };
-  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
-  conversationLogs.push(rec);
-  return {
-    user_id: stored.user_id,
-    email: stored.email,
-    username: stored.email,
-    name: stored.email,
-    role: stored.role,
-    tenant_id: stored.tenant_id,
-    company_name: stored.company_name,
-    plan_id: stored.plan_id,
-    assigned_bot_id: stored.assigned_bot_id,
-    tenant_status: "setup",
-    created_at: stored.created_at,
-    updated_at: stored.updated_at,
-    fallback_access: true
-  };
+  const previous = publicCustomerAccessCreationLocks.get(email) || Promise.resolve();
+  const operation = previous.catch(function () {}).then(async function () {
+    const existing = await loadPublicCustomerAccessUser(email);
+    if (existing && customerAccessCreatedAfterReset(existing)) throw new CustomerAccessError("customer_already_exists", 409);
+    const salt = crypto.randomBytes(16);
+    const createdAt = new Date().toISOString();
+    const slug = String(input.company_name || "cliente").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 45) || "cliente";
+    const stored = {
+      version: 1,
+      fallback_access: true,
+      user_id: crypto.randomUUID(),
+      tenant_id: slug + "-" + crypto.randomBytes(3).toString("hex"),
+      company_name: String(input.company_name || "").trim().slice(0, 120),
+      email,
+      role: "admin",
+      plan_id: input.plan_id || "nextfor-uno",
+      assigned_bot_id: input.assigned_bot_id || "atencion-cliente",
+      password_hash: hashDashboardPassword(input.password, salt),
+      password_salt: salt.toString("base64url"),
+      active: true,
+      created_at: createdAt,
+      updated_at: createdAt
+    };
+    const rec = {
+      ts: createdAt,
+      userId: publicCustomerAccessRecordId(email),
+      tenantId: DEFAULT_TENANT_ID,
+      userMessage: "",
+      botReply: "[PublicCustomerAccess] " + JSON.stringify(stored),
+      tools: [PUBLIC_CUSTOMER_ACCESS_TOOL],
+      zeroResultQueries: [],
+      handoff: false,
+      rating: null,
+      numTools: 1,
+      status: "ok",
+      eval: { skip: true, reason: PUBLIC_CUSTOMER_ACCESS_TOOL }
+    };
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+    conversationLogs.push(rec);
+    return {
+      user_id: stored.user_id,
+      email: stored.email,
+      username: stored.email,
+      name: stored.email,
+      role: stored.role,
+      tenant_id: stored.tenant_id,
+      company_name: stored.company_name,
+      plan_id: stored.plan_id,
+      assigned_bot_id: stored.assigned_bot_id,
+      tenant_status: "setup",
+      created_at: stored.created_at,
+      updated_at: stored.updated_at,
+      fallback_access: true
+    };
+  });
+  publicCustomerAccessCreationLocks.set(email, operation);
+  try {
+    return await operation;
+  } finally {
+    if (publicCustomerAccessCreationLocks.get(email) === operation) publicCustomerAccessCreationLocks.delete(email);
+  }
 }
 
 async function authenticatePublicCustomerAccessUser(email, password) {
@@ -4303,21 +4338,27 @@ async function listSetupReviewTenants() {
     status: CUSTOMER_PANEL_BUSINESS.status || "active"
   });
   if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
-    const rows = await catalogService.listTenants();
-    rows.forEach(function (tenant) {
-      add({
-        id: cleanTenantId(tenant.id),
-        company_name: tenant.company_name || tenant.name || tenant.id,
-        name: tenant.company_name || tenant.name || tenant.id,
-        plan_id: tenant.plan_id || null,
-        assigned_bot_id: tenant.assigned_bot_id || null,
-        status: tenant.status || "setup",
-        admin_email: tenant.admin_email || null
+    try {
+      if (CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) throw forcedCustomerAccessSchemaError("setup_review_catalog");
+      const rows = await catalogService.listTenants();
+      rows.forEach(function (tenant) {
+        add({
+          id: cleanTenantId(tenant.id),
+          company_name: tenant.company_name || tenant.name || tenant.id,
+          name: tenant.company_name || tenant.name || tenant.id,
+          plan_id: tenant.plan_id || null,
+          assigned_bot_id: tenant.assigned_bot_id || null,
+          status: tenant.status || "setup",
+          admin_email: tenant.admin_email || null
+        });
       });
-    });
+    } catch (error) {
+      console.error("setup review tenant catalog fallback error:", error.message);
+    }
   }
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && customerAccessService.listInvitations) {
     try {
+      if (CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) throw forcedCustomerAccessSchemaError("setup_review_invitations");
       const invitations = await customerAccessService.listInvitations();
       invitations.filter(function (invitation) {
         return invitation && invitation.tenant_id;
@@ -5188,6 +5229,7 @@ async function buildSuperAdminLeadsPipeline() {
   let tenants = [];
   if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
     try {
+      if (CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) throw forcedCustomerAccessSchemaError("lead_pipeline_catalog");
       tenants = await catalogService.listTenants();
     } catch (error) {
       console.error("lead pipeline tenants error:", error.message);
@@ -5195,7 +5237,10 @@ async function buildSuperAdminLeadsPipeline() {
   }
   let invitations = [];
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && customerAccessService.listInvitations) {
-    try { invitations = await customerAccessService.listInvitations(); }
+    try {
+      if (CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) throw forcedCustomerAccessSchemaError("lead_pipeline_invitations");
+      invitations = await customerAccessService.listInvitations();
+    }
     catch (error) { console.error("lead pipeline invitations error:", error.message); }
   }
   const invitationByTenant = new Map();
@@ -6420,6 +6465,7 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
   try {
     let catalogs;
     try {
+      if (CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) throw forcedCustomerAccessSchemaError("public_signup_catalogs");
       catalogs = catalogService ? await catalogService.activeCatalogs() : await customerAccessService.catalogs();
     } catch (catalogError) {
       console.error("public signup catalogs fallback:", catalogError.code || catalogError.message);
@@ -6431,16 +6477,14 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
     const defaults = publicSignupDefaults(catalogs);
     let user;
     try {
+      if (CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) throw forcedCustomerAccessSchemaError("public_signup_create");
       user = await customerAccessService.createPublicSignup(Object.assign({}, req.body, {
         contact_phone: contactPhone,
         reset_conflicts_before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO
       }, defaults));
     } catch (signupError) {
-      const missingAccessRpc = signupError instanceof CustomerAccessError
-        && signupError.code === "customer_access_unavailable"
-        && String(signupError.details && signupError.details.store_error || "").includes("PGRST202");
-      if (!missingAccessRpc) throw signupError;
-      console.error("public signup fallback store enabled: missing customer access RPC");
+      if (!customerAccessSchemaUnavailable(signupError)) throw signupError;
+      console.error("public signup compatibility store enabled: customer access schema unavailable");
       user = await persistPublicCustomerAccessUser(Object.assign({}, req.body, {
         contact_phone: contactPhone,
         plan_id: defaults.plan_id,

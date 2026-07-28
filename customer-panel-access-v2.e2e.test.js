@@ -100,6 +100,7 @@ function signedSessionCookie(secret, user) {
       CUSTOMER_PUBLIC_SIGNUP_ENABLED: "1",
       CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T01:00:00.000Z",
       CUSTOMER_ACCESS_TEST_MODE: "1",
+      CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_ACCESS_TEST_INVITATIONS: JSON.stringify([
         { tenant_id: "setup-tenant", company_name: "Empresa Setup", email: "invited@example.com", token: validInviteToken },
@@ -173,6 +174,28 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_email, "publica@example.com");
     assert.strictEqual(publicOnboarding.onboarding.answers.business.contact_phone, "+57 311 222 3333");
     assert.strictEqual(publicOnboarding.onboarding.answers.meta.whatsapp_number, "+57 311 222 3333");
+
+    response = await fetch(base + "/admin/leads", {
+      headers: { "x-dashboard-key": "customer-panel-v2-key" }
+    });
+    assert.strictEqual(response.status, 200);
+    const publicLeadPipeline = await response.json();
+    const publicLead = publicLeadPipeline.leads.rows.find(function (row) {
+      return row.tenant_id === publicSignup.tenant.id;
+    });
+    assert(publicLead, "compatibility accounts must appear in Super Admin leads");
+    assert.strictEqual(publicLead.admin_email, "publica@example.com");
+    assert.strictEqual(publicLead.contact_phone, "+57 311 222 3333");
+
+    response = await fetch(base + "/admin/customer-setups", {
+      headers: { "x-dashboard-key": "customer-panel-v2-key" }
+    });
+    assert.strictEqual(response.status, 200);
+    const setupReview = await response.json();
+    assert(setupReview.setups.some(function (entry) {
+      return entry.tenant_id === publicSignup.tenant.id
+        && entry.tenant.admin_email === "publica@example.com";
+    }), "compatibility accounts must appear in Super Admin setup review");
 
     const publicLogin = await login(base, { email: "publica@example.com", password: "PublicPassword2026" });
     assert.strictEqual(publicLogin.body.redirect, "/admin/client-onboarding");

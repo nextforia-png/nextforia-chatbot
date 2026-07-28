@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v225-super-admin-setup-delete-audit";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v226-super-admin-setup-delete-storage";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4300,8 +4300,18 @@ async function fetchClientOnboardingAuditFallback(tenantId) {
 
 async function fetchSetupReviewDeletedTenantIds() {
   const deleted = new Set(Array.from(setupReviewDeletedTenantIdsMemory));
+  async function collectFromTurns(turns) {
+    (turns || []).map(normalizeTurnRow).forEach(function (turn) {
+      const record = parseAnyClientOnboardingTurn(turn);
+      if (record && (record.setup_deleted === true || record.deleted_at)) {
+        const tenantId = cleanTenantId(record.tenant_id);
+        if (tenantId) deleted.add(tenantId);
+      }
+    });
+  }
   if (!SUPABASE_ENABLED) return deleted;
   try {
+    await collectFromTurns(await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, 1000, { allTenants: true }));
     const response = await axios.get(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
       headers: SB_HEADERS,
       params: {
@@ -4338,23 +4348,83 @@ async function markSetupReviewTenantDeleted(tenant, onboarding, auth, confirmati
     onboarding: onboarding || null,
     deletion_scope: "setup_review"
   };
+  const tombstone = {
+    version: 2,
+    tenant_id: tenantId,
+    answers: {},
+    status: "deleted",
+    setup_completed: false,
+    setup_deleted: true,
+    deleted_at: deletedAt,
+    deleted_by: String(actor).slice(0, 160),
+    company_name: companyName,
+    backup_generated: true,
+    setup_review: {
+      status: "incomplete",
+      updated_at: deletedAt,
+      updated_by: String(actor).slice(0, 160),
+      note: "Tenant eliminado desde Super Admin.",
+      requested_changes: "",
+      history: [{
+        at: deletedAt,
+        actor: String(actor).slice(0, 160),
+        action: "delete",
+        status: "deleted",
+        note: "Borrado operativo con respaldo."
+      }]
+    }
+  };
   setupReviewDeletedTenantIdsMemory.add(tenantId);
   clientOnboardingCacheByTenant.delete(tenantId);
   if (SUPABASE_ENABLED) {
-    await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
-      tenant_id: null,
-      invitation_id: null,
-      actor: String(actor).slice(0, 160),
-      action: "tenant_deleted",
-      metadata: {
-        tenant_id: tenantId,
-        company_name: companyName,
-        eliminado_en: deletedAt,
-        deletion_scope: "setup_review",
-        source: "super_admin_setup_review",
-        backup
-      }
-    }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 10000 });
+    const rec = {
+      ts: deletedAt,
+      userId: clientOnboardingRecordId(tenantId),
+      tenantId,
+      userMessage: "",
+      botReply: "[ClientOnboarding] " + JSON.stringify(tombstone),
+      tools: [CLIENT_ONBOARDING_TOOL, SUPER_ADMIN_SETUP_REVIEW_TOOL],
+      zeroResultQueries: [],
+      handoff: false,
+      rating: null,
+      numTools: 2,
+      status: "ok",
+      eval: { skip: true, reason: "super_admin_setup_delete" }
+    };
+    await supabaseInsertStrict(rec);
+    try {
+      await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+        tenant_id: null,
+        invitation_id: null,
+        actor: String(actor).slice(0, 160),
+        action: "tenant_deleted",
+        metadata: {
+          tenant_id: tenantId,
+          company_name: companyName,
+          eliminado_en: deletedAt,
+          deletion_scope: "setup_review",
+          source: "super_admin_setup_review",
+          backup
+        }
+      }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 10000 });
+    } catch (auditError) {
+      console.error("setup review delete audit fallback error:", auditError.message);
+    }
+  } else {
+    conversationLogs.push({
+      ts: deletedAt,
+      userId: clientOnboardingRecordId(tenantId),
+      tenantId,
+      userMessage: "",
+      botReply: "[ClientOnboarding] " + JSON.stringify(tombstone),
+      tools: [CLIENT_ONBOARDING_TOOL, SUPER_ADMIN_SETUP_REVIEW_TOOL],
+      zeroResultQueries: [],
+      handoff: false,
+      rating: null,
+      numTools: 2,
+      status: "ok",
+      eval: { skip: true, reason: "super_admin_setup_delete" }
+    });
   }
   return {
     result: { ok: true, tenant_id: tenantId, company_name: companyName, deletion_scope: "setup_review" },

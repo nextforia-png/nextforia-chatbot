@@ -499,13 +499,33 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(response.status, 400);
     assert.strictEqual((await response.json()).error, "launch_confirmation_required");
 
+    const validLaunchConfiguration = payload.onboarding.customer_service_configuration;
+    const invalidWhatsappAnswers = JSON.parse(JSON.stringify(payload.onboarding.answers));
+    invalidWhatsappAnswers.meta.whatsapp_number = "3000000000";
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
       body: JSON.stringify({
         action: "launch_live",
         launch_confirmed: true,
-        customer_service_configuration: payload.onboarding.customer_service_configuration
+        answers: invalidWhatsappAnswers,
+        customer_service_configuration: validLaunchConfiguration
+      })
+    });
+    assert.strictEqual(response.status, 409);
+    payload = await response.json();
+    assert.strictEqual(payload.error, "launch_blocked");
+    assert(payload.details.blockers.some(function (item) {
+      return item.code === "whatsapp_number_invalid";
+    }), "Live must block WhatsApp numbers without country code");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({
+        action: "launch_live",
+        launch_confirmed: true,
+        customer_service_configuration: validLaunchConfiguration
       })
     });
     assert.strictEqual(response.status, 200);

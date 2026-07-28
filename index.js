@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v219-strict-module-entitlements";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v220-super-admin-live-guards";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4534,6 +4534,21 @@ function setupWantsWhatsApp(answers) {
   return !!(meta.whatsapp_number || meta.whatsapp_integration_intent === "yes" || meta.whatsapp_integration_status === "requested");
 }
 
+function setupPhoneDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function setupPhoneHasInternationalFormat(value) {
+  const clean = String(value || "").replace(/[\s().-]/g, "");
+  return /^\+\d{10,15}$/.test(clean);
+}
+
+function setupConnectedChannel(channels, channel) {
+  return (Array.isArray(channels) ? channels : []).filter(function (row) {
+    return row && row.channel === channel && row.status === "connected";
+  })[0] || null;
+}
+
 function setupWantsShopify(answers) {
   const commerce = answers && answers.commerce || {};
   return commerce.platform === "shopify" &&
@@ -4541,9 +4556,7 @@ function setupWantsShopify(answers) {
 }
 
 function setupChannelIsConnected(channels, channel) {
-  return (Array.isArray(channels) ? channels : []).some(function (row) {
-    return row && row.channel === channel && row.status === "connected";
-  });
+  return !!setupConnectedChannel(channels, channel);
 }
 
 async function setupReviewChannels(tenantId) {
@@ -4611,9 +4624,20 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels) {
   }
 
   if (setupWantsWhatsApp(answers)) {
+    const setupWhatsapp = answers.meta && answers.meta.whatsapp_number || "";
+    if (setupWhatsapp && !setupPhoneHasInternationalFormat(setupWhatsapp)) {
+      addBlock("whatsapp_number_invalid", "WhatsApp sin formato internacional", "Corrige el número del setup con código de país, por ejemplo +573015872708.");
+    }
     if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
-      if (setupChannelIsConnected(channels, "whatsapp")) {
-        addOk("whatsapp_connected", "WhatsApp conectado", "Hay una conexión técnica de WhatsApp para este tenant.");
+      const whatsappConnection = setupConnectedChannel(channels, "whatsapp");
+      if (whatsappConnection) {
+        const setupDigits = setupPhoneDigits(setupWhatsapp);
+        const connectedDigits = setupPhoneDigits(whatsappConnection.account_label || "");
+        if (setupDigits && connectedDigits && setupDigits !== connectedDigits) {
+          addBlock("whatsapp_number_mismatch", "WhatsApp no coincide", "El setup dice " + setupWhatsapp + ", pero la conexión real muestra " + (whatsappConnection.account_label || "otro número") + ".");
+        } else {
+          addOk("whatsapp_connected", "WhatsApp conectado", "Hay una conexión técnica de WhatsApp para este tenant.");
+        }
       } else {
         addBlock("whatsapp_connection_required", "Falta conectar WhatsApp", "El cliente solicitó WhatsApp, pero todavía no hay conexión técnica activa.");
       }

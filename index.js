@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v235-super-admin-channel-alias";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v236-super-admin-channel-alias-detail";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -8263,11 +8263,10 @@ app.get("/admin/customer-setups/:tenantId", async (req, res) => {
       return;
     }
     const onboarding = await loadClientOnboarding(true, tenant.id);
-    let channels = [];
-    if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
-      try { channels = await channelConnectionService.listTenant(tenant.id); }
-      catch (error) { console.error("customer setup channel summary error:", tenant.id, error.message); }
-    }
+    const channels = await setupReviewChannels(tenant.id).catch(function (error) {
+      console.error("customer setup channel summary error:", tenant.id, error.message);
+      return [];
+    });
     const questionnaire = await loadCustomerSetupQuestionnaire(false);
     res.json({
       ok: true,

@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v238-rav-toys-live-activation-retry";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v239-live-with-catalog-fallback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5024,7 +5024,11 @@ async function persistSetupReview(tenantId, input, auth) {
     );
     if (!configuration) throw setupReviewFailure("customer_service_not_selected");
     if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
-      await catalogService.setTenantStatus(tenant.id, "activo", auth);
+      try {
+        await catalogService.setTenantStatus(tenant.id, "activo", auth);
+      } catch (error) {
+        console.error("setup launch catalog status warning:", tenant.id, error.message);
+      }
     }
     cleanStatus = "live";
     configurationLifecycle = "approved_for_testing";

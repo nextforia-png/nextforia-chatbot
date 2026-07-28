@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v229-super-admin-delete-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v230-super-admin-setup-actions";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4434,6 +4434,66 @@ async function markSetupReviewTenantDeleted(tenant, onboarding, auth, confirmati
   };
 }
 
+function setupReviewTenantFromRecord(record, tenantId) {
+  if (!record || record.setup_deleted === true) return null;
+  const answers = record.answers || {};
+  const business = answers.business || {};
+  return {
+    id: cleanTenantId(record.tenant_id) || cleanTenantId(tenantId),
+    company_name: business.brand_name || business.legal_name || record.company_name || record.tenant_id || tenantId,
+    name: business.brand_name || business.legal_name || record.company_name || record.tenant_id || tenantId,
+    plan_id: record.plan_id || null,
+    assigned_bot_id: record.assigned_bot_id || null,
+    status: record.tenant_lifecycle_status || "setup",
+    admin_email: answers.team && answers.team.admin_email || business.contact_email || null
+  };
+}
+
+async function setupReviewTenantForAction(tenantId) {
+  const clean = cleanTenantId(tenantId);
+  if (!clean) return null;
+  const visible = await setupReviewTenant(clean).catch(function () { return null; });
+  if (visible) return visible;
+  const records = await listRecentClientOnboardingRecords(1000).catch(function () { return []; });
+  const record = records.find(function (item) { return cleanTenantId(item && item.tenant_id) === clean; });
+  return setupReviewTenantFromRecord(record, clean);
+}
+
+async function markSetupReviewTenantLifecycle(tenant, onboarding, auth, status) {
+  const tenantId = cleanTenantId(tenant && tenant.id);
+  if (!tenantId) throw new CatalogError("tenant_not_found", 404);
+  const cleanStatus = String(status || "").trim().toLowerCase();
+  if (!["setup", "activo", "suspendido", "archivado"].includes(cleanStatus)) {
+    throw new CatalogError("invalid_status", 400);
+  }
+  const actor = auth && (auth.email || auth.username || auth.name || auth.user_id) || "super_admin";
+  const previous = onboarding && onboarding.answers ? onboarding : createOnboardingRecord({}, {
+    tenant_id: tenantId,
+    status: "draft",
+    updated_by: actor
+  });
+  const review = setupReviewSummary(previous);
+  const record = createOnboardingRecord(previous.answers || {}, {
+    tenant_id: tenantId,
+    status: previous.status || "draft",
+    updated_by: actor,
+    previous,
+    review_status: review.status,
+    review_actor: actor,
+    review_note: review.note,
+    requested_changes: review.requested_changes,
+    customer_service_configuration: previous.customer_service_configuration || null,
+    configuration_lifecycle: previous.customer_service_configuration && previous.customer_service_configuration.lifecycle,
+    review_event: {
+      action: "tenant_status_" + cleanStatus,
+      note: "Estado del cliente actualizado desde Super Admin: " + cleanStatus
+    }
+  });
+  record.tenant_lifecycle_status = cleanStatus;
+  const saved = await appendClientOnboardingRecord(record, tenantId);
+  return Object.assign({}, tenant, { status: cleanStatus, updated_at: saved.updated_at });
+}
+
 async function loadClientOnboarding(force, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
@@ -4651,7 +4711,7 @@ async function listSetupReviewTenants() {
         name: answers.business && answers.business.brand_name || record.tenant_id,
         plan_id: null,
         assigned_bot_id: null,
-        status: "setup",
+        status: record.tenant_lifecycle_status || "setup",
         admin_email: answers.team && answers.team.admin_email || answers.business && answers.business.contact_email || null
       });
     });
@@ -6891,7 +6951,18 @@ app.post("/admin/tenants/:tenantId/status", async (req, res) => {
   if (!auth) return;
   try {
     const status = req.body && req.body.status;
-    res.json({ ok: true, tenant: await catalogService.setTenantStatus(req.params.tenantId, status, auth) });
+    try {
+      if (!catalogService) throw new CatalogError("catalog_unavailable", 503);
+      res.json({ ok: true, tenant: await catalogService.setTenantStatus(req.params.tenantId, status, auth) });
+      return;
+    } catch (error) {
+      const code = error && (error.code || error.message);
+      if (!["tenant_not_found", "catalog_unavailable"].includes(code)) throw error;
+      const tenant = await setupReviewTenantForAction(req.params.tenantId);
+      if (!tenant) throw error;
+      const onboarding = await loadClientOnboarding(true, tenant.id);
+      res.json({ ok: true, tenant: await markSetupReviewTenantLifecycle(tenant, onboarding, auth, status) });
+    }
   } catch (error) {
     sendCatalogError(res, error);
   }
@@ -6921,6 +6992,7 @@ app.post("/admin/tenants/:tenantId/delete", async (req, res) => {
   try {
     let outcome;
     try {
+      if (!catalogService) throw new CatalogError("catalog_unavailable", 503);
       outcome = await catalogService.deleteTenant({
         tenant_id: req.params.tenantId,
         company_name_confirmacion: req.body && req.body.company_name_confirmacion,
@@ -6930,7 +7002,7 @@ app.post("/admin/tenants/:tenantId/delete", async (req, res) => {
       const code = error && (error.code || error.message);
       if (!req.body || req.body.confirmacion_final !== true) throw error;
       if (["company_name_mismatch", "final_confirmation_required"].includes(code)) throw error;
-      const tenant = await setupReviewTenant(req.params.tenantId);
+      const tenant = await setupReviewTenantForAction(req.params.tenantId);
       if (!tenant) throw error;
       const onboarding = await loadClientOnboarding(true, tenant.id);
       outcome = await markSetupReviewTenantDeleted(tenant, onboarding, auth, req.body.company_name_confirmacion);

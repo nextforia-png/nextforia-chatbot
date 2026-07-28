@@ -93,13 +93,19 @@ async function login(base, body) {
 
   try {
     await waitForServer(child, port);
+    let response = await fetch(base + "/admin/health");
+    assert.strictEqual(response.status, 200);
+    let body = await response.json();
+    assert.strictEqual(body.customer_setup.meta_oauth_ready, true);
+    assert.strictEqual(body.customer_setup.channel_storage_ready, false);
+    assert.strictEqual(body.customer_setup.shopify_install_ready, false);
+    assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
+
     const userA = await login(base, { email: "admin@a.example", password: "TenantPassword2026" });
     const userB = await login(base, { email: "admin@b.example", password: "TenantPassword2026" });
     const appointmentUser = await login(base, { email: "admin@c.example", password: "TenantPassword2026" });
     const superAdmin = await login(base, { username: "owner@nextforia.test", password: "OwnerPassword2026" });
-    let body;
-
-    let response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: userA.cookie } });
+    response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
     const panel = await response.text();
     assert(panel.includes("Finaliza el entrenamiento de tu Nextfor"));

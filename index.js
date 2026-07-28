@@ -211,7 +211,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v200-production-channel-storage-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v201-production-setup-readiness";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -9235,6 +9235,11 @@ app.get("/admin/health", async (req, res) => {
     res.json({
       ok: true,
       bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
+      customer_setup: {
+        channel_storage_ready: !!(appendOnlyChannelConnectionStore && SUPABASE_ENABLED),
+        meta_oauth_ready: !!(channelConnectionProvider && channelConnectionProvider.configured("whatsapp")),
+        shopify_install_ready: !!(SHOPIFY_APP_INSTALL_URL && String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32)
+      },
       status: "running"
     });
     return;

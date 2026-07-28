@@ -234,6 +234,31 @@ async function login(base, body) {
     assert(!superPanel.includes("channel-e2e-wa-legacy"));
     assert(!superPanel.includes(encryptionKey));
 
+    response = await fetch(base + "/admin/channel-connections/tenant-a/whatsapp/connect", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://nextforia.com",
+        "x-nextforia-panel-origin": "https://nextforia.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "nextforia.com",
+        cookie: superAdmin.cookie
+      },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    const superAdminAuthorization = new URL(body.authorization_url);
+    assert.strictEqual(superAdminAuthorization.hostname, "www.facebook.com");
+    assert(superAdminAuthorization.searchParams.get("scope").includes("whatsapp_business_management"));
+    const superAdminState = decodeURIComponent(superAdminAuthorization.searchParams.get("state"));
+    assert(!body.authorization_url.includes("channel-e2e-meta-app-secret-value"));
+    response = await fetch(base + "/admin/channel-connections", { headers: { cookie: superAdmin.cookie } });
+    body = await response.json();
+    assert.strictEqual(body.channels.find(function (row) {
+      return row.tenant_id === "tenant-a" && row.channel === "whatsapp";
+    }).status, "connecting");
+
     response = await fetch(base + "/admin/channel-connections/rav-toys/whatsapp/disconnect", {
       method: "POST",
       headers: { "content-type": "application/json", origin: base, cookie: superAdmin.cookie },

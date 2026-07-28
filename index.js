@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v217-customer-module-entitlements";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v218-super-admin-operational-launch";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -7780,6 +7780,61 @@ app.get("/admin/integrations/shopify/connect", async (req, res) => {
   res.redirect(destination.href);
 });
 
+app.get("/admin/integrations/shopify/connect/:tenantId", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const tenant = await setupReviewTenant(req.params.tenantId);
+  if (!tenant) {
+    res.status(404).json({ ok: false, error: "tenant_not_found" });
+    return;
+  }
+  const record = await loadClientOnboarding(false, tenant.id);
+  const answers = JSON.parse(JSON.stringify(record.answers || defaultClientOnboarding()));
+  const commerce = answers.commerce || {};
+  const shop = cleanShopifyShop(commerce.store_url || commerce.shopify_shop);
+  const card = function (status, title, body) {
+    res.status(status).setHeader("content-type", "text/html; charset=utf-8");
+    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Nextfor IA</title><style>body{margin:0;background:#F6F8FB;color:#313C50;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:680px;margin:0 auto;padding:48px 22px}.card{background:#fff;border:1px solid #DFE6F0;border-radius:22px;padding:28px;box-shadow:0 18px 46px rgba(10,24,54,.1)}h1{margin:0;color:#0A1836;font-size:28px;line-height:1.12}p{line-height:1.6;color:#66758D;font-size:15px}a{display:inline-flex;margin-top:10px;height:44px;align-items:center;padding:0 16px;border-radius:13px;background:#00A0F0;color:#fff;text-decoration:none;font-weight:800}</style></head><body><main class="wrap"><section class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p><a href="/admin/super-admin?view=setupReview&tenant_id=${encodeURIComponent(tenant.id)}">Volver a Super Admin</a></section></main></body></html>`);
+  };
+  if (commerce.platform !== "shopify" || !shop) {
+    card(409, "Falta Shopify en el setup", "Para conectar Shopify, el setup de " + (tenant.company_name || tenant.name || tenant.id) + " debe tener plataforma Shopify y URL de tienda.");
+    return;
+  }
+  if (!SHOPIFY_APP_INSTALL_URL) {
+    card(503, "Shopify casi listo", "Falta configurar la URL privada de instalación de la app en producción.");
+    return;
+  }
+  let pairingToken;
+  try {
+    pairingToken = createPairingToken({
+      tenant_id: tenant.id,
+      bot_id: tenant.assigned_bot_id || "commerce",
+      shop
+    });
+  } catch (error) {
+    card(503, "Falta configurar seguridad", "Para producción falta configurar NEXFORIA_PAIRING_SECRET con al menos 32 caracteres.");
+    return;
+  }
+  answers.commerce = Object.assign({}, commerce, {
+    platform: "shopify",
+    integration_intent: "yes",
+    integration_status: commerce.integration_status === "connected" ? "connected" : "pending_customer",
+    shopify_shop: shop,
+    shopify_pairing_started_at: new Date().toISOString(),
+    shopify_pairing_expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    shopify_pairing_bot_id: tenant.assigned_bot_id || "commerce"
+  });
+  await persistClientOnboarding(answers, record.status || "draft", auth, tenant.id);
+  const destination = new URL(SHOPIFY_APP_INSTALL_URL);
+  destination.searchParams.set("pairing_token", pairingToken);
+  destination.searchParams.set("tenant_id", tenant.id);
+  destination.searchParams.set("shop", shop);
+  res.redirect(destination.href);
+});
+
 app.get("/admin/client-onboarding/data", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -8505,6 +8560,13 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
 });
 
 app.get("/admin/channel-connections/meta/callback", async (req, res) => {
+  function channelConnectionReturnUrl(state, status) {
+    const fallback = "/admin/panel?tab=channels";
+    const raw = state && state.return_path || fallback;
+    const safePath = String(raw || fallback).startsWith("/admin/") ? String(raw || fallback) : fallback;
+    const separator = safePath.includes("?") ? "&" : "?";
+    return safePath + separator + "connection=" + encodeURIComponent(status);
+  }
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.redirect("/admin/panel?tab=channels&connection=error");
     return;
@@ -8533,11 +8595,10 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
       redirect_uri: state.redirect_uri || channelConnectionCallbackUrlForRequest(req),
       code: req.query.error ? "" : req.query.code
     });
-    res.redirect("/admin/panel?tab=channels&connection=" +
-      (result.status === "selection_required" ? "select" : "success"));
+    res.redirect(channelConnectionReturnUrl(state, result.status === "selection_required" ? "select" : "success"));
   } catch (error) {
     console.error("Meta channel authorization failed:", state.channel, error.internalMessage || error.message);
-    res.redirect("/admin/panel?tab=channels&connection=error");
+    res.redirect(channelConnectionReturnUrl(state, "error"));
   }
 });
 
@@ -8611,6 +8672,42 @@ app.get("/admin/channel-connections", async (req, res) => {
     res.json({ ok: true, channels: await channelConnectionService.listAll(tenants) });
   } catch (error) {
     console.error("super admin channel list error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/:channel/connect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const tenant = await setupReviewTenant(req.params.tenantId);
+  if (!tenant) {
+    res.status(404).json({ ok: false, error: "tenant_not_found" });
+    return;
+  }
+  const channel = cleanChannel(req.params.channel);
+  try {
+    const redirectUri = channelConnectionCallbackUrlForRequest(req);
+    const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
+      tenant_id: tenant.id,
+      channel,
+      actor_id: auth.user_id || auth.username,
+      actor: channelConnectionActor(auth),
+      redirect_uri: redirectUri,
+      return_path: "/admin/super-admin?view=setupReview&tenant_id=" + encodeURIComponent(tenant.id)
+    });
+    const authorizationUrl = await channelConnectionService.begin(tenant.id, channel, auth, state, {
+      redirectUri
+    });
+    res.json({ ok: true, authorization_url: authorizationUrl });
+  } catch (error) {
+    console.error("super admin channel connect start error:", error.message);
     channelConnectionErrorResponse(res, error);
   }
 });

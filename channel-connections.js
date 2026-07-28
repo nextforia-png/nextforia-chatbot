@@ -153,6 +153,7 @@ function createOAuthState(secret, input, now) {
     actor_id: cleanText(input && input.actor_id, 200),
     actor: cleanText(input && input.actor, 200),
     redirect_uri: cleanText(input && input.redirect_uri, 500),
+    return_path: cleanText(input && input.return_path, 500),
     nonce: crypto.randomBytes(24).toString("base64url"),
     exp: Number(now || Date.now()) + 10 * 60 * 1000
   })).toString("base64url");

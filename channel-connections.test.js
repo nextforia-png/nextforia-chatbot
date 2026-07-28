@@ -28,10 +28,12 @@ function expectCode(promise, code) {
     tenant_id: "tenant-a",
     channel: "instagram",
     actor_id: "user-a",
-    actor: "admin@a.example"
+    actor: "admin@a.example",
+    return_path: "/admin/super-admin?view=setupReview&tenant_id=tenant-a"
   }, 1000);
   assert.strictEqual(readOAuthState(stateSecret, state, 2000).tenant_id, "tenant-a");
   assert.strictEqual(readOAuthState(stateSecret, state, 2000).channel, "instagram");
+  assert.strictEqual(readOAuthState(stateSecret, state, 2000).return_path, "/admin/super-admin?view=setupReview&tenant_id=tenant-a");
   assert.strictEqual(readOAuthState(stateSecret, state.slice(0, -1) + "x", 2000), null);
   assert.strictEqual(readOAuthState(stateSecret, state, 11 * 60 * 1000), null);
 

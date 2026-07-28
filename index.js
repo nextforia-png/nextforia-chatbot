@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v231-super-admin-setup-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v232-super-admin-audit-setup-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4298,6 +4298,30 @@ async function fetchClientOnboardingAuditFallback(tenantId) {
   }
 }
 
+async function fetchRecentClientOnboardingAuditFallbacks(limit) {
+  if (!SUPABASE_ENABLED) return [];
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+      headers: SB_HEADERS,
+      params: {
+        select: "tenant_id,metadata,created_at",
+        order: "created_at.desc",
+        limit: limit || 2000
+      },
+      timeout: 8000
+    });
+    return (Array.isArray(response.data) ? response.data : []).map(function (row) {
+      const metadata = row && row.metadata || {};
+      const record = metadata.source === CLIENT_ONBOARDING_TOOL && metadata.record ? metadata.record : null;
+      if (!record || !record.tenant_id || !record.answers) return null;
+      return record;
+    }).filter(Boolean);
+  } catch (error) {
+    console.error("client onboarding audit fallback list error:", error.message);
+    return [];
+  }
+}
+
 async function fetchSetupReviewDeletedTenantIds() {
   const deleted = new Set(Array.from(setupReviewDeletedTenantIdsMemory));
   async function collectFromTurns(turns) {
@@ -4524,22 +4548,29 @@ async function loadClientOnboarding(force, tenantId) {
 async function listRecentClientOnboardingRecords(limit) {
   const seen = new Set();
   const records = [];
+  function collectRecord(record, fallbackTenantId) {
+    const tenantId = cleanTenantId(fallbackTenantId) || cleanTenantId(record && record.tenant_id);
+    if (!tenantId || seen.has(tenantId) || !record || !record.answers) return;
+    if (record.setup_deleted === true && typeof record.deleted_setup_completed !== "boolean") return;
+    if (record.setup_deleted === true && record.deleted_setup_completed === true && record.hide_completed_setup !== true) return;
+    seen.add(tenantId);
+    records.push(record);
+  }
   function collect(turn) {
     const fallbackRecord = parseAnyClientOnboardingTurn(turn);
     const tenantId = cleanTenantId(turn && turn.tenantId) || cleanTenantId(fallbackRecord && fallbackRecord.tenant_id);
     if (!tenantId || seen.has(tenantId)) return;
     const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
-    if (!record || !record.answers) return;
-    if (record.setup_deleted === true && typeof record.deleted_setup_completed !== "boolean") return;
-    if (record.setup_deleted === true && record.deleted_setup_completed === true && record.hide_completed_setup !== true) return;
-    seen.add(tenantId);
-    records.push(record);
+    collectRecord(record, tenantId);
   }
   if (SUPABASE_ENABLED) {
     const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200, {
       allTenants: true
     });
     (rows || []).map(normalizeTurnRow).forEach(collect);
+    (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (record) {
+      collectRecord(record, record.tenant_id);
+    });
   } else {
     conversationLogs.slice().reverse().filter(isClientOnboardingTurn).forEach(collect);
   }

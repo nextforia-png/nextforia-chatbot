@@ -54,7 +54,7 @@ async function login(base, body, expectedStatus) {
 function signedSessionCookie(secret, user) {
   const payload = Buffer.from(JSON.stringify({
     v: 2,
-    rst: "customer-access-hard-reset-2026-07-28",
+    rst: "customer-access-full-reset-2026-07-28",
     uid: user.user_id,
     e: user.email,
     n: user.email,
@@ -98,7 +98,7 @@ function signedSessionCookie(secret, user) {
       SUPABASE_KEY: "",
       CUSTOMER_ACCESS_V2_ENABLED: "1",
       CUSTOMER_PUBLIC_SIGNUP_ENABLED: "1",
-      CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T01:55:00.000Z",
+      CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T02:02:19.000Z",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_ACCESS_TEST_INVITATIONS: JSON.stringify([

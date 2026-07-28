@@ -801,7 +801,7 @@ function createCustomerAccessService(options) {
       const salt = crypto.randomBytes(16);
       const passwordHash = hashPassword(password, salt);
       const passwordSalt = salt.toString("base64url");
-      if (store && typeof store.createPublicSignupDirect === "function") {
+      if (store && typeof store.createPublicSignupDirect === "function" && body.use_direct_signup === true) {
         try {
           if (typeof store.releaseSignupConflicts === "function") {
             await store.releaseSignupConflicts(Object.assign({}, clean, { before: body.reset_conflicts_before }));

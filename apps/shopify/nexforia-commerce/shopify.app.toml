@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "0bf916abd43507a544c21eabd566f6a1"
-application_url = "https://example.com"
+application_url = "https://nexforia-commerce.onrender.com"
 embedded = true
 name = "nexforia-commerce"
 
@@ -10,7 +10,7 @@ name = "nexforia-commerce"
 scopes = "read_products,read_inventory,read_orders"
 
 [webhooks]
-api_version = "2026-10"
+api_version = "2026-07"
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/app/uninstalled"
@@ -21,8 +21,7 @@ api_version = "2026-10"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://nexforia-commerce.onrender.com/auth/callback" ]
 
 [build]
-include_config_on_deploy = true
 automatically_update_urls_on_dev = true

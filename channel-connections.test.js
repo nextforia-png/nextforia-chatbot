@@ -112,7 +112,9 @@ function expectCode(promise, code) {
   const beginUrl = await service.begin("tenant-a", "instagram", "admin@a.example", state);
   assert(beginUrl.startsWith("https://www.facebook.com/"));
   let tenantA = await service.listTenant("tenant-a");
-  assert.strictEqual(tenantA.find(function (row) { return row.channel === "instagram"; }).status, "connecting");
+  const connectingInstagram = tenantA.find(function (row) { return row.channel === "instagram"; });
+  assert.strictEqual(connectingInstagram.status, "connecting");
+  assert.strictEqual(connectingInstagram.reconnect_available, true);
   let tenantB = await service.listTenant("tenant-b");
   assert.strictEqual(tenantB.find(function (row) { return row.channel === "instagram"; }).status, "not_connected");
 

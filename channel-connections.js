@@ -126,7 +126,10 @@ function publicConnection(record, options) {
     : [];
   safe.requires_selection = safe.status === "connecting" && safe.pending_assets.length > 1;
   safe.disconnect_available = !safe.protected_legacy && ["connected", "needs_attention", "connecting"].includes(safe.status);
-  safe.reconnect_available = !safe.protected_legacy && ["needs_attention", "disconnected"].includes(safe.status);
+  safe.reconnect_available = !safe.protected_legacy && (
+    ["needs_attention", "disconnected"].includes(safe.status)
+    || (safe.status === "connecting" && safe.pending_assets.length === 0)
+  );
   safe.connect_available = !safe.protected_legacy && ["not_connected", "disconnected"].includes(safe.status);
   if (!(options && options.superAdmin)) {
     delete safe.last_error;

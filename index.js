@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v245-live-meta-channel-runtime";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v246-live-tenant-channel-reconnect";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -320,9 +320,6 @@ const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL
 const CHANNEL_CONNECTION_PUBLIC_ORIGINS = configuredHttpsOrigins(
   process.env.CHANNEL_CONNECTION_PUBLIC_ORIGINS ||
   "https://nextforia.com,https://staging.nextforia.com"
-);
-const CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES = configuredTenantAliases(
-  process.env.CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES
 );
 const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
 const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
@@ -5282,12 +5279,12 @@ function setupChannelIsConnected(channels, channel) {
 }
 
 function channelConnectionTenantId(tenantId) {
-  const cleanTenant = cleanTenantId(tenantId);
-  const internalTenantId = CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES.get(cleanTenant);
-  // Customer Panel already uses this restricted alias so RAV's new account can
-  // reuse the protected legacy WhatsApp/Instagram/Messenger connections. Super
-  // Admin must read the same physical channel state before deciding Live.
-  return internalTenantId === DEFAULT_TENANT_ID ? internalTenantId : cleanTenant;
+  // Channel ownership follows the signed customer tenant. A previous migration
+  // alias made a newly-created RAV account appear connected by borrowing the
+  // legacy singleton tenant, even when those credentials were expired. Keeping
+  // the physical connection on the real tenant is required for isolation,
+  // health verification and safe reconnects.
+  return cleanTenantId(tenantId);
 }
 
 async function setupReviewChannels(tenantId) {
@@ -6164,12 +6161,7 @@ function customerTenantForAuth(auth) {
 }
 
 function customerChannelTenantForAuth(auth) {
-  const customerTenantId = customerTenantForAuth(auth);
-  const internalTenantId = CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES.get(customerTenantId);
-  // Internal aliases may only point at the protected legacy tenant. This lets
-  // RAV's new Customer Panel account reuse its existing live connections
-  // without allowing arbitrary cross-tenant aliases.
-  return internalTenantId === DEFAULT_TENANT_ID ? internalTenantId : customerTenantId;
+  return customerTenantForAuth(auth);
 }
 
 function customerPanelAuthOk(req, minRole = "viewer") {
@@ -8131,7 +8123,18 @@ app.post("/admin/send-message", async (req, res) => {
   await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
   const sent = await sendText(userId, text, tenantMeta);
   recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error", undefined, tenantMeta);
-  res.json({ ok: !!sent, userId, handoff: true, meta_sent: !!sent });
+  if (!sent) {
+    res.status(502).json({
+      ok: false,
+      error: "channel_delivery_failed",
+      message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
+      userId,
+      handoff: true,
+      meta_sent: false
+    });
+    return;
+  }
+  res.json({ ok: true, userId, handoff: true, meta_sent: true });
 });
 
 app.get("/admin/customer-meta", async (req, res) => {
@@ -9557,9 +9560,24 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
   }
   try {
     const tenantId = customerChannelTenantForAuth(auth);
+    let channels = await channelConnectionService.listTenant(tenantId);
+    // A "connected" badge must represent a live Meta credential and webhook
+    // subscription, not only a previously saved OAuth result. Refresh stale
+    // connections when the customer opens the channel hub.
+    for (const connection of channels) {
+      if (!connection || connection.status !== "connected") continue;
+      const verifiedAt = Date.parse(connection.last_verified_at || "");
+      if (Number.isFinite(verifiedAt) && Date.now() - verifiedAt < 2 * 60 * 1000) continue;
+      try {
+        await channelConnectionService.verify(tenantId, connection.channel, auth);
+      } catch (error) {
+        console.error("customer channel verify error:", connection.channel, error.message);
+      }
+    }
+    channels = await channelConnectionService.listTenant(tenantId);
     res.json({
       ok: true,
-      channels: await channelConnectionService.listTenant(tenantId),
+      channels,
       meta_authorization_available: {
         whatsapp: channelConnectionService.providerConfigured("whatsapp"),
         instagram: channelConnectionService.providerConfigured("instagram"),

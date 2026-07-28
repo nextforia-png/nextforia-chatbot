@@ -147,10 +147,21 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     body = await response.json();
     const ravWhatsapp = body.channels.find(function (row) { return row.channel === "whatsapp"; });
-    assert.strictEqual(ravWhatsapp.status, "connected");
-    assert.strictEqual(ravWhatsapp.account_label, "+57 301 000 0000");
-    assert.strictEqual(ravWhatsapp.connect_available, false);
+    assert.strictEqual(ravWhatsapp.tenant_id, "rav-customer-account");
+    assert.strictEqual(ravWhatsapp.status, "not_connected");
+    assert.strictEqual(ravWhatsapp.account_label, null);
+    assert.strictEqual(ravWhatsapp.connect_available, true);
     assert.strictEqual(ravWhatsapp.disconnect_available, false);
+
+    response = await fetch(base + "/admin/send-message", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: JSON.stringify({ userId: "ig:123456789", text: "Prueba de entrega" })
+    });
+    assert.strictEqual(response.status, 502, "a rejected Meta delivery must never look successful");
+    body = await response.json();
+    assert.strictEqual(body.error, "channel_delivery_failed");
+    assert.strictEqual(body.meta_sent, false);
 
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
       method: "POST",
@@ -164,7 +175,9 @@ async function login(base, body) {
       },
       body: "{}"
     });
-    assert.strictEqual(response.status, 409, "RAV reuses its protected live WhatsApp connection");
+    assert.strictEqual(response.status, 200, "RAV customer must connect its own tenant-scoped WhatsApp account");
+    body = await response.json();
+    assert(new URL(body.authorization_url).searchParams.get("scope").includes("whatsapp_business_management"));
 
     response = await fetch(base + "/admin/panel/channel-connections/instagram/connect", {
       method: "POST",

@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v232-super-admin-audit-setup-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v233-super-admin-tenant-id-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4558,7 +4558,7 @@ async function listRecentClientOnboardingRecords(limit) {
   }
   function collect(turn) {
     const fallbackRecord = parseAnyClientOnboardingTurn(turn);
-    const tenantId = cleanTenantId(turn && turn.tenantId) || cleanTenantId(fallbackRecord && fallbackRecord.tenant_id);
+    const tenantId = cleanTenantId(fallbackRecord && fallbackRecord.tenant_id) || cleanTenantId(turn && turn.tenantId);
     if (!tenantId || seen.has(tenantId)) return;
     const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
     collectRecord(record, tenantId);

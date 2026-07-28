@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v241-live-visual-consistency";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v242-super-admin-customer-operations";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4798,15 +4798,18 @@ function setupChannelIsConnected(channels, channel) {
   return !!setupConnectedChannel(channels, channel);
 }
 
-async function setupReviewChannels(tenantId) {
-  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) return [];
+function channelConnectionTenantId(tenantId) {
   const cleanTenant = cleanTenantId(tenantId);
   const internalTenantId = CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES.get(cleanTenant);
   // Customer Panel already uses this restricted alias so RAV's new account can
   // reuse the protected legacy WhatsApp/Instagram/Messenger connections. Super
   // Admin must read the same physical channel state before deciding Live.
-  const channelTenantId = internalTenantId === DEFAULT_TENANT_ID ? internalTenantId : cleanTenant;
-  return channelConnectionService.listTenant(channelTenantId);
+  return internalTenantId === DEFAULT_TENANT_ID ? internalTenantId : cleanTenant;
+}
+
+async function setupReviewChannels(tenantId) {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) return [];
+  return channelConnectionService.listTenant(channelConnectionTenantId(tenantId));
 }
 
 function launchChecklistItem(ok, code, label, detail, type) {
@@ -4921,6 +4924,115 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels) {
     blockers,
     warnings,
     checks
+  };
+}
+
+function setupOperationalCheck(ok, code, label, detail) {
+  return { ok: !!ok, code, label, detail };
+}
+
+async function runSetupOperationalTest(tenant, record, questionnaire, channels, auth) {
+  const answers = record && record.answers || {};
+  const review = setupReviewSummary(record);
+  let whatsappVerificationError = "";
+  if (setupWantsWhatsApp(answers) && setupChannelIsConnected(channels, "whatsapp") &&
+      CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
+    try {
+      await channelConnectionService.verify(
+        channelConnectionTenantId(tenant.id),
+        "whatsapp",
+        auth
+      );
+      channels = await setupReviewChannels(tenant.id);
+    } catch (error) {
+      whatsappVerificationError = String(error && (error.code || error.message) || "verification_failed");
+    }
+  }
+  const launch = setupLaunchReadiness(tenant, record, questionnaire, channels);
+  const health = await buildAdminHealthResult();
+  const checks = [
+    setupOperationalCheck(
+      !!record.setup_completed,
+      "setup_record",
+      "Setup del cliente",
+      record.setup_completed ? "El formulario está completo y persistido." : "El cliente todavía no terminó el formulario."
+    ),
+    setupOperationalCheck(
+      launch.blockers.length === 0,
+      "launch_readiness",
+      "Validaciones para Live",
+      launch.blockers.length === 0
+        ? "No hay bloqueos de configuración o canales."
+        : launch.blockers.map(function (item) { return item.label; }).join(", ")
+    ),
+    setupOperationalCheck(
+      !!(record.customer_service_configuration &&
+        record.customer_service_configuration.lifecycle === "approved_for_testing"),
+      "bot_configuration",
+      "Programación del bot",
+      record.customer_service_configuration
+        ? (record.customer_service_configuration.lifecycle === "approved_for_testing"
+            ? "La configuración está aprobada para Testing/Live."
+            : "La configuración existe, pero todavía no está aprobada para pruebas.")
+        : "Todavía no se ha generado la configuración desde el setup."
+    ),
+    setupOperationalCheck(
+      !setupWantsWhatsApp(answers) ||
+        setupChannelIsConnected(channels, "whatsapp") && !whatsappVerificationError,
+      "whatsapp_connection",
+      "WhatsApp",
+      setupWantsWhatsApp(answers)
+        ? (setupChannelIsConnected(channels, "whatsapp") && !whatsappVerificationError
+            ? "Conexión técnica verificada para este tenant."
+            : (whatsappVerificationError
+                ? "La conexión existe, pero falló su verificación técnica."
+                : "El canal solicitado todavía no está conectado."))
+        : "No solicitado por este cliente."
+    ),
+    setupOperationalCheck(
+      !setupWantsShopify(answers) ||
+        !!(answers.commerce && answers.commerce.integration_status === "connected"),
+      "shopify_connection",
+      "Shopify",
+      setupWantsShopify(answers)
+        ? (answers.commerce && answers.commerce.integration_status === "connected"
+            ? "Tienda emparejada con el tenant."
+            : "La tienda solicitada todavía no está conectada.")
+        : "No solicitado por este cliente."
+    ),
+    setupOperationalCheck(
+      !setupWantsWhatsApp(answers) || health.checks && health.checks.meta_whatsapp === "ok",
+      "messaging_infrastructure",
+      "Infraestructura de mensajería",
+      health.checks && health.checks.meta_whatsapp === "ok"
+        ? "Meta Graph API responde correctamente."
+        : "La infraestructura de Meta necesita revisión."
+    ),
+    setupOperationalCheck(
+      !SUPABASE_ENABLED || health.checks && health.checks.supabase_conversation_logs === "ok",
+      "history_infrastructure",
+      "Persistencia e historial",
+      !SUPABASE_ENABLED
+        ? "Persistencia externa no requerida en este ambiente."
+        : (health.checks && health.checks.supabase_conversation_logs === "ok"
+            ? "Supabase responde correctamente."
+            : "Supabase necesita revisión.")
+    )
+  ];
+  const passed = checks.filter(function (check) { return check.ok; }).length;
+  return {
+    ok: passed === checks.length,
+    safe: true,
+    tenant_id: tenant.id,
+    tested_at: new Date().toISOString(),
+    review_status: review.status,
+    passed,
+    total: checks.length,
+    checks,
+    launch,
+    message: passed === checks.length
+      ? "Prueba segura completada. La operación del cliente está lista."
+      : "La prueba encontró " + (checks.length - passed) + " punto(s) por corregir."
   };
 }
 
@@ -8288,6 +8400,81 @@ app.get("/admin/customer-setups/:tenantId", async (req, res) => {
   }
 });
 
+app.post("/admin/customer-setups/:tenantId/test", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenant = await setupReviewTenant(req.params.tenantId);
+    if (!tenant) {
+      res.status(404).json({ ok: false, error: "tenant_not_found" });
+      return;
+    }
+    const onboarding = await reconcileShopifyOnboardingConnection(
+      await loadClientOnboarding(false, tenant.id)
+    );
+    const questionnaire = await loadCustomerSetupQuestionnaire(false);
+    const channels = await setupReviewChannels(tenant.id).catch(function () { return []; });
+    const result = await runSetupOperationalTest(tenant, onboarding, questionnaire, channels, auth);
+    const audited = await persistSetupReview(tenant.id, {
+      action: "run_safe_test",
+      review_note: "Prueba segura: " + result.passed + " de " + result.total + " controles correctos."
+    }, auth);
+    res.json({
+      ok: true,
+      result,
+      onboarding: audited,
+      review: setupReviewSummary(audited),
+      launch: setupLaunchReadiness(tenant, audited, questionnaire, channels)
+    });
+  } catch (error) {
+    console.error("customer setup operational test error:", error.message);
+    res.status(error.status || 503).json({
+      ok: false,
+      error: error.message === "tenant_not_found" ? "tenant_not_found" : "setup_operation_test_unavailable"
+    });
+  }
+});
+
+app.post("/admin/customer-setups/:tenantId/sync-live", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenant = await setupReviewTenant(req.params.tenantId);
+    if (!tenant) throw setupReviewFailure("tenant_not_found", 404);
+    const onboarding = await loadClientOnboarding(false, tenant.id);
+    if (setupReviewSummary(onboarding).status !== "live") {
+      throw setupReviewFailure("customer_not_live", 409);
+    }
+    if (!CUSTOMER_ACCESS_V2_ENABLED || !catalogService) {
+      throw setupReviewFailure("catalog_unavailable", 503);
+    }
+    const syncedTenant = await catalogService.setTenantStatus(tenant.id, "activo", auth);
+    const audited = await persistSetupReview(tenant.id, {
+      action: "sync_live_access",
+      review_note: "Acceso del cliente sincronizado con su estado Live."
+    }, auth);
+    res.json({
+      ok: true,
+      tenant: syncedTenant,
+      onboarding: audited,
+      review: setupReviewSummary(audited)
+    });
+  } catch (error) {
+    console.error("customer setup live sync error:", error.message);
+    const expected = ["tenant_not_found", "customer_not_live", "catalog_unavailable"];
+    res.status(error.status || 503).json({
+      ok: false,
+      error: expected.includes(error.message) ? error.message : "live_sync_unavailable"
+    });
+  }
+});
+
 app.post("/admin/panel/commerce-connector", async (req, res) => {
   if (!customerPanelAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -9040,7 +9227,11 @@ app.post("/admin/channel-connections/:tenantId/:channel/verify", async (req, res
   try {
     res.json({
       ok: true,
-      connection: await channelConnectionService.verify(req.params.tenantId, req.params.channel, auth)
+      connection: await channelConnectionService.verify(
+        channelConnectionTenantId(req.params.tenantId),
+        req.params.channel,
+        auth
+      )
     });
   } catch (error) {
     console.error("super admin channel verify error:", error.message);
@@ -9061,7 +9252,11 @@ app.post("/admin/channel-connections/:tenantId/:channel/help-reconnect", async (
   try {
     res.json({
       ok: true,
-      connection: await channelConnectionService.requestReconnect(req.params.tenantId, req.params.channel, auth)
+      connection: await channelConnectionService.requestReconnect(
+        channelConnectionTenantId(req.params.tenantId),
+        req.params.channel,
+        auth
+      )
     });
   } catch (error) {
     console.error("super admin channel reconnect request error:", error.message);
@@ -9082,7 +9277,11 @@ app.post("/admin/channel-connections/:tenantId/:channel/disconnect", async (req,
   try {
     res.json({
       ok: true,
-      connection: await channelConnectionService.disconnect(req.params.tenantId, req.params.channel, auth)
+      connection: await channelConnectionService.disconnect(
+        channelConnectionTenantId(req.params.tenantId),
+        req.params.channel,
+        auth
+      )
     });
   } catch (error) {
     console.error("super admin channel disconnect error:", error.message);
@@ -10841,53 +11040,6 @@ app.get("/admin/test-search", async (req, res) => {
   }
 });
 
-async function activateRavToysLiveOnProductionBoot() {
-  const tenantId = "rav-toys-adac1e";
-  if (process.env.NODE_ENV === "test") return;
-  if (!process.env.RENDER && process.env.NODE_ENV !== "production") return;
-  if (process.env.DISABLE_RAV_TOYS_AUTO_LIVE === "1") return;
-  try {
-    const tenant = await setupReviewTenant(tenantId);
-    if (!tenant) {
-      console.warn("RAV Toys live activation skipped: tenant_not_found", tenantId);
-      return;
-    }
-    const current = await loadClientOnboarding(false, tenant.id);
-    const currentReview = setupReviewSummary(current);
-    if (currentReview.status === "live") {
-      console.log("RAV Toys live activation: already live", tenant.id);
-      return;
-    }
-    const questionnaire = await loadCustomerSetupQuestionnaire(false);
-    const channels = await setupReviewChannels(tenant.id).catch(function (error) {
-      console.error("RAV Toys live activation channel check failed:", error.message);
-      return [];
-    });
-    const readiness = setupLaunchReadiness(tenant, current, questionnaire, channels);
-    if (!readiness.ready) {
-      console.warn("RAV Toys live activation blocked:", JSON.stringify({
-        tenant_id: tenant.id,
-        blockers: readiness.blockers.map(function (item) { return item.code; })
-      }));
-      return;
-    }
-    await persistSetupReview(tenant.id, {
-      action: "launch_live",
-      launch_confirmed: true,
-      review_note: "Activado Live por despliegue operativo solicitado por Santiago."
-    }, {
-      ok: true,
-      role: "super_admin",
-      username: "codex-production-activation",
-      name: "Codex production activation",
-      method: "deployment"
-    });
-    console.log("RAV Toys live activation completed:", tenant.id);
-  } catch (error) {
-    console.error("RAV Toys live activation failed:", error.message);
-  }
-}
-
 app.listen(PORT, () => {
   console.log(`RAV-Bot ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
   console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
@@ -10895,10 +11047,6 @@ app.listen(PORT, () => {
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
   syncNextforPricingJuly2026();
-  [15000, 45000, 90000].forEach(function (delay) {
-    const ravToysLiveActivationTimer = setTimeout(activateRavToysLiveOnProductionBoot, delay);
-    ravToysLiveActivationTimer.unref();
-  });
   if (customerAccessResetEnabled() && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED) {
     resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
       .then(function (result) {

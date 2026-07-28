@@ -535,6 +535,46 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "approved_for_testing");
     assert.strictEqual(payload.launch.ready, true);
 
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a/test", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: cookieA },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 401, "a customer cannot run Super Admin operational tests");
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a/test", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.result.safe, true);
+    assert.strictEqual(payload.result.tenant_id, "tenant-setup-a");
+    assert.strictEqual(payload.result.total, 7);
+    assert(payload.result.checks.some(function (check) {
+      return check.code === "bot_configuration" && check.ok;
+    }));
+    assert.strictEqual(
+      payload.review.history[payload.review.history.length - 1].action,
+      "run_safe_test",
+      "the per-customer test must be audited"
+    );
+
+    response = await fetch(base + "/admin/customer-setups/tenant-setup-a/sync-live", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.tenant.status, "activo");
+    assert.strictEqual(
+      payload.review.history[payload.review.history.length - 1].action,
+      "sync_live_access",
+      "manual Live access repair must be audited"
+    );
+
     response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },
       redirect: "manual"

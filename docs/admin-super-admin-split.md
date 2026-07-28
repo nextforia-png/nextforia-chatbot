@@ -61,6 +61,8 @@ El panel Super admin debe enfocarse en plataforma y soporte tecnico:
 - En `v80`, el panel adopta el sistema visual NexforIA del handoff: sidebar de plataforma, vistas Resumen/Clientes/Leads/Incidencias/Facturación, detalle de RAV Toys y acceso al piloto DERCO. Las vistas sin fuente productiva muestran estados vacíos explícitos y no métricas simuladas.
 - Desde `v81`, `/admin/super-admin/login` es la entrada exclusiva de plataforma. Una sesión `admin`, `agent` o `viewer` se redirige allí, pero no se eleva: debe validar una cuenta `super_admin` o la clave maestra antes de reemplazar la sesión cliente.
 - Customer Access v2 agrega en Staging un único alta desde **Clientes**: el Super Admin ingresa empresa, correo administrador, plan y bot; puede ver entrega/vencimiento/consumo y revocar invitaciones. El enlace nunca aparece en el panel y no existe signup público.
+- Desde `v242`, la ficha de cada setup incorpora **Operación del cliente**. El Super Admin puede corregir el mismo record del Customer Panel, conectar o verificar canales, ejecutar una prueba segura por tenant, activar Live, reintentar la sincronización de acceso, suspender o eliminar. Las pruebas y reparaciones quedan auditadas y no envían mensajes reales.
+- La activación ya no depende de lógica especial al desplegar ni de un tenant escrito en código. El flujo operativo es reutilizable para cualquier cliente y exige rol exacto `super_admin`.
 
 ## Configuracion de usuarios
 

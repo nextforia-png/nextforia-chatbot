@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v244-live-meta-channel-runtime";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v245-live-meta-channel-runtime";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1529,7 +1529,7 @@ function isShopifySessionStateTurn(turn) {
 
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
-  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent)\]\s*/.test(botReply)) return true;
+  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isBotSetupTurn(turn) ||

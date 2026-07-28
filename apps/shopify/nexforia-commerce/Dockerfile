@@ -7,12 +7,12 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json* ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-RUN npm ci --omit=dev && npm cache clean --force
+RUN corepack enable && pnpm install --frozen-lockfile
 
 COPY . .
 
-RUN npm run build
+RUN pnpm run build
 
-CMD ["npm", "run", "docker-start"]
+CMD ["pnpm", "run", "start"]

@@ -6,7 +6,18 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
 
   if (url.searchParams.get("shop")) {
-    throw redirect(`/app?${url.searchParams.toString()}`);
+    const pairingToken = String(url.searchParams.get("pairing_token") || "").trim();
+    url.searchParams.delete("pairing_token");
+    const headers = pairingToken
+      ? {
+          "Set-Cookie": [
+            "nexforia_pairing=",
+            encodeURIComponent(pairingToken),
+            "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=900"
+          ].join("")
+        }
+      : undefined;
+    throw redirect(`/app?${url.searchParams.toString()}`, { headers });
   }
 
   return { showForm: Boolean(login) };
@@ -18,35 +29,27 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Conecta Shopify con NextforIA</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Autoriza el catálogo de tu tienda para que tu agente pueda recomendar
+          productos, consultar disponibilidad y ayudar con pedidos.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
             <label className={styles.label}>
-              <span>Shop domain</span>
+              <span>Dominio de tu tienda</span>
               <input className={styles.input} type="text" name="shop" />
               <span>e.g: my-shop-domain.myshopify.com</span>
             </label>
             <button className={styles.button} type="submit">
-              Log in
+              Conectar tienda
             </button>
           </Form>
         )}
         <ul className={styles.list}>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
-          <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
-          </li>
+          <li><strong>Solo lectura.</strong> NextforIA no modifica tu catálogo ni tus pedidos.</li>
+          <li><strong>Una sola conexión.</strong> La tienda queda ligada únicamente a tu empresa.</li>
+          <li><strong>Control total.</strong> Puedes desinstalar la app cuando quieras.</li>
         </ul>
       </div>
     </div>

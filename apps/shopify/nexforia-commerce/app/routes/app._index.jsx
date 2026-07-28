@@ -1,7 +1,8 @@
+/* eslint-env node */
+
 import { Form, useActionData, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import db from "../db.server";
 import {
   NEXFORIA_CAPABILITIES,
   searchProducts,
@@ -10,6 +11,10 @@ import {
   pairingErrorMessage,
   verifyPairingToken,
 } from "../lib/pairing.server";
+import {
+  confirmPairingWithBackend,
+  loadPairingFromBackend,
+} from "../lib/remote-session-storage.server";
 
 async function pairShopToBot(session, pairingToken) {
   const verified = verifyPairingToken(pairingToken);
@@ -18,26 +23,32 @@ async function pairShopToBot(session, pairingToken) {
     error.code = "pairing_shop_mismatch";
     throw error;
   }
-  const pairing = await db.storePairing.upsert({
-    where: { shop: session.shop },
-    create: {
-      shop: session.shop,
-      tenantId: verified.tenantId,
-      botId: verified.botId,
-      pairedBySessionId: session.id,
-    },
-    update: {
-      tenantId: verified.tenantId,
-      botId: verified.botId,
-      status: "active",
-      pairedBySessionId: session.id,
-    },
+  const pairing = await confirmPairingWithBackend({
+    baseUrl: process.env.NEXFORIA_BACKEND_URL,
+    secret: process.env.NEXFORIA_COMMERCE_SERVICE_SECRET,
+    pairingToken,
+    shop: session.shop,
   });
 
   return {
-    tenantId: pairing.tenantId,
-    botId: pairing.botId,
+    tenantId: pairing.tenant_id,
+    botId: pairing.bot_id,
   };
+}
+
+function pairingTokenFromRequest(request) {
+  const url = new URL(request.url);
+  const direct = String(url.searchParams.get("pairing_token") || "").trim();
+  if (direct) return direct;
+  const match = String(request.headers.get("cookie") || "").match(
+    /(?:^|;\s*)nexforia_pairing=([^;]+)/,
+  );
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return "";
+  }
 }
 
 export const loader = async ({ request }) => {
@@ -45,8 +56,7 @@ export const loader = async ({ request }) => {
   let catalogStatus = "Connected";
   let catalogMessage = "Shopify accepted a live catalog query.";
   let pairingNotice = null;
-  const url = new URL(request.url);
-  const pairingToken = String(url.searchParams.get("pairing_token") || "").trim();
+  const pairingToken = pairingTokenFromRequest(request);
   if (pairingToken) {
     try {
       const pairing = await pairShopToBot(session, pairingToken);
@@ -55,15 +65,16 @@ export const loader = async ({ request }) => {
       pairingNotice = pairingErrorMessage(error);
     }
   }
-  const pairing = await db.storePairing.findUnique({
-    where: { shop: session.shop },
-    select: {
-      tenantId: true,
-      botId: true,
-      status: true,
-      pairedAt: true,
-    },
-  });
+  let pairing = null;
+  try {
+    pairing = await loadPairingFromBackend({
+      baseUrl: process.env.NEXFORIA_BACKEND_URL,
+      secret: process.env.NEXFORIA_COMMERCE_SERVICE_SECRET,
+      shop: session.shop,
+    });
+  } catch (error) {
+    pairingNotice = pairingNotice || pairingErrorMessage(error);
+  }
 
   try {
     await searchProducts(admin, "status:active", { limit: 1 });
@@ -83,10 +94,10 @@ export const loader = async ({ request }) => {
     catalogMessage,
     pairing: pairing
       ? {
-          tenantId: pairing.tenantId,
-          botId: pairing.botId,
+          tenantId: pairing.tenant_id,
+          botId: pairing.bot_id,
           status: pairing.status,
-          pairedAt: pairing.pairedAt.toISOString(),
+          pairedAt: pairing.connected_at,
         }
       : null,
     pairingToken,

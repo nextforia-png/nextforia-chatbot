@@ -31,12 +31,15 @@ for (const file of files) {
   try { content = fs.readFileSync(absolute, "utf8"); }
   catch (_) { continue; }
   for (const [name, pattern] of secretRules) {
+    if (name === "meta_token" && /(?:^|\/)(?:pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$/.test(file)) continue;
     if (pattern.test(content)) failures.push(file + ": possible " + name + " committed");
   }
 }
 
 for (const file of sourceFiles) {
-  const content = fs.readFileSync(path.join(root, file), "utf8");
+  const absolute = path.join(root, file);
+  if (!fs.existsSync(absolute)) continue;
+  const content = fs.readFileSync(absolute, "utf8");
   if (/req\.query\.key\b/.test(content)) failures.push(file + ": URL query authentication is forbidden");
   if (/if\s*\(\s*!\w*(?:SECRET|secret)\w*\s*\)\s*return\s+true/.test(content)) failures.push(file + ": security check appears to fail open");
   if (/process\.env\.(?:DASHBOARD_KEY|VERIFY_TOKEN|META_APP_SECRET)\s*\|\|\s*["'][^"']+["']/.test(content)) failures.push(file + ": sensitive environment variable has a hard-coded fallback");

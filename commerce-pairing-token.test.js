@@ -3,7 +3,8 @@
 const assert = require("assert");
 const {
   cleanShopifyShop,
-  createPairingToken
+  createPairingToken,
+  verifyPairingToken
 } = require("./commerce/pairing-token");
 
 assert.strictEqual(cleanShopifyShop("https://store-a.myshopify.com/admin"), "store-a.myshopify.com");
@@ -19,6 +20,19 @@ const token = createPairingToken({
 }, { secret: "0123456789abcdef0123456789abcdef" });
 
 assert(token.startsWith("nexforia-pairing-v1."));
+assert.deepStrictEqual(
+  verifyPairingToken(token, { secret: "0123456789abcdef0123456789abcdef" }),
+  {
+    tenant_id: "tenant-a",
+    bot_id: "commerce",
+    nonce: "nonce_123",
+    shop: "store-a.myshopify.com",
+    exp: verifyPairingToken(token, { secret: "0123456789abcdef0123456789abcdef" }).exp
+  }
+);
+assert.throws(function () {
+  verifyPairingToken(token + "altered", { secret: "0123456789abcdef0123456789abcdef" });
+}, /invalid_pairing_token/);
 assert.throws(function () {
   createPairingToken({
     tenant_id: "tenant-a",

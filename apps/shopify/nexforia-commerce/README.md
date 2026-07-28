@@ -5,7 +5,7 @@ commerce adapter.
 
 ## Current capabilities
 
-- OAuth installation and offline session storage.
+- OAuth installation and encrypted, durable session storage in the existing NexforIA backend.
 - Read-only product search and inventory lookup.
 - Privacy-safe order lookup that validates customer identity before returning details.
 - Uninstall and scope-change webhooks.
@@ -22,9 +22,11 @@ shopify app dev
 Shopify CLI updates the development URLs automatically. The app requests only
 `read_products`, `read_inventory`, and `read_orders`.
 
-Set `NEXFORIA_PAIRING_SECRET` in both this app and the NexforIA backend. The backend
-creates short-lived pairing codes; the merchant pastes the code in Shopify to connect
-the store to the correct bot.
+Set `NEXFORIA_PAIRING_SECRET` in both this app and the NexforIA backend. Also set the
+same `NEXFORIA_COMMERCE_SERVICE_SECRET` in both services and point
+`NEXFORIA_BACKEND_URL` to `https://nextforia.com`. The backend creates short-lived
+pairing codes and the app confirms the installation server-to-server so the Customer
+Panel and Super Admin read the same tenant record.
 
 ## Verification
 

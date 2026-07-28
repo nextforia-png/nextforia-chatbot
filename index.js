@@ -93,7 +93,7 @@ const {
   isStopMessage
 } = require("./retargeting");
 const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
-const { cleanShopifyShop, createPairingToken } = require("./commerce/pairing-token");
+const { cleanShopifyShop, createPairingToken, verifyPairingToken } = require("./commerce/pairing-token");
 const { AppointmentRegistry } = require("./appointments");
 const {
   DERCO_TENANT_ID,
@@ -211,7 +211,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v201-production-setup-readiness";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v202-shopify-production-connector";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -403,6 +403,7 @@ const SHOPIFY_STOREFRONT_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_S
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_ADMIN_API_VERSION = process.env.SHOPIFY_ADMIN_API_VERSION || "2026-04";
 const SHOPIFY_APP_INSTALL_URL = safeExternalHttpsUrl(process.env.SHOPIFY_APP_INSTALL_URL);
+const NEXFORIA_COMMERCE_SERVICE_SECRET = String(process.env.NEXFORIA_COMMERCE_SERVICE_SECRET || "").trim();
 const SHOPIFY_ORDER_PREFIXES = (process.env.SHOPIFY_ORDER_PREFIXES || process.env.SHOPIFY_ORDER_PREFIX || "RAV")
   .split(",")
   .map(s => s.trim().replace(/[^A-Za-z0-9-]/g, "").replace(/-+$/g, ""))
@@ -421,6 +422,8 @@ const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:global";
 const CHANNEL_CONNECTION_STATE_TOOL = "tenant_channel_connection_state_v1";
+const SHOPIFY_SESSION_STATE_TOOL = "shopify_session_state_v1";
+const SHOPIFY_SESSION_TENANT_ID = "platform-shopify";
 const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
 const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
@@ -579,6 +582,7 @@ const botStats = {
 // Guarda en memoria las últimas 100 vueltas (turno = mensaje del cliente + respuesta del bot).
 // Se expone en /admin/conversations. Persistencia permanente (Google Sheets) se suma después.
 const conversationLogs = [];
+const shopifySessionMemory = new Map();
 const instagramProfileCache = new Map();
 const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
@@ -4279,7 +4283,9 @@ async function listRecentClientOnboardingRecords(limit) {
     records.push(record);
   }
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200);
+    const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200, {
+      allTenants: true
+    });
     (rows || []).map(normalizeTurnRow).forEach(collect);
   } else {
     conversationLogs.slice().reverse().filter(isClientOnboardingTurn).forEach(collect);
@@ -7086,6 +7092,262 @@ app.get("/admin/client-onboarding", async (req, res) => {
   });
 });
 
+function shopifySessionRecordId(id) {
+  return "shopify-session:" + crypto.createHash("sha256").update(String(id || "")).digest("hex");
+}
+
+function shopifySessionEncryptionKey() {
+  if (NEXFORIA_COMMERCE_SERVICE_SECRET.length < 32) {
+    throw new Error("commerce_service_secret_required");
+  }
+  return crypto.createHash("sha256")
+    .update("nexforia-shopify-session-v1\0" + NEXFORIA_COMMERCE_SERVICE_SECRET)
+    .digest();
+}
+
+function encryptShopifySessionEntries(id, shop, entries) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", shopifySessionEncryptionKey(), iv);
+  cipher.setAAD(Buffer.from(String(id) + "|" + String(shop)));
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(entries), "utf8"),
+    cipher.final()
+  ]);
+  return {
+    version: 1,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64")
+  };
+}
+
+function decryptShopifySessionEntries(id, shop, encrypted) {
+  if (!encrypted || encrypted.version !== 1) throw new Error("invalid_shopify_session");
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    shopifySessionEncryptionKey(),
+    Buffer.from(String(encrypted.iv || ""), "base64")
+  );
+  decipher.setAAD(Buffer.from(String(id) + "|" + String(shop)));
+  decipher.setAuthTag(Buffer.from(String(encrypted.tag || ""), "base64"));
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(String(encrypted.ciphertext || ""), "base64")),
+    decipher.final()
+  ]).toString("utf8");
+  return normalizeShopifySessionEntries(JSON.parse(plaintext));
+}
+
+function normalizeShopifySessionEntries(entries) {
+  const allowed = new Set([
+    "id", "shop", "state", "isOnline", "scope", "accessToken", "expires",
+    "refreshToken", "refreshTokenExpires", "userId", "firstName", "lastName",
+    "email", "accountOwner", "locale", "collaborator", "emailVerified"
+  ]);
+  if (!Array.isArray(entries)) throw new Error("invalid_shopify_session");
+  const normalized = entries.slice(0, 40).map(function (entry) {
+    if (!Array.isArray(entry) || entry.length !== 2 || !allowed.has(String(entry[0] || ""))) {
+      throw new Error("invalid_shopify_session");
+    }
+    const key = String(entry[0]);
+    const value = entry[1];
+    if (!["string", "number", "boolean"].includes(typeof value)) throw new Error("invalid_shopify_session");
+    return [key, typeof value === "string" ? value.slice(0, key === "accessToken" || key === "refreshToken" ? 8192 : 1000) : value];
+  });
+  const data = Object.fromEntries(normalized);
+  if (!String(data.id || "").trim() || !cleanShopifyShop(data.shop)) throw new Error("invalid_shopify_session");
+  return normalized;
+}
+
+function parseShopifySessionTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(SHOPIFY_SESSION_STATE_TOOL)) return null;
+  try {
+    const payload = JSON.parse(String(turn.botReply || "").replace(/^\[ShopifySessionState\]\s*/, ""));
+    if (!payload || !payload.id || !payload.shop || !payload.encrypted) return null;
+    return Object.assign({}, payload, {
+      entries: decryptShopifySessionEntries(payload.id, payload.shop, payload.encrypted)
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+async function persistShopifySessionState(entries, deleted) {
+  const normalized = normalizeShopifySessionEntries(entries);
+  const data = Object.fromEntries(normalized);
+  const record = {
+    id: String(data.id),
+    shop: cleanShopifyShop(data.shop),
+    entries: normalized,
+    deleted: deleted === true,
+    updated_at: new Date().toISOString()
+  };
+  const persistedRecord = {
+    id: record.id,
+    shop: record.shop,
+    encrypted: encryptShopifySessionEntries(record.id, record.shop, normalized),
+    deleted: record.deleted,
+    updated_at: record.updated_at
+  };
+  shopifySessionMemory.set(record.id, record);
+  if (SUPABASE_ENABLED) {
+    await supabaseInsertStrict({
+      ts: record.updated_at,
+      tenantId: SHOPIFY_SESSION_TENANT_ID,
+      userId: shopifySessionRecordId(record.id),
+      userMessage: "",
+      botReply: "[ShopifySessionState] " + JSON.stringify(persistedRecord),
+      tools: [SHOPIFY_SESSION_STATE_TOOL],
+      zeroResultQueries: [],
+      handoff: false,
+      rating: null,
+      numTools: 1,
+      status: "ok",
+      eval: { skip: true, reason: SHOPIFY_SESSION_STATE_TOOL }
+    });
+  }
+  return record;
+}
+
+async function loadShopifySessionState(id) {
+  const cleanId = String(id || "").trim().slice(0, 1000);
+  if (!cleanId) return null;
+  if (shopifySessionMemory.has(cleanId)) return shopifySessionMemory.get(cleanId);
+  if (!SUPABASE_ENABLED) return null;
+  const rows = await supabaseFetchUserRecent(shopifySessionRecordId(cleanId), 1, SHOPIFY_SESSION_TENANT_ID);
+  const record = (rows || []).map(normalizeTurnRow).map(parseShopifySessionTurn).find(Boolean) || null;
+  if (record) shopifySessionMemory.set(cleanId, record);
+  return record;
+}
+
+async function findShopifySessionsByShop(shop) {
+  const cleanShop = cleanShopifyShop(shop);
+  if (!cleanShop) return [];
+  const seen = new Map();
+  for (const record of shopifySessionMemory.values()) {
+    if (record.shop === cleanShop) seen.set(record.id, record);
+  }
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchToolRecent(SHOPIFY_SESSION_STATE_TOOL, 3000, { allTenants: true });
+    (rows || []).map(normalizeTurnRow).map(parseShopifySessionTurn).filter(Boolean).forEach(function (record) {
+      if (record.shop === cleanShop && !seen.has(record.id)) seen.set(record.id, record);
+    });
+  }
+  return Array.from(seen.values()).filter(function (record) { return !record.deleted; });
+}
+
+function commerceServiceAuthorized(req) {
+  if (NEXFORIA_COMMERCE_SERVICE_SECRET.length < 32) return false;
+  const authorization = String(req.get("authorization") || "");
+  return authorization.startsWith("Bearer ") &&
+    safeEqualText(authorization.slice(7), NEXFORIA_COMMERCE_SERVICE_SECRET);
+}
+
+function requireCommerceService(req, res) {
+  if (commerceServiceAuthorized(req)) return true;
+  res.status(401).json({ ok: false, error: "unauthorized" });
+  return false;
+}
+
+app.post("/internal/shopify/sessions", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  try {
+    const record = await persistShopifySessionState(req.body && req.body.session, false);
+    res.json({ ok: true, id: record.id });
+  } catch (_) {
+    res.status(422).json({ ok: false, error: "invalid_shopify_session" });
+  }
+});
+
+app.get("/internal/shopify/sessions/by-shop", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  const shop = cleanShopifyShop(req.query.shop);
+  if (!shop) return res.status(400).json({ ok: false, error: "invalid_shop" });
+  const records = await findShopifySessionsByShop(shop);
+  res.json({ ok: true, sessions: records.map(function (record) { return record.entries; }) });
+});
+
+app.get("/internal/shopify/sessions/:sessionId", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  const record = await loadShopifySessionState(req.params.sessionId);
+  if (!record || record.deleted) return res.status(404).json({ ok: false, error: "not_found" });
+  res.json({ ok: true, session: record.entries });
+});
+
+app.delete("/internal/shopify/sessions/:sessionId", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  const current = await loadShopifySessionState(req.params.sessionId);
+  if (current) await persistShopifySessionState(current.entries, true);
+  res.json({ ok: true });
+});
+
+app.post("/internal/shopify/sessions/delete", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 100) : [];
+  for (const id of ids) {
+    const current = await loadShopifySessionState(id);
+    if (current) await persistShopifySessionState(current.entries, true);
+  }
+  res.json({ ok: true });
+});
+
+app.get("/internal/shopify/pairings/by-shop", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  const shop = cleanShopifyShop(req.query.shop);
+  if (!shop) return res.status(400).json({ ok: false, error: "invalid_shop" });
+  const records = await listRecentClientOnboardingRecords(1000);
+  const match = records.find(function (record) {
+    const commerce = record && record.answers && record.answers.commerce || {};
+    return commerce.integration_status === "connected" &&
+      cleanShopifyShop(commerce.shopify_shop || commerce.store_url) === shop;
+  });
+  if (!match) return res.json({ ok: true, pairing: null });
+  res.json({
+    ok: true,
+    pairing: {
+      tenant_id: match.tenant_id,
+      bot_id: match.assigned_bot_id || match.answers && match.answers.selected_bot_id || "commerce",
+      shop,
+      status: "active",
+      connected_at: match.answers.commerce.shopify_connected_at || match.updated_at
+    }
+  });
+});
+
+app.post("/internal/shopify/pairings", async (req, res) => {
+  if (!requireCommerceService(req, res)) return;
+  try {
+    const verified = verifyPairingToken(req.body && req.body.pairing_token);
+    const shop = cleanShopifyShop(req.body && req.body.shop);
+    if (!shop || verified.shop && verified.shop !== shop) {
+      return res.status(409).json({ ok: false, error: "pairing_shop_mismatch" });
+    }
+    const record = await loadClientOnboarding(false, verified.tenant_id);
+    const answers = JSON.parse(JSON.stringify(record.answers || defaultClientOnboarding()));
+    answers.commerce = Object.assign({}, answers.commerce || {}, {
+      platform: "shopify",
+      integration_intent: "yes",
+      integration_status: "connected",
+      store_url: shop,
+      shopify_shop: shop,
+      shopify_connected_at: new Date().toISOString()
+    });
+    await persistClientOnboarding(answers, record.status || "completed", {
+      name: "NexforIA Commerce",
+      username: "shopify-service"
+    }, verified.tenant_id);
+    res.json({
+      ok: true,
+      tenant_id: verified.tenant_id,
+      bot_id: verified.bot_id,
+      shop
+    });
+  } catch (error) {
+    const code = error && error.code || "invalid_pairing_token";
+    res.status(code === "expired_pairing_token" ? 410 : 422).json({ ok: false, error: code });
+  }
+});
+
 app.get("/admin/integrations/shopify/connect", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok || !customerPanelAuthOk(req, "admin")) {
@@ -9159,7 +9421,9 @@ async function buildAdminHealthResult() {
     result.checks.shopify_storefront = `error: ${e.message}`;
   }
   result.checks.shopify_app_install = SHOPIFY_APP_INSTALL_URL
-    ? (String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32 ? "ok" : "missing_pairing_secret")
+    ? (String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32
+        ? (NEXFORIA_COMMERCE_SERVICE_SECRET.length >= 32 ? "ok" : "missing_commerce_service_secret")
+        : "missing_pairing_secret")
     : "missing_install_url";
   // Probar Meta WhatsApp API (verifica que el token siga válido)
   try {
@@ -9238,7 +9502,11 @@ app.get("/admin/health", async (req, res) => {
       customer_setup: {
         channel_storage_ready: !!(appendOnlyChannelConnectionStore && SUPABASE_ENABLED),
         meta_oauth_ready: !!(channelConnectionProvider && channelConnectionProvider.configured("whatsapp")),
-        shopify_install_ready: !!(SHOPIFY_APP_INSTALL_URL && String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32)
+        shopify_install_ready: !!(
+          SHOPIFY_APP_INSTALL_URL &&
+          String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32 &&
+          NEXFORIA_COMMERCE_SERVICE_SECRET.length >= 32
+        )
       },
       status: "running"
     });

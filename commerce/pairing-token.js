@@ -16,6 +16,13 @@ function signPayload(encodedPayload, secret) {
     .digest("base64url");
 }
 
+function safeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  return leftBuffer.length === rightBuffer.length &&
+    crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 function cleanId(value, fieldName) {
   const cleaned = String(value || "").trim();
   if (!/^[A-Za-z0-9_-]{3,80}$/.test(cleaned)) {
@@ -63,8 +70,47 @@ function createPairingToken(input, options) {
   return TOKEN_VERSION + "." + encodedPayload + "." + signPayload(encodedPayload, secret);
 }
 
+function verifyPairingToken(token, options) {
+  options = options || {};
+  const secret = String(options.secret || process.env.NEXFORIA_PAIRING_SECRET || "").trim();
+  if (secret.length < 32) {
+    const error = new Error("pairing_secret_required");
+    error.code = "pairing_secret_required";
+    throw error;
+  }
+  const parts = String(token || "").trim().split(".");
+  if (parts.length !== 3 || parts[0] !== TOKEN_VERSION || !safeEqual(parts[2], signPayload(parts[1], secret))) {
+    const error = new Error("invalid_pairing_token");
+    error.code = "invalid_pairing_token";
+    throw error;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch (_) {
+    const error = new Error("invalid_pairing_token");
+    error.code = "invalid_pairing_token";
+    throw error;
+  }
+  const now = Number(options.now) || Math.floor(Date.now() / 1000);
+  if (!payload.iat || !payload.exp || payload.exp < now || payload.iat > now + 60 ||
+      payload.exp - payload.iat > MAX_TOKEN_AGE_SECONDS) {
+    const error = new Error("expired_pairing_token");
+    error.code = "expired_pairing_token";
+    throw error;
+  }
+  return {
+    tenant_id: cleanId(payload.tenant_id, "tenant_id"),
+    bot_id: cleanId(payload.bot_id, "bot_id"),
+    nonce: cleanId(payload.nonce, "nonce"),
+    shop: cleanShopifyShop(payload.shop),
+    exp: Number(payload.exp)
+  };
+}
+
 module.exports = {
   MAX_TOKEN_AGE_SECONDS,
   cleanShopifyShop,
-  createPairingToken
+  createPairingToken,
+  verifyPairingToken
 };

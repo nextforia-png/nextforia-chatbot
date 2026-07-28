@@ -54,7 +54,7 @@ async function login(base, body, expectedStatus) {
 function signedSessionCookie(secret, user) {
   const payload = Buffer.from(JSON.stringify({
     v: 2,
-    rst: "customer-access-forced-zero-state-2026-07-28",
+    rst: "customer-access-ready-clean-2026-07-28",
     uid: user.user_id,
     e: user.email,
     n: user.email,

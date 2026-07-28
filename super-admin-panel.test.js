@@ -94,6 +94,7 @@ assert.match(html, /launch_blocked/);
 assert.match(html, /Conectar WhatsApp/);
 assert.match(html, /Conectar Shopify/);
 assert.match(html, /startSetupChannelConnection/);
+assert.match(html, /\/\^\\\+\\d\{10,15\}\$\//);
 assert.match(html, /\/admin\/integrations\/shopify\/connect\//);
 assert.doesNotMatch(html, /id="setupReviewStatus"/);
 assert.match(html, /mismo setup que usa Customer Panel/);

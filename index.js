@@ -208,7 +208,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v174-production-customer-access-reset";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v175-production-customer-access-auto-reset";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4637,39 +4637,44 @@ function sendCustomerAccessError(res, error) {
   res.status(problem.status).json(payload);
 }
 
-async function resetCustomerPanelAccess(actor) {
+async function resetCustomerPanelAccess(actor, options) {
   if (!SUPABASE_ENABLED) throw new CustomerAccessError("persistent_user_store_unavailable", 503);
   const now = new Date().toISOString();
+  const before = options && options.before ? String(options.before) : "";
+  const beforeFilter = before ? "&created_at=lt." + encodeURIComponent(before) : "";
   const patchHeaders = Object.assign({ Prefer: "return=representation" }, SB_HEADERS);
-  const disabledUsers = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_users?active=eq.true", {
+  const disabledUsers = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_users?active=eq.true" + beforeFilter, {
     active: false,
     status: "disabled",
     updated_at: now
   }, { headers: patchHeaders, timeout: 10000 }).then(function (response) {
     return Array.isArray(response.data) ? response.data : [];
   });
-  const revokedInvitations = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_invitations?used_at=is.null&revoked_at=is.null", {
+  const revokedInvitations = await axios.patch(SUPABASE_URL + "/rest/v1/tenant_invitations?used_at=is.null&revoked_at=is.null" + beforeFilter, {
     revoked_at: now,
     updated_at: now
   }, { headers: patchHeaders, timeout: 10000 }).then(function (response) {
     return Array.isArray(response.data) ? response.data : [];
   });
-  try {
-    await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
-      tenant_id: null,
-      invitation_id: null,
-      actor: String(actor && (actor.email || actor.username || actor.user_id) || "super_admin").slice(0, 160),
-      action: "tenant_status_changed",
-      metadata: {
-        reset: "customer_panel_access",
-        disabled_users: disabledUsers.length,
-        revoked_invitations: revokedInvitations.length,
-        legacy_customer_panel_users_enabled: LEGACY_CUSTOMER_PANEL_USERS_ENABLED,
-        public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
-      }
-    }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 10000 });
-  } catch (error) {
-    console.error("customer access reset audit error:", error.message);
+  if (disabledUsers.length || revokedInvitations.length) {
+    try {
+      await axios.post(SUPABASE_URL + "/rest/v1/tenant_access_audit", {
+        tenant_id: null,
+        invitation_id: null,
+        actor: String(actor && (actor.email || actor.username || actor.user_id) || "super_admin").slice(0, 160),
+        action: "tenant_status_changed",
+        metadata: {
+          reset: "customer_panel_access",
+          before: before || null,
+          disabled_users: disabledUsers.length,
+          revoked_invitations: revokedInvitations.length,
+          legacy_customer_panel_users_enabled: LEGACY_CUSTOMER_PANEL_USERS_ENABLED,
+          public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
+        }
+      }, { headers: Object.assign({ Prefer: "return=minimal" }, SB_HEADERS), timeout: 10000 });
+    } catch (error) {
+      console.error("customer access reset audit error:", error.message);
+    }
   }
   dashboardCustomerUserCache = { loaded_at: 0, user: null };
   return {
@@ -9350,6 +9355,23 @@ app.listen(PORT, () => {
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
   syncNextforPricingJuly2026();
+  if (customerAccessResetEnabled() && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED) {
+    resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
+      .then(function (result) {
+        if ((result.disabled_users || 0) || (result.revoked_invitations || 0)) {
+          console.log("Customer access auto-reset:", JSON.stringify({
+            before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO,
+            disabled_users: result.disabled_users,
+            revoked_invitations: result.revoked_invitations
+          }));
+        } else {
+          console.log("Customer access auto-reset: no matching pre-cutoff access");
+        }
+      })
+      .catch(function (error) {
+        console.error("Customer access auto-reset failed:", error.message);
+      });
+  }
 
   if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;

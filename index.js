@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v243-live-customer-runtime";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v244-live-meta-channel-runtime";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -817,6 +817,8 @@ const channelRuntimeCache = {
   loaded_at: 0,
   rows: [],
   by_whatsapp_phone_id: new Map(),
+  by_instagram_destination_id: new Map(),
+  by_messenger_page_id: new Map(),
   by_tenant_channel: new Map()
 };
 
@@ -851,17 +853,29 @@ function connectionRuntimeFromRecord(record) {
   const tenantId = cleanTenantId(record && record.tenant_id);
   if (!tenantId || !channel || !record || record.status !== "connected") return null;
   if (record.protected_legacy) {
-    if (channel !== "whatsapp") return null;
-    return {
+    const legacyRuntime = {
       tenantId,
       tenant_id: tenantId,
       channel,
-      phoneNumberId: cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240),
-      phone_number_id: cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240),
-      accessToken: WA_TOKEN,
-      access_token: WA_TOKEN,
       source: "legacy"
     };
+    if (channel === "whatsapp") {
+      legacyRuntime.phoneNumberId = cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240);
+      legacyRuntime.phone_number_id = legacyRuntime.phoneNumberId;
+      legacyRuntime.accessToken = WA_TOKEN;
+    } else if (channel === "instagram") {
+      legacyRuntime.instagramUserId = cleanRuntimeText(record.instagram_user_id || IG_SEND_ID || IG_USER_ID, 240);
+      legacyRuntime.instagram_user_id = legacyRuntime.instagramUserId;
+      legacyRuntime.pageId = cleanRuntimeText(record.page_id, 240);
+      legacyRuntime.page_id = legacyRuntime.pageId;
+      legacyRuntime.accessToken = IG_ACCESS_TOKEN;
+    } else if (channel === "messenger") {
+      legacyRuntime.pageId = cleanRuntimeText(record.page_id || MESSENGER_PAGE_ID, 240);
+      legacyRuntime.page_id = legacyRuntime.pageId;
+      legacyRuntime.accessToken = MESSENGER_PAGE_ACCESS_TOKEN;
+    }
+    legacyRuntime.access_token = legacyRuntime.accessToken;
+    return legacyRuntime.accessToken ? legacyRuntime : null;
   }
   const credential = credentialPayloadFromConnection(record);
   const accessToken = cleanRuntimeText(credential && credential.access_token, 4096);
@@ -874,6 +888,37 @@ function connectionRuntimeFromRecord(record) {
       channel,
       phoneNumberId,
       phone_number_id: phoneNumberId,
+      accessToken,
+      access_token: accessToken,
+      source: "channel_connection"
+    };
+  }
+  if (channel === "instagram") {
+    const instagramUserId = cleanRuntimeText(record.instagram_user_id || credential && credential.instagram_user_id, 240);
+    const pageId = cleanRuntimeText(record.page_id || credential && credential.page_id, 240);
+    if (!instagramUserId || !accessToken) return null;
+    return {
+      tenantId,
+      tenant_id: tenantId,
+      channel,
+      instagramUserId,
+      instagram_user_id: instagramUserId,
+      pageId,
+      page_id: pageId,
+      accessToken,
+      access_token: accessToken,
+      source: "channel_connection"
+    };
+  }
+  if (channel === "messenger") {
+    const pageId = cleanRuntimeText(record.page_id || credential && credential.page_id, 240);
+    if (!pageId || !accessToken) return null;
+    return {
+      tenantId,
+      tenant_id: tenantId,
+      channel,
+      pageId,
+      page_id: pageId,
       accessToken,
       access_token: accessToken,
       source: "channel_connection"
@@ -898,6 +943,30 @@ async function loadChannelRuntimeRows(force) {
       source: "environment"
     });
   }
+  if (IG_ACCESS_TOKEN && (IG_SEND_ID || IG_USER_ID)) {
+    rows.push({
+      tenantId: DEFAULT_TENANT_ID,
+      tenant_id: DEFAULT_TENANT_ID,
+      channel: "instagram",
+      instagramUserId: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
+      instagram_user_id: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
+      accessToken: IG_ACCESS_TOKEN,
+      access_token: IG_ACCESS_TOKEN,
+      source: "environment"
+    });
+  }
+  if (MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID) {
+    rows.push({
+      tenantId: DEFAULT_TENANT_ID,
+      tenant_id: DEFAULT_TENANT_ID,
+      channel: "messenger",
+      pageId: cleanRuntimeText(MESSENGER_PAGE_ID, 240),
+      page_id: cleanRuntimeText(MESSENGER_PAGE_ID, 240),
+      accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
+      access_token: MESSENGER_PAGE_ACCESS_TOKEN,
+      source: "environment"
+    });
+  }
   if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionStore && typeof channelConnectionStore.listAll === "function") {
     try {
       const stored = await channelConnectionStore.listAll();
@@ -910,14 +979,26 @@ async function loadChannelRuntimeRows(force) {
     }
   }
   const byPhone = new Map();
+  const byInstagramDestination = new Map();
+  const byMessengerPage = new Map();
   const byTenantChannel = new Map();
   rows.forEach(function (runtime) {
     if (runtime.channel === "whatsapp" && runtime.phoneNumberId) byPhone.set(String(runtime.phoneNumberId), runtime);
+    if (runtime.channel === "instagram") {
+      [runtime.instagramUserId, runtime.instagram_user_id, runtime.pageId, runtime.page_id]
+        .filter(Boolean)
+        .forEach(function (id) { byInstagramDestination.set(String(id), runtime); });
+    }
+    if (runtime.channel === "messenger" && (runtime.pageId || runtime.page_id)) {
+      byMessengerPage.set(String(runtime.pageId || runtime.page_id), runtime);
+    }
     byTenantChannel.set(runtimeTenantChannelKey(runtime.tenantId, runtime.channel), runtime);
   });
   channelRuntimeCache.loaded_at = now;
   channelRuntimeCache.rows = rows;
   channelRuntimeCache.by_whatsapp_phone_id = byPhone;
+  channelRuntimeCache.by_instagram_destination_id = byInstagramDestination;
+  channelRuntimeCache.by_messenger_page_id = byMessengerPage;
   channelRuntimeCache.by_tenant_channel = byTenantChannel;
   return channelRuntimeCache;
 }
@@ -925,26 +1006,40 @@ async function loadChannelRuntimeRows(force) {
 function rememberConversationRuntime(userId, runtime) {
   const key = conversationRuntimeKey(userId);
   const channel = cleanChannel(runtime && runtime.channel) || conversationChannel(userId);
-  if (!key || !runtime || channel !== "whatsapp") return null;
+  if (!key || !runtime || !channel) return null;
   const normalized = {
     tenantId: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
     tenant_id: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
     channel,
     phoneNumberId: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
     phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
-    accessToken: cleanRuntimeText(runtime.accessToken || runtime.access_token || WA_TOKEN, 4096),
-    access_token: cleanRuntimeText(runtime.accessToken || runtime.access_token || WA_TOKEN, 4096),
+    instagramUserId: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
+    instagram_user_id: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
+    pageId: cleanRuntimeText(runtime.pageId || runtime.page_id, 240),
+    page_id: cleanRuntimeText(runtime.pageId || runtime.page_id, 240),
+    accessToken: cleanRuntimeText(runtime.accessToken || runtime.access_token, 4096),
+    access_token: cleanRuntimeText(runtime.accessToken || runtime.access_token, 4096),
     source: runtime.source || "conversation"
   };
+  if (!normalized.accessToken) {
+    if (channel === "whatsapp") normalized.accessToken = normalized.access_token = WA_TOKEN;
+    if (channel === "instagram") normalized.accessToken = normalized.access_token = IG_ACCESS_TOKEN;
+    if (channel === "messenger") normalized.accessToken = normalized.access_token = MESSENGER_PAGE_ACCESS_TOKEN;
+  }
   conversationOutboundRuntime.set(key, normalized);
   return normalized;
 }
 
-async function resolveWhatsAppRuntimeForTenant(tenantId) {
+async function resolveChannelRuntimeForTenant(tenantId, channel) {
   const cleanTenant = cleanTenantId(tenantId);
-  if (!cleanTenant) return null;
+  const clean = cleanChannel(channel);
+  if (!cleanTenant || !clean) return null;
   const cache = await loadChannelRuntimeRows(false);
-  return cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, "whatsapp")) || null;
+  return cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
+}
+
+async function resolveWhatsAppRuntimeForTenant(tenantId) {
+  return resolveChannelRuntimeForTenant(tenantId, "whatsapp");
 }
 
 async function resolveWhatsAppDestinationRuntime(webhookValue) {
@@ -974,30 +1069,81 @@ async function resolveWhatsAppDestinationRuntime(webhookValue) {
   };
 }
 
+async function resolveInstagramDestinationRuntime(entry, events) {
+  const cache = await loadChannelRuntimeRows(false);
+  const ids = [entry && entry.id];
+  (events || []).forEach(function (event) {
+    ids.push(event && event.recipient && event.recipient.id);
+  });
+  for (const id of ids.filter(Boolean)) {
+    const runtime = cache.by_instagram_destination_id.get(String(id));
+    if (runtime) return runtime;
+  }
+  return null;
+}
+
+async function resolveMessengerDestinationRuntime(entry) {
+  const pageId = cleanRuntimeText(entry && entry.id, 240);
+  if (!pageId) return null;
+  const cache = await loadChannelRuntimeRows(false);
+  return cache.by_messenger_page_id.get(pageId) || null;
+}
+
 async function outboundRuntimeForConversation(userId, options) {
   const recipient = parseChannelRecipient(userId);
-  if (recipient.channel !== "whatsapp") return null;
+  const channel = recipient.channel;
   const key = conversationRuntimeKey(userId);
   const suppliedTenant = cleanTenantId(options && (options.tenantId || options.tenant_id));
   const supplied = {
     tenantId: suppliedTenant,
     tenant_id: suppliedTenant,
-    channel: "whatsapp",
+    channel,
     phoneNumberId: cleanRuntimeText(options && (options.phoneNumberId || options.phone_number_id), 240),
     phone_number_id: cleanRuntimeText(options && (options.phoneNumberId || options.phone_number_id), 240),
+    instagramUserId: cleanRuntimeText(options && (options.instagramUserId || options.instagram_user_id), 240),
+    instagram_user_id: cleanRuntimeText(options && (options.instagramUserId || options.instagram_user_id), 240),
+    pageId: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
+    page_id: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
     accessToken: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
     access_token: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
     source: options && options.source || "options"
   };
-  if (supplied.tenantId && (!supplied.phoneNumberId || !supplied.accessToken)) {
-    const byTenant = await resolveWhatsAppRuntimeForTenant(supplied.tenantId);
-    if (byTenant) return rememberConversationRuntime(userId, Object.assign({}, byTenant, supplied));
+  const suppliedDestination = channel === "whatsapp"
+    ? supplied.phoneNumberId
+    : channel === "instagram" ? supplied.instagramUserId : supplied.pageId;
+  if (supplied.tenantId && (!suppliedDestination || !supplied.accessToken)) {
+    const byTenant = await resolveChannelRuntimeForTenant(supplied.tenantId, channel);
+    if (byTenant) return rememberConversationRuntime(userId, Object.assign({}, supplied, byTenant));
   }
-  if (supplied.phoneNumberId && supplied.accessToken) return rememberConversationRuntime(userId, supplied);
+  if (suppliedDestination && supplied.accessToken) return rememberConversationRuntime(userId, supplied);
   if (key && conversationOutboundRuntime.has(key)) return conversationOutboundRuntime.get(key);
   if (supplied.tenantId) {
-    const byTenant = await resolveWhatsAppRuntimeForTenant(supplied.tenantId);
+    const byTenant = await resolveChannelRuntimeForTenant(supplied.tenantId, channel);
     if (byTenant) return rememberConversationRuntime(userId, byTenant);
+  }
+  if (channel === "instagram") {
+    return {
+      tenantId: DEFAULT_TENANT_ID,
+      tenant_id: DEFAULT_TENANT_ID,
+      channel,
+      instagramUserId: IG_SEND_ID || IG_USER_ID,
+      instagram_user_id: IG_SEND_ID || IG_USER_ID,
+      accessToken: IG_ACCESS_TOKEN,
+      access_token: IG_ACCESS_TOKEN,
+      source: "environment"
+    };
+  }
+  if (channel === "messenger") {
+    return {
+      tenantId: DEFAULT_TENANT_ID,
+      tenant_id: DEFAULT_TENANT_ID,
+      channel,
+      pageId: MESSENGER_PAGE_ID,
+      page_id: MESSENGER_PAGE_ID,
+      accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
+      access_token: MESSENGER_PAGE_ACCESS_TOKEN,
+      source: "environment"
+    };
   }
   return {
     tenantId: DEFAULT_TENANT_ID,
@@ -1630,8 +1776,11 @@ function recordInstagramProfile(userId, username) {
   const cleanUserId = normalizeConversationUserId(userId);
   const cleanUsername = normalizeInstagramUsername(username);
   if (conversationChannel(cleanUserId) !== "instagram" || !cleanUsername) return null;
+  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
   const rec = {
     ts: new Date().toISOString(),
+    tenantId: cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID,
+    channel: "instagram",
     userId: cleanUserId,
     userMessage: "",
     botReply: "[InstagramProfile] " + JSON.stringify({ username: cleanUsername }),
@@ -1652,7 +1801,10 @@ function recordInstagramProfile(userId, username) {
 
 async function refreshInstagramProfile(userId) {
   const cleanUserId = normalizeConversationUserId(userId);
-  if (conversationChannel(cleanUserId) !== "instagram" || !IG_ACCESS_TOKEN) return null;
+  if (conversationChannel(cleanUserId) !== "instagram") return null;
+  const runtime = await outboundRuntimeForConversation(cleanUserId);
+  const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
+  if (!accessToken) return null;
   const cached = instagramProfileCache.get(cleanUserId);
   const cacheTtl = cached && cached.username ? INSTAGRAM_PROFILE_TTL_MS : INSTAGRAM_PROFILE_RETRY_MS;
   if (cached && Date.now() - cached.fetched_at < cacheTtl) return cached.username ? cached : null;
@@ -1661,7 +1813,7 @@ async function refreshInstagramProfile(userId) {
     const instagramScopedId = conversationExternalId(cleanUserId);
     const response = await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramScopedId)}`, {
       params: { fields: "id,username" },
-      headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 8000
     });
     const username = normalizeInstagramUsername(response.data && response.data.username);
@@ -2822,25 +2974,31 @@ async function sendText(to, text, options) {
   const recipient = parseChannelRecipient(to);
   try {
     if (recipient.channel === "instagram") {
-      if (!IG_ACCESS_TOKEN || !IG_SEND_ID) throw new Error("Instagram messaging is not configured");
+      const runtime = await outboundRuntimeForConversation(to, options);
+      const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
+      const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
-        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_SEND_ID}/messages`,
+        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${sendId}/messages`,
         { recipient: { id: recipient.id }, message: { text: String(text || "").slice(0, 2000) } },
-        { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
       instagramRuntimeState.outbound_messages++;
       instagramRuntimeState.last_outbound_at = new Date().toISOString();
-      console.log(`Instagram text sent to ${maskedIdentifier(to)}`);
+      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
       return true;
     }
     if (recipient.channel === "messenger") {
-      if (!MESSENGER_PAGE_ACCESS_TOKEN || !MESSENGER_PAGE_ID) throw new Error("Messenger messaging is not configured");
+      const runtime = await outboundRuntimeForConversation(to, options);
+      const accessToken = runtime && runtime.accessToken || MESSENGER_PAGE_ACCESS_TOKEN;
+      const pageId = runtime && runtime.pageId || MESSENGER_PAGE_ID;
+      if (!accessToken || !pageId) throw new Error("Messenger messaging is not configured");
       await axios.post(
-        `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}/messages`,
+        `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${pageId}/messages`,
         { recipient: { id: recipient.id }, messaging_type: "RESPONSE", message: { text: String(text || "").slice(0, 2000) } },
-        { headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      console.log(`Messenger text sent to ${maskedIdentifier(to)}`);
+      console.log(`Messenger text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
@@ -2935,27 +3093,33 @@ async function sendImage(to, imageUrl, caption, options) {
   const recipient = parseChannelRecipient(to);
   try {
     if (recipient.channel === "instagram") {
-      if (!IG_ACCESS_TOKEN || !IG_SEND_ID) throw new Error("Instagram messaging is not configured");
+      const runtime = await outboundRuntimeForConversation(to, options);
+      const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
+      const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
-        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_SEND_ID}/messages`,
+        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${sendId}/messages`,
         { recipient: { id: recipient.id }, message: { attachment: { type: "image", payload: { url: imageUrl } } } },
-        { headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      if (caption) await sendText(to, caption);
+      if (caption) await sendText(to, caption, runtime);
       return true;
     }
     if (recipient.channel === "messenger") {
-      if (!MESSENGER_PAGE_ACCESS_TOKEN || !MESSENGER_PAGE_ID) throw new Error("Messenger messaging is not configured");
+      const runtime = await outboundRuntimeForConversation(to, options);
+      const accessToken = runtime && runtime.accessToken || MESSENGER_PAGE_ACCESS_TOKEN;
+      const pageId = runtime && runtime.pageId || MESSENGER_PAGE_ID;
+      if (!accessToken || !pageId) throw new Error("Messenger messaging is not configured");
       await axios.post(
-        `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}/messages`,
+        `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${pageId}/messages`,
         {
           recipient: { id: recipient.id },
           messaging_type: "RESPONSE",
           message: { attachment: { type: "image", payload: { url: imageUrl, is_reusable: true } } }
         },
-        { headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      if (caption) await sendText(to, caption);
+      if (caption) await sendText(to, caption, runtime);
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
@@ -3405,7 +3569,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   if (!userId || !userMessage) return;
   const conversationRuntime = rememberConversationRuntime(userId, {
     tenant_id: conversationMeta.tenant_id,
+    channel: conversationChannel(userId),
     phone_number_id: conversationMeta.phone_number_id,
+    instagram_user_id: conversationMeta.instagram_user_id,
+    page_id: conversationMeta.page_id,
     access_token: conversationMeta.access_token,
     source: conversationMeta.source || "inbound_webhook"
   }) || {
@@ -3414,8 +3581,12 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     channel: conversationChannel(userId),
     phoneNumberId: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
     phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
-    accessToken: cleanRuntimeText(conversationMeta.access_token, 4096) || WA_TOKEN,
-    access_token: cleanRuntimeText(conversationMeta.access_token, 4096) || WA_TOKEN,
+    instagramUserId: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
+    instagram_user_id: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
+    pageId: cleanRuntimeText(conversationMeta.page_id, 240),
+    page_id: cleanRuntimeText(conversationMeta.page_id, 240),
+    accessToken: cleanRuntimeText(conversationMeta.access_token, 4096),
+    access_token: cleanRuntimeText(conversationMeta.access_token, 4096),
     source: conversationMeta.source || "inbound_webhook"
   };
   const tenantId = cleanTenantId(conversationRuntime.tenantId) || DEFAULT_TENANT_ID;
@@ -3673,8 +3844,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       const reply = textBlock ? textBlock.text.trim() : "";
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
-      if (reply) recordTurn(userId, userMessage, reply, "ok", conversationRuntime);
       const replySent = await sendBotReply(reply);
+      if (reply) recordTurn(userId, userMessage, reply, replySent ? "ok" : "error", conversationRuntime);
       if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
         await createRetargetingJobForCustomer(userId, "high_intent", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":high-intent", {
           source_at: conversationMeta.source_at || new Date().toISOString(),
@@ -3884,7 +4055,20 @@ app.post("/instagram/webhook", async (req, res) => {
     }
     for (const entry of req.body?.entry || []) {
       const events = instagramEventsFromEntry(entry);
-      if (!instagramEntryMatchesLegacyRuntime(entry, events)) {
+      let destination = await resolveInstagramDestinationRuntime(entry, events);
+      if (!destination && instagramEntryMatchesLegacyRuntime(entry, events)) {
+        destination = {
+          tenantId: DEFAULT_TENANT_ID,
+          tenant_id: DEFAULT_TENANT_ID,
+          channel: "instagram",
+          instagramUserId: IG_SEND_ID || IG_USER_ID,
+          instagram_user_id: IG_SEND_ID || IG_USER_ID,
+          accessToken: IG_ACCESS_TOKEN,
+          access_token: IG_ACCESS_TOKEN,
+          source: "legacy_destination"
+        };
+      }
+      if (!destination) {
         instagramRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
         log("info", "instagram_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
         continue;
@@ -3911,6 +4095,7 @@ app.post("/instagram/webhook", async (req, res) => {
           continue;
         }
         const userId = `ig:${event.sender.id}`;
+        rememberConversationRuntime(userId, destination);
         instagramRuntimeState.inbound_messages++;
         instagramRuntimeState.last_inbound_at = new Date().toISOString();
         instagramRuntimeState.last_skip_reason = null;
@@ -3918,13 +4103,21 @@ app.post("/instagram/webhook", async (req, res) => {
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
-          await handleConversation(userId, event.message.text, { source_event_id: event.message.mid || "ig:" + Date.now(), source_at: new Date().toISOString() });
+          await handleConversation(userId, event.message.text, {
+            tenant_id: destination.tenantId,
+            instagram_user_id: destination.instagramUserId,
+            page_id: destination.pageId,
+            access_token: destination.accessToken,
+            source: destination.source || "instagram_webhook",
+            source_event_id: event.message.mid || "ig:" + Date.now(),
+            source_at: new Date().toISOString()
+          });
         } else if (event.message?.attachments?.length) {
           console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
           if (await humanControlActiveFor(userId)) {
             recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments });
           } else {
-            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.");
+            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
           }
         }
       }
@@ -3952,29 +4145,57 @@ app.post("/messenger/webhook", async (req, res) => {
   try {
     if (req.body?.object !== "page") return;
     for (const entry of req.body?.entry || []) {
-      if (!MESSENGER_PAGE_ID || String(entry && entry.id || "") !== String(MESSENGER_PAGE_ID)) {
+      let destination = await resolveMessengerDestinationRuntime(entry);
+      if (!destination && MESSENGER_PAGE_ID && String(entry && entry.id || "") === String(MESSENGER_PAGE_ID)) {
+        destination = {
+          tenantId: DEFAULT_TENANT_ID,
+          tenant_id: DEFAULT_TENANT_ID,
+          channel: "messenger",
+          pageId: MESSENGER_PAGE_ID,
+          page_id: MESSENGER_PAGE_ID,
+          accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
+          access_token: MESSENGER_PAGE_ACCESS_TOKEN,
+          source: "legacy_destination"
+        };
+      }
+      if (!destination) {
         log("info", "messenger_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
         continue;
       }
       for (const event of entry.messaging || []) {
         if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
         const userId = `ms:${event.sender.id}`;
+        rememberConversationRuntime(userId, destination);
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ms:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
-          await handleConversation(userId, event.message.text, { source_event_id: event.message.mid || "ms:" + Date.now(), source_at: new Date().toISOString() });
+          await handleConversation(userId, event.message.text, {
+            tenant_id: destination.tenantId,
+            page_id: destination.pageId,
+            access_token: destination.accessToken,
+            source: destination.source || "messenger_webhook",
+            source_event_id: event.message.mid || "ms:" + Date.now(),
+            source_at: new Date().toISOString()
+          });
         } else if (event.postback?.payload || event.postback?.title) {
           const postbackText = String(event.postback.title || event.postback.payload || "").trim();
           if (postbackText) {
             console.log(`Inbound ${maskedIdentifier(userId)}: postback (${postbackText.length} chars)`);
-            await handleConversation(userId, postbackText, { source_event_id: event.postback && event.postback.mid || "ms-postback:" + Date.now(), source_at: new Date().toISOString() });
+            await handleConversation(userId, postbackText, {
+              tenant_id: destination.tenantId,
+              page_id: destination.pageId,
+              access_token: destination.accessToken,
+              source: destination.source || "messenger_webhook",
+              source_event_id: event.postback && event.postback.mid || "ms-postback:" + Date.now(),
+              source_at: new Date().toISOString()
+            });
           }
         } else if (event.message?.attachments?.length) {
           console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
           if (await humanControlActiveFor(userId)) {
             recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments });
           } else {
-            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.");
+            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
           }
         }
       }

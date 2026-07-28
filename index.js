@@ -237,7 +237,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v230-super-admin-setup-actions";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v231-super-admin-setup-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4359,6 +4359,7 @@ async function markSetupReviewTenantDeleted(tenant, onboarding, auth, confirmati
     deleted_by: String(actor).slice(0, 160),
     company_name: companyName,
     backup_generated: true,
+    hide_completed_setup: true,
     deleted_setup_completed: !!(onboarding && onboarding.setup_completed),
     deleted_completion: Number(onboarding && onboarding.completion) || 0,
     setup_review: {
@@ -4530,6 +4531,7 @@ async function listRecentClientOnboardingRecords(limit) {
     const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
     if (!record || !record.answers) return;
     if (record.setup_deleted === true && typeof record.deleted_setup_completed !== "boolean") return;
+    if (record.setup_deleted === true && record.deleted_setup_completed === true && record.hide_completed_setup !== true) return;
     seen.add(tenantId);
     records.push(record);
   }
@@ -4697,7 +4699,7 @@ async function listSetupReviewTenants() {
   }
   const latestDeletedTenantIds = new Set();
   try {
-    const onboardingRecords = await listRecentClientOnboardingRecords(200);
+    const onboardingRecords = await listRecentClientOnboardingRecords(2000);
     onboardingRecords.forEach(function (record) {
       const tenantId = cleanTenantId(record.tenant_id);
       if (record.setup_deleted === true) {
@@ -5872,7 +5874,7 @@ async function buildSuperAdminLeadsPipeline() {
   }
   let onboardingRecordByTenant = new Map();
   try {
-    const onboardingRecords = await listRecentClientOnboardingRecords(200);
+    const onboardingRecords = await listRecentClientOnboardingRecords(2000);
     onboardingRecordByTenant = new Map(onboardingRecords.filter(function (record) {
       return !(record && record.setup_deleted === true);
     }).map(function (record) {

@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v264-meta-signature-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v265-whatsapp-registration-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4544,11 +4544,20 @@ app.get("/whatsapp/health", async (req, res) => {
     });
   }
   try {
-    await axios.get(`https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(phoneNumberId)}`, {
-      params: { fields: "id,display_phone_number,verified_name,quality_rating" },
+    const phone = await axios.get(`https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(phoneNumberId)}`, {
+      params: {
+        fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type"
+      },
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000
     });
+    safeRuntime.phone = {
+      code_verification_status: cleanRuntimeText(phone.data && phone.data.code_verification_status, 60) || null,
+      platform_type: cleanRuntimeText(phone.data && phone.data.platform_type, 60) || null,
+      quality_rating: cleanRuntimeText(phone.data && phone.data.quality_rating, 60) || null,
+      registration_ready: String(phone.data && phone.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
+        String(phone.data && phone.data.platform_type || "").toUpperCase() === "CLOUD_API"
+    };
     if (!whatsappBusinessAccountId) {
       return res.status(503).json({
         ok: false,

@@ -46,6 +46,20 @@ function elevenLabsSignature(body, secret, timestamp) {
   const base = "http://127.0.0.1:" + port;
   const dashboardKey = "appointments-e2e-dashboard-key";
   const webhookSecret = "appointments-e2e-webhook-secret";
+  const customerPassword = "DercoAppointments2026!";
+  const customerFixtures = [
+    {
+      user_id: "55555555-5555-4555-8555-555555555555",
+      tenant_id: "grupo-derco",
+      company_name: "Grupo Jurídico DERCO S.A.S.",
+      email: "agenda@derco.example",
+      password: customerPassword,
+      role: "admin",
+      plan_id: "nextfor-tempo",
+      assigned_bot_id: "agendamiento",
+      tenant_status: "pilot"
+    }
+  ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
     cwd: __dirname,
     env: Object.assign({}, process.env, {
@@ -63,7 +77,10 @@ function elevenLabsSignature(body, secret, timestamp) {
       ELEVENLABS_WEBHOOK_SECRET: webhookSecret,
       ELEVENLABS_AGENT_TENANT_MAP: JSON.stringify({ agent_derco: "grupo-derco" }),
       SUPABASE_URL: "",
-      SUPABASE_KEY: ""
+      SUPABASE_KEY: "",
+      CUSTOMER_ACCESS_TEST_MODE: "1",
+      CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(customerFixtures),
+      CUSTOMER_PANEL_BASE_URL: "https://customer-panel.test.example"
     }),
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -133,6 +150,35 @@ function elevenLabsSignature(body, secret, timestamp) {
     const dercoCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
     response = await fetch(base + "/admin/pilots/derco/data", { headers: { cookie: dercoCookie } });
     assert.strictEqual(response.status, 200, "DERCO user should access only its tenant panel");
+
+    response = await fetch(base + "/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ email: "agenda@derco.example", password: customerPassword })
+    });
+    assert.strictEqual(response.status, 200);
+    const customerCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
+    response = await fetch(base + "/admin/panel/appointments-data", { headers: { cookie: customerCookie } });
+    assert.strictEqual(response.status, 200, "Appointment customer should access the tenant appointment module");
+    const customerData = await response.json();
+    assert.strictEqual(customerData.tenant_id, "grupo-derco");
+    assert.strictEqual(customerData.appointments[0].ui_status, "confirmed");
+
+    response = await fetch(base + "/admin/panel/appointments/action", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: customerCookie, origin: base },
+      body: JSON.stringify({ action: "cancel", appointment_id: "conv_e2e_001", reason: "Prueba controlada" })
+    });
+    assert.strictEqual(response.status, 200);
+    const actionData = await response.json();
+    assert.strictEqual(actionData.updated_count, 1);
+    assert.strictEqual(actionData.appointments[0].ui_status, "cancelled");
+
+    response = await fetch(base + "/admin/pilots/derco/data", { headers: { "x-dashboard-key": dashboardKey } });
+    assert.strictEqual(response.status, 200);
+    const cancelledData = await response.json();
+    assert.strictEqual(cancelledData.metrics.cancelled, 1);
+    assert.strictEqual(cancelledData.appointments[0].status, "cancelled");
 
     response = await fetch(base + "/admin/login", {
       method: "POST",

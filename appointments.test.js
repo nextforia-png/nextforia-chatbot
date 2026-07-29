@@ -63,13 +63,22 @@ function sampleEvent(overrides) {
     created_at: "2026-07-18T12:00:00Z",
     updated_at: "2026-07-18T12:00:00Z"
   }, false);
+  const updated = await registry.applyPanelAction(DERCO_TENANT_ID, "conv_002", "cancel", {
+    actor: "Admin DERCO",
+    reason: "Cliente no puede asistir",
+    persist: false
+  });
+  assert.equal(updated.status, "cancelled");
+  assert.equal(updated.panel_action, "cancel");
+  assert.equal(updated.panel_action_status, "queued");
+  assert.equal(updated.panel_action_by, "Admin DERCO");
   const snapshot = registry.snapshot(DERCO_TENANT_ID, new Date("2026-07-18T12:00:00Z").getTime());
   assert.deepEqual(snapshot.metrics, {
     interactions: 2,
     requested: 2,
     booked: 1,
-    pending: 1,
-    cancelled: 0,
+    pending: 0,
+    cancelled: 1,
     failed: 0
   });
   assert.equal(snapshot.upcoming.length, 1);

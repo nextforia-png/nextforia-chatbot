@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v278-appointment-super-admin-fix";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v279-appointment-customer-creation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -317,10 +317,7 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL, process.env.RENDER_EXTERNAL_URL);
-const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT !== "0" && (
-  process.env.NEXTFOR_PRICING_SYNC_ON_BOOT === "1"
-  || (PUBLIC_BASE_URL && ["nextforia.com", "staging.nextforia.com"].includes(new URL(PUBLIC_BASE_URL).hostname))
-);
+const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT !== "0";
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
 const SUPABASE_URL = normalizedSupabaseUrl && (
@@ -8719,12 +8716,16 @@ app.get("/admin/customer-access/catalogs", async (req, res) => {
     return;
   }
   try {
+    const appointmentCatalog = { appointmentsVisible: true };
     const catalogs = catalogService
-      ? catalogWithDefaults(await catalogService.activeCatalogs(), true)
-      : catalogWithDefaults(await customerAccessService.catalogs(), true);
+      ? catalogWithDefaults(await catalogService.activeCatalogs(), true, appointmentCatalog)
+      : catalogWithDefaults(await customerAccessService.catalogs(), true, appointmentCatalog);
     res.json(Object.assign({ ok: true }, catalogs));
   } catch (error) {
-    res.json(Object.assign({ ok: true, warning: "catalog_store_unavailable" }, catalogWithDefaults(null, true)));
+    res.json(Object.assign(
+      { ok: true, warning: "catalog_store_unavailable" },
+      catalogWithDefaults(null, true, { appointmentsVisible: true })
+    ));
   }
 });
 

@@ -93,8 +93,11 @@ async function login(base, email, password) {
     const catalogs = await response.json();
     assert(catalogs.plans.some(function (row) { return row.id === "nextfor-aura"; }));
     assert(catalogs.plans.some(function (row) { return row.id === "nextfor-uno"; }));
-    assert(!catalogs.plans.some(function (row) { return row.id === "nextfor-tempo" || row.id === "nextfor-atlas" || row.id === "nextfor-signature"; }));
+    assert(catalogs.plans.some(function (row) { return row.id === "nextfor-tempo"; }));
+    assert(catalogs.plans.some(function (row) { return row.id === "nextfor-atlas"; }));
+    assert(!catalogs.plans.some(function (row) { return row.id === "nextfor-signature"; }));
     assert(catalogs.bots.some(function (row) { return row.id === "atencion-cliente"; }));
+    assert(catalogs.bots.some(function (row) { return row.id === "agendamiento"; }));
 
     response = await fetch(base + "/admin/super-admin", { headers: { cookie: superCookie } });
     assert.strictEqual(response.status, 200);
@@ -134,6 +137,21 @@ async function login(base, email, password) {
     response = await fetch(base + "/admin/customer-invite", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: superCookie, origin: base },
+      body: JSON.stringify({
+        company_name: "Empresa Agenda",
+        admin_email: "agenda@staging.example",
+        plan_id: "nextfor-tempo",
+        assigned_bot_id: "agendamiento"
+      })
+    });
+    assert.strictEqual(response.status, 201);
+    const appointmentCreated = await response.json();
+    assert.strictEqual(appointmentCreated.tenant.plan_id, "nextfor-tempo");
+    assert.strictEqual(appointmentCreated.tenant.assigned_bot_id, "agendamiento");
+
+    response = await fetch(base + "/admin/customer-invite", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: superCookie, origin: base },
       body: JSON.stringify({ company_name: "Otra empresa", admin_email: "admin@staging.example", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" })
     });
     assert.strictEqual(response.status, 409);
@@ -142,7 +160,7 @@ async function login(base, email, password) {
     response = await fetch(base + "/admin/customer-invitations", { headers: { cookie: superCookie } });
     assert.strictEqual(response.status, 200);
     const listed = await response.json();
-    assert.strictEqual(listed.invitations.length, 1);
+    assert.strictEqual(listed.invitations.length, 2);
     assert.strictEqual(listed.invitations[0].status, "sent");
     assert(!JSON.stringify(listed).includes("token_hash"));
     assert(!JSON.stringify(listed).includes("setup_url"));

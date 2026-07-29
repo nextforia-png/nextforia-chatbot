@@ -61,7 +61,17 @@ async function expectError(promise, code, status) {
   await expectError(service.createInvitation({ company_name: "Empresa B", admin_email: "admin@empresa.example", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" }), "customer_already_exists", 409);
   await expectError(service.createInvitation({ company_name: "Empresa B", admin_email: "b@empresa.example", plan_id: "missing", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" }), "invalid_plan", 400);
   await expectError(service.createInvitation({ company_name: "Empresa B", admin_email: "b@empresa.example", plan_id: "nextfor-aura", assigned_bot_id: "missing" }, { user_id: "platform-user-1" }), "invalid_assigned_bot", 400);
+  await expectError(service.createInvitation({ company_name: "Empresa Agenda Inválida", admin_email: "agenda-invalida@empresa.example", plan_id: "nextfor-tempo", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" }), "invalid_assigned_bot", 400);
   await expectError(service.createInvitation({ company_name: "Empresa B", admin_email: "b@empresa.example", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente", extra: true }, { user_id: "platform-user-1" }), "invalid_request", 400);
+
+  const appointmentInvitation = await service.createInvitation({
+    company_name: "Empresa Agenda",
+    admin_email: "agenda@empresa.example",
+    plan_id: "nextfor-tempo",
+    assigned_bot_id: "agendamiento"
+  }, { user_id: "platform-user-1", role: "super_admin" });
+  assert.strictEqual(appointmentInvitation.tenant.plan_id, "nextfor-tempo");
+  assert.strictEqual(appointmentInvitation.tenant.assigned_bot_id, "agendamiento");
 
   await expectError(service.inspectInvitation("otro-tenant", token), "invalid_invitation", 403);
   await expectError(service.inspectInvitation(created.tenant.id, token.slice(0, -1) + (token.endsWith("A") ? "B" : "A")), "invalid_invitation", 403);
@@ -129,6 +139,14 @@ async function expectError(promise, code, status) {
     password: "PublicPassword2026",
     password_confirmation: "PublicPassword2026"
   }), "customer_already_exists", 409);
+  await expectError(service.createPublicSignup({
+    company_name: "Empresa Pública Agenda",
+    admin_email: "publica-agenda@empresa.example",
+    plan_id: "nextfor-tempo",
+    assigned_bot_id: "agendamiento",
+    password: "PublicPassword2026",
+    password_confirmation: "PublicPassword2026"
+  }), "invalid_plan", 400);
   const validSession = await service.validateSession({
     user_id: user.user_id,
     email: "ADMIN@EMPRESA.EXAMPLE",
@@ -145,12 +163,12 @@ async function expectError(promise, code, status) {
   store.users.find(function (row) { return row.user_id === user.user_id; }).active = true;
 
   const revoked = await service.createInvitation({ company_name: "Empresa C", admin_email: "c@empresa.example", plan_id: "nextfor-uno", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" });
-  const revokedToken = new URL(email.outbox[1].setup_url).searchParams.get("invite");
+  const revokedToken = new URL(email.outbox.find(function (item) { return item.to === "c@empresa.example"; }).setup_url).searchParams.get("invite");
   await service.revokeInvitation(revoked.invitation.id, { user_id: "platform-user-1" });
   await expectError(service.inspectInvitation(revoked.tenant.id, revokedToken), "invitation_revoked", 409);
 
   const expiring = await service.createInvitation({ company_name: "Empresa D", admin_email: "d@empresa.example", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" });
-  const expiringToken = new URL(email.outbox[2].setup_url).searchParams.get("invite");
+  const expiringToken = new URL(email.outbox.find(function (item) { return item.to === "d@empresa.example"; }).setup_url).searchParams.get("invite");
   clock = new Date("2026-07-22T12:00:01.000Z");
   await expectError(service.inspectInvitation(expiring.tenant.id, expiringToken), "invitation_expired", 410);
 

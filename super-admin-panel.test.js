@@ -316,6 +316,9 @@ assert.match(accessV2Html, /name="plan_id"/);
 assert.match(accessV2Html, /name="assigned_bot_id"/);
 assert.match(accessV2Html, /\/admin\/customer-access\/catalogs/);
 assert.match(accessV2Html, /\/admin\/customer-invitations/);
+assert.match(accessV2Html, /syncCustomerCreateBotToPlan/);
+assert.match(accessV2Html, /botSelect\.disabled=true/);
+assert.match(accessV2Html, /customerCreatePlan\.addEventListener\("change",syncCustomerCreateBotToPlan\)/);
 assert.match(accessV2Html, /No existe registro público/);
 assert.doesNotMatch(accessV2Html, /body:JSON\.stringify\(\{[^}]*setup_url/);
 

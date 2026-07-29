@@ -2,8 +2,13 @@
 
 const crypto = require("crypto");
 
-const CUSTOMER_VISIBLE_PLAN_IDS = ["nextfor-uno", "nextfor-aura"];
-const CUSTOMER_VISIBLE_BOT_IDS = ["atencion-cliente"];
+const CUSTOMER_VISIBLE_PLAN_IDS = ["nextfor-uno", "nextfor-aura", "nextfor-tempo", "nextfor-atlas"];
+const CUSTOMER_VISIBLE_BOT_IDS = ["atencion-cliente", "agendamiento"];
+const PLAN_BOT_REQUIREMENTS = Object.freeze({
+  "nextfor-uno": "atencion-cliente",
+  "nextfor-aura": "atencion-cliente",
+  "nextfor-tempo": "agendamiento"
+});
 
 class CustomerAccessError extends Error {
   constructor(code, status, details) {
@@ -57,6 +62,9 @@ function validateCreateInput(input) {
   if (!/^[a-z0-9][a-z0-9_-]{1,63}$/.test(assignedBotId)) throw new CustomerAccessError("invalid_assigned_bot", 400);
   if (CUSTOMER_VISIBLE_PLAN_IDS.indexOf(planId) < 0) throw new CustomerAccessError("invalid_plan", 400);
   if (CUSTOMER_VISIBLE_BOT_IDS.indexOf(assignedBotId) < 0) throw new CustomerAccessError("invalid_assigned_bot", 400);
+  if (PLAN_BOT_REQUIREMENTS[planId] && PLAN_BOT_REQUIREMENTS[planId] !== assignedBotId) {
+    throw new CustomerAccessError("invalid_assigned_bot", 400);
+  }
   return { company_name: companyName, admin_email: adminEmail, plan_id: planId, assigned_bot_id: assignedBotId };
 }
 
@@ -788,6 +796,14 @@ function createCustomerAccessService(options) {
 
     async createPublicSignup(input) {
       const body = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+      const publicPlanId = String(body.plan_id || "").trim().toLowerCase();
+      const publicBotId = String(body.assigned_bot_id || "").trim().toLowerCase();
+      if (!["nextfor-uno", "nextfor-aura"].includes(publicPlanId)) {
+        throw new CustomerAccessError("invalid_plan", 400);
+      }
+      if (publicBotId !== "atencion-cliente") {
+        throw new CustomerAccessError("invalid_assigned_bot", 400);
+      }
       const clean = validateCreateInput({
         company_name: body.company_name,
         admin_email: body.admin_email,

@@ -16,6 +16,7 @@ let result = evaluateAppointmentLiveReadiness({
   expectedVersion: "v247-appointment-setup-gate",
   fullHealth: {
     appointment_readiness: {
+      setup_enabled_for_pilot: true,
       production_can_be_enabled: true,
       production_ready: false,
       blockers: []
@@ -37,6 +38,7 @@ result = evaluateAppointmentLiveReadiness({
   expectedVersion: "v247-appointment-setup-gate",
   fullHealth: {
     appointment_readiness: {
+      setup_enabled_for_pilot: false,
       production_can_be_enabled: false,
       production_ready: false,
       blockers: ["calendar_not_connected", "elevenlabs_agent_not_configured"]
@@ -67,6 +69,7 @@ result = evaluateAppointmentLiveReadiness({
   requirePublicEnabled: true,
   fullHealth: {
     appointment_readiness: {
+      setup_enabled_for_pilot: true,
       production_can_be_enabled: true,
       production_ready: false,
       blockers: []
@@ -88,6 +91,7 @@ result = evaluateAppointmentLiveReadiness({
   expectedVersion: "v247-appointment-setup-gate",
   fullHealth: {
     appointment_readiness: {
+      setup_enabled_for_pilot: true,
       production_can_be_enabled: true,
       production_ready: false,
       blockers: []
@@ -110,6 +114,7 @@ result = evaluateAppointmentLiveReadiness({
   requireDashboardKey: true,
   fullHealth: {
     appointment_readiness: {
+      setup_enabled_for_pilot: true,
       production_can_be_enabled: true,
       production_ready: false,
       blockers: []
@@ -123,5 +128,27 @@ result = evaluateAppointmentLiveReadiness({
 });
 assert.strictEqual(result.ok, false);
 assert(result.failures.some(function (failure) { return /DERCO/.test(failure); }));
+
+result = evaluateAppointmentLiveReadiness({
+  health: { ok: true, bot: { version: "v247-appointment-setup-gate" } },
+  dns: { ok: true, host: "api.nextforia.com", addresses: ["203.0.113.10"] },
+  webhook: { ok: true, url: "https://api.nextforia.com/webhooks/elevenlabs/post-call", status: 401 },
+  expectedVersion: "v247-appointment-setup-gate",
+  fullHealth: {
+    appointment_readiness: {
+      setup_enabled_for_pilot: false,
+      production_can_be_enabled: true,
+      production_ready: false,
+      blockers: []
+    }
+  },
+  appointmentOverview: {
+    ok: true,
+    totals: { live_ready: 1 },
+    clients: [{ tenant_id: "grupo-derco" }]
+  }
+});
+assert.strictEqual(result.ok, false);
+assert(result.failures.some(function (failure) { return /APPOINTMENT_SETUP_TENANT_IDS=grupo-derco/.test(failure); }));
 
 console.log("appointment live check tests: ok");

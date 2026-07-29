@@ -11972,6 +11972,9 @@ async function buildAdminHealthResult() {
     },
     appointment_readiness: {
       pilot_tenant: DERCO_TENANT_ID,
+      setup_enabled_for_pilot: appointmentSetupEnabledForTenant(DERCO_TENANT_ID),
+      setup_enabled_publicly: APPOINTMENT_SETUP_ENABLED,
+      setup_tenant_allowlist_count: APPOINTMENT_SETUP_TENANT_IDS.size,
       testing_ready: dercoAppointmentIntegrations.ready_for_testing,
       production_can_be_enabled: dercoAppointmentIntegrations.ready_for_live,
       production_ready: dercoAppointmentIntegrations.ready_for_live && process.env.APPOINTMENTS_PUBLIC_ENABLED === "1",

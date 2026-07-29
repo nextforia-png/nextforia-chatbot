@@ -36,6 +36,36 @@ async function resolveHost(host) {
   }
 }
 
+async function probeWebhookEndpoint(url, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(function () { controller.abort(); }, Number(timeoutMs) || 8000);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal: controller.signal
+    });
+    return {
+      ok: response.status === 401,
+      url,
+      status: response.status,
+      expected_status: 401,
+      error: ""
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      status: 0,
+      expected_status: 401,
+      error: error.name === "AbortError" ? "timeout" : error.message
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function evaluateAppointmentLiveReadiness(input) {
   input = input || {};
   const failures = [];
@@ -43,6 +73,7 @@ function evaluateAppointmentLiveReadiness(input) {
   const health = input.health || {};
   const fullHealth = input.fullHealth || null;
   const dnsResult = input.dns || {};
+  const webhookResult = input.webhook || null;
   const expectedVersion = input.expectedVersion || "";
   const requireDashboardKey = input.requireDashboardKey === true;
   const requirePublicEnabled = input.requirePublicEnabled === true;
@@ -53,6 +84,11 @@ function evaluateAppointmentLiveReadiness(input) {
   }
   if (!dnsResult.ok) {
     failures.push("DNS no resuelve para " + (dnsResult.host || "api.nextforia.com") + ": " + (dnsResult.error || "sin detalle") + ".");
+  }
+  if (!webhookResult) {
+    warnings.push("Sin prueba directa del webhook ElevenLabs post-call.");
+  } else if (!webhookResult.ok) {
+    failures.push("Webhook ElevenLabs no responde como endpoint protegido: " + (webhookResult.error || ("status_" + webhookResult.status)) + ".");
   }
 
   if (!fullHealth) {
@@ -88,6 +124,8 @@ async function main() {
   const requirePublicEnabled = args["require-public"] === true || process.env.APPOINTMENT_VERIFY_REQUIRE_PUBLIC === "1";
 
   const dnsResult = await resolveHost(apiHost);
+  const webhookUrl = String(args["webhook-url"] || process.env.ELEVENLABS_WEBHOOK_URL || ("https://" + apiHost + "/webhooks/elevenlabs/post-call")).trim();
+  const webhookResult = await probeWebhookEndpoint(webhookUrl, cfg.timeoutMs);
   const publicHealth = await requestJson({
     url: cfg.baseUrl + "/admin/health",
     key: "",
@@ -110,6 +148,7 @@ async function main() {
     health: publicHealth,
     fullHealth,
     dns: dnsResult,
+    webhook: webhookResult,
     expectedVersion,
     requireDashboardKey,
     requirePublicEnabled
@@ -121,7 +160,7 @@ async function main() {
     expected_version: expectedVersion,
     public_version: publicHealth.bot && publicHealth.bot.version,
     api_dns: dnsResult,
-    webhook_url: "https://" + apiHost + "/webhooks/elevenlabs/post-call",
+    webhook: webhookResult,
     appointment_readiness: fullHealth && fullHealth.appointment_readiness || null,
     warnings: result.warnings,
     failures: result.failures
@@ -144,5 +183,6 @@ if (require.main === module) {
 module.exports = {
   cleanHost,
   evaluateAppointmentLiveReadiness,
+  probeWebhookEndpoint,
   resolveHost
 };

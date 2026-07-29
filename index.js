@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v272-rav-support-handoff-release";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v273-rav-handoff-repair-form";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -9295,7 +9295,7 @@ app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) =
     return;
   }
   const tenantId = cleanTenantId(req.params.tenantId);
-  const channel = String(req.body && req.body.channel || "").trim().toLowerCase();
+  const channel = String(req.body && req.body.channel || req.query.channel || "").trim().toLowerCase();
   if (!tenantId || !["whatsapp", "instagram", "messenger"].includes(channel)) {
     res.status(400).json({ ok: false, error: "invalid_tenant_or_channel" });
     return;

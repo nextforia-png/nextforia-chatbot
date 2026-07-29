@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v259-channel-tenant-runtime-routing";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v260-channel-delivery-truth";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4440,6 +4440,20 @@ async function instagramConnectionHealth() {
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000
     });
+    const lastErrorAt = Date.parse(instagramRuntimeState.last_error_at || "") || 0;
+    const lastOutboundAt = Date.parse(instagramRuntimeState.last_outbound_at || "") || 0;
+    const outboundBlocked = !!instagramRuntimeState.last_error_code && lastErrorAt > lastOutboundAt;
+    if (outboundBlocked) {
+      return {
+        ok: false,
+        configured: true,
+        status: "outbound_blocked",
+        error_code: instagramRuntimeState.last_error_code,
+        error_type: instagramRuntimeState.last_error_type || "send_failed",
+        checked_at: checkedAt,
+        runtime: { ...instagramRuntimeState }
+      };
+    }
     return { ok: true, configured: true, status: "connected", checked_at: checkedAt, runtime: { ...instagramRuntimeState } };
   } catch (err) {
     const metaError = err.response?.data?.error || {};
@@ -7936,14 +7950,17 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       group.last_text = eventText;
     } else if (replyText) {
       const actor = customerPanelReplyActor(turn);
+      const delivered = turn.status !== "error";
       group.messages.push({
         ts,
         author: actor,
         text: replyText,
-        delivery_status: turn.status === "error" ? "failed" : "sent"
+        delivery_status: delivered ? "sent" : "failed"
       });
-      if (actor === "human") group.last_human_reply_ms = Math.max(group.last_human_reply_ms, tsMs);
-      group.last_text = replyText;
+      if (actor === "human" && delivered) group.last_human_reply_ms = Math.max(group.last_human_reply_ms, tsMs);
+      group.last_text = delivered ? replyText : "⚠ No enviado: " + replyText;
+      group.last_delivery_status = delivered ? "sent" : "failed";
+      group.last_delivery_actor = actor;
     }
 
     const tools = Array.isArray(turn.tools) ? turn.tools : [];
@@ -8025,6 +8042,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       copy_value: copyValue,
       last_ts: group.last_ts,
       last_text: group.last_text,
+      last_delivery_status: group.last_delivery_status || null,
+      last_delivery_actor: group.last_delivery_actor || null,
       conversation_status: conversationStatus,
       status_label: statusLabels[conversationStatus],
       resolution_source: conversationStatus === "resolved" ? group.resolved_by : null,

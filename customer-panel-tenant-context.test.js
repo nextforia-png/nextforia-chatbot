@@ -40,6 +40,10 @@ assert(tenantA.includes("Atención al cliente · Plan Nextfor Aura"));
 assert(tenantA.includes("Versión v-test-panel"));
 assert(tenantA.includes("Configuración de tu bot"));
 assert(tenantA.includes("Ver cuestionario completo"));
+assert(tenantA.includes('item.last_delivery_status==="failed"'));
+assert(tenantA.includes("Meta rechazó el envío"));
+assert(tenantA.includes('m.delivery_status==="failed"'));
+assert(tenantA.includes("No enviado"));
 assert(!tenantA.includes(">Empresa B<"));
 assert(!tenantA.includes(">RAV Toys<"));
 

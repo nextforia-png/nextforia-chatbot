@@ -11526,6 +11526,18 @@ app.get("/", (req, res) => {
 
 app.get("/ready", async (req, res) => {
   const appointmentStorageReadyNow = await appointmentsStorageReady(false);
+  const elevenLabsAppointmentReady = !!(
+    ELEVENLABS_API_KEY &&
+    ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID &&
+    ELEVENLABS_APPOINTMENT_TOOL_SECRET.length >= 32 &&
+    ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED
+  );
+  const googleCalendarOAuthReady = !!(
+    GOOGLE_CALENDAR_CLIENT_ID &&
+    GOOGLE_CALENDAR_CLIENT_SECRET &&
+    appointmentCalendarService &&
+    appointmentCalendarService.providerConfigured()
+  );
   res.json({
     ok: true,
     bot_version: BOT_VERSION,
@@ -11534,18 +11546,19 @@ app.get("/ready", async (req, res) => {
       setup_enabled: appointmentSetupEnabledForTenant(DERCO_TENANT_ID),
       public_enabled: process.env.APPOINTMENTS_PUBLIC_ENABLED === "1",
       storage_ready: appointmentStorageReadyNow,
-      elevenlabs_ready: !!(
-        ELEVENLABS_API_KEY &&
-        ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID &&
-        ELEVENLABS_APPOINTMENT_TOOL_SECRET.length >= 32 &&
-        ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED
-      ),
-      google_calendar_oauth_ready: !!(
-        GOOGLE_CALENDAR_CLIENT_ID &&
-        GOOGLE_CALENDAR_CLIENT_SECRET &&
-        appointmentCalendarService &&
-        appointmentCalendarService.providerConfigured()
-      )
+      elevenlabs_ready: elevenLabsAppointmentReady,
+      google_calendar_oauth_ready: googleCalendarOAuthReady,
+      diagnostics: {
+        elevenlabs_api_key_present: !!ELEVENLABS_API_KEY,
+        elevenlabs_template_agent_present: !!ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID,
+        elevenlabs_tool_secret_ready: ELEVENLABS_APPOINTMENT_TOOL_SECRET.length >= 32,
+        elevenlabs_tool_base_url_ready: /^https:\/\//.test(ELEVENLABS_APPOINTMENT_TOOL_BASE_URL),
+        elevenlabs_agent_write_enabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
+        elevenlabs_webhook_secret_present: !!ELEVENLABS_WEBHOOK_SECRET,
+        google_calendar_client_id_present: !!GOOGLE_CALENDAR_CLIENT_ID,
+        google_calendar_client_secret_present: !!GOOGLE_CALENDAR_CLIENT_SECRET,
+        google_calendar_provider_configured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured())
+      }
     }
   });
 });

@@ -67,7 +67,9 @@ const {
   buildCoverageConversationContext,
   cloneDefaults: defaultClientOnboarding,
   createOnboardingRecord,
+  generateAppointmentConfiguration,
   generateCustomerServiceConfiguration,
+  normalizeAppointmentConfiguration,
   normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
   mergeCustomerSetupQuestionnaireHistory,
@@ -95,6 +97,25 @@ const {
 const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
 const { cleanShopifyShop, createPairingToken, verifyPairingToken } = require("./commerce/pairing-token");
 const { AppointmentRegistry } = require("./appointments");
+const {
+  buildAppointmentIntegrations,
+  parseAppointmentCalendarTenantMap
+} = require("./appointment-integrations");
+const {
+  applyElevenLabsAppointmentAgent,
+  appointmentAgentConfigured,
+  markAppointmentConfigurationElevenLabsApplied,
+  markAppointmentConfigurationElevenLabsFailed
+} = require("./appointment-elevenlabs");
+const {
+  AppointmentCalendarError,
+  AppendOnlyAppointmentCalendarStore,
+  GoogleCalendarProvider,
+  InMemoryAppointmentCalendarStore,
+  createAppointmentCalendarConnectionService,
+  createCalendarOAuthState,
+  readCalendarOAuthState
+} = require("./appointment-calendar-connections");
 const {
   DERCO_TENANT_ID,
   getRegisteredClient,
@@ -237,7 +258,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v246-live-tenant-channel-reconnect";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v247-appointment-setup-gate";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -300,6 +321,7 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const APPOINTMENT_SETUP_ENABLED = process.env.APPOINTMENT_SETUP_ENABLED === "1";
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
@@ -370,6 +392,12 @@ const PAYMENTS_V1_ENABLED = PAYMENTS_V1_GATE || PAYMENTS_TEST_MODE || PAYMENTS_P
 const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
 const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
+const ELEVENLABS_API_KEY = String(process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED = process.env.ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED === "1" ||
+  (process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1");
+const GOOGLE_CALENDAR_CLIENT_ID = String(process.env.GOOGLE_CALENDAR_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim();
+const GOOGLE_CALENDAR_CLIENT_SECRET = String(process.env.GOOGLE_CALENDAR_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || "").trim();
+const APPOINTMENT_CALENDAR_TENANT_MAP = parseAppointmentCalendarTenantMap(process.env);
 const appointmentRegistry = new AppointmentRegistry();
 const WA_TOKEN = process.env.WA_TOKEN;
 const TENANT_CONFIG = createTenantConfig(process.env);
@@ -401,6 +429,9 @@ const META_APP_SECRET = process.env.META_APP_SECRET || process.env.MESSENGER_APP
 const MESSENGER_APP_SECRET = META_APP_SECRET;
 const CHANNEL_CONNECTION_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
   ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/channel-connections/meta/callback"
+  : "";
+const APPOINTMENT_CALENDAR_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
+  ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/appointment-calendar/google/callback"
   : "";
 const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
 const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
@@ -452,6 +483,7 @@ const CLIENT_ONBOARDING_TOOL = "tenant_client_onboarding_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_TOOL = "customer_setup_questionnaire_v1";
 const CUSTOMER_SETUP_QUESTIONNAIRE_RECORD_ID = "customer-setup-questionnaire:global";
 const CHANNEL_CONNECTION_STATE_TOOL = "tenant_channel_connection_state_v1";
+const APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL = "appointment_calendar_connection_state_v1";
 const SHOPIFY_SESSION_STATE_TOOL = "shopify_session_state_v1";
 const SHOPIFY_SESSION_TENANT_ID = "platform-shopify";
 const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
@@ -809,6 +841,69 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
     })
   : null;
 const usedChannelOAuthNonces = new Set();
+function parseAppendOnlyAppointmentCalendarTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[AppointmentCalendarConnectionState\]\s*/, "");
+  try {
+    const payload = JSON.parse(raw);
+    const record = payload && payload.record;
+    const tenantId = cleanTenantId(record && record.tenant_id);
+    if (!tenantId) return null;
+    return Object.assign({}, record, { tenant_id: tenantId, provider: "google" });
+  } catch (_) {
+    return null;
+  }
+}
+const appendOnlyAppointmentCalendarStore = SUPABASE_ENABLED && process.env.NODE_ENV !== "test"
+  ? new AppendOnlyAppointmentCalendarStore({
+      loadLatest: async function (recordId, tenantId) {
+        const rows = await supabaseFetchUserRecent(recordId, 1, tenantId);
+        return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyAppointmentCalendarTurn).find(Boolean) || null;
+      },
+      loadAll: async function () {
+        const rows = await supabaseFetchToolRecent(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL, 3000, { allTenants: true });
+        return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyAppointmentCalendarTurn).filter(Boolean);
+      },
+      append: async function (recordId, record, event) {
+        await supabaseInsertStrict({
+          ts: record.updated_at || new Date().toISOString(),
+          tenantId: record.tenant_id,
+          userId: recordId,
+          userMessage: "",
+          botReply: "[AppointmentCalendarConnectionState] " + JSON.stringify({
+            version: 1,
+            record,
+            event: event ? {
+              action: String(event.action || "").slice(0, 80),
+              actor: String(event.actor || "").slice(0, 200),
+              details: event.details || {}
+            } : null
+          }),
+          tools: [APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL],
+          zeroResultQueries: [],
+          handoff: false,
+          rating: null,
+          numTools: 1,
+          status: "ok",
+          eval: { skip: true, reason: APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL }
+        });
+      }
+    })
+  : null;
+const appointmentCalendarStore = appendOnlyAppointmentCalendarStore || new InMemoryAppointmentCalendarStore();
+const appointmentCalendarProvider = new GoogleCalendarProvider({
+  clientId: GOOGLE_CALENDAR_CLIENT_ID,
+  clientSecret: GOOGLE_CALENDAR_CLIENT_SECRET,
+  redirectUri: APPOINTMENT_CALENDAR_CALLBACK_URL,
+  axiosClient: axios
+});
+const appointmentCalendarService = createAppointmentCalendarConnectionService({
+  store: appointmentCalendarStore,
+  provider: appointmentCalendarProvider,
+  encryptionKey: DATA_ENCRYPTION_KEY
+});
+const usedAppointmentCalendarOAuthNonces = new Set();
 const conversationOutboundRuntime = new Map();
 const channelRuntimeCache = {
   loaded_at: 0,
@@ -4988,7 +5083,9 @@ async function markSetupReviewTenantLifecycle(tenant, onboarding, auth, status) 
     review_note: review.note,
     requested_changes: review.requested_changes,
     customer_service_configuration: previous.customer_service_configuration || null,
+    appointment_configuration: previous.appointment_configuration || null,
     configuration_lifecycle: previous.customer_service_configuration && previous.customer_service_configuration.lifecycle,
+    appointment_configuration_lifecycle: previous.appointment_configuration && previous.appointment_configuration.lifecycle,
     review_event: {
       action: "tenant_status_" + cleanStatus,
       note: "Estado del cliente actualizado desde Super Admin: " + cleanStatus
@@ -5292,6 +5389,80 @@ async function setupReviewChannels(tenantId) {
   return channelConnectionService.listTenant(channelConnectionTenantId(tenantId));
 }
 
+function setupChannelConnected(channels, channel) {
+  return (channels || []).some(function (row) {
+    return row && cleanChannel(row.channel) === channel && row.status === "connected";
+  });
+}
+
+async function appointmentCalendarConnectionForTenant(tenantId) {
+  try {
+    return appointmentCalendarService ? await appointmentCalendarService.get(tenantId) : null;
+  } catch (error) {
+    console.error("appointment calendar connection lookup error:", cleanTenantId(tenantId), error.message);
+    return null;
+  }
+}
+
+function appointmentIntegrationOptions(channels, calendarConnection, record, tenantId) {
+  return {
+    elevenlabsApiKey: ELEVENLABS_API_KEY,
+    elevenlabsWebhookSecret: ELEVENLABS_WEBHOOK_SECRET,
+    agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+    elevenlabsAgentConfigured: appointmentAgentConfigured(
+      record && record.appointment_configuration,
+      tenantId || record && record.tenant_id,
+      ELEVENLABS_AGENT_TENANT_MAP
+    ),
+    googleCalendarOAuthConfigured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured()),
+    calendarTenantMap: APPOINTMENT_CALENDAR_TENANT_MAP,
+    calendarConnected: !!(calendarConnection && calendarConnection.status === "connected"),
+    calendarConnection: calendarConnection || null,
+    metaOAuthReady: !!(CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService),
+    whatsappConnected: setupChannelConnected(channels, "whatsapp"),
+    supabaseAppointmentsEnabled: SUPABASE_APPOINTMENTS_ENABLED
+  };
+}
+
+async function appointmentIntegrationsForRecord(record, tenantId, channels) {
+  const calendarConnection = await appointmentCalendarConnectionForTenant(tenantId || record && record.tenant_id);
+  return buildAppointmentIntegrations(record, tenantId, appointmentIntegrationOptions(channels || [], calendarConnection, record, tenantId));
+}
+
+function setupIncludesCustomerService(answers) {
+  return answers && (answers.setup_goal === "customer_service" || answers.setup_goal === "both");
+}
+
+function setupIncludesAppointments(answers) {
+  return answers && (answers.setup_goal === "appointments" || answers.setup_goal === "both");
+}
+
+function setupConfigurationTarget(previous, input) {
+  const requested = String(input && (input.configuration_bot_type || input.bot_type || input.configuration_type) || "").toLowerCase();
+  if (requested === "appointments" || requested === "appointment") return "appointments";
+  if (requested === "customer_service" || requested === "customer-service" || requested === "support") return "customer_service";
+  const goal = previous && previous.answers && previous.answers.setup_goal;
+  if (goal === "appointments") return "appointments";
+  if (goal === "customer_service") return "customer_service";
+  if (goal === "both") {
+    if (input && input.appointment_configuration && !input.customer_service_configuration) return "appointments";
+    if (input && input.customer_service_configuration && !input.appointment_configuration) return "customer_service";
+    if (previous && previous.customer_service_configuration && !previous.appointment_configuration) return "appointments";
+  }
+  return "customer_service";
+}
+
+function setupTestingConfigReady(record) {
+  const answers = record && record.answers || {};
+  const needsCustomerService = setupIncludesCustomerService(answers);
+  const needsAppointments = setupIncludesAppointments(answers);
+  if (needsCustomerService && !(record.customer_service_configuration &&
+      record.customer_service_configuration.lifecycle === "approved_for_testing")) return false;
+  if (needsAppointments && !(record.appointment_configuration &&
+      record.appointment_configuration.lifecycle === "approved_for_testing")) return false;
+  return needsCustomerService || needsAppointments;
+}
+
 function launchChecklistItem(ok, code, label, detail, type) {
   return {
     ok: !!ok,
@@ -5302,7 +5473,7 @@ function launchChecklistItem(ok, code, label, detail, type) {
   };
 }
 
-function setupLaunchReadiness(tenant, record, questionnaire, channels) {
+function setupLaunchReadiness(tenant, record, questionnaire, channels, appointmentGate) {
   const answers = record && record.answers || {};
   const review = setupReviewSummary(record);
   const pendingRequired = pendingQuestionnaireItems(answers, questionnaire, {
@@ -5331,10 +5502,37 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels) {
     addOk("setup_completed", "Setup completo", "El cliente terminó el formulario.");
   }
 
-  if ((answers.setup_goal || "unknown") !== "customer_service") {
-    addBlock("only_customer_service_live_supported", "Solo Chatbot en esta etapa", "Producción inicial activa únicamente Atención al cliente / Ventas 24/7.");
-  } else {
-    addOk("customer_service_selected", "Bot correcto", "Este cliente eligió Chatbot de atención al cliente.");
+  if (setupIncludesCustomerService(answers)) {
+    addOk("customer_service_selected", "Atención al cliente incluida", "Este setup incluye Customer Service.");
+  }
+  if (setupIncludesAppointments(answers)) {
+    addOk("appointments_selected", "Agendamiento incluido", "Este setup incluye Appointment Bot.");
+    appointmentGate = appointmentGate || buildAppointmentIntegrations(record, tenant && tenant.id || record && record.tenant_id, appointmentIntegrationOptions(channels || [], null, record, tenant && tenant.id || record && record.tenant_id));
+    if (appointmentGate.blockers && appointmentGate.blockers.length) {
+      appointmentGate.blockers.forEach(function (code) {
+        const labels = {
+          appointment_not_selected: ["Appointment no seleccionado", "El setup no incluye bot de agendamiento."],
+          setup_not_completed: ["Setup incompleto", "El cliente todavía no completó el formulario."],
+          appointment_not_in_testing: ["Appointment no está en Testing", "Primero aprueba la configuración para Testing."],
+          elevenlabs_agent_not_mapped: ["Falta agente ElevenLabs", "Mapea el agente real al tenant antes de Live."],
+          elevenlabs_webhook_not_ready: ["Falta webhook ElevenLabs", "Configura el secreto/webhook post-call."],
+          elevenlabs_api_key_missing: ["Falta API key ElevenLabs", "Configura ELEVENLABS_API_KEY para operaciones reales."],
+          elevenlabs_agent_not_configured: ["Falta configurar ElevenLabs", "Aplica el prompt de Appointment al agente real del tenant."],
+          calendar_not_connected: ["Falta calendario", "El cliente debe conectar o mapear su calendario real."],
+          whatsapp_not_connected: ["Falta WhatsApp", "Conecta WhatsApp real desde Meta para este tenant."],
+          email_not_ready: ["Falta correo de citas", "Configura el correo si el cliente pidió email."],
+          calls_not_ready: ["Faltan llamadas", "Configura llamadas si el cliente las activó."],
+          appointments_persistence_not_ready: ["Falta persistencia de citas", "Activa Supabase appointments después de aplicar la migración."]
+        };
+        const item = labels[code] || ["Appointment bloqueado", code];
+        addBlock("appointment_" + code, item[0], item[1]);
+      });
+    } else {
+      addOk("appointment_integrations_ready", "Appointment conectado", "Bot real, calendario, canales y persistencia están listos.");
+    }
+  }
+  if (!setupIncludesCustomerService(answers) && !setupIncludesAppointments(answers)) {
+    addBlock("bot_not_selected", "Bot no seleccionado", "El cliente debe elegir Customer Service, Appointment o ambos.");
   }
 
   if (pendingRequired.length > 0) {
@@ -5376,25 +5574,35 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels) {
     addWarning("whatsapp_not_requested", "WhatsApp no solicitado", "El cliente no dejó WhatsApp como canal inicial.");
   }
 
-  if (setupWantsShopify(answers)) {
+  if (setupIncludesCustomerService(answers) && setupWantsShopify(answers)) {
     const commerce = answers.commerce || {};
     if (commerce.integration_status === "connected") {
       addOk("shopify_connected", "Shopify conectado", "La tienda ya está emparejada con NextforIA.");
     } else {
       addBlock("shopify_connection_required", "Falta conectar Shopify", "El cliente solicitó Shopify, pero la tienda sigue pendiente de conexión.");
     }
-  } else {
+  } else if (setupIncludesCustomerService(answers)) {
     addWarning("shopify_not_requested", "Shopify no solicitado", "El cliente no pidió conexión Shopify para este bot.");
   }
 
-  if (record && record.customer_service_configuration) {
+  if (setupIncludesCustomerService(answers) && record && record.customer_service_configuration) {
     if (record.customer_service_configuration.lifecycle === "approved_for_testing") {
-      addOk("configuration_testing_ready", "Configuración aprobada para Testing", "El borrador interno ya fue aprobado para pruebas.");
+      addOk("customer_service_configuration_testing_ready", "Customer Service aprobado para Testing", "El borrador interno ya fue aprobado para pruebas.");
     } else {
-      addWarning("configuration_auto_testing", "Configuración se aprobará automáticamente", "Al aceptar, Super Admin usará el borrador actual y lo dejará aprobado.");
+      addWarning("customer_service_configuration_auto_testing", "Customer Service se aprobará automáticamente", "Al aceptar, Super Admin usará el borrador actual y lo dejará aprobado.");
     }
   } else if (answers.setup_goal === "customer_service") {
-    addWarning("configuration_auto_build", "Configuración se generará automáticamente", "Al aceptar, Super Admin construirá el prompt desde el setup del cliente.");
+    addWarning("customer_service_configuration_auto_build", "Customer Service se generará automáticamente", "Al aceptar, Super Admin construirá el prompt desde el setup del cliente.");
+  }
+
+  if (setupIncludesAppointments(answers) && record && record.appointment_configuration) {
+    if (record.appointment_configuration.lifecycle === "approved_for_testing") {
+      addOk("appointment_configuration_testing_ready", "Appointment aprobado para Testing", "El borrador interno ya fue aprobado para pruebas.");
+    } else {
+      addWarning("appointment_configuration_auto_testing", "Appointment se aprobará automáticamente", "Al aceptar, Super Admin usará el borrador actual y lo dejará aprobado.");
+    }
+  } else if (answers.setup_goal === "appointments") {
+    addWarning("appointment_configuration_auto_build", "Appointment se generará automáticamente", "Al aceptar, Super Admin construirá el prompt desde el setup del cliente.");
   }
 
   return {
@@ -5405,6 +5613,13 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels) {
     warnings,
     checks
   };
+}
+
+async function buildSetupLaunchReadiness(tenant, record, questionnaire, channels) {
+  const gate = setupIncludesAppointments(record && record.answers || {})
+    ? await appointmentIntegrationsForRecord(record, tenant && tenant.id || record && record.tenant_id, channels)
+    : null;
+  return setupLaunchReadiness(tenant, record, questionnaire, channels, gate);
 }
 
 function setupOperationalCheck(ok, code, label, detail) {
@@ -5428,7 +5643,7 @@ async function runSetupOperationalTest(tenant, record, questionnaire, channels, 
       whatsappVerificationError = String(error && (error.code || error.message) || "verification_failed");
     }
   }
-  const launch = setupLaunchReadiness(tenant, record, questionnaire, channels);
+  const launch = await buildSetupLaunchReadiness(tenant, record, questionnaire, channels);
   const health = await buildAdminHealthResult();
   const checks = [
     setupOperationalCheck(
@@ -5446,15 +5661,12 @@ async function runSetupOperationalTest(tenant, record, questionnaire, channels, 
         : launch.blockers.map(function (item) { return item.label; }).join(", ")
     ),
     setupOperationalCheck(
-      !!(record.customer_service_configuration &&
-        record.customer_service_configuration.lifecycle === "approved_for_testing"),
+      setupTestingConfigReady(record),
       "bot_configuration",
       "Programación del bot",
-      record.customer_service_configuration
-        ? (record.customer_service_configuration.lifecycle === "approved_for_testing"
-            ? "La configuración está aprobada para Testing/Live."
-            : "La configuración existe, pero todavía no está aprobada para pruebas.")
-        : "Todavía no se ha generado la configuración desde el setup."
+      setupTestingConfigReady(record)
+        ? "La configuración requerida está aprobada para Testing/Live."
+        : "Todavía falta generar o aprobar la configuración requerida desde el setup."
     ),
     setupOperationalCheck(
       !setupWantsWhatsApp(answers) ||
@@ -5530,62 +5742,170 @@ async function persistSetupReview(tenantId, input, auth) {
   const answers = input && input.answers && typeof input.answers === "object" ? input.answers : previous.answers;
   const actor = auth && (auth.name || auth.username || auth.email);
   let cleanStatus = fallbackStatus;
-  let configuration = previous.customer_service_configuration || null;
-  let configurationLifecycle = configuration && configuration.lifecycle || "draft";
+  let customerServiceConfiguration = previous.customer_service_configuration || null;
+  let appointmentConfiguration = previous.appointment_configuration || null;
+  let customerServiceLifecycle = customerServiceConfiguration && customerServiceConfiguration.lifecycle || "draft";
+  let appointmentLifecycle = appointmentConfiguration && appointmentConfiguration.lifecycle || "draft";
+  let configurationTarget = setupConfigurationTarget(previous, input);
+  if (action === "configure_appointment_agent") configurationTarget = "appointments";
 
   if (action === "request_changes") {
     cleanStatus = "incomplete";
-    configuration = null;
+    customerServiceConfiguration = null;
+    appointmentConfiguration = null;
   } else if (action === "approve") {
     if (!previous.setup_completed) throw setupReviewFailure("setup_not_completed");
     cleanStatus = "ready";
-    configuration = null;
+    customerServiceConfiguration = null;
+    appointmentConfiguration = null;
   } else if (action === "build_configuration") {
     const setupGoal = previous.answers && previous.answers.setup_goal;
-    if (setupGoal !== "customer_service" && setupGoal !== "both") {
+    if (configurationTarget === "customer_service" && setupGoal !== "customer_service" && setupGoal !== "both") {
       throw setupReviewFailure("customer_service_not_selected");
     }
-    const customerServiceSetupStatus = previous.answers && previous.answers.customer_service_setup &&
-      previous.answers.customer_service_setup.setup_status;
-    if (!previous.setup_completed || fallbackStatus !== "ready" ||
-        !["approved", "active"].includes(customerServiceSetupStatus)) {
+    if (configurationTarget === "appointments" && setupGoal !== "appointments" && setupGoal !== "both") {
+      throw setupReviewFailure("appointment_not_selected");
+    }
+    const setupStatus = configurationTarget === "appointments"
+      ? previous.answers && previous.answers.appointment_setup && previous.answers.appointment_setup.setup_status
+      : previous.answers && previous.answers.customer_service_setup && previous.answers.customer_service_setup.setup_status;
+    if (!previous.setup_completed || fallbackStatus !== "ready" || !["approved", "active"].includes(setupStatus)) {
       throw setupReviewFailure("setup_must_be_approved");
     }
-    configuration = generateCustomerServiceConfiguration(answers, {
-      actor,
-      source_setup_updated_at: previous.last_updated_at || previous.updated_at
-    });
-    if (!configuration) throw setupReviewFailure("customer_service_not_selected");
+    if (configurationTarget === "appointments") {
+      appointmentConfiguration = generateAppointmentConfiguration(answers, {
+        actor,
+        source_setup_updated_at: previous.last_updated_at || previous.updated_at
+      });
+      if (!appointmentConfiguration) throw setupReviewFailure("appointment_not_selected");
+      appointmentLifecycle = "draft";
+    } else {
+      customerServiceConfiguration = generateCustomerServiceConfiguration(answers, {
+        actor,
+        source_setup_updated_at: previous.last_updated_at || previous.updated_at
+      });
+      if (!customerServiceConfiguration) throw setupReviewFailure("customer_service_not_selected");
+      customerServiceLifecycle = "draft";
+    }
     cleanStatus = "building";
-    configurationLifecycle = "draft";
   } else if (action === "save_configuration") {
-    if (!["building", "testing"].includes(fallbackStatus) || !configuration) {
-      throw setupReviewFailure("configuration_not_building");
+    if (!["building", "testing"].includes(fallbackStatus)) throw setupReviewFailure("configuration_not_building");
+    if (configurationTarget === "appointments") {
+      if (!appointmentConfiguration) throw setupReviewFailure("configuration_not_building");
+      if (!input.appointment_configuration || typeof input.appointment_configuration !== "object") {
+        throw setupReviewFailure("configuration_required");
+      }
+      appointmentConfiguration = normalizeAppointmentConfiguration(input.appointment_configuration, {
+        actor,
+        lifecycle: "draft"
+      });
+      appointmentLifecycle = "draft";
+    } else {
+      if (!customerServiceConfiguration) throw setupReviewFailure("configuration_not_building");
+      if (!input.customer_service_configuration || typeof input.customer_service_configuration !== "object") {
+        throw setupReviewFailure("configuration_required");
+      }
+      customerServiceConfiguration = normalizeCustomerServiceConfiguration(input.customer_service_configuration, {
+        actor,
+        lifecycle: "draft"
+      });
+      customerServiceLifecycle = "draft";
     }
-    if (!input.customer_service_configuration || typeof input.customer_service_configuration !== "object") {
-      throw setupReviewFailure("configuration_required");
-    }
-    configuration = normalizeCustomerServiceConfiguration(input.customer_service_configuration, {
-      actor,
-      lifecycle: "draft"
-    });
     cleanStatus = "building";
-    configurationLifecycle = "draft";
   } else if (action === "approve_configuration") {
-    if (fallbackStatus !== "building" || !configuration) {
-      throw setupReviewFailure("configuration_not_building");
+    if (fallbackStatus !== "building") throw setupReviewFailure("configuration_not_building");
+    if (configurationTarget === "appointments") {
+      if (!appointmentConfiguration) throw setupReviewFailure("configuration_not_building");
+      appointmentConfiguration = normalizeAppointmentConfiguration(
+        input.appointment_configuration && typeof input.appointment_configuration === "object"
+          ? input.appointment_configuration
+          : appointmentConfiguration,
+        { actor, lifecycle: "approved_for_testing" }
+      );
+      appointmentLifecycle = "approved_for_testing";
+    } else {
+      if (!customerServiceConfiguration) throw setupReviewFailure("configuration_not_building");
+      customerServiceConfiguration = normalizeCustomerServiceConfiguration(
+        input.customer_service_configuration && typeof input.customer_service_configuration === "object"
+          ? input.customer_service_configuration
+          : customerServiceConfiguration,
+        { actor, lifecycle: "approved_for_testing" }
+      );
+      customerServiceLifecycle = "approved_for_testing";
     }
-    configuration = normalizeCustomerServiceConfiguration(
-      input.customer_service_configuration && typeof input.customer_service_configuration === "object"
-        ? input.customer_service_configuration
-        : configuration,
+    cleanStatus = "testing";
+  } else if (action === "configure_appointment_agent") {
+    if (fallbackStatus !== "testing") throw setupReviewFailure("appointment_not_in_testing");
+    if (!appointmentConfiguration) throw setupReviewFailure("configuration_required");
+    appointmentConfiguration = normalizeAppointmentConfiguration(
+      input.appointment_configuration && typeof input.appointment_configuration === "object"
+        ? input.appointment_configuration
+        : appointmentConfiguration,
       { actor, lifecycle: "approved_for_testing" }
     );
-    cleanStatus = "testing";
-    configurationLifecycle = "approved_for_testing";
+    try {
+      const result = await applyElevenLabsAppointmentAgent({
+        tenant_id: tenant.id,
+        answers,
+        appointment_configuration: appointmentConfiguration
+      }, tenant.id, {
+        apiKey: ELEVENLABS_API_KEY,
+        agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+        writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
+        httpClient: process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1"
+          ? { patch: async function () { return { status: 200 }; } }
+          : axios
+      });
+      appointmentConfiguration = normalizeAppointmentConfiguration(
+        markAppointmentConfigurationElevenLabsApplied(appointmentConfiguration, result, actor),
+        { actor, lifecycle: "approved_for_testing" }
+      );
+      appointmentLifecycle = "approved_for_testing";
+      cleanStatus = "testing";
+    } catch (error) {
+      appointmentConfiguration = normalizeAppointmentConfiguration(
+        markAppointmentConfigurationElevenLabsFailed(appointmentConfiguration, error, actor),
+        { actor, lifecycle: "approved_for_testing" }
+      );
+      appointmentLifecycle = "approved_for_testing";
+      error.details = Object.assign({}, error.details || {}, {
+        elevenlabs: {
+          status: "failed",
+          error: error.message,
+          draft: error.draft || null
+        }
+      });
+      throw error;
+    }
   } else if (action === "launch_live" || action === "mark_live" || String(input && input.review_status || "").toLowerCase() === "live") {
     if (input && input.launch_confirmed !== true) {
       throw setupReviewFailure("launch_confirmation_required", 400);
+    }
+    if (setupIncludesCustomerService(answers)) {
+      customerServiceConfiguration = normalizeCustomerServiceConfiguration(
+        input.customer_service_configuration && typeof input.customer_service_configuration === "object"
+          ? input.customer_service_configuration
+          : (customerServiceConfiguration || generateCustomerServiceConfiguration(answers, {
+            actor,
+            source_setup_updated_at: previous.last_updated_at || previous.updated_at
+          })),
+        { actor, lifecycle: "approved_for_testing" }
+      );
+      if (!customerServiceConfiguration) throw setupReviewFailure("customer_service_not_selected");
+      customerServiceLifecycle = "approved_for_testing";
+    }
+    if (setupIncludesAppointments(answers)) {
+      appointmentConfiguration = normalizeAppointmentConfiguration(
+        input.appointment_configuration && typeof input.appointment_configuration === "object"
+          ? input.appointment_configuration
+          : (appointmentConfiguration || generateAppointmentConfiguration(answers, {
+            actor,
+            source_setup_updated_at: previous.last_updated_at || previous.updated_at
+          })),
+        { actor, lifecycle: "approved_for_testing" }
+      );
+      if (!appointmentConfiguration) throw setupReviewFailure("appointment_not_selected");
+      appointmentLifecycle = "approved_for_testing";
     }
     const candidateRecord = createOnboardingRecord(answers, {
       tenant_id: tenant.id,
@@ -5595,26 +5915,18 @@ async function persistSetupReview(tenantId, input, auth) {
       questionnaire,
       review_status: fallbackStatus,
       review_actor: actor,
-      customer_service_configuration: configuration,
-      configuration_lifecycle: configurationLifecycle
+      customer_service_configuration: customerServiceConfiguration,
+      appointment_configuration: appointmentConfiguration,
+      configuration_lifecycle: customerServiceLifecycle,
+      appointment_configuration_lifecycle: appointmentLifecycle
     });
     const channels = await setupReviewChannels(tenant.id).catch(function () { return []; });
-    const readiness = setupLaunchReadiness(tenant, candidateRecord, questionnaire, channels);
+    const readiness = await buildSetupLaunchReadiness(tenant, candidateRecord, questionnaire, channels);
     if (!readiness.ready) {
       const error = setupReviewFailure("launch_blocked", 409);
       error.details = readiness;
       throw error;
     }
-    configuration = normalizeCustomerServiceConfiguration(
-      input.customer_service_configuration && typeof input.customer_service_configuration === "object"
-        ? input.customer_service_configuration
-        : (configuration || generateCustomerServiceConfiguration(answers, {
-          actor,
-          source_setup_updated_at: previous.last_updated_at || previous.updated_at
-        })),
-      { actor, lifecycle: "approved_for_testing" }
-    );
-    if (!configuration) throw setupReviewFailure("customer_service_not_selected");
     if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
       try {
         await catalogService.setTenantStatus(tenant.id, "activo", auth);
@@ -5623,7 +5935,6 @@ async function persistSetupReview(tenantId, input, auth) {
       }
     }
     cleanStatus = "live";
-    configurationLifecycle = "approved_for_testing";
   }
   const record = createOnboardingRecord(answers, {
     tenant_id: tenant.id,
@@ -5636,8 +5947,10 @@ async function persistSetupReview(tenantId, input, auth) {
     review_note: input && input.review_note,
     requested_changes: input && input.requested_changes,
     review_actor: actor,
-    customer_service_configuration: configuration,
-    configuration_lifecycle: configurationLifecycle,
+    customer_service_configuration: customerServiceConfiguration,
+    appointment_configuration: appointmentConfiguration,
+    configuration_lifecycle: customerServiceLifecycle,
+    appointment_configuration_lifecycle: appointmentLifecycle,
     review_event: {
       action,
       note: input && (input.requested_changes || input.review_note) || ""
@@ -6254,15 +6567,12 @@ function customerBusinessForOnboarding(auth, tenantId, answers) {
 
 function customerChannelConnectionsVisibleForAuth(auth) {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
-  if (!auth || auth.version !== 2) return true;
-  const assignedBotId = String(auth.assigned_bot_id || "").trim().toLowerCase();
-  return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
+  return true;
 }
 
 function customerChannelConnectionsVisibleForBusiness(business) {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE) return false;
-  const assignedBotId = String(business && business.assigned_bot_id || "").trim().toLowerCase();
-  return !["agendamiento", "appointments", "appointment"].includes(assignedBotId);
+  return true;
 }
 
 async function customerChannelConnectionsVisibleForPanelAuth(auth) {
@@ -6293,6 +6603,19 @@ function customerBusinessHasAppointmentModule(business) {
   return ["agendamiento", "appointments", "appointment", "duo", "both"].includes(assignedBotId);
 }
 
+async function customerAppointmentBusinessForPanelAuth(auth) {
+  if (!auth || auth.version !== 2) return customerBusinessForAuth(auth);
+  try {
+    return customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, customerTenantForAuth(auth)));
+  } catch (_) {
+    return customerBusinessForAuth(auth);
+  }
+}
+
+async function customerAppointmentCalendarVisibleForPanelAuth(auth) {
+  return customerBusinessHasAppointmentModule(await customerAppointmentBusinessForPanelAuth(auth));
+}
+
 function channelConnectionCallbackUrlForRequest(req) {
   const publicPanelOrigin = CHANNEL_CONNECTION_PUBLIC_ORIGINS.find(function (origin) {
     try { return new URL(origin).hostname === "nextforia.com"; }
@@ -6320,6 +6643,12 @@ function channelConnectionCallbackUrlForRequest(req) {
     ? requestOrigin
     : safeFallbackOrigin;
   return origin ? origin + "/admin/channel-connections/meta/callback" : CHANNEL_CONNECTION_CALLBACK_URL;
+}
+
+function appointmentCalendarCallbackUrlForRequest(req) {
+  const base = channelConnectionCallbackUrlForRequest(req);
+  if (base) return base.replace("/admin/channel-connections/meta/callback", "/admin/appointment-calendar/google/callback");
+  return APPOINTMENT_CALENDAR_CALLBACK_URL;
 }
 
 function customerSetupCompletionPath(auth, source) {
@@ -6437,6 +6766,7 @@ function ensureInitialProductionCustomerSelection(planId, botId) {
 }
 
 function ensureChatbotOnlyOnboardingAnswers(answers) {
+  if (APPOINTMENT_SETUP_ENABLED) return;
   const goal = String(answers && answers.setup_goal || "").trim().toLowerCase();
   if (goal && goal !== "unknown" && goal !== "customer_service") throw new CatalogError("chatbot_only_release", 422);
 }
@@ -8205,7 +8535,8 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     completionPath: "/admin/panel-demo?tab=channels&from=onboarding",
     paymentsV1Enabled: true,
     demoPaymentPath: "/admin/client-onboarding-demo/payment",
-    questionnaire
+    questionnaire,
+    chatbotOnlyRelease: !APPOINTMENT_SETUP_ENABLED
   });
 });
 
@@ -8308,6 +8639,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
     demo: false,
     apiPath: "/admin/client-onboarding/data",
     shopifyConnectPath: "/admin/integrations/shopify/connect",
+    chatbotOnlyRelease: !APPOINTMENT_SETUP_ENABLED,
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
     questionnaire,
     focusPending: req.query.focus === "pending"
@@ -8887,6 +9219,11 @@ app.get("/admin/customer-setups", async (req, res) => {
           updated_at: onboarding.customer_service_configuration.updated_at,
           updated_by: onboarding.customer_service_configuration.updated_by
         } : null,
+        appointment_configuration: onboarding.appointment_configuration ? {
+          lifecycle: onboarding.appointment_configuration.lifecycle,
+          updated_at: onboarding.appointment_configuration.updated_at,
+          updated_by: onboarding.appointment_configuration.updated_by
+        } : null,
         review,
         updated_at: onboarding.last_updated_at || onboarding.updated_at || null
       };
@@ -8940,7 +9277,8 @@ app.get("/admin/customer-setups/:tenantId", async (req, res) => {
       review: setupReviewSummary(onboarding),
       questionnaire,
       channels,
-      launch: setupLaunchReadiness(tenant, onboarding, questionnaire, channels),
+      appointment_integrations: await appointmentIntegrationsForRecord(onboarding, tenant.id, channels),
+      launch: await buildSetupLaunchReadiness(tenant, onboarding, questionnaire, channels),
       statuses: SETUP_REVIEW_STATUSES
     });
   } catch (error) {
@@ -8976,7 +9314,7 @@ app.post("/admin/customer-setups/:tenantId/test", async (req, res) => {
       result,
       onboarding: audited,
       review: setupReviewSummary(audited),
-      launch: setupLaunchReadiness(tenant, audited, questionnaire, channels)
+      launch: await buildSetupLaunchReadiness(tenant, audited, questionnaire, channels)
     });
   } catch (error) {
     console.error("customer setup operational test error:", error.message);
@@ -9090,7 +9428,8 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
       ok: true,
       onboarding: record,
       review: setupReviewSummary(record),
-      launch: tenant ? setupLaunchReadiness(tenant, record, questionnaire, channels) : null
+      appointment_integrations: tenant ? await appointmentIntegrationsForRecord(record, tenant.id, channels) : null,
+      launch: tenant ? await buildSetupLaunchReadiness(tenant, record, questionnaire, channels) : null
     });
   } catch (error) {
     console.error("customer setup review save error:", error.message);
@@ -9099,8 +9438,14 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
       "setup_not_completed",
       "setup_must_be_approved",
       "customer_service_not_selected",
+      "appointment_not_selected",
+      "appointment_not_in_testing",
       "configuration_not_building",
       "configuration_required",
+      "elevenlabs_agent_not_mapped",
+      "elevenlabs_api_key_missing",
+      "elevenlabs_write_disabled",
+      "elevenlabs_client_unavailable",
       "launch_confirmation_required",
       "launch_blocked"
     ];
@@ -9853,6 +10198,220 @@ app.post("/admin/channel-connections/:tenantId/:channel/disconnect", async (req,
   }
 });
 
+function appointmentCalendarErrorResponse(res, error) {
+  const problem = error instanceof AppointmentCalendarError
+    ? error
+    : new AppointmentCalendarError("calendar_connection_failed", 503, error && error.message);
+  const customerCodes = [
+    "invalid_calendar_request",
+    "calendar_oauth_not_configured",
+    "calendar_authorization_denied",
+    "calendar_connection_not_found"
+  ];
+  res.status(problem.status || 503).json({
+    ok: false,
+    error: customerCodes.includes(problem.code) ? problem.code : "calendar_connection_failed",
+    message: problem.code === "calendar_oauth_not_configured"
+      ? "Aún estamos preparando Google Calendar. Habla con NextforIA."
+      : problem.code === "calendar_connection_not_found"
+        ? "Todavía no hay un calendario conectado."
+        : "No pudimos terminar la conexión del calendario. Intenta de nuevo o habla con NextforIA."
+  });
+}
+
+app.get("/admin/panel/appointment-calendar", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!await customerAppointmentCalendarVisibleForPanelAuth(auth)) {
+    res.status(404).json({ ok: false, error: "appointment_calendar_disabled" });
+    return;
+  }
+  try {
+    const tenantId = customerTenantForAuth(auth);
+    res.json({
+      ok: true,
+      provider: "google",
+      authorization_available: appointmentCalendarService.providerConfigured(),
+      connection: await appointmentCalendarService.get(tenantId)
+    });
+  } catch (error) {
+    console.error("customer appointment calendar status error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/appointment-calendar/google/connect", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!await customerAppointmentCalendarVisibleForPanelAuth(auth)) {
+    res.status(404).json({ ok: false, error: "appointment_calendar_disabled" });
+    return;
+  }
+  try {
+    const tenantId = customerTenantForAuth(auth);
+    const redirectUri = appointmentCalendarCallbackUrlForRequest(req);
+    const state = createCalendarOAuthState(DASHBOARD_SESSION_SECRET, {
+      tenant_id: tenantId,
+      actor_id: auth.user_id || auth.username,
+      actor: channelConnectionActor(auth),
+      redirect_uri: redirectUri,
+      return_path: "/admin/panel?tab=appointments"
+    });
+    const authorizationUrl = await appointmentCalendarService.begin(tenantId, auth, state, { redirectUri });
+    res.json({ ok: true, authorization_url: authorizationUrl });
+  } catch (error) {
+    console.error("customer appointment calendar connect start error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
+app.get("/admin/appointment-calendar/google/callback", async (req, res) => {
+  function calendarReturnUrl(state, status) {
+    const fallback = "/admin/panel?tab=appointments";
+    const raw = state && state.return_path || fallback;
+    const safePath = String(raw || fallback).startsWith("/admin/") ? String(raw || fallback) : fallback;
+    const separator = safePath.includes("?") ? "&" : "?";
+    return safePath + separator + "calendar=" + encodeURIComponent(status);
+  }
+  const state = readCalendarOAuthState(DASHBOARD_SESSION_SECRET, req.query.state);
+  if (!state || usedAppointmentCalendarOAuthNonces.has(state.nonce)) {
+    res.redirect("/admin/panel?tab=appointments&calendar=error");
+    return;
+  }
+  const session = dashboardAuth(req);
+  if (session.ok && session.version === 2 &&
+      (customerTenantForAuth(session) !== state.tenant_id ||
+       String(session.user_id || session.username) !== String(state.actor_id))) {
+    res.redirect(calendarReturnUrl(state, "error"));
+    return;
+  }
+  usedAppointmentCalendarOAuthNonces.add(state.nonce);
+  if (usedAppointmentCalendarOAuthNonces.size > 10000) {
+    usedAppointmentCalendarOAuthNonces.delete(usedAppointmentCalendarOAuthNonces.values().next().value);
+  }
+  try {
+    await appointmentCalendarService.completeAuthorization({
+      tenant_id: state.tenant_id,
+      actor: state.actor,
+      redirect_uri: state.redirect_uri || appointmentCalendarCallbackUrlForRequest(req),
+      code: req.query.error ? "" : req.query.code
+    });
+    res.redirect(calendarReturnUrl(state, "success"));
+  } catch (error) {
+    console.error("Google calendar authorization failed:", state.tenant_id, error.internalMessage || error.message);
+    res.redirect(calendarReturnUrl(state, "error"));
+  }
+});
+
+app.post("/admin/panel/appointment-calendar/disconnect", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!await customerAppointmentCalendarVisibleForPanelAuth(auth)) {
+    res.status(404).json({ ok: false, error: "appointment_calendar_disabled" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await appointmentCalendarService.disconnect(customerTenantForAuth(auth), auth)
+    });
+  } catch (error) {
+    console.error("customer appointment calendar disconnect error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
+app.get("/admin/appointment-calendar-connections", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const tenants = await listSetupReviewTenants();
+    res.json({
+      ok: true,
+      provider: "google",
+      authorization_available: appointmentCalendarService.providerConfigured(),
+      calendars: await appointmentCalendarService.listAll(tenants)
+    });
+  } catch (error) {
+    console.error("super admin appointment calendar list error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/appointment-calendar-connections/:tenantId/connect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const tenant = await setupReviewTenant(req.params.tenantId);
+  if (!tenant) {
+    res.status(404).json({ ok: false, error: "tenant_not_found" });
+    return;
+  }
+  try {
+    const redirectUri = appointmentCalendarCallbackUrlForRequest(req);
+    const state = createCalendarOAuthState(DASHBOARD_SESSION_SECRET, {
+      tenant_id: tenant.id,
+      actor_id: auth.user_id || auth.username,
+      actor: channelConnectionActor(auth),
+      redirect_uri: redirectUri,
+      return_path: "/admin/super-admin?view=setupReview&tenant_id=" + encodeURIComponent(tenant.id)
+    });
+    const authorizationUrl = await appointmentCalendarService.begin(tenant.id, auth, state, { redirectUri });
+    res.json({ ok: true, authorization_url: authorizationUrl });
+  } catch (error) {
+    console.error("super admin appointment calendar connect start error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/appointment-calendar-connections/:tenantId/verify", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await appointmentCalendarService.verify(req.params.tenantId, auth)
+    });
+  } catch (error) {
+    console.error("super admin appointment calendar verify error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/appointment-calendar-connections/:tenantId/disconnect", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      connection: await appointmentCalendarService.disconnect(req.params.tenantId, auth)
+    });
+  } catch (error) {
+    console.error("super admin appointment calendar disconnect error:", error.message);
+    appointmentCalendarErrorResponse(res, error);
+  }
+});
+
 app.get("/admin/panel/data", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -9943,7 +10502,11 @@ app.get("/admin/panel/appointments-data", async (req, res) => {
   const persistent = await hydrateAppointmentsForTenant(tenantId);
   const snapshot = appointmentRegistry.snapshot(tenantId);
   snapshot.source = persistent ? "supabase" : "memory";
-  res.json(customerAppointmentSnapshot(snapshot, business));
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const channels = await setupReviewChannels(tenantId).catch(function () { return []; });
+  res.json(Object.assign(customerAppointmentSnapshot(snapshot, business), {
+    integrations: await appointmentIntegrationsForRecord(onboarding, tenantId, channels)
+  }));
 });
 
 app.get("/admin/panel/demo-appointments-data", (req, res) => {
@@ -10965,6 +11528,9 @@ loadData(); setInterval(loadData, 15000);
 });
 
 async function buildAdminHealthResult() {
+  const dercoAppointmentRecord = await loadClientOnboarding(false, DERCO_TENANT_ID).catch(function () { return null; });
+  const dercoAppointmentChannels = await setupReviewChannels(DERCO_TENANT_ID).catch(function () { return []; });
+  const dercoAppointmentIntegrations = await appointmentIntegrationsForRecord(dercoAppointmentRecord, DERCO_TENANT_ID, dercoAppointmentChannels);
   const result = {
     bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
     env: {
@@ -11011,6 +11577,14 @@ async function buildAdminHealthResult() {
         instagram: false,
         messenger: false
       }
+    },
+    appointment_readiness: {
+      pilot_tenant: DERCO_TENANT_ID,
+      testing_ready: dercoAppointmentIntegrations.ready_for_testing,
+      production_can_be_enabled: dercoAppointmentIntegrations.ready_for_live,
+      production_ready: dercoAppointmentIntegrations.ready_for_live && process.env.APPOINTMENTS_PUBLIC_ENABLED === "1",
+      blockers: dercoAppointmentIntegrations.blockers,
+      integrations: dercoAppointmentIntegrations
     },
     checks: {}
   };

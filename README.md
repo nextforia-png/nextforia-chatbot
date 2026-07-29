@@ -89,9 +89,13 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |
 | `CUSTOMER_INVITE_FROM_EMAIL` | Remitente verificado del entorno de Staging |
 | `RESEND_API_KEY` | API key exclusiva de Staging para entregar invitaciones; nunca se registra ni se devuelve |
+| `APPOINTMENT_SETUP_ENABLED` | Habilita que clientes piloto elijan/configuren Appointment Bot desde el setup; no activa operación pública |
 | `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |
 | `ELEVENLABS_DERCO_AGENT_ID` | ID del agente de DERCO; lo vincula al tenant `grupo-derco` |
 | `ELEVENLABS_AGENT_TENANT_MAP` | Mapa JSON opcional `agent_id -> tenant_id` para más clientes |
+| `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED` | Permite que Super Admin aplique el prompt aprobado al agente real de ElevenLabs; dejar en `0` hasta validar mapa/webhook |
+| `GOOGLE_CALENDAR_CLIENT_ID` / `GOOGLE_CALENDAR_CLIENT_SECRET` | OAuth de Google Calendar para que el cliente conecte su calendario desde el panel |
+| `APPOINTMENT_CALENDAR_TENANT_MAP` | Mapa temporal por tenant con calendario conectado hasta guardar OAuth por cliente |
 | `SUPABASE_APPOINTMENTS_ENABLED` | Activa persistencia de citas después de aplicar la migración correspondiente |
 | `DASHBOARD_KEY` | Clave maestra aleatoria (mínimo 32 caracteres); los clientes automatizados la envían solo en `X-Dashboard-Key` |
 | `DASHBOARD_USERS` | Usuarios del panel en CSV o JSON; el JSON puede incluir `email` como identificador alternativo de acceso |

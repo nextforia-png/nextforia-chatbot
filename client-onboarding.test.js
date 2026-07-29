@@ -2,14 +2,18 @@
 
 const assert = require("assert");
 const {
+  APPOINTMENT_DEPLOYMENT_INSTRUCTIONS,
   CUSTOMER_SETUP_QUESTIONS,
   CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS,
   SETUP_REVIEW_STATUSES,
+  buildAppointmentSystemPrompt,
   buildCustomerServiceSystemPrompt,
   buildCoverageConversationContext,
   cloneDefaults,
   createOnboardingRecord,
+  generateAppointmentConfiguration,
   generateCustomerServiceConfiguration,
+  normalizeAppointmentConfiguration,
   normalizeCustomerServiceConfiguration,
   mergeCustomerSetupQuestionnaireHistory,
   normalizeCustomerSetupQuestionnaire,
@@ -162,6 +166,74 @@ assert.match(generatedConfiguration.system_prompt, /Crear respaldo de la base de
 assert.strictEqual(CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS, generatedConfiguration.deployment_instructions);
 assert.doesNotMatch(JSON.stringify(generatedConfiguration), /APPOINTMENT-SECRET-MARKER/);
 assert.doesNotMatch(JSON.stringify(generatedConfiguration), /APPOINTMENT-ONLY-RULE/);
+const dercoAppointmentAnswers = cloneDefaults();
+dercoAppointmentAnswers.setup_goal = "appointments";
+dercoAppointmentAnswers.business.brand_name = "Grupo Derco";
+dercoAppointmentAnswers.operations.monthly_customer_volume = "300";
+dercoAppointmentAnswers.operations.bot_instructions = "No prometer resultados jurídicos.";
+dercoAppointmentAnswers.customer_service_setup.business_offer_description = "CUSTOMER-SERVICE-ONLY-MARKER";
+dercoAppointmentAnswers.appointment_setup.business_name = "Grupo Derco";
+dercoAppointmentAnswers.appointment_setup.business_category = "legal";
+dercoAppointmentAnswers.appointment_setup.target_customer = "Clientes que necesitan asesoría jurídica.";
+dercoAppointmentAnswers.appointment_setup.business_description = "Firma jurídica para consultas.";
+dercoAppointmentAnswers.appointment_setup.assistant_tone = "Profesional y cálido";
+dercoAppointmentAnswers.appointment_setup.bot_display_name = "Luciana";
+dercoAppointmentAnswers.appointment_setup.allowed_topics = "Agendar consultas jurídicas.";
+dercoAppointmentAnswers.appointment_setup.forbidden_topics = "No dar asesoría legal definitiva.";
+dercoAppointmentAnswers.appointment_setup.escalation_triggers = "Casos urgentes o riesgosos.";
+dercoAppointmentAnswers.appointment_setup.escalation_contact = "Coordinación DERCO";
+dercoAppointmentAnswers.appointment_setup.services = "Consulta inicial, revisión documental.";
+dercoAppointmentAnswers.appointment_setup.business_hours = "Lunes a viernes 8am a 5pm.";
+dercoAppointmentAnswers.appointment_setup.staff_mode = "Por especialista asignado.";
+dercoAppointmentAnswers.appointment_setup.appointment_locations = "Virtual y presencial.";
+dercoAppointmentAnswers.appointment_setup.availability_rules = "Agenda según Google Calendar.";
+dercoAppointmentAnswers.appointment_setup.required_booking_fields = "Nombre, teléfono, correo, motivo.";
+dercoAppointmentAnswers.appointment_setup.booking_confirmation_mode = "Confirmar con el cliente antes de crear la cita.";
+dercoAppointmentAnswers.appointment_setup.cancellation_policy = "Reprogramar con 24 horas.";
+dercoAppointmentAnswers.appointment_setup.calendar_provider = "google";
+dercoAppointmentAnswers.appointment_setup.calendar_email = "agenda@derco.example";
+dercoAppointmentAnswers.appointment_setup.reminder_channel = "whatsapp";
+dercoAppointmentAnswers.appointment_setup.reminder_timing = "both";
+dercoAppointmentAnswers.appointment_setup.survey_enabled = "yes";
+dercoAppointmentAnswers.appointment_setup.channel_email = "citas@derco.example";
+dercoAppointmentAnswers.appointment_setup.data_consent = true;
+dercoAppointmentAnswers.meta.whatsapp_number = "+57 300 000 0000";
+dercoAppointmentAnswers.channels.phone_calls = true;
+const dercoAppointmentConfiguration = generateAppointmentConfiguration(dercoAppointmentAnswers, {
+  actor: "root@nextforia.com",
+  now: "2026-07-25T13:00:00.000Z"
+});
+assert.strictEqual(dercoAppointmentConfiguration.bot_type, "appointments");
+assert.strictEqual(dercoAppointmentConfiguration.lifecycle, "draft");
+assert.strictEqual(dercoAppointmentConfiguration.calendar_provider, "google");
+assert.strictEqual(dercoAppointmentConfiguration.calendar_email, "agenda@derco.example");
+assert.strictEqual(dercoAppointmentConfiguration.phone_calls_enabled, true);
+assert.match(dercoAppointmentConfiguration.reminder_timing, /24 horas antes y 6 horas antes/);
+assert.match(dercoAppointmentConfiguration.rescheduling_policy, /reprogramar/i);
+assert.match(dercoAppointmentConfiguration.system_prompt, /CONFIGURACIÓN DE APPOINTMENT BOT/);
+assert.match(dercoAppointmentConfiguration.system_prompt, /Google Calendar|google/i);
+assert.match(dercoAppointmentConfiguration.deployment_instructions, /post-call/);
+assert.strictEqual(APPOINTMENT_DEPLOYMENT_INSTRUCTIONS, dercoAppointmentConfiguration.deployment_instructions);
+assert.doesNotMatch(JSON.stringify(dercoAppointmentConfiguration), /CUSTOMER-SERVICE-ONLY-MARKER/);
+const appointmentTestingConfiguration = normalizeAppointmentConfiguration(dercoAppointmentConfiguration, {
+  actor: "root@nextforia.com",
+  lifecycle: "approved_for_testing",
+  now: "2026-07-25T13:30:00.000Z"
+});
+assert.strictEqual(appointmentTestingConfiguration.lifecycle, "approved_for_testing");
+assert.strictEqual(appointmentTestingConfiguration.approved_for_testing_by, "root@nextforia.com");
+assert.match(buildAppointmentSystemPrompt(appointmentTestingConfiguration), /RECORDATORIOS/);
+const appointmentBuildingRecord = createOnboardingRecord(dercoAppointmentAnswers, {
+  tenant_id: "grupo-derco",
+  status: "completed",
+  review_status: "building",
+  review_actor: "root@nextforia.com",
+  appointment_configuration: dercoAppointmentConfiguration,
+  appointment_configuration_lifecycle: "draft"
+});
+assert.strictEqual(appointmentBuildingRecord.appointment_configuration.bot_type, "appointments");
+assert.strictEqual(appointmentBuildingRecord.appointment_configuration.lifecycle, "draft");
+assert.strictEqual(appointmentBuildingRecord.customer_service_configuration, null);
 const editedConfiguration = normalizeCustomerServiceConfiguration(Object.assign({}, generatedConfiguration, {
   objective: "Resolver dudas y convertir oportunidades calificadas."
 }), {

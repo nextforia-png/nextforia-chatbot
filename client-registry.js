@@ -37,7 +37,7 @@ function parseAgentTenantMap(env) {
       const parsed = JSON.parse(raw);
       Object.keys(parsed || {}).forEach(function (agentId) {
         const tenantId = cleanTenantId(parsed[agentId]);
-        if (String(agentId).trim() && getRegisteredClient(tenantId)) result[String(agentId).trim()] = tenantId;
+        if (String(agentId).trim() && tenantId) result[String(agentId).trim()] = tenantId;
       });
     } catch (_) {}
   }

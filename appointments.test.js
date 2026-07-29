@@ -38,7 +38,7 @@ function sampleEvent(overrides) {
     ELEVENLABS_AGENT_TENANT_MAP: JSON.stringify({ agent_derco: DERCO_TENANT_ID, agent_unknown: "not-registered" })
   });
   assert.equal(agentMap.agent_derco, DERCO_TENANT_ID);
-  assert.equal(agentMap.agent_unknown, undefined);
+  assert.equal(agentMap.agent_unknown, "not-registered");
 
   const parsed = appointmentFromElevenLabsEvent(sampleEvent(), DERCO_TENANT_ID);
   assert.equal(parsed.status, "booked");

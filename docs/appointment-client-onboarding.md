@@ -32,8 +32,9 @@
 
 - El módulo vive en `/admin/panel?tab=appointments` y mantiene separadas las métricas de Atención al cliente.
 - `GET /admin/panel/appointments-data` entrega una vista segura y aislada por `tenant_id`; no incluye tokens ni credenciales del proveedor de calendario.
+- La respuesta del panel incluye `integrations`, el semáforo real del bot de citas: ElevenLabs, calendario, WhatsApp, correo, llamadas, Supabase y bloqueadores antes de live.
 - Citas, conversaciones de agendamiento y recordatorios comparten el identificador de cita para reflejar confirmaciones y handoffs en una sola fuente de verdad.
-- Super Admin podrá consolidar después los mismos snapshots por `tenant_id`. La pantalla global no debe leer el HTML del panel ni reconstruir métricas desde la interfaz.
+- Super Admin ve el mismo gate en `GET /admin/customer-setups/:tenantId` como `appointment_integrations`; la pantalla global no debe leer el HTML del panel ni reconstruir métricas desde la interfaz.
 - Las acciones del demo mutan únicamente el estado local de la vista. El envío real, Google Calendar y las mutaciones persistentes se habilitan al conectar los proveedores del cliente.
 
 ## Información necesaria del cliente
@@ -87,12 +88,21 @@
 ## Activación técnica
 
 1. Aplicar `docs/supabase-appointments-pilot.sql`.
-2. Configurar `ELEVENLABS_WEBHOOK_SECRET`.
-3. Configurar `ELEVENLABS_DERCO_AGENT_ID` con el agente real de DERCO.
-4. Activar `SUPABASE_APPOINTMENTS_ENABLED=1`.
-5. Crear un usuario DERCO en `DASHBOARD_USERS` con `tenant_id: "grupo-derco"`.
-6. En ElevenLabs, apuntar el post-call webhook a `https://api.nextforia.com/webhooks/elevenlabs/post-call`.
-7. Ejecutar una llamada de prueba y confirmar que la cita aparezca en el panel.
+2. Activar `APPOINTMENT_SETUP_ENABLED=1` solo para el piloto controlado.
+3. Configurar `ELEVENLABS_WEBHOOK_SECRET`.
+4. Configurar `ELEVENLABS_DERCO_AGENT_ID` con el agente real de DERCO.
+5. Configurar `ELEVENLABS_AGENT_TENANT_MAP` si hay más agentes reales.
+6. Mantener `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=0` hasta confirmar que el mapa `agent_id -> tenant_id` y el webhook son correctos.
+7. Cuando Appointment esté aprobado para Testing, activar `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=1` y usar Super Admin → `Configurar agente real`.
+8. Configurar `GOOGLE_CALENDAR_CLIENT_ID` y `GOOGLE_CALENDAR_CLIENT_SECRET`.
+9. En Google Cloud, agregar redirect URI: `https://nextforia.com/admin/appointment-calendar/google/callback`.
+10. Conectar Google Calendar desde Customer Panel o Super Admin. `APPOINTMENT_CALENDAR_TENANT_MAP` queda solo como fallback temporal operativo.
+11. Activar `SUPABASE_APPOINTMENTS_ENABLED=1`.
+12. Crear un usuario DERCO en `DASHBOARD_USERS` con `tenant_id: "grupo-derco"`.
+13. Conectar WhatsApp desde el panel de canales del cliente usando el flujo de Meta existente.
+14. En ElevenLabs, apuntar el post-call webhook a `https://api.nextforia.com/webhooks/elevenlabs/post-call`.
+15. Ejecutar una llamada o conversación de prueba y confirmar que la cita aparezca en el panel.
+16. Revisar `appointment_readiness` en `/admin/health`; solo activar `APPOINTMENTS_PUBLIC_ENABLED=1` cuando `production_can_be_enabled=true` y Super Admin apruebe.
 
 Ejemplo de usuario aislado por tenant:
 

@@ -97,6 +97,7 @@
 5. Configurar `ELEVENLABS_AGENT_TENANT_MAP` si hay más agentes reales.
 6. Si el cliente pidió llamadas, configurar `ELEVENLABS_DERCO_PHONE_NUMBER_ID` o `ELEVENLABS_PHONE_NUMBER_TENANT_MAP` con el `phone_number_id` importado en ElevenLabs.
 7. Mantener `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=0` hasta confirmar que los mapas `agent_id -> tenant_id`, `phone_number_id -> tenant_id` y el webhook son correctos.
+   Para clientes nuevos, configurar `ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID` con la plantilla de Appointment y `ELEVENLABS_APPOINTMENT_TOOL_SECRET` con un secreto de 32+ caracteres. Nextfor lee voz/turnos de la plantilla, elimina herramientas y bases de conocimiento del cliente anterior, crea herramientas de calendario aisladas por tenant y genera un agente nuevo; no modifica la plantilla.
 8. Cuando Appointment esté aprobado para Testing, activar `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=1` y usar Super Admin → `Configurar agente real`. Esta acción aplica el prompt al agente y, si el cliente pidió llamadas, asigna el `phone_number_id` al agente con la API de ElevenLabs.
 9. Configurar `GOOGLE_CALENDAR_CLIENT_ID` y `GOOGLE_CALENDAR_CLIENT_SECRET`.
 10. En Google Cloud, agregar redirect URI: `https://nextforia.com/admin/appointment-calendar/google/callback`.

@@ -313,6 +313,92 @@ class GoogleCalendarProvider {
       account_label: cleanText(primary.summary || primary.id || "Google Calendar", 240)
     };
   }
+
+  appointmentEventBody(appointment) {
+    const start = new Date(appointment && appointment.starts_at);
+    if (!Number.isFinite(start.getTime())) {
+      throw new AppointmentCalendarError("appointment_start_required", 422);
+    }
+    const durationMinutes = Math.max(5, Math.min(Number(appointment && appointment.duration_minutes) || 60, 24 * 60));
+    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    const customerName = cleanText(appointment && appointment.customer_name, 160) || "Cliente";
+    const reason = cleanText(appointment && appointment.consultation_reason, 1000) || "Cita";
+    const description = [
+      "Cita gestionada por Nextfor IA.",
+      appointment && appointment.customer_phone ? "Teléfono: " + cleanText(appointment.customer_phone, 80) : "",
+      appointment && appointment.customer_email ? "Correo: " + cleanText(appointment.customer_email, 200) : "",
+      appointment && appointment.transcript_summary ? "Contexto: " + cleanText(appointment.transcript_summary, 2000) : ""
+    ].filter(Boolean).join("\n");
+    return {
+      summary: reason + " · " + customerName,
+      description,
+      start: { dateTime: start.toISOString() },
+      end: { dateTime: end.toISOString() },
+      extendedProperties: {
+        private: {
+          nextfor_tenant_id: cleanTenantId(appointment && appointment.tenant_id),
+          nextfor_conversation_id: cleanText(appointment && appointment.conversation_id, 160)
+        }
+      }
+    };
+  }
+
+  async upsertAppointment(token, calendarId, appointment) {
+    const base = this.calendarOrigin + "/calendar/v3/calendars/" + encodeURIComponent(calendarId || "primary") + "/events";
+    const eventId = cleanText(appointment && appointment.calendar_event_id, 500);
+    const body = this.appointmentEventBody(appointment);
+    const options = {
+      headers: { Authorization: "Bearer " + token.access_token },
+      params: { sendUpdates: "none" },
+      timeout: 10000
+    };
+    const response = eventId
+      ? await this.axios.patch(base + "/" + encodeURIComponent(eventId), body, options)
+      : await this.axios.post(base, body, options);
+    return {
+      event_id: cleanText(response.data && response.data.id, 500) || eventId,
+      event_link: cleanText(response.data && response.data.htmlLink, 1000),
+      status: cleanText(response.data && response.data.status, 80) || "confirmed"
+    };
+  }
+
+  async checkAvailability(token, calendarId, startsAt, durationMinutes) {
+    const start = new Date(startsAt);
+    if (!Number.isFinite(start.getTime())) {
+      throw new AppointmentCalendarError("appointment_start_required", 422);
+    }
+    const minutes = Math.max(5, Math.min(Number(durationMinutes) || 60, 24 * 60));
+    const end = new Date(start.getTime() + minutes * 60 * 1000);
+    const response = await this.axios.post(this.calendarOrigin + "/calendar/v3/freeBusy", {
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+      items: [{ id: calendarId || "primary" }]
+    }, {
+      headers: { Authorization: "Bearer " + token.access_token },
+      timeout: 10000
+    });
+    const calendars = response.data && response.data.calendars || {};
+    const row = calendars[calendarId || "primary"] || {};
+    const busy = Array.isArray(row.busy) ? row.busy : [];
+    return {
+      available: busy.length === 0,
+      starts_at: start.toISOString(),
+      ends_at: end.toISOString(),
+      busy
+    };
+  }
+
+  async cancelAppointment(token, calendarId, eventId) {
+    const cleanEventId = cleanText(eventId, 500);
+    if (!cleanEventId) return { cancelled: false, not_required: true };
+    const url = this.calendarOrigin + "/calendar/v3/calendars/" + encodeURIComponent(calendarId || "primary") + "/events/" + encodeURIComponent(cleanEventId);
+    await this.axios.delete(url, {
+      headers: { Authorization: "Bearer " + token.access_token },
+      params: { sendUpdates: "none" },
+      timeout: 10000
+    });
+    return { cancelled: true, event_id: cleanEventId };
+  }
 }
 
 function createAppointmentCalendarConnectionService(options) {
@@ -371,6 +457,30 @@ function createAppointmentCalendarConnectionService(options) {
         details: {}
       });
       return { credential, details };
+    }
+  }
+
+  async function withFreshCredential(record, actor, operation) {
+    let credential = credentialPayload(record);
+    if (!credential || !credential.access_token) {
+      throw new AppointmentCalendarError("calendar_connection_not_found", 404);
+    }
+    try {
+      return await operation(credential);
+    } catch (error) {
+      if (!(error && error.response && error.response.status === 401) || !credential.refresh_token) throw error;
+      credential = Object.assign({}, credential, await provider.refreshToken(credential.refresh_token));
+      await store.upsert({
+        tenant_id: record.tenant_id,
+        credentials_ciphertext: encryptedCredential(credential),
+        credential_source: "oauth",
+        updated_at: iso(now())
+      }, {
+        action: "token_refreshed",
+        actor: actorLabel(actor),
+        details: {}
+      });
+      return operation(credential);
     }
   }
 
@@ -488,6 +598,72 @@ function createAppointmentCalendarConnectionService(options) {
         throw error instanceof AppointmentCalendarError
           ? error
           : new AppointmentCalendarError("calendar_verification_failed", 422, internalError(error));
+      }
+    },
+
+    async syncAppointment(tenantId, appointment, actor) {
+      const cleanTenant = cleanTenantId(tenantId);
+      const record = await store.get(cleanTenant);
+      if (!record || record.status !== "connected" || !record.calendar_id) {
+        throw new AppointmentCalendarError("calendar_connection_not_found", 404);
+      }
+      try {
+        const event = await withFreshCredential(record, actor, function (credential) {
+          return provider.upsertAppointment(credential, record.calendar_id, appointment);
+        });
+        return {
+          calendar_sync_status: "synced",
+          calendar_event_id: event.event_id,
+          calendar_event_link: event.event_link,
+          calendar_synced_at: iso(now()),
+          calendar_last_error: ""
+        };
+      } catch (error) {
+        await markFailure(cleanTenant, actor, error);
+        throw error instanceof AppointmentCalendarError
+          ? error
+          : new AppointmentCalendarError("calendar_sync_failed", 422, internalError(error));
+      }
+    },
+
+    async checkAvailability(tenantId, startsAt, durationMinutes, actor) {
+      const cleanTenant = cleanTenantId(tenantId);
+      const record = await store.get(cleanTenant);
+      if (!record || record.status !== "connected" || !record.calendar_id) {
+        throw new AppointmentCalendarError("calendar_connection_not_found", 404);
+      }
+      try {
+        return await withFreshCredential(record, actor, function (credential) {
+          return provider.checkAvailability(credential, record.calendar_id, startsAt, durationMinutes);
+        });
+      } catch (error) {
+        if (error instanceof AppointmentCalendarError) throw error;
+        throw new AppointmentCalendarError("calendar_availability_failed", 422, internalError(error));
+      }
+    },
+
+    async cancelAppointment(tenantId, appointment, actor) {
+      const cleanTenant = cleanTenantId(tenantId);
+      const record = await store.get(cleanTenant);
+      if (!record || record.status !== "connected" || !record.calendar_id) {
+        throw new AppointmentCalendarError("calendar_connection_not_found", 404);
+      }
+      try {
+        const result = await withFreshCredential(record, actor, function (credential) {
+          return provider.cancelAppointment(credential, record.calendar_id, appointment && appointment.calendar_event_id);
+        });
+        return {
+          calendar_sync_status: result.not_required ? "not_required" : "synced",
+          calendar_event_id: cleanText(appointment && appointment.calendar_event_id, 500),
+          calendar_event_link: "",
+          calendar_synced_at: iso(now()),
+          calendar_last_error: ""
+        };
+      } catch (error) {
+        await markFailure(cleanTenant, actor, error);
+        throw error instanceof AppointmentCalendarError
+          ? error
+          : new AppointmentCalendarError("calendar_sync_failed", 422, internalError(error));
       }
     },
 

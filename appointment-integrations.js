@@ -63,11 +63,18 @@ function buildAppointmentIntegrations(record, tenantId, options) {
   const setupCompleted = !!(record && record.setup_completed);
   const reviewStatus = cleanText(record && record.setup_review && record.setup_review.status, 40) || (setupCompleted ? "ready" : "incomplete");
   const agentTenantMap = options.agentTenantMap || {};
-  const agentMapped = Object.keys(agentTenantMap).some(function (agentId) {
+  const externalAgentId = cleanText(record && record.appointment_configuration && record.appointment_configuration.external_agent_id, 160);
+  const agentMapped = !!externalAgentId || Object.keys(agentTenantMap).some(function (agentId) {
     return cleanTenantId(agentTenantMap[agentId]) === cleanTenant;
   });
   const webhookReady = !!options.elevenlabsWebhookSecret;
   const elevenLabsApiReady = !!options.elevenlabsApiKey;
+  const templateReady = !!options.elevenlabsTemplateAgentId;
+  const appointmentToolSecretReady = cleanText(options.elevenlabsAppointmentToolSecret, 4096).length >= 32;
+  const appointmentToolBaseUrlReady = /^https:\/\//.test(cleanText(options.elevenlabsAppointmentToolBaseUrl, 500));
+  const agentWriteEnabled = options.elevenlabsAgentWriteEnabled === true;
+  const provisioningReady = elevenLabsApiReady && templateReady && appointmentToolSecretReady &&
+    appointmentToolBaseUrlReady && agentWriteEnabled;
   const agentConfigured = options.elevenlabsAgentConfigured === true;
   const phoneNumberMapped = options.elevenlabsPhoneNumberMapped === true;
   const phoneNumberConfigured = options.elevenlabsPhoneNumberConfigured === true;
@@ -118,6 +125,10 @@ function buildAppointmentIntegrations(record, tenantId, options) {
   if (selected && !["testing", "live"].includes(reviewStatus)) blockers.push("appointment_not_in_testing");
   if (selected && botStatus !== "ready") blockers.push(botStatus === "needs_configuration" ? "elevenlabs_agent_not_configured" : botStatus === "needs_webhook" ? "elevenlabs_webhook_not_ready" : "elevenlabs_agent_not_mapped");
   if (selected && !elevenLabsApiReady) blockers.push("elevenlabs_api_key_missing");
+  if (selected && !templateReady) blockers.push("elevenlabs_template_agent_missing");
+  if (selected && !appointmentToolSecretReady) blockers.push("elevenlabs_appointment_tool_secret_missing");
+  if (selected && !appointmentToolBaseUrlReady) blockers.push("elevenlabs_appointment_tool_url_missing");
+  if (selected && !agentWriteEnabled) blockers.push("elevenlabs_agent_write_disabled");
   if (selected && calendarStatus !== "ready") blockers.push("calendar_not_connected");
   if (selected && appointmentWhatsappEnabled && whatsappStatus !== "ready") blockers.push("whatsapp_not_connected");
   if (selected && appointmentEmailEnabled && emailStatus !== "ready") blockers.push("email_not_ready");
@@ -132,7 +143,19 @@ function buildAppointmentIntegrations(record, tenantId, options) {
     ready_for_testing: selected && setupCompleted && ["testing", "live"].includes(reviewStatus) && botStatus === "ready",
     ready_for_live: selected && blockers.length === 0,
     blockers: Array.from(new Set(blockers)),
-    bot: { provider: "elevenlabs", status: botStatus, agent_mapped: agentMapped, webhook_ready: webhookReady, api_ready: elevenLabsApiReady, agent_configured: agentConfigured },
+    bot: {
+      provider: "elevenlabs",
+      status: botStatus,
+      agent_mapped: agentMapped,
+      webhook_ready: webhookReady,
+      api_ready: elevenLabsApiReady,
+      agent_configured: agentConfigured,
+      provisioning_ready: provisioningReady,
+      template_ready: templateReady,
+      appointment_tool_secret_ready: appointmentToolSecretReady,
+      appointment_tool_base_url_ready: appointmentToolBaseUrlReady,
+      write_enabled: agentWriteEnabled
+    },
     calendar: {
       provider: normalizedProvider || "",
       label: calendarProviderLabel(normalizedProvider),

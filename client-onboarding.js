@@ -608,7 +608,7 @@ function normalizeOnboarding(input) {
       calendar_provider: choice(appointmentSetup.calendar_provider, ["google", "outlook", "calendly", "other", "none", ""], ""),
       calendar_email: text(appointmentSetup.calendar_email, 180).toLowerCase(),
       reminder_channel: choice(appointmentSetup.reminder_channel, ["whatsapp", "email", "sms", "none", ""], ""),
-      reminder_timing: choice(appointmentSetup.reminder_timing, ["24h", "2h", "both", "custom", "none", ""], ""),
+      reminder_timing: choice(appointmentSetup.reminder_timing, ["24h", "6h", "2h", "both", "custom", "none", ""], ""),
       survey_enabled: choice(appointmentSetup.survey_enabled, ["yes", "no", "unknown"], "unknown"),
       survey_scale: choice(appointmentSetup.survey_scale, ["1_5", "1_10", "nps", ""], ""),
       high_rating_action: text(appointmentSetup.high_rating_action, 2000),

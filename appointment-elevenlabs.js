@@ -52,12 +52,116 @@ function appointmentPhoneNumberIdForTenant(tenantId, phoneNumberTenantMap) {
 
 function appointmentAgentConfigured(configuration, tenantId, agentTenantMap) {
   const config = configuration && typeof configuration === "object" ? configuration : {};
-  const agentId = appointmentAgentIdForTenant(tenantId, agentTenantMap);
+  const cleanTenant = cleanTenantId(tenantId);
+  const externalAgentId = cleanText(config.external_agent_id, 160);
+  const externalMappedTenant = externalAgentId && cleanTenantId((agentTenantMap || {})[externalAgentId]);
+  if (externalMappedTenant && externalMappedTenant !== cleanTenant) return false;
+  const agentId = externalAgentId || appointmentAgentIdForTenant(tenantId, agentTenantMap);
   if (!agentId) return false;
   return config.external_provider === "elevenlabs" &&
     config.external_status === "configured" &&
     config.external_agent_id === agentId &&
     config.external_prompt_hash === appointmentPromptHash(config);
+}
+
+async function createElevenLabsAppointmentAgentFromTemplate(record, tenantId, options) {
+  options = options || {};
+  const configuration = record && record.appointment_configuration || {};
+  if (configuration.bot_type !== "appointments") {
+    const error = new Error("appointment_not_selected");
+    error.status = 422;
+    throw error;
+  }
+  if (configuration.lifecycle !== "approved_for_testing") {
+    const error = new Error("appointment_not_in_testing");
+    error.status = 422;
+    throw error;
+  }
+  if (!options.apiKey) {
+    const error = new Error("elevenlabs_api_key_missing");
+    error.status = 422;
+    throw error;
+  }
+  if (options.writeEnabled !== true) {
+    const error = new Error("elevenlabs_write_disabled");
+    error.status = 409;
+    throw error;
+  }
+  const templateAgentId = cleanText(options.templateAgentId, 160);
+  if (!templateAgentId) {
+    const error = new Error("elevenlabs_template_agent_missing");
+    error.status = 422;
+    throw error;
+  }
+  const http = options.httpClient;
+  if (!http || typeof http.get !== "function" || typeof http.post !== "function") {
+    const error = new Error("elevenlabs_client_unavailable");
+    error.status = 503;
+    throw error;
+  }
+  const headers = { "Content-Type": "application/json", "xi-api-key": options.apiKey };
+  const templateResponse = await http.get(
+    "https://api.elevenlabs.io/v1/convai/agents/" + encodeURIComponent(templateAgentId),
+    { headers, timeout: options.timeoutMs || 15000 }
+  );
+  const template = templateResponse && templateResponse.data || {};
+  const conversationConfig = JSON.parse(JSON.stringify(template.conversation_config || {}));
+  delete conversationConfig.language_presets;
+  conversationConfig.agent = conversationConfig.agent || {};
+  conversationConfig.agent.first_message = appointmentFirstMessage(configuration);
+  conversationConfig.agent.language = "es";
+  conversationConfig.agent.prompt = conversationConfig.agent.prompt || {};
+  conversationConfig.agent.prompt.prompt = cleanText(configuration.system_prompt, 200000);
+  const cleanTenant = cleanTenantId(tenantId || record && record.tenant_id);
+  delete conversationConfig.agent.prompt.knowledge_base;
+  delete conversationConfig.agent.prompt.tools;
+  conversationConfig.agent.prompt.tool_ids = await createElevenLabsAppointmentTools(cleanTenant, {
+    apiKey: options.apiKey,
+    toolSecret: options.toolSecret,
+    baseUrl: options.toolBaseUrl,
+    httpClient: http,
+    timeoutMs: options.timeoutMs
+  });
+  const payload = {
+    name: cleanText(configuration.business_name, 80)
+      ? "Nextfor Appointment · " + cleanText(configuration.business_name, 80)
+      : "Nextfor Appointment · " + cleanTenant,
+    tags: Array.from(new Set([].concat(template.tags || [], ["nextfor", "appointments", cleanTenant]).filter(Boolean))),
+    conversation_config: conversationConfig
+  };
+  payload.platform_settings = {
+    data_collection: {
+      appointment_status: { type: "string", description: "Estado final: booked, requested, failed, cancelled, rescheduled o not_requested." },
+      appointment_datetime: { type: "string", description: "Fecha y hora confirmada en ISO 8601 con zona horaria." },
+      appointment_duration_minutes: { type: "integer", description: "Duración confirmada de la cita en minutos." },
+      client_name: { type: "string", description: "Nombre completo del cliente." },
+      client_phone: { type: "string", description: "Teléfono del cliente con código de país." },
+      client_email: { type: "string", description: "Correo del cliente si fue proporcionado." },
+      consultation_reason: { type: "string", description: "Servicio o motivo de la cita." },
+      data_processing_consent: { type: "string", description: "authorized si aceptó, denied si rechazó, unclear si no fue explícito." }
+    }
+  };
+  const created = await http.post("https://api.elevenlabs.io/v1/convai/agents/create", payload, {
+    headers,
+    timeout: options.timeoutMs || 15000
+  });
+  const agentId = cleanText(created && created.data && created.data.agent_id, 160);
+  if (!agentId) {
+    const error = new Error("elevenlabs_agent_create_failed");
+    error.status = 502;
+    throw error;
+  }
+  return {
+    ok: true,
+    applied: true,
+    created: true,
+    template_agent_id: templateAgentId,
+    agent_id: agentId,
+    tenant_id: cleanTenant,
+    prompt_hash: appointmentPromptHash(configuration),
+    provider_response_status: created && created.status || 200,
+    payload
+  };
 }
 
 function appointmentPhoneNumberConfigured(configuration, tenantId, phoneNumberTenantMap) {
@@ -75,10 +179,101 @@ function appointmentFirstMessage(configuration) {
   return "Hola, soy " + assistant + " de " + business + ". Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?";
 }
 
+function appointmentToolToken(tenantId, secret) {
+  const cleanTenant = cleanTenantId(tenantId);
+  const key = cleanText(secret, 4096);
+  if (!cleanTenant || key.length < 32) return "";
+  return crypto.createHmac("sha256", key).update("nextfor-appointment-tool:" + cleanTenant).digest("base64url");
+}
+
+function appointmentWebhookToolConfig(name, description, url, properties, required) {
+  return {
+    tool_config: {
+      type: "webhook",
+      name,
+      description,
+      response_timeout_secs: 20,
+      api_schema: {
+        url,
+        method: "POST",
+        path_params_schema: {},
+        query_params_schema: { properties: {}, required: [] },
+        request_body_schema: { type: "object", description, properties, required },
+        request_headers: {}
+      }
+    }
+  };
+}
+
+async function createElevenLabsAppointmentTools(tenantId, options) {
+  options = options || {};
+  const cleanTenant = cleanTenantId(tenantId);
+  const token = appointmentToolToken(cleanTenant, options.toolSecret);
+  const baseUrl = String(options.baseUrl || "").replace(/\/+$/, "");
+  const http = options.httpClient;
+  if (!token) {
+    const error = new Error("elevenlabs_appointment_tool_secret_missing");
+    error.status = 422;
+    throw error;
+  }
+  if (!/^https:\/\//.test(baseUrl)) {
+    const error = new Error("elevenlabs_appointment_tool_url_missing");
+    error.status = 422;
+    throw error;
+  }
+  if (!http || typeof http.post !== "function") {
+    const error = new Error("elevenlabs_client_unavailable");
+    error.status = 503;
+    throw error;
+  }
+  const root = baseUrl + "/webhooks/elevenlabs/appointments/" + encodeURIComponent(cleanTenant);
+  const dateProperties = {
+    starts_at: { type: "string", description: "Fecha y hora ISO 8601 con zona horaria." },
+    duration_minutes: { type: "integer", description: "Duración del servicio en minutos." }
+  };
+  const definitions = [
+    appointmentWebhookToolConfig(
+      "nextfor_check_appointment_availability",
+      "Consulta el calendario real del cliente Nextfor antes de ofrecer o confirmar un horario.",
+      root + "/availability?token=" + encodeURIComponent(token),
+      dateProperties,
+      ["starts_at", "duration_minutes"]
+    ),
+    appointmentWebhookToolConfig(
+      "nextfor_book_appointment",
+      "Crea una cita confirmada en Nextfor y Google Calendar después de comprobar disponibilidad y obtener consentimiento.",
+      root + "/book?token=" + encodeURIComponent(token),
+      Object.assign({}, dateProperties, {
+        customer_name: { type: "string", description: "Nombre completo del cliente." },
+        customer_phone: { type: "string", description: "Teléfono del cliente con código de país." },
+        customer_email: { type: "string", description: "Correo del cliente si lo proporcionó." },
+        consultation_reason: { type: "string", description: "Servicio o motivo de la cita." },
+        data_processing_consent: { type: "boolean", description: "True solo si el cliente autorizó tratamiento de datos." }
+      }),
+      ["starts_at", "duration_minutes", "customer_name", "consultation_reason", "data_processing_consent"]
+    )
+  ];
+  const ids = [];
+  for (const definition of definitions) {
+    const response = await http.post("https://api.elevenlabs.io/v1/convai/tools", definition, {
+      headers: { "Content-Type": "application/json", "xi-api-key": options.apiKey },
+      timeout: options.timeoutMs || 15000
+    });
+    const id = cleanText(response && response.data && response.data.id, 160);
+    if (!id) {
+      const error = new Error("elevenlabs_tool_create_failed");
+      error.status = 502;
+      throw error;
+    }
+    ids.push(id);
+  }
+  return ids;
+}
+
 function buildElevenLabsAppointmentAgentPayload(record, tenantId, options) {
   options = options || {};
   const configuration = record && record.appointment_configuration || {};
-  const agentId = cleanText(options.agentId || appointmentAgentIdForTenant(tenantId || record && record.tenant_id, options.agentTenantMap), 160);
+  const agentId = cleanText(options.agentId || configuration.external_agent_id || appointmentAgentIdForTenant(tenantId || record && record.tenant_id, options.agentTenantMap), 160);
   const prompt = cleanText(configuration.system_prompt, 200000);
   if (!prompt) {
     const error = new Error("appointment_configuration_required");
@@ -126,7 +321,7 @@ function buildElevenLabsAppointmentAgentPayload(record, tenantId, options) {
 function buildElevenLabsPhoneNumberAssignmentPayload(record, tenantId, options) {
   options = options || {};
   const configuration = record && record.appointment_configuration || {};
-  const agentId = cleanText(options.agentId || appointmentAgentIdForTenant(tenantId || record && record.tenant_id, options.agentTenantMap), 160);
+  const agentId = cleanText(options.agentId || configuration.external_agent_id || appointmentAgentIdForTenant(tenantId || record && record.tenant_id, options.agentTenantMap), 160);
   const phoneNumberId = cleanText(options.phoneNumberId || appointmentPhoneNumberIdForTenant(tenantId || record && record.tenant_id, options.phoneNumberTenantMap), 160);
   if (configuration.bot_type !== "appointments") {
     const error = new Error("appointment_not_selected");
@@ -288,8 +483,11 @@ module.exports = {
   appointmentPhoneNumberConfigured,
   appointmentPhoneNumberIdForTenant,
   appointmentPromptHash,
+  appointmentToolToken,
   buildElevenLabsPhoneNumberAssignmentPayload,
   buildElevenLabsAppointmentAgentPayload,
+  createElevenLabsAppointmentAgentFromTemplate,
+  createElevenLabsAppointmentTools,
   markAppointmentConfigurationElevenLabsApplied,
   markAppointmentConfigurationElevenLabsFailed,
   markAppointmentConfigurationPhoneApplied,

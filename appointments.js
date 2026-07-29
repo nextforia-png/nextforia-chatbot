@@ -35,6 +35,11 @@ function cleanAppointmentActionStatus(value) {
   return ["queued", "saved", "applied", "synced", "pending", "failed", "not_required"].includes(status) ? status : "";
 }
 
+function cleanDurationMinutes(value) {
+  const minutes = Math.round(Number(value));
+  return Number.isFinite(minutes) && minutes >= 5 && minutes <= 24 * 60 ? minutes : 60;
+}
+
 function analysisValue(collection, key) {
   const entry = collection && collection[key];
   if (entry == null) return "";
@@ -66,6 +71,7 @@ function appointmentFromElevenLabsEvent(event, tenantId, now) {
     agent_id: agentId,
     status,
     starts_at: validIsoDate(analysisValue(collection, "appointment_datetime")),
+    duration_minutes: cleanDurationMinutes(analysisValue(collection, "appointment_duration_minutes")),
     customer_name: cleanText(analysisValue(collection, "client_name"), 160),
     customer_phone: cleanText(analysisValue(collection, "client_phone"), 80),
     customer_email: cleanText(analysisValue(collection, "client_email"), 200).toLowerCase(),
@@ -90,6 +96,7 @@ function normalizeAppointment(input) {
     agent_id: cleanText(input.agent_id, 160),
     status: cleanStatus(input.status),
     starts_at: validIsoDate(input.starts_at),
+    duration_minutes: cleanDurationMinutes(input.duration_minutes),
     customer_name: cleanText(input.customer_name, 160),
     customer_phone: cleanText(input.customer_phone, 80),
     customer_email: cleanText(input.customer_email, 200).toLowerCase(),
@@ -115,6 +122,14 @@ function normalizeAppointment(input) {
   if (panelActionReason) normalized.panel_action_reason = panelActionReason;
   const panelActionMessage = cleanText(input.panel_action_message, 1000);
   if (panelActionMessage) normalized.panel_action_message = panelActionMessage;
+  const calendarEventId = cleanText(input.calendar_event_id, 500);
+  if (calendarEventId) normalized.calendar_event_id = calendarEventId;
+  const calendarEventLink = cleanText(input.calendar_event_link, 1000);
+  if (calendarEventLink) normalized.calendar_event_link = calendarEventLink;
+  const calendarSyncedAt = validIsoDate(input.calendar_synced_at);
+  if (calendarSyncedAt) normalized.calendar_synced_at = calendarSyncedAt;
+  const calendarLastError = cleanText(input.calendar_last_error, 800);
+  if (calendarLastError) normalized.calendar_last_error = calendarLastError;
   return normalized;
 }
 

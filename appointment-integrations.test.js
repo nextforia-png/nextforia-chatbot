@@ -25,15 +25,21 @@ const record = {
     }
   }
 };
+const provisioning = {
+  elevenlabsTemplateAgentId: "agent_template",
+  elevenlabsAppointmentToolSecret: "nextfor-appointment-tool-secret-2026-secure",
+  elevenlabsAppointmentToolBaseUrl: "https://api.nextforia.com",
+  elevenlabsAgentWriteEnabled: true
+};
 
-let gate = buildAppointmentIntegrations(record, "clinica-a", {
+let gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
   elevenlabsApiKey: "el-key",
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
   googleCalendarOAuthConfigured: true,
   metaOAuthReady: true,
   supabaseAppointmentsEnabled: true
-});
+}));
 
 assert.strictEqual(gate.ready_for_live, false);
 assert.strictEqual(gate.bot.status, "needs_configuration");
@@ -43,7 +49,7 @@ assert.strictEqual(gate.whatsapp.status, "needs_customer_connection");
 assert(gate.blockers.includes("calendar_not_connected"));
 assert(gate.blockers.includes("whatsapp_not_connected"));
 
-gate = buildAppointmentIntegrations(record, "clinica-a", {
+gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
   elevenlabsApiKey: "el-key",
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
@@ -58,13 +64,13 @@ gate = buildAppointmentIntegrations(record, "clinica-a", {
   metaOAuthReady: true,
   whatsappConnected: true,
   supabaseAppointmentsEnabled: true
-});
+}));
 
 assert.strictEqual(gate.ready_for_live, false);
 assert(gate.blockers.includes("calls_not_ready"));
 assert.strictEqual(gate.calls.status, "needs_phone_assignment");
 
-gate = buildAppointmentIntegrations(record, "clinica-a", {
+gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
   elevenlabsApiKey: "el-key",
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
@@ -80,7 +86,7 @@ gate = buildAppointmentIntegrations(record, "clinica-a", {
   metaOAuthReady: true,
   whatsappConnected: true,
   supabaseAppointmentsEnabled: true
-});
+}));
 
 assert.strictEqual(gate.ready_for_live, true);
 assert.deepStrictEqual(gate.blockers, []);
@@ -89,7 +95,7 @@ assert.strictEqual(gate.calendar.status, "ready");
 assert.strictEqual(gate.whatsapp.status, "ready");
 assert.strictEqual(gate.calls.status, "ready");
 
-gate = buildAppointmentIntegrations(record, "clinica-a", {
+gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
   elevenlabsApiKey: "el-key",
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
@@ -106,11 +112,29 @@ gate = buildAppointmentIntegrations(record, "clinica-a", {
   metaOAuthReady: true,
   whatsappConnected: true,
   supabaseAppointmentsEnabled: true
-});
+}));
 assert.strictEqual(gate.ready_for_live, true);
 assert.strictEqual(gate.calendar.status, "ready");
 assert.strictEqual(gate.calendar.account_label, "Agenda Clínica A");
 assert.strictEqual(gate.calendar.calendar_id_present, true);
+
+gate = buildAppointmentIntegrations(record, "clinica-a", {
+  elevenlabsApiKey: "el-key",
+  elevenlabsWebhookSecret: "el-secret",
+  agentTenantMap: { agent_a: "clinica-a" },
+  elevenlabsAgentConfigured: true,
+  elevenlabsPhoneNumberMapped: true,
+  elevenlabsPhoneNumberConfigured: true,
+  googleCalendarOAuthConfigured: true,
+  calendarConnection: { status: "connected", calendar_id: "primary" },
+  metaOAuthReady: true,
+  whatsappConnected: true,
+  supabaseAppointmentsEnabled: true
+});
+assert.strictEqual(gate.ready_for_live, false);
+assert(gate.blockers.includes("elevenlabs_template_agent_missing"));
+assert(gate.blockers.includes("elevenlabs_appointment_tool_secret_missing"));
+assert(gate.blockers.includes("elevenlabs_agent_write_disabled"));
 
 const notSelected = buildAppointmentIntegrations({ setup_completed: true, answers: { setup_goal: "customer_service" } }, "tenant-b", {});
 assert.strictEqual(notSelected.selected, false);

@@ -45,6 +45,7 @@ function sampleEvent(overrides) {
   assert.equal(parsed.customer_name, "María Pérez");
   assert.equal(parsed.customer_email, "maria@example.com");
   assert.equal(parsed.starts_at, "2026-07-21T14:00:00.000Z");
+  assert.equal(parsed.duration_minutes, 60);
   assert.equal(parsed.data_processing_consent, "authorized");
 
   const persisted = [];

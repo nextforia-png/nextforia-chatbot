@@ -7,8 +7,10 @@ const {
   appointmentAgentConfigured,
   appointmentPhoneNumberConfigured,
   appointmentPromptHash,
+  appointmentToolToken,
   buildElevenLabsAppointmentAgentPayload,
   buildElevenLabsPhoneNumberAssignmentPayload,
+  createElevenLabsAppointmentAgentFromTemplate,
   markAppointmentConfigurationElevenLabsApplied,
   markAppointmentConfigurationPhoneApplied,
   parsePhoneNumberTenantMap
@@ -28,6 +30,10 @@ const record = {
     system_prompt: "CUSTOMER-SERVICE-ONLY-SECRET"
   }
 };
+assert.notStrictEqual(
+  appointmentToolToken("clinica-a", "nextfor-appointment-tool-secret-2026-secure"),
+  appointmentToolToken("clinica-b", "nextfor-appointment-tool-secret-2026-secure")
+);
 
 const draft = buildElevenLabsAppointmentAgentPayload(record, "clinica-a", {
   agentTenantMap: { agent_a: "clinica-a" }
@@ -78,6 +84,53 @@ assert.throws(function () {
   const marked = markAppointmentConfigurationElevenLabsApplied(appointmentConfiguration, result, "root", "2026-07-28T12:00:00.000Z");
   assert.strictEqual(appointmentAgentConfigured(marked, "clinica-a", { agent_a: "clinica-a" }), true);
   assert.strictEqual(appointmentAgentConfigured(marked, "clinica-b", { agent_a: "clinica-a" }), false);
+  let createdPayload = null;
+  let toolCreates = 0;
+  const cloned = await createElevenLabsAppointmentAgentFromTemplate(record, "clinica-a", {
+    apiKey: "el-key",
+    templateAgentId: "agent_luciana_template",
+    toolSecret: "nextfor-appointment-tool-secret-2026-secure",
+    toolBaseUrl: "https://api.nextforia.com",
+    writeEnabled: true,
+    httpClient: {
+      get: async function (url) {
+        assert.match(url, /agent_luciana_template$/);
+        return {
+          data: {
+            name: "Luciana",
+            tags: ["template"],
+            conversation_config: {
+              tts: { voice_id: "voice_luciana" },
+              agent: {
+                first_message: "Mensaje original",
+                language: "es",
+                prompt: { prompt: "PROMPT ORIGINAL", tool_ids: ["tool_calendar"] }
+              }
+            }
+          }
+        };
+      },
+      post: async function (url, payload, options) {
+        assert.strictEqual(options.headers["xi-api-key"], "el-key");
+        if (/\/v1\/convai\/tools$/.test(url)) {
+          toolCreates += 1;
+          assert.match(payload.tool_config.api_schema.url, /api\.nextforia\.com\/webhooks\/elevenlabs\/appointments\/clinica-a/);
+          return { status: 200, data: { id: "tool_nextfor_" + toolCreates } };
+        }
+        assert.match(url, /\/v1\/convai\/agents\/create$/);
+        createdPayload = payload;
+        return { status: 200, data: { agent_id: "agent_clinica_a" } };
+      }
+    }
+  });
+  assert.strictEqual(cloned.created, true);
+  assert.strictEqual(cloned.agent_id, "agent_clinica_a");
+  assert.strictEqual(toolCreates, 2);
+  assert.strictEqual(createdPayload.conversation_config.tts.voice_id, "voice_luciana");
+  assert.deepStrictEqual(createdPayload.conversation_config.agent.prompt.tool_ids, ["tool_nextfor_1", "tool_nextfor_2"]);
+  assert.strictEqual(createdPayload.conversation_config.agent.prompt.knowledge_base, undefined);
+  assert.match(createdPayload.conversation_config.agent.prompt.prompt, /APPOINTMENT BOT/);
+  assert.strictEqual(createdPayload.conversation_config.agent.first_message.includes("Luciana"), true);
   const phoneResult = await applyElevenLabsPhoneNumberAssignment({ tenant_id: "clinica-a", appointment_configuration: marked }, "clinica-a", {
     apiKey: "el-key",
     agentTenantMap: { agent_a: "clinica-a" },

@@ -105,12 +105,15 @@ const {
   applyElevenLabsAppointmentAgent,
   applyElevenLabsPhoneNumberAssignment,
   appointmentAgentConfigured,
+  appointmentAgentIdForTenant,
   appointmentPhoneNumberConfigured,
   appointmentPhoneNumberIdForTenant,
+  appointmentToolToken,
   markAppointmentConfigurationElevenLabsApplied,
   markAppointmentConfigurationElevenLabsFailed,
   markAppointmentConfigurationPhoneApplied,
   markAppointmentConfigurationPhoneFailed,
+  createElevenLabsAppointmentAgentFromTemplate,
   parsePhoneNumberTenantMap
 } = require("./appointment-elevenlabs");
 const {
@@ -261,6 +264,8 @@ app.use(express.json({
     req.rawBody = buffer;
   }
 }));
+app.post("/webhooks/elevenlabs/appointments/:tenantId/availability", receiveElevenLabsAppointmentAvailabilityTool);
+app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAppointmentBookingTool);
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
@@ -400,6 +405,16 @@ const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET |
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
 const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
 const ELEVENLABS_API_KEY = String(process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID = String(
+  process.env.ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID ||
+  process.env.ELEVENLABS_LUCIANA_AGENT_ID ||
+  ""
+).trim();
+const ELEVENLABS_APPOINTMENT_TOOL_SECRET = String(process.env.ELEVENLABS_APPOINTMENT_TOOL_SECRET || "").trim();
+const ELEVENLABS_APPOINTMENT_TOOL_BASE_URL = String(
+  process.env.ELEVENLABS_APPOINTMENT_TOOL_BASE_URL ||
+  "https://api.nextforia.com"
+).replace(/\/+$/, "");
 const ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED = process.env.ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED === "1" ||
   (process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1");
 const ELEVENLABS_PHONE_NUMBER_TENANT_MAP = parsePhoneNumberTenantMap(process.env);
@@ -2643,6 +2658,48 @@ const TOOLS = [
   }
 ];
 
+const APPOINTMENT_TOOLS = [
+  {
+    name: "check_appointment_availability",
+    description: "Consulta el Google Calendar conectado antes de ofrecer o confirmar un horario. Nunca afirmes que un horario está disponible sin usar esta herramienta.",
+    input_schema: {
+      type: "object",
+      properties: {
+        starts_at: { type: "string", description: "Fecha y hora ISO 8601 con zona horaria. Ejemplo: 2026-07-30T10:00:00-05:00." },
+        duration_minutes: { type: "integer", minimum: 5, maximum: 1440, description: "Duración del servicio en minutos." }
+      },
+      required: ["starts_at", "duration_minutes"]
+    }
+  },
+  {
+    name: "book_appointment",
+    description: "Crea la cita en Nextfor y la sincroniza con Google Calendar. Úsala solo después de comprobar disponibilidad, recopilar los datos obligatorios y recibir confirmación explícita del cliente.",
+    input_schema: {
+      type: "object",
+      properties: {
+        starts_at: { type: "string", description: "Fecha y hora ISO 8601 con zona horaria." },
+        duration_minutes: { type: "integer", minimum: 5, maximum: 1440 },
+        customer_name: { type: "string" },
+        customer_phone: { type: "string" },
+        customer_email: { type: "string" },
+        consultation_reason: { type: "string", description: "Servicio o motivo de la cita." },
+        data_processing_consent: { type: "boolean", description: "Debe ser true solo cuando el cliente autorizó el tratamiento de datos." }
+      },
+      required: ["starts_at", "duration_minutes", "customer_name", "consultation_reason", "data_processing_consent"]
+    }
+  },
+  TOOLS.find(function (tool) { return tool.name === "request_human_handoff"; })
+].filter(Boolean);
+
+const APPOINTMENT_OPERATIONAL_PROMPT = [
+  "REGLAS OPERATIVAS DEL CANAL DE CITAS:",
+  "- Para consultar un horario usa check_appointment_availability.",
+  "- Antes de reservar confirma servicio, fecha/hora, nombre y consentimiento de datos.",
+  "- Usa book_appointment únicamente después de que el cliente confirme explícitamente.",
+  "- Si el calendario no está conectado o una herramienta falla, no inventes disponibilidad: ofrece apoyo humano.",
+  "- Informa que la cita quedó confirmada solo cuando book_appointment responda status=booked y calendar_sync_status=synced."
+].join("\n");
+
 async function searchShopifyStorefront(query, options = {}) {
   if (!SHOPIFY_STOREFRONT_DOMAIN) return { products: [], total: 0, query, error: "shopify_storefront_not_configured" };
   // CACHE (v32): si la misma query se buscó hace <5min, reusar resultado.
@@ -3693,6 +3750,78 @@ async function executeHumanHandoff(userId, input) {
   return { handoff: true, bot_paused: true };
 }
 
+async function executeCheckAppointmentAvailability(tenantId, input, actor) {
+  const startsAt = String(input && input.starts_at || "").trim();
+  const durationMinutes = Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
+  const parsed = new Date(startsAt);
+  if (!startsAt || !Number.isFinite(parsed.getTime())) {
+    return { ok: false, error: "invalid_appointment_datetime" };
+  }
+  const result = await appointmentCalendarService.checkAvailability(tenantId, parsed.toISOString(), durationMinutes, actor);
+  return Object.assign({ ok: true }, result);
+}
+
+async function executeBookAppointment(userId, tenantId, input, actor) {
+  if (input && input.data_processing_consent !== true) {
+    return { ok: false, error: "data_processing_consent_required" };
+  }
+  const startsAt = new Date(String(input && input.starts_at || ""));
+  if (!Number.isFinite(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
+    return { ok: false, error: "invalid_appointment_datetime" };
+  }
+  const durationMinutes = Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
+  const availability = await appointmentCalendarService.checkAvailability(
+    tenantId,
+    startsAt.toISOString(),
+    durationMinutes,
+    actor
+  );
+  if (!availability.available) {
+    return { ok: false, error: "appointment_slot_unavailable", busy: availability.busy };
+  }
+  const conversationId = "chat_" + crypto.createHash("sha256")
+    .update([tenantId, userId, startsAt.toISOString(), cleanRuntimeText(input && input.consultation_reason, 1000)].join("|"))
+    .digest("hex")
+    .slice(0, 32);
+  const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
+  let row = await appointmentRegistry.upsert({
+    tenant_id: tenantId,
+    conversation_id: conversationId,
+    agent_id: "nextfor-appointment-chat",
+    status: "booked",
+    starts_at: startsAt.toISOString(),
+    duration_minutes: durationMinutes,
+    customer_name: cleanRuntimeText(input && input.customer_name, 160),
+    customer_phone: cleanRuntimeText(input && input.customer_phone, 80) ||
+      (bookingChannel === "whatsapp" ? conversationExternalId(userId) : ""),
+    customer_email: cleanRuntimeText(input && input.customer_email, 200).toLowerCase(),
+    consultation_reason: cleanRuntimeText(input && input.consultation_reason, 1000),
+    data_processing_consent: "authorized",
+    transcript_summary: "Cita creada desde el bot Appointment por " + bookingChannel + ".",
+    source: "nextfor_appointment_bot",
+    channel: bookingChannel,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }, false);
+  row = await applyAppointmentCalendarEffect(row, "sync", actor);
+  if (row.calendar_sync_status !== "synced") {
+    row = await appointmentRegistry.upsert(Object.assign({}, row, {
+      status: "requested",
+      updated_at: new Date().toISOString()
+    }), false);
+  }
+  await persistAppointment(row);
+  return {
+    ok: row.status === "booked" && row.calendar_sync_status === "synced",
+    appointment_id: row.conversation_id,
+    status: row.status,
+    starts_at: row.starts_at,
+    duration_minutes: row.duration_minutes,
+    calendar_sync_status: row.calendar_sync_status || "pending",
+    error: row.calendar_sync_status === "synced" ? undefined : row.calendar_last_error || "calendar_sync_pending"
+  };
+}
+
 // ─── MAIN CONVERSATION LOOP ──────────────────────────────────────────────────
 
 function acceptInboundMessageRate(userId, now) {
@@ -3774,6 +3903,34 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const history = conversations.get(userId);
   const activeBotSetup = await loadBotSetup(false);
   const activeClientOnboarding = await loadClientOnboarding(false, tenantId);
+  const onboardingGoal = String(activeClientOnboarding && activeClientOnboarding.answers && activeClientOnboarding.answers.setup_goal || "").trim().toLowerCase();
+  const customerServiceConfiguration = activeClientOnboarding && activeClientOnboarding.customer_service_configuration;
+  const appointmentConfiguration = activeClientOnboarding && activeClientOnboarding.appointment_configuration;
+  const customerServiceConfigured = !!(customerServiceConfiguration &&
+    customerServiceConfiguration.lifecycle === "approved_for_testing" &&
+    customerServiceConfiguration.system_prompt);
+  const appointmentConfigured = !!(appointmentConfiguration &&
+    appointmentConfiguration.lifecycle === "approved_for_testing" &&
+    appointmentConfiguration.system_prompt);
+  const usesAppointmentBot = appointmentConfigured && ["appointments", "both"].includes(onboardingGoal);
+  const usesCustomerServiceBot = customerServiceConfigured && ["customer_service", "both"].includes(onboardingGoal);
+  const tenantConfigurationPrompts = [
+    usesCustomerServiceBot ? customerServiceConfiguration.system_prompt : "",
+    usesAppointmentBot ? appointmentConfiguration.system_prompt : "",
+    usesAppointmentBot ? APPOINTMENT_OPERATIONAL_PROMPT : ""
+  ].filter(Boolean);
+  const configuredTenantBot = tenantConfigurationPrompts.length > 0;
+  const conversationSystemPrompt = configuredTenantBot
+    ? "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad."
+    : SYSTEM_PROMPT;
+  let conversationTools = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot
+    ? TOOLS.slice()
+    : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
+  if (usesAppointmentBot) {
+    APPOINTMENT_TOOLS.forEach(function (tool) {
+      if (tool && !conversationTools.some(function (current) { return current.name === tool.name; })) conversationTools.push(tool);
+    });
+  }
   const serviceAreaConfig = serviceAreaConfigForSetup(activeBotSetup, activeClientOnboarding);
   const phoneCheck = conversationChannel(userId) === "whatsapp"
     ? serviceAreaCheckForPhone(conversationExternalId(userId), serviceAreaConfig)
@@ -3831,7 +3988,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   });
   let memoryContext = buildCustomerMemoryContext(customerMemory, { newSession });
   let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
-  let publishedSetupPrompt = activeBotSetup.published && activeBotSetup.published.derived
+  let publishedSetupPrompt = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot && activeBotSetup.published && activeBotSetup.published.derived
     ? activeBotSetup.published.derived.system_prompt
     : "";
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
@@ -3847,7 +4004,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
           model: "claude-sonnet-4-5-20250929",
           max_tokens: adaptiveBudget.maxTokens,
           system: [
-        { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },
+        { type: "text", text: conversationSystemPrompt, cache_control: { type: "ephemeral" } },
+        ...tenantConfigurationPrompts.map(function (prompt) { return { type: "text", text: prompt, cache_control: { type: "ephemeral" } }; }),
         ...(publishedSetupPrompt ? [{ type: "text", text: publishedSetupPrompt, cache_control: { type: "ephemeral" } }] : []),
         ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
         ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
@@ -3855,7 +4013,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         ...(cartContextFor(userId) ? [{ type: "text", text: cartContextFor(userId) }] : []),
         ...(memoryContext ? [{ type: "text", text: memoryContext }] : [])
       ],
-          tools: TOOLS.map((t, i) => i === TOOLS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t),
+          tools: conversationTools.map((t, i) => i === conversationTools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t),
           messages: workingHistory.slice(-adaptiveBudget.historyMessages),
         },
         {
@@ -3956,6 +4114,12 @@ async function handleConversation(userId, userMessage, conversationMeta) {
               case "request_human_handoff":
               turnHandoff = true;  // (Tarea 1)
                 result = await executeHumanHandoff(userId, toolUse.input);
+                break;
+              case "check_appointment_availability":
+                result = await executeCheckAppointmentAvailability(tenantId, toolUse.input, "appointment_bot:" + conversationChannel(userId));
+                break;
+              case "book_appointment":
+                result = await executeBookAppointment(userId, tenantId, toolUse.input, "appointment_bot:" + conversationChannel(userId));
                 break;
               default:
                 result = { error: "Unknown tool: " + toolUse.name };
@@ -4359,6 +4523,76 @@ app.post("/messenger/webhook", async (req, res) => {
   }
 });
 
+async function appointmentTenantForAgent(agentId) {
+  const cleanAgentId = String(agentId || "").trim();
+  if (!cleanAgentId) return "";
+  if (ELEVENLABS_AGENT_TENANT_MAP[cleanAgentId]) return ELEVENLABS_AGENT_TENANT_MAP[cleanAgentId];
+  try {
+    const tenants = await listSetupReviewTenants();
+    for (const tenant of tenants) {
+      const tenantId = cleanTenantId(tenant && (tenant.id || tenant.tenant_id));
+      if (!tenantId) continue;
+      const record = await loadClientOnboarding(false, tenantId);
+      if (String(record && record.appointment_configuration && record.appointment_configuration.external_agent_id || "").trim() === cleanAgentId) {
+        return tenantId;
+      }
+    }
+  } catch (error) {
+    console.error("appointment agent tenant lookup error:", error.message);
+  }
+  return "";
+}
+
+async function validElevenLabsAppointmentToolTenant(req) {
+  const tenantId = cleanTenantId(req.params && req.params.tenantId);
+  const expected = appointmentToolToken(tenantId, ELEVENLABS_APPOINTMENT_TOOL_SECRET);
+  const received = String(req.query && req.query.token || "");
+  if (!expected || !safeEqualText(received, expected)) return null;
+  const record = await loadClientOnboarding(false, tenantId);
+  const configuration = record && record.appointment_configuration;
+  if (!record || !configuration || configuration.lifecycle !== "approved_for_testing") return null;
+  return { tenantId, record };
+}
+
+async function receiveElevenLabsAppointmentAvailabilityTool(req, res) {
+  try {
+    const context = await validElevenLabsAppointmentToolTenant(req);
+    if (!context) {
+      res.status(401).json({ ok: false, error: "invalid_appointment_tool" });
+      return;
+    }
+    const result = await executeCheckAppointmentAvailability(
+      context.tenantId,
+      req.body || {},
+      "elevenlabs_tool"
+    );
+    res.status(result.ok ? 200 : 422).json(result);
+  } catch (error) {
+    res.status(error && error.status || 422).json({ ok: false, error: String(error && (error.code || error.message) || "calendar_availability_failed") });
+  }
+}
+
+async function receiveElevenLabsAppointmentBookingTool(req, res) {
+  try {
+    const context = await validElevenLabsAppointmentToolTenant(req);
+    if (!context) {
+      res.status(401).json({ ok: false, error: "invalid_appointment_tool" });
+      return;
+    }
+    const body = req.body || {};
+    const voiceIdentity = cleanRuntimeText(body.customer_phone || body.customer_email || "caller", 200);
+    const result = await executeBookAppointment(
+      "voice:" + voiceIdentity,
+      context.tenantId,
+      body,
+      "elevenlabs_tool"
+    );
+    res.status(result.ok ? 200 : 422).json(result);
+  } catch (error) {
+    res.status(error && error.status || 422).json({ ok: false, error: String(error && (error.code || error.message) || "appointment_booking_failed") });
+  }
+}
+
 async function receiveElevenLabsPostCallWebhook(req, res) {
   if (!ELEVENLABS_WEBHOOK_SECRET) {
     res.status(503).json({ ok: false, error: "elevenlabs_webhook_not_configured" });
@@ -4377,12 +4611,16 @@ async function receiveElevenLabsPostCallWebhook(req, res) {
       return;
     }
     const agentId = String(event.data && event.data.agent_id || "").trim();
-    const tenantId = ELEVENLABS_AGENT_TENANT_MAP[agentId];
-    if (!tenantId || !getRegisteredClient(tenantId)) {
+    const tenantId = await appointmentTenantForAgent(agentId);
+    const tenantRecord = tenantId ? await setupReviewTenant(tenantId).catch(function () { return null; }) : null;
+    if (!tenantId || (!getRegisteredClient(tenantId) && !tenantRecord)) {
       res.status(202).json({ ok: true, ignored: true, reason: "unregistered_agent" });
       return;
     }
-    const appointment = await appointmentRegistry.ingestElevenLabs(event, tenantId);
+    let appointment = await appointmentRegistry.ingestElevenLabs(event, tenantId);
+    if (appointment && ["booked", "rescheduled"].includes(appointment.status) && appointment.starts_at) {
+      appointment = await applyAppointmentCalendarEffect(appointment, "sync", "elevenlabs_post_call");
+    }
     if (appointment) await persistAppointment(appointment);
     res.json({ ok: true, tenant_id: tenantId, conversation_id: appointment && appointment.conversation_id || null });
   } catch (error) {
@@ -5466,10 +5704,37 @@ async function appointmentCalendarConnectionForTenant(tenantId) {
   }
 }
 
+async function applyAppointmentCalendarEffect(row, action, actor) {
+  if (!row || !appointmentCalendarService) return row;
+  const tenantId = cleanTenantId(row.tenant_id);
+  if (!tenantId) return row;
+  try {
+    const result = action === "cancel"
+      ? await appointmentCalendarService.cancelAppointment(tenantId, row, actor)
+      : await appointmentCalendarService.syncAppointment(tenantId, row, actor);
+    return appointmentRegistry.upsert(Object.assign({}, row, result, {
+      panel_action_status: row.panel_action ? "synced" : row.panel_action_status,
+      updated_at: new Date().toISOString()
+    }), false);
+  } catch (error) {
+    const code = String(error && (error.code || error.message) || "calendar_sync_failed");
+    return appointmentRegistry.upsert(Object.assign({}, row, {
+      calendar_sync_status: code === "calendar_connection_not_found" ? "pending" : "failed",
+      calendar_last_error: code,
+      panel_action_status: row.panel_action ? "pending" : row.panel_action_status,
+      updated_at: new Date().toISOString()
+    }), false);
+  }
+}
+
 function appointmentIntegrationOptions(channels, calendarConnection, record, tenantId) {
   return {
     elevenlabsApiKey: ELEVENLABS_API_KEY,
     elevenlabsWebhookSecret: ELEVENLABS_WEBHOOK_SECRET,
+    elevenlabsTemplateAgentId: ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID,
+    elevenlabsAppointmentToolSecret: ELEVENLABS_APPOINTMENT_TOOL_SECRET,
+    elevenlabsAppointmentToolBaseUrl: ELEVENLABS_APPOINTMENT_TOOL_BASE_URL,
+    elevenlabsAgentWriteEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
     agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
     elevenlabsAgentConfigured: appointmentAgentConfigured(
       record && record.appointment_configuration,
@@ -6012,17 +6277,45 @@ async function persistSetupReview(tenantId, input, auth) {
       { actor, lifecycle: "approved_for_testing" }
     );
     try {
-      const result = await applyElevenLabsAppointmentAgent({
+      let elevenLabsTestToolCounter = 0;
+      const elevenLabsHttpClient = process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1"
+        ? {
+            get: async function () { return { status: 200, data: { conversation_config: { agent: { prompt: {} } }, tags: ["template"] } }; },
+            post: async function (url) {
+              if (/\/v1\/convai\/tools$/.test(url)) {
+                elevenLabsTestToolCounter += 1;
+                return { status: 200, data: { id: "tool_test_" + elevenLabsTestToolCounter } };
+              }
+              return { status: 200, data: { agent_id: "agent_test_created" } };
+            },
+            patch: async function () { return { status: 200 }; }
+          }
+        : axios;
+      const existingAgentId = appointmentConfiguration.external_agent_id ||
+        appointmentAgentIdForTenant(tenant.id, ELEVENLABS_AGENT_TENANT_MAP);
+      const result = existingAgentId
+        ? await applyElevenLabsAppointmentAgent({
+            tenant_id: tenant.id,
+            answers,
+            appointment_configuration: appointmentConfiguration
+          }, tenant.id, {
+            apiKey: ELEVENLABS_API_KEY,
+            agentId: existingAgentId,
+            agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+            writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
+            httpClient: elevenLabsHttpClient
+          })
+        : await createElevenLabsAppointmentAgentFromTemplate({
         tenant_id: tenant.id,
         answers,
         appointment_configuration: appointmentConfiguration
       }, tenant.id, {
         apiKey: ELEVENLABS_API_KEY,
-        agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+        templateAgentId: ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID,
+        toolSecret: ELEVENLABS_APPOINTMENT_TOOL_SECRET,
+        toolBaseUrl: ELEVENLABS_APPOINTMENT_TOOL_BASE_URL,
         writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
-        httpClient: process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1"
-          ? { patch: async function () { return { status: 200 }; } }
-          : axios
+        httpClient: elevenLabsHttpClient
       });
       appointmentConfiguration = normalizeAppointmentConfiguration(
         markAppointmentConfigurationElevenLabsApplied(appointmentConfiguration, result, actor),
@@ -6036,12 +6329,11 @@ async function persistSetupReview(tenantId, input, auth) {
             appointment_configuration: appointmentConfiguration
           }, tenant.id, {
             apiKey: ELEVENLABS_API_KEY,
+            agentId: appointmentConfiguration.external_agent_id,
             agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
             phoneNumberTenantMap: ELEVENLABS_PHONE_NUMBER_TENANT_MAP,
             writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
-            httpClient: process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1"
-              ? { patch: async function () { return { status: 200 }; } }
-              : axios
+            httpClient: elevenLabsHttpClient
           });
           appointmentConfiguration = normalizeAppointmentConfiguration(
             markAppointmentConfigurationPhoneApplied(appointmentConfiguration, phoneResult, actor),
@@ -10885,8 +11177,13 @@ app.post("/admin/panel/appointments/action", async (req, res) => {
         message: body.message,
         persist: false
       });
-      await persistAppointment(row);
-      updated.push(row);
+      const calendarRow = action === "confirm" && row.starts_at
+        ? await applyAppointmentCalendarEffect(row, "sync", actor)
+        : action === "cancel"
+          ? await applyAppointmentCalendarEffect(row, "cancel", actor)
+          : row;
+      await persistAppointment(calendarRow);
+      updated.push(calendarRow);
     }
     const snapshot = appointmentRegistry.snapshot(tenantId);
     res.json(Object.assign(customerAppointmentSnapshot(snapshot, business), {
@@ -11975,6 +12272,10 @@ async function buildAdminHealthResult() {
       setup_enabled_for_pilot: appointmentSetupEnabledForTenant(DERCO_TENANT_ID),
       setup_enabled_publicly: APPOINTMENT_SETUP_ENABLED,
       setup_tenant_allowlist_count: APPOINTMENT_SETUP_TENANT_IDS.size,
+      elevenlabs_template_configured: !!ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID,
+      elevenlabs_tool_secret_configured: ELEVENLABS_APPOINTMENT_TOOL_SECRET.length >= 32,
+      elevenlabs_tool_base_url: ELEVENLABS_APPOINTMENT_TOOL_BASE_URL,
+      elevenlabs_agent_write_enabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
       testing_ready: dercoAppointmentIntegrations.ready_for_testing,
       production_can_be_enabled: dercoAppointmentIntegrations.ready_for_live,
       production_ready: dercoAppointmentIntegrations.ready_for_live && process.env.APPOINTMENTS_PUBLIC_ENABLED === "1",

@@ -29,6 +29,14 @@ const calls = [];
 const axiosClient = {
   async post(url, body, options) {
     calls.push(["post", url, body, options && options.headers && options.headers["content-type"]]);
+    if (/\/calendar\/v3\/freeBusy$/.test(url)) {
+      assert.match(options.headers.Authorization, /^Bearer access-/);
+      return { data: { calendars: { "agenda@derco.example": { busy: [] } } } };
+    }
+    if (/\/calendar\/v3\/calendars\//.test(url)) {
+      assert.match(options.headers.Authorization, /^Bearer access-/);
+      return { data: { id: "event-derco-1", htmlLink: "https://calendar.google.com/event?eid=derco", status: "confirmed" } };
+    }
     assert.strictEqual(options.headers["content-type"], "application/x-www-form-urlencoded");
     if (String(body).includes("grant_type=refresh_token")) {
       return { data: { access_token: "access-refreshed", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events" } };
@@ -39,6 +47,14 @@ const axiosClient = {
     calls.push(["get", url, options && options.headers && options.headers.Authorization]);
     assert.match(options.headers.Authorization, /^Bearer access-/);
     return { data: { items: [{ id: "agenda@derco.example", summary: "Agenda DERCO", primary: true }] } };
+  },
+  async patch(url, body, options) {
+    calls.push(["patch", url, body, options && options.headers && options.headers.Authorization]);
+    return { data: { id: "event-derco-1", htmlLink: "https://calendar.google.com/event?eid=derco", status: "confirmed" } };
+  },
+  async delete(url, options) {
+    calls.push(["delete", url, options && options.headers && options.headers.Authorization]);
+    return { status: 204 };
   }
 };
 
@@ -80,10 +96,39 @@ assert.match(authUrl, /access_type=offline/);
   assert.match(stored.credentials_ciphertext, /^enc:v1:/);
   const verified = await service.verify("grupo-derco", "super_admin");
   assert.strictEqual(verified.status, "connected");
+  const availability = await service.checkAvailability("grupo-derco", "2026-07-29T15:00:00.000Z", 45, "super_admin");
+  assert.strictEqual(availability.available, true);
+  assert.strictEqual(availability.ends_at, "2026-07-29T15:45:00.000Z");
+  const synced = await service.syncAppointment("grupo-derco", {
+    tenant_id: "grupo-derco",
+    conversation_id: "conv-derco-1",
+    starts_at: "2026-07-29T15:00:00.000Z",
+    duration_minutes: 45,
+    customer_name: "Cliente DERCO",
+    customer_phone: "+573001112233",
+    consultation_reason: "Prueba de manejo"
+  }, "super_admin");
+  assert.strictEqual(synced.calendar_sync_status, "synced");
+  assert.strictEqual(synced.calendar_event_id, "event-derco-1");
+  assert.match(synced.calendar_event_link, /calendar\.google\.com/);
+  const updated = await service.syncAppointment("grupo-derco", Object.assign({
+    tenant_id: "grupo-derco",
+    conversation_id: "conv-derco-1",
+    starts_at: "2026-07-29T16:00:00.000Z",
+    duration_minutes: 45,
+    customer_name: "Cliente DERCO",
+    consultation_reason: "Prueba de manejo"
+  }, synced), "super_admin");
+  assert.strictEqual(updated.calendar_event_id, "event-derco-1");
+  const cancelled = await service.cancelAppointment("grupo-derco", updated, "super_admin");
+  assert.strictEqual(cancelled.calendar_sync_status, "synced");
   const disconnected = await service.disconnect("grupo-derco", "super_admin");
   assert.strictEqual(disconnected.status, "disconnected");
   assert.strictEqual((await store.get("grupo-derco")).credentials_ciphertext, null);
   assert(calls.some(function (call) { return call[0] === "post" && /oauth2/.test(call[1]); }));
+  assert(calls.some(function (call) { return call[0] === "post" && /\/events$/.test(call[1]); }));
+  assert(calls.some(function (call) { return call[0] === "patch" && /\/events\/event-derco-1$/.test(call[1]); }));
+  assert(calls.some(function (call) { return call[0] === "delete" && /\/events\/event-derco-1$/.test(call[1]); }));
   console.log("appointment calendar connection tests: ok");
 })().catch(function (error) {
   console.error(error);

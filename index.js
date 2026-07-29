@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v274-rav-instagram-handoff-migration";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v275-rav-instagram-delivery-verification";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -9290,6 +9290,8 @@ app.post("/admin/release/:userId", releaseAdminConversation);
 
 const RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT = "rav-toys-adac1e";
 const RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER = "repair:rav-instagram-handoff-v274";
+const RAV_INSTAGRAM_DELIVERY_TEST_INBOUND = "Prueba real Nextfor IG 29-07 14:40";
+const RAV_INSTAGRAM_DELIVERY_TEST_MARKER = "verification:rav-instagram-delivery-v275";
 
 async function runRavInstagramHandoffRepairOnce() {
   if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
@@ -9326,6 +9328,45 @@ async function runRavInstagramHandoffRepairOnce() {
     released_count: userIds.length
   });
   return { ok: true, skipped: false, released_count: userIds.length };
+}
+
+async function runRavInstagramDeliveryVerificationOnce() {
+  if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
+    return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
+  }
+  const rows = await supabaseFetchRecent(500, { tenantId: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
+  if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
+  const turns = rows.map(normalizeTurnRow).filter(function (turn) {
+    return cleanTenantId(turn.tenantId || turn.tenant_id) === RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT;
+  });
+  const alreadyDelivered = turns.some(function (turn) {
+    return turn.status === "ok" &&
+      Array.isArray(turn.tools) &&
+      turn.tools.includes("support_delivery_verification") &&
+      String(turn.botReply || "").includes(RAV_INSTAGRAM_DELIVERY_TEST_MARKER);
+  });
+  if (alreadyDelivered) return { ok: true, skipped: true, reason: "already_delivered" };
+  const targetTurn = turns.find(function (turn) {
+    return conversationChannel(turn.userId) === "instagram" &&
+      String(turn.userMessage || "").trim() === RAV_INSTAGRAM_DELIVERY_TEST_INBOUND;
+  });
+  const userId = normalizeConversationUserId(targetTurn && targetTurn.userId);
+  if (!userId) return { ok: false, skipped: true, reason: "verified_test_conversation_not_found" };
+  const reply = "¡Hola! 👋 Ya estoy de nuevo en línea y listo para ayudarte desde Instagram. ¿Qué juguete estás buscando hoy?";
+  const sent = await sendText(userId, reply, { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
+  await recordAdminEvent(
+    userId,
+    "support_delivery_verification",
+    reply + " (" + RAV_INSTAGRAM_DELIVERY_TEST_MARKER + ")",
+    sent ? "ok" : "error",
+    false,
+    { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
+  );
+  log(sent ? "info" : "error", "rav_instagram_delivery_verification", {
+    tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
+    sent
+  });
+  return { ok: sent, skipped: false, sent };
 }
 
 app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) => {
@@ -13407,6 +13448,10 @@ app.listen(PORT, () => {
     runRavInstagramHandoffRepairOnce()
       .then(function (result) {
         console.log("RAV Instagram handoff repair:", JSON.stringify(result));
+        return runRavInstagramDeliveryVerificationOnce();
+      })
+      .then(function (result) {
+        console.log("RAV Instagram delivery verification:", JSON.stringify(result));
       })
       .catch(function (error) {
         console.error("RAV Instagram handoff repair failed:", error.message);

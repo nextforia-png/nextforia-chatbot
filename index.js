@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v275-rav-instagram-delivery-verification";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v276-rav-instagram-cross-scope-repair";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -9334,11 +9334,9 @@ async function runRavInstagramDeliveryVerificationOnce() {
   if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
     return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
   }
-  const rows = await supabaseFetchRecent(500, { tenantId: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
+  const rows = await supabaseFetchRecent(1000, { allTenants: true });
   if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
-  const turns = rows.map(normalizeTurnRow).filter(function (turn) {
-    return cleanTenantId(turn.tenantId || turn.tenant_id) === RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT;
-  });
+  const turns = rows.map(normalizeTurnRow);
   const alreadyDelivered = turns.some(function (turn) {
     return turn.status === "ok" &&
       Array.isArray(turn.tools) &&
@@ -9352,6 +9350,15 @@ async function runRavInstagramDeliveryVerificationOnce() {
   });
   const userId = normalizeConversationUserId(targetTurn && targetTurn.userId);
   if (!userId) return { ok: false, skipped: true, reason: "verified_test_conversation_not_found" };
+  humanHandoff.delete(userId);
+  await recordAdminEvent(
+    userId,
+    "admin_release",
+    "[Soporte NexforIA] Conversación devuelta a la IA (repair:rav-instagram-cross-scope-v276).",
+    "ok",
+    false,
+    { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
+  );
   const reply = "¡Hola! 👋 Ya estoy de nuevo en línea y listo para ayudarte desde Instagram. ¿Qué juguete estás buscando hoy?";
   const sent = await sendText(userId, reply, { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
   await recordAdminEvent(
@@ -9364,6 +9371,7 @@ async function runRavInstagramDeliveryVerificationOnce() {
   );
   log(sent ? "info" : "error", "rav_instagram_delivery_verification", {
     tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
+    source_tenant_id: cleanTenantId(targetTurn && targetTurn.tenantId) || null,
     sent
   });
   return { ok: sent, skipped: false, sent };

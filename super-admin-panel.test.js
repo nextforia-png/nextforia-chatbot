@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const vm = require("vm");
 const renderSuperAdminPanel = require("./super-admin-panel");
 
 let contentType = "";
@@ -167,6 +168,11 @@ assert.match(html, /\/admin\/leads/);
 assert.match(html, /email y clave/);
 assert.doesNotMatch(html, /<script>alert\("x"\)<\/script>/);
 assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+const inlineScript = html.match(/<script>([\s\S]*?)<\/script>/);
+assert(inlineScript, "Super Admin must render its application script");
+assert.doesNotThrow(function () {
+  new vm.Script(inlineScript[1], { filename: "super-admin-inline.js" });
+}, "Super Admin inline JavaScript must be syntactically valid");
 
 // Sin fuente financiera el panel no inventa cifras.
 assert.match(html, /sin fuente financiera conectada/);

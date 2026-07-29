@@ -1125,6 +1125,7 @@ ${customerAppointments.styles}
       ${channelsNav}
       ${paymentGateRequired ? "" : `<button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>`}
       ${paymentGateRequired ? "" : notificationsNav}
+      ${auth.role === "super_admin" ? `<a class="navItem" href="/admin/super-admin?view=channels"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Volver a Super Admin</span></a>` : ""}
       <button class="navItem logoutItem" id="nav-logout" type="button" onclick="logoutCustomerPanel()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></button>
       <div class="whatsappCard">
         <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>

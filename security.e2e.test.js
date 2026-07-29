@@ -136,6 +136,27 @@ function waitForServer(child, port) {
     response = await fetch(base + "/admin/platform-goals", { headers: { cookie: adminCookie } });
     assert.strictEqual(response.status, 401, "client admin must not read platform goals");
 
+    response = await fetch(base + "/admin/support/tenants/rav-toys-adac1e/release-handoffs", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: adminCookie },
+      body: JSON.stringify({ channel: "instagram" })
+    });
+    assert.strictEqual(response.status, 401, "client admins must not run tenant support repairs");
+
+    response = await fetch(base + "/admin/support/tenants/rav-toys-adac1e/release-handoffs", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ channel: "invalid" })
+    });
+    assert.strictEqual(response.status, 400, "support repairs must reject unknown channels");
+
+    response = await fetch(base + "/admin/support/tenants/rav-toys-adac1e/release-handoffs", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: superAdminCookie },
+      body: JSON.stringify({ channel: "instagram" })
+    });
+    assert.strictEqual(response.status, 503, "support repairs must fail closed without the tenant conversation store");
+
     const webhookBody = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
     response = await fetch(base + "/webhook", {
       method: "POST",

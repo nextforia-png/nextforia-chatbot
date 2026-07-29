@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v271-meta-resume-authorization";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v272-rav-support-handoff-release";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2276,7 +2276,7 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
     };
     conversationLogs.push(rec);
     if (conversationLogs.length > 100) conversationLogs.shift();
-    supabaseInsert(rec);
+    return supabaseInsert(rec);
   } catch (e) { console.error("recordAdminEvent error:", e.message); }
 }
 
@@ -9287,6 +9287,55 @@ function releaseAdminConversation(req, res) {
 }
 
 app.post("/admin/release/:userId", releaseAdminConversation);
+
+app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const tenantId = cleanTenantId(req.params.tenantId);
+  const channel = String(req.body && req.body.channel || "").trim().toLowerCase();
+  if (!tenantId || !["whatsapp", "instagram", "messenger"].includes(channel)) {
+    res.status(400).json({ ok: false, error: "invalid_tenant_or_channel" });
+    return;
+  }
+  const rows = await supabaseFetchRecent(500, { tenantId });
+  if (!rows) {
+    res.status(503).json({ ok: false, error: "conversation_store_unavailable" });
+    return;
+  }
+  const turns = rows.map(normalizeTurnRow).filter(function (turn) {
+    return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId;
+  });
+  const states = inferHandoffStates(turns, []);
+  const userIds = Object.keys(states).filter(function (userId) {
+    return states[userId].active && conversationChannel(userId) === channel;
+  });
+  for (const userId of userIds) {
+    humanHandoff.delete(userId);
+    await recordAdminEvent(
+      userId,
+      "admin_release",
+      "[Soporte NexforIA] Conversación devuelta a la IA después de reparar el canal.",
+      "ok",
+      false,
+      { tenant_id: tenantId }
+    );
+  }
+  log("info", "support_handoffs_released", {
+    tenant_id: tenantId,
+    channel,
+    released_count: userIds.length,
+    actor: auth.username || auth.name || "super_admin"
+  });
+  res.json({
+    ok: true,
+    tenant_id: tenantId,
+    channel,
+    released_count: userIds.length
+  });
+});
 
 app.post("/admin/resolve/:userId", (req, res) => {
   if (!conversationActionAuthOk(req, "agent")) {

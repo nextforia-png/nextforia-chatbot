@@ -52,6 +52,9 @@ function waitForServer(child, port) {
   assert.match(source, /instagramRuntimeState\.last_error_type = metaError\.type \|\| err\.code \|\| null/);
   assert.match(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
   assert.match(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
+  assert.match(source, /const RAV_INSTAGRAM_LOGIN_OVERRIDE = process\.env\.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1"/);
+  assert.match(source, /const CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID =[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
+  assert.match(source, /const ravInstagramLoginWins =[\s\S]*?runtime\.channel === "instagram"[\s\S]*?if \(runtime && !ravInstagramLoginWins\) rows\.push\(runtime\)/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -85,7 +88,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v279-appointment-customer-creation"));
+    assert((await response.text()).includes("v280-rav-instagram-login-runtime"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

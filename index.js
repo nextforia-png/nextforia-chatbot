@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v279-appointment-customer-creation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v280-rav-instagram-login-runtime";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -430,6 +430,7 @@ const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
 const IG_USER_ID = process.env.IG_USER_ID || "";
 const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
+const RAV_INSTAGRAM_LOGIN_OVERRIDE = process.env.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1";
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
 const META_APP_ID = String(process.env.META_APP_ID || "").trim();
@@ -442,6 +443,10 @@ const CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID = cleanTenantId(
 );
 const CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID =
   CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
+const CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID =
+  RAV_INSTAGRAM_LOGIN_OVERRIDE && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
+    ? CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
+    : DEFAULT_TENANT_ID;
 const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
   ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
   : "";
@@ -1193,8 +1198,8 @@ async function loadChannelRuntimeRows(force) {
   }
   if (IG_ACCESS_TOKEN && (IG_SEND_ID || IG_USER_ID)) {
     rows.push({
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
+      tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
+      tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
       channel: "instagram",
       instagramUserId: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
       instagram_user_id: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
@@ -1220,7 +1225,14 @@ async function loadChannelRuntimeRows(force) {
       const stored = await channelConnectionStore.listAll();
       (Array.isArray(stored) ? stored : []).forEach(function (record) {
         const runtime = connectionRuntimeFromRecord(record);
-        if (runtime) rows.push(runtime);
+        const ravInstagramLoginWins =
+          RAV_INSTAGRAM_LOGIN_OVERRIDE &&
+          IG_ACCESS_TOKEN &&
+          (IG_SEND_ID || IG_USER_ID) &&
+          runtime &&
+          runtime.channel === "instagram" &&
+          cleanTenantId(runtime.tenantId || runtime.tenant_id) === CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID;
+        if (runtime && !ravInstagramLoginWins) rows.push(runtime);
       });
     } catch (error) {
       log("warn", "channel_runtime_load_failed", { error: error.message });

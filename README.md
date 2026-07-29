@@ -93,6 +93,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |
 | `ELEVENLABS_DERCO_AGENT_ID` | ID del agente de DERCO; lo vincula al tenant `grupo-derco` |
 | `ELEVENLABS_AGENT_TENANT_MAP` | Mapa JSON opcional `agent_id -> tenant_id` para más clientes |
+| `ELEVENLABS_DERCO_PHONE_NUMBER_ID` | ID del número importado en ElevenLabs para llamadas DERCO |
+| `ELEVENLABS_PHONE_NUMBER_TENANT_MAP` | Mapa JSON opcional `phone_number_id -> tenant_id` para llamadas reales por cliente |
 | `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED` | Permite que Super Admin aplique el prompt aprobado al agente real de ElevenLabs; dejar en `0` hasta validar mapa/webhook |
 | `GOOGLE_CALENDAR_CLIENT_ID` / `GOOGLE_CALENDAR_CLIENT_SECRET` | OAuth de Google Calendar para que el cliente conecte su calendario desde el panel |
 | `APPOINTMENT_CALENDAR_TENANT_MAP` | Mapa temporal por tenant con calendario conectado hasta guardar OAuth por cliente |

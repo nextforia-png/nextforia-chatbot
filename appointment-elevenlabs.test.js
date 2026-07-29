@@ -3,10 +3,15 @@
 const assert = require("assert");
 const {
   applyElevenLabsAppointmentAgent,
+  applyElevenLabsPhoneNumberAssignment,
   appointmentAgentConfigured,
+  appointmentPhoneNumberConfigured,
   appointmentPromptHash,
   buildElevenLabsAppointmentAgentPayload,
-  markAppointmentConfigurationElevenLabsApplied
+  buildElevenLabsPhoneNumberAssignmentPayload,
+  markAppointmentConfigurationElevenLabsApplied,
+  markAppointmentConfigurationPhoneApplied,
+  parsePhoneNumberTenantMap
 } = require("./appointment-elevenlabs");
 
 const appointmentConfiguration = {
@@ -36,6 +41,18 @@ assert.match(draft.payload.conversation_config.agent.first_message, /Luciana/);
 assert.match(draft.payload.conversation_config.agent.prompt.prompt, /APPOINTMENT BOT/);
 assert.doesNotMatch(JSON.stringify(draft.payload), /CUSTOMER-SERVICE-ONLY-SECRET/);
 
+const phoneMap = parsePhoneNumberTenantMap({
+  ELEVENLABS_PHONE_NUMBER_TENANT_MAP: JSON.stringify({ phone_123: "clinica-a" })
+});
+const phoneDraft = buildElevenLabsPhoneNumberAssignmentPayload(record, "clinica-a", {
+  agentTenantMap: { agent_a: "clinica-a" },
+  phoneNumberTenantMap: phoneMap
+});
+assert.strictEqual(phoneDraft.phone_number_id, "phone_123");
+assert.strictEqual(phoneDraft.agent_id, "agent_a");
+assert.match(phoneDraft.endpoint, /\/v1\/convai\/phone-numbers\/phone_123$/);
+assert.deepStrictEqual(phoneDraft.payload, { agent_id: "agent_a" });
+
 assert.throws(function () {
   buildElevenLabsAppointmentAgentPayload({
     tenant_id: "clinica-a",
@@ -61,6 +78,21 @@ assert.throws(function () {
   const marked = markAppointmentConfigurationElevenLabsApplied(appointmentConfiguration, result, "root", "2026-07-28T12:00:00.000Z");
   assert.strictEqual(appointmentAgentConfigured(marked, "clinica-a", { agent_a: "clinica-a" }), true);
   assert.strictEqual(appointmentAgentConfigured(marked, "clinica-b", { agent_a: "clinica-a" }), false);
+  const phoneResult = await applyElevenLabsPhoneNumberAssignment({ tenant_id: "clinica-a", appointment_configuration: marked }, "clinica-a", {
+    apiKey: "el-key",
+    agentTenantMap: { agent_a: "clinica-a" },
+    phoneNumberTenantMap: phoneMap,
+    writeEnabled: true,
+    httpClient: {
+      patch: async function (url, payload, options) {
+        patched = { url, payload, options };
+        return { status: 200 };
+      }
+    }
+  });
+  assert.strictEqual(phoneResult.applied, true);
+  const phoneMarked = markAppointmentConfigurationPhoneApplied(marked, phoneResult, "root", "2026-07-28T12:05:00.000Z");
+  assert.strictEqual(appointmentPhoneNumberConfigured(phoneMarked, "clinica-a", phoneMap), true);
   console.log("appointment elevenlabs tests: ok");
 })().catch(function (error) {
   console.error(error);

@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v261-meta-webhook-repair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v262-meta-runtime-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -997,14 +997,24 @@ async function bootstrapExistingWhatsAppConnection() {
         CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
         "whatsapp"
       );
-      if (existing && existing.status === "connected" && existing.credentials_ciphertext) {
-        const repaired = await channelConnectionService.repairSubscription(
-          CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-          "whatsapp",
-          "system:webhook-repair"
-        );
-        channelRuntimeCache.loaded_at = 0;
-        return { skipped: true, reason: "existing_connection_preserved", repaired };
+      if (existing && existing.credentials_ciphertext && !existing.protected_legacy) {
+        try {
+          const repaired = await channelConnectionService.repairSubscription(
+            CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+            "whatsapp",
+            "system:webhook-repair"
+          );
+          channelRuntimeCache.loaded_at = 0;
+          return { skipped: true, reason: "existing_connection_preserved", repaired };
+        } catch (error) {
+          channelRuntimeCache.loaded_at = 0;
+          return {
+            skipped: true,
+            ok: false,
+            reason: "existing_connection_repair_failed",
+            error: String(error.internalMessage || error.message || "repair_failed").slice(0, 300)
+          };
+        }
       }
     }
     const connection = await channelConnectionService.adoptExisting(
@@ -4495,19 +4505,32 @@ app.get("/instagram/health", async (req, res) => {
 
 app.get("/whatsapp/health", async (req, res) => {
   const checkedAt = new Date().toISOString();
+  const bootstrap = await channelConnectionBootstrapPromise;
   const runtime = await resolveWhatsAppRuntimeForTenant(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
   const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
   const whatsappBusinessAccountId = runtime && (
     runtime.whatsappBusinessAccountId || runtime.whatsapp_business_account_id
   ) || META_WHATSAPP_BUSINESS_ACCOUNT_ID;
   const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+  const safeRuntime = Object.assign({}, whatsappRuntimeState, {
+    runtime_source: runtime && runtime.source || "environment",
+    tenant_id: cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null,
+    phone_number_suffix: String(phoneNumberId || "").slice(-8) || null,
+    waba_suffix: String(whatsappBusinessAccountId || "").slice(-8) || null,
+    bootstrap: {
+      ok: bootstrap && bootstrap.ok !== false,
+      skipped: !!(bootstrap && bootstrap.skipped),
+      reason: bootstrap && bootstrap.reason || null,
+      error: bootstrap && bootstrap.error ? String(bootstrap.error).slice(0, 300) : null
+    }
+  });
   if (!phoneNumberId || !accessToken) {
     return res.status(503).json({
       ok: false,
       configured: false,
       status: "not_configured",
       checked_at: checkedAt,
-      runtime: { ...whatsappRuntimeState }
+      runtime: safeRuntime
     });
   }
   try {
@@ -4522,7 +4545,7 @@ app.get("/whatsapp/health", async (req, res) => {
         configured: true,
         status: "waba_not_configured",
         checked_at: checkedAt,
-        runtime: { ...whatsappRuntimeState }
+        runtime: safeRuntime
       });
     }
     const subscription = await axios.get(
@@ -4541,7 +4564,7 @@ app.get("/whatsapp/health", async (req, res) => {
         configured: true,
         status: "webhook_not_subscribed",
         checked_at: checkedAt,
-        runtime: { ...whatsappRuntimeState }
+        runtime: safeRuntime
       });
     }
     return res.json({
@@ -4549,7 +4572,7 @@ app.get("/whatsapp/health", async (req, res) => {
       configured: true,
       status: "connected",
       checked_at: checkedAt,
-      runtime: { ...whatsappRuntimeState }
+      runtime: safeRuntime
     });
   } catch (err) {
     const metaError = err.response?.data?.error || {};
@@ -4560,7 +4583,7 @@ app.get("/whatsapp/health", async (req, res) => {
       error_code: metaError.code || null,
       error_type: metaError.type || "request_failed",
       checked_at: checkedAt,
-      runtime: { ...whatsappRuntimeState }
+      runtime: safeRuntime
     });
   }
 });

@@ -125,10 +125,10 @@ async function login(base, body) {
     response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: appointmentUser.cookie } });
     assert.strictEqual(response.status, 200);
     const appointmentPanel = await response.text();
-    assert(!appointmentPanel.includes("Conectar canales"));
-    assert(!appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
+    assert(appointmentPanel.includes("Conectar canales"));
+    assert(appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentUser.cookie } });
-    assert.strictEqual(response.status, 404);
+    assert.strictEqual(response.status, 200);
 
     response = await fetch(base + "/admin/panel/channel-connections?tenant_id=tenant-b", {
       headers: { cookie: userA.cookie }

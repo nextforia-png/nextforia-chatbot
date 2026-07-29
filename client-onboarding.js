@@ -218,6 +218,7 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
 const QUESTION_TYPES = Object.freeze(["text", "number", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
 const SETUP_REVIEW_STATUSES = Object.freeze(["incomplete", "ready", "building", "testing", "live"]);
 const CUSTOMER_SERVICE_CONFIGURATION_VERSION = 1;
+const APPOINTMENT_CONFIGURATION_VERSION = 1;
 const CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS = [
   "14. Despliegue a Staging y Producción",
   "",
@@ -256,6 +257,19 @@ const CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS = [
   "- Migraciones ejecutadas.",
   "- Pruebas realizadas.",
   "- Riesgos, limitaciones o pendientes encontrados."
+].join("\n");
+const APPOINTMENT_DEPLOYMENT_INSTRUCTIONS = [
+  "- Usar solo la configuración de Appointment; Customer Service vive en su propia configuración.",
+  "- No activar públicamente sin aprobación explícita de Super Admin.",
+  "- Confirmar que el agente ElevenLabs real esté mapeado al tenant correcto.",
+  "- Confirmar webhook post-call de ElevenLabs hacia NextforIA.",
+  "- Confirmar calendario real conectado y aislado por tenant.",
+  "- Confirmar WhatsApp real conectado desde Meta para el tenant.",
+  "- Si el cliente activa llamadas, probar llamada real controlada antes de Live.",
+  "- Probar crear, confirmar, reprogramar y cancelar una cita.",
+  "- Probar recordatorios 24 horas y 6 horas cuando estén activados.",
+  "- Probar bloqueo de agenda interno y reprogramación automática con mensaje de disculpa.",
+  "- Verificar que la cita y la conversación aparezcan en Customer Panel y Super Admin."
 ].join("\n");
 const QUESTION_SECTIONS = Object.freeze([
   "goal",
@@ -825,6 +839,213 @@ function generateCustomerServiceConfiguration(input, meta) {
   });
 }
 
+function reminderTimingLabel(value) {
+  const raw = Array.isArray(value) ? value.join(",") : String(value || "");
+  const normalized = raw.toLowerCase();
+  if (normalized === "both") return "24 horas antes y 6 horas antes";
+  if (normalized.indexOf("24") >= 0 && normalized.indexOf("6") >= 0) return "24 horas antes y 6 horas antes";
+  if (normalized.indexOf("24") >= 0) return "24 horas antes";
+  if (normalized === "2h") return "6 horas antes";
+  if (normalized.indexOf("6") >= 0) return "6 horas antes";
+  if (normalized === "none" || normalized === "no") return "Sin recordatorios automáticos";
+  return text(value, 800);
+}
+
+function buildAppointmentSystemPrompt(configuration) {
+  const config = configuration && typeof configuration === "object" ? configuration : {};
+  const lines = [
+    "CONFIGURACIÓN DE APPOINTMENT BOT EN REVISIÓN INTERNA.",
+    "Esta configuración proviene del setup compartido aprobado por el cliente y Super Admin.",
+    "No inventes disponibilidad, precios, sedes, políticas ni confirmaciones.",
+    "No respondas temas de Customer Service fuera del alcance de agendamiento; deriva cuando aplique.",
+    "",
+    "IDENTIDAD:",
+    "- Empresa: " + (text(config.business_name, 120) || "No definida"),
+    "- Nombre del asistente: " + (text(config.assistant_name, 120) || "Nextfor"),
+    "- Objetivo: " + (text(config.objective, 1800) || "Gestionar citas de forma segura.")
+  ];
+  addConfigurationSection(lines, "NEGOCIO Y ALCANCE", [
+    ["Categoría", config.business_category],
+    ["Cliente objetivo", config.target_customer],
+    ["Descripción", config.business_summary],
+    ["Diferenciador", config.business_differentiator],
+    ["Tono", config.tone],
+    ["Temas permitidos", config.allowed_topics],
+    ["Temas prohibidos", config.forbidden_topics]
+  ]);
+  addConfigurationSection(lines, "AGENDA Y SERVICIOS", [
+    ["Servicios agendables", config.services],
+    ["Horario general", config.business_hours],
+    ["Quién atiende", config.staff_mode],
+    ["Ubicaciones/modalidad", config.appointment_locations],
+    ["Reglas de disponibilidad", config.availability_rules],
+    ["Datos obligatorios para reservar", config.required_booking_fields],
+    ["Confirmación de reserva", config.booking_confirmation_mode],
+    ["Cancelaciones y cambios", config.cancellation_policy],
+    ["No-show", config.no_show_policy],
+    ["Pagos para reservar", config.booking_payment_details]
+  ]);
+  addConfigurationSection(lines, "CALENDARIO Y CANALES", [
+    ["Proveedor de calendario", config.calendar_provider],
+    ["Correo/calendario", config.calendar_email],
+    ["WhatsApp", config.whatsapp_number],
+    ["Correo de citas", config.channel_email],
+    ["Llamadas activadas", config.phone_calls_enabled ? "Sí" : "No"],
+    ["Otros canales", config.other_channels],
+    ["Canales operativos", Array.isArray(config.channels) ? config.channels.join(", ") : ""]
+  ]);
+  addConfigurationSection(lines, "RECORDATORIOS Y REPROGRAMACIÓN", [
+    ["Canal de recordatorio", config.reminder_channel],
+    ["Momentos de recordatorio", config.reminder_timing],
+    ["Encuesta posterior", config.survey_enabled],
+    ["Reprogramación por cambios internos", config.rescheduling_policy]
+  ]);
+  addConfigurationSection(lines, "ESCALAMIENTO Y CUMPLIMIENTO", [
+    ["Escalar cuando", config.escalation_triggers],
+    ["Contacto humano", config.escalation_contact],
+    ["Consentimiento de datos", config.data_consent ? "Aceptado" : "Pendiente"],
+    ["Instrucciones adicionales", config.bot_instructions]
+  ]);
+  addConfigurationSection(lines, "DESPLIEGUE Y QA", [
+    ["Instrucciones", config.deployment_instructions]
+  ]);
+  return lines.join("\n");
+}
+
+function normalizeAppointmentConfiguration(input, meta) {
+  const source = input && typeof input === "object" ? input : {};
+  const now = meta && meta.now || new Date().toISOString();
+  const lifecycle = choice(
+    meta && meta.lifecycle != null ? meta.lifecycle : source.lifecycle,
+    ["draft", "approved_for_testing"],
+    "draft"
+  );
+  const channels = Array.isArray(source.channels)
+    ? source.channels.map(function (channel) { return text(channel, 40).toLowerCase(); })
+      .filter(function (channel, index, values) { return channel && values.indexOf(channel) === index; })
+      .slice(0, 12)
+    : [];
+  const normalized = {
+    version: APPOINTMENT_CONFIGURATION_VERSION,
+    bot_type: "appointments",
+    lifecycle,
+    source_record: "client-onboarding",
+    source_setup_updated_at: text(source.source_setup_updated_at, 40),
+    business_name: text(source.business_name, 120),
+    assistant_name: text(source.assistant_name, 120),
+    objective: text(source.objective, 1800),
+    business_category: text(source.business_category, 120),
+    target_customer: text(source.target_customer, 3000),
+    business_summary: text(source.business_summary, 5000),
+    business_differentiator: text(source.business_differentiator, 3000),
+    tone: text(source.tone, 1200),
+    allowed_topics: text(source.allowed_topics, 5000),
+    forbidden_topics: text(source.forbidden_topics, 5000),
+    services: text(source.services, 8000),
+    business_hours: text(source.business_hours, 3000),
+    staff_mode: text(source.staff_mode, 1200),
+    appointment_locations: text(source.appointment_locations, 5000),
+    availability_rules: text(source.availability_rules, 8000),
+    required_booking_fields: text(source.required_booking_fields, 4000),
+    minimum_booking_notice: text(source.minimum_booking_notice, 1200),
+    maximum_booking_window: text(source.maximum_booking_window, 1200),
+    booking_confirmation_mode: text(source.booking_confirmation_mode, 1200),
+    cancellation_policy: text(source.cancellation_policy, 5000),
+    no_show_policy: text(source.no_show_policy, 3000),
+    booking_payment_details: text(source.booking_payment_details, 3000),
+    calendar_provider: text(source.calendar_provider, 80),
+    calendar_email: text(source.calendar_email, 180).toLowerCase(),
+    whatsapp_number: text(source.whatsapp_number, 80),
+    channel_email: text(source.channel_email, 180).toLowerCase(),
+    phone_calls_enabled: source.phone_calls_enabled === true,
+    other_channels: text(source.other_channels, 2500),
+    channels,
+    reminder_channel: text(source.reminder_channel, 120),
+    reminder_timing: text(source.reminder_timing, 800),
+    survey_enabled: text(source.survey_enabled, 120),
+    rescheduling_policy: text(source.rescheduling_policy, 5000) ||
+      "Si NextforIA o el usuario del panel bloquea agenda, el bot debe contactar a los clientes afectados, pedir disculpas y reprogramar ofreciendo nuevas opciones.",
+    escalation_triggers: text(source.escalation_triggers, 5000),
+    escalation_contact: text(source.escalation_contact, 1500),
+    data_consent: source.data_consent === true,
+    bot_instructions: text(source.bot_instructions, 8000),
+    deployment_instructions: text(source.deployment_instructions, 10000) || APPOINTMENT_DEPLOYMENT_INSTRUCTIONS,
+    external_provider: choice(source.external_provider, ["", "elevenlabs"], ""),
+    external_status: choice(source.external_status, ["", "draft", "configured", "failed"], ""),
+    external_agent_id: text(source.external_agent_id, 160),
+    external_prompt_hash: text(source.external_prompt_hash, 80),
+    external_configured_at: text(source.external_configured_at, 40),
+    external_configured_by: text(source.external_configured_by, 160),
+    external_last_error: text(source.external_last_error, 500),
+    generated_at: text(source.generated_at, 40) || now,
+    updated_at: now,
+    updated_by: text(meta && meta.actor != null ? meta.actor : source.updated_by, 160),
+    approved_for_testing_at: lifecycle === "approved_for_testing"
+      ? (text(source.approved_for_testing_at, 40) || now)
+      : null,
+    approved_for_testing_by: lifecycle === "approved_for_testing"
+      ? text(meta && meta.actor != null ? meta.actor : source.approved_for_testing_by, 160)
+      : ""
+  };
+  normalized.system_prompt = buildAppointmentSystemPrompt(normalized);
+  return normalized;
+}
+
+function generateAppointmentConfiguration(input, meta) {
+  const answers = normalizeOnboarding(input);
+  if (answers.setup_goal !== "appointments" && answers.setup_goal !== "both") return null;
+  const appointment = answers.appointment_setup;
+  const channels = [];
+  if (answers.channels.whatsapp || answers.meta.whatsapp_number) channels.push("whatsapp");
+  if (answers.channels.email || appointment.channel_email) channels.push("email");
+  if (answers.channels.phone_calls) channels.push("phone_calls");
+  if (appointment.instagram_username) channels.push("instagram");
+  return normalizeAppointmentConfiguration({
+    source_setup_updated_at: text(meta && meta.source_setup_updated_at, 40),
+    business_name: appointment.business_name || answers.business.brand_name,
+    assistant_name: appointment.bot_display_name,
+    objective: "Gestionar citas: consultar disponibilidad, agendar, confirmar, recordar, cancelar y reprogramar con aprobación del cliente.",
+    business_category: appointment.business_category_other || appointment.business_category,
+    target_customer: appointment.target_customer,
+    business_summary: appointment.business_description,
+    business_differentiator: appointment.business_differentiator,
+    tone: appointment.assistant_tone,
+    allowed_topics: appointment.allowed_topics,
+    forbidden_topics: appointment.forbidden_topics,
+    services: appointment.services,
+    business_hours: appointment.business_hours,
+    staff_mode: appointment.staff_mode,
+    appointment_locations: appointment.appointment_locations,
+    availability_rules: appointment.availability_rules,
+    required_booking_fields: appointment.required_booking_fields,
+    minimum_booking_notice: appointment.minimum_booking_notice,
+    maximum_booking_window: appointment.maximum_booking_window,
+    booking_confirmation_mode: appointment.booking_confirmation_mode,
+    cancellation_policy: appointment.cancellation_policy,
+    no_show_policy: appointment.no_show_policy,
+    booking_payment_details: appointment.booking_payment_details || appointment.booking_payment_required,
+    calendar_provider: appointment.calendar_provider,
+    calendar_email: appointment.calendar_email,
+    whatsapp_number: answers.meta.whatsapp_number,
+    channel_email: appointment.channel_email || answers.channels.service_email,
+    phone_calls_enabled: answers.channels.phone_calls === true,
+    other_channels: appointment.other_channels || answers.channels.other_details,
+    channels,
+    reminder_channel: appointment.reminder_channel,
+    reminder_timing: reminderTimingLabel(appointment.reminder_timing),
+    survey_enabled: appointment.survey_enabled,
+    escalation_triggers: appointment.escalation_triggers,
+    escalation_contact: appointment.escalation_contact,
+    data_consent: appointment.data_consent === true,
+    bot_instructions: answers.operations.bot_instructions,
+    deployment_instructions: APPOINTMENT_DEPLOYMENT_INSTRUCTIONS
+  }, {
+    actor: meta && meta.actor,
+    lifecycle: "draft",
+    now: meta && meta.now
+  });
+}
+
 const CUSTOMER_SERVICE_REQUIRED_PATHS = [
   "setup_goal",
   "business.brand_name",
@@ -1030,6 +1251,22 @@ function createOnboardingRecord(input, meta) {
       now: previous.customer_service_configuration.updated_at || now
     });
   }
+  let appointmentConfiguration = null;
+  if (Object.prototype.hasOwnProperty.call(meta, "appointment_configuration")) {
+    appointmentConfiguration = meta.appointment_configuration
+      ? normalizeAppointmentConfiguration(meta.appointment_configuration, {
+        actor: meta.review_actor || meta.updated_by,
+        lifecycle: meta.appointment_configuration_lifecycle,
+        now
+      })
+      : null;
+  } else if (previous.appointment_configuration) {
+    appointmentConfiguration = normalizeAppointmentConfiguration(previous.appointment_configuration, {
+      actor: previous.appointment_configuration.updated_by,
+      lifecycle: previous.appointment_configuration.lifecycle,
+      now: previous.appointment_configuration.updated_at || now
+    });
+  }
   return {
     version: 2,
     questionnaire_version: 1,
@@ -1040,6 +1277,7 @@ function createOnboardingRecord(input, meta) {
     setup_completed_at: setupCompletedAt,
     setup_review: setupReview,
     customer_service_configuration: customerServiceConfiguration,
+    appointment_configuration: appointmentConfiguration,
     last_updated_at: now,
     answers,
     updated_at: now,
@@ -1059,6 +1297,8 @@ function buildCoverageConversationContext(record) {
 }
 
 module.exports = {
+  APPOINTMENT_CONFIGURATION_VERSION,
+  APPOINTMENT_DEPLOYMENT_INSTRUCTIONS,
   CUSTOMER_SERVICE_CONFIGURATION_VERSION,
   CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS,
   CUSTOMER_SETUP_QUESTIONS,
@@ -1070,10 +1310,13 @@ module.exports = {
   CUSTOMER_SERVICE_REQUIRED_PATHS,
   REQUIRED_PATHS,
   buildCoverageConversationContext,
+  buildAppointmentSystemPrompt,
   buildCustomerServiceSystemPrompt,
   cloneDefaults,
   createOnboardingRecord,
+  generateAppointmentConfiguration,
   generateCustomerServiceConfiguration,
+  normalizeAppointmentConfiguration,
   normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
   mergeCustomerSetupQuestionnaireHistory,

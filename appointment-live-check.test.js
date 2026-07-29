@@ -20,6 +20,11 @@ let result = evaluateAppointmentLiveReadiness({
       production_ready: false,
       blockers: []
     }
+  },
+  appointmentOverview: {
+    ok: true,
+    totals: { live_ready: 1 },
+    clients: [{ tenant_id: "grupo-derco" }]
   }
 });
 assert.strictEqual(result.ok, true);
@@ -66,6 +71,11 @@ result = evaluateAppointmentLiveReadiness({
       production_ready: false,
       blockers: []
     }
+  },
+  appointmentOverview: {
+    ok: true,
+    totals: { live_ready: 1 },
+    clients: [{ tenant_id: "grupo-derco" }]
   }
 });
 assert.strictEqual(result.ok, false);
@@ -82,9 +92,36 @@ result = evaluateAppointmentLiveReadiness({
       production_ready: false,
       blockers: []
     }
+  },
+  appointmentOverview: {
+    ok: true,
+    totals: { live_ready: 1 },
+    clients: [{ tenant_id: "grupo-derco" }]
   }
 });
 assert.strictEqual(result.ok, false);
 assert(result.failures.some(function (failure) { return /status_503/.test(failure); }));
+
+result = evaluateAppointmentLiveReadiness({
+  health: { ok: true, bot: { version: "v247-appointment-setup-gate" } },
+  dns: { ok: true, host: "api.nextforia.com", addresses: ["203.0.113.10"] },
+  webhook: { ok: true, url: "https://api.nextforia.com/webhooks/elevenlabs/post-call", status: 401 },
+  expectedVersion: "v247-appointment-setup-gate",
+  requireDashboardKey: true,
+  fullHealth: {
+    appointment_readiness: {
+      production_can_be_enabled: true,
+      production_ready: false,
+      blockers: []
+    }
+  },
+  appointmentOverview: {
+    ok: true,
+    totals: { live_ready: 0 },
+    clients: [{ tenant_id: "otro-cliente" }]
+  }
+});
+assert.strictEqual(result.ok, false);
+assert(result.failures.some(function (failure) { return /DERCO/.test(failure); }));
 
 console.log("appointment live check tests: ok");

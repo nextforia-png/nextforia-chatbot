@@ -103,3 +103,7 @@ Appointment solo está listo cuando hay evidencia de:
 - persistencia de citas activa;
 - prueba real de cita visible en Customer Panel y Super Admin;
 - aprobación explícita de Super Admin antes de `APPOINTMENTS_PUBLIC_ENABLED=1`.
+
+El comando `pnpm verify:appointments --require-dashboard-key` debe validar
+también `/admin/appointments-overview`: si Super Admin no puede ver la flota de
+agendamiento o DERCO no aparece como piloto, no hay luz verde.

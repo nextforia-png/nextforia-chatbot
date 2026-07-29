@@ -72,6 +72,7 @@ function evaluateAppointmentLiveReadiness(input) {
   const warnings = [];
   const health = input.health || {};
   const fullHealth = input.fullHealth || null;
+  const appointmentOverview = input.appointmentOverview || null;
   const dnsResult = input.dns || {};
   const webhookResult = input.webhook || null;
   const expectedVersion = input.expectedVersion || "";
@@ -107,6 +108,19 @@ function evaluateAppointmentLiveReadiness(input) {
       }
     }
   }
+  if (!appointmentOverview) {
+    const message = "Sin DASHBOARD_KEY no se puede verificar la supervisión Appointment de Super Admin.";
+    if (requireDashboardKey) failures.push(message);
+    else warnings.push(message);
+  } else if (appointmentOverview.ok !== true) {
+    failures.push("Super Admin no pudo cargar /admin/appointments-overview: " + (appointmentOverview.error || "sin detalle") + ".");
+  } else {
+    const clients = Array.isArray(appointmentOverview.clients) ? appointmentOverview.clients : [];
+    if (clients.length < 1) failures.push("Super Admin overview no lista clientes Appointment.");
+    if (!clients.some(function (client) { return client && client.tenant_id === "grupo-derco"; })) {
+      failures.push("Super Admin overview no incluye el piloto DERCO.");
+    }
+  }
 
   return {
     ok: failures.length === 0,
@@ -134,6 +148,7 @@ async function main() {
     retryDelayMs: cfg.coldStartDelayMs
   });
   let fullHealth = null;
+  let appointmentOverview = null;
   if (cfg.dashboardKey) {
     fullHealth = await requestJson({
       url: cfg.baseUrl + "/admin/health",
@@ -142,11 +157,23 @@ async function main() {
       retries: cfg.coldStartRetries,
       retryDelayMs: cfg.coldStartDelayMs
     });
+    try {
+      appointmentOverview = await requestJson({
+        url: cfg.baseUrl + "/admin/appointments-overview",
+        key: cfg.dashboardKey,
+        timeoutMs: cfg.timeoutMs,
+        retries: cfg.coldStartRetries,
+        retryDelayMs: cfg.coldStartDelayMs
+      });
+    } catch (error) {
+      appointmentOverview = { ok: false, error: error.message };
+    }
   }
 
   const result = evaluateAppointmentLiveReadiness({
     health: publicHealth,
     fullHealth,
+    appointmentOverview,
     dns: dnsResult,
     webhook: webhookResult,
     expectedVersion,
@@ -162,6 +189,12 @@ async function main() {
     api_dns: dnsResult,
     webhook: webhookResult,
     appointment_readiness: fullHealth && fullHealth.appointment_readiness || null,
+    appointment_overview: appointmentOverview ? {
+      ok: appointmentOverview.ok,
+      clients: Array.isArray(appointmentOverview.clients) ? appointmentOverview.clients.length : 0,
+      live_ready: appointmentOverview.totals && appointmentOverview.totals.live_ready || 0,
+      error: appointmentOverview.error || ""
+    } : null,
     warnings: result.warnings,
     failures: result.failures
   });

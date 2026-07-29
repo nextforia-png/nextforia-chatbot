@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v281-rav-meta-asset-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v282-rav-whatsapp-cloud-registration";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1063,7 +1063,80 @@ async function bootstrapExistingWhatsAppConnection() {
   }
 }
 
-channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection();
+async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult) {
+  const isRavSpecialCase =
+    process.env.NODE_ENV === "production" &&
+    CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e" &&
+    META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606" &&
+    PHONE_NUMBER_ID === "334999901166332" &&
+    !!WA_TOKEN &&
+    !!channelConnectionProvider;
+  if (!isRavSpecialCase) return bootstrapResult;
+  try {
+    const phone = await channelConnectionProvider.graph(encodeURIComponent(PHONE_NUMBER_ID), WA_TOKEN, {
+      params: { fields: "id,code_verification_status,platform_type" }
+    });
+    const verification = String(phone.data && phone.data.code_verification_status || "").toUpperCase();
+    const platform = String(phone.data && phone.data.platform_type || "").toUpperCase();
+    if (verification === "VERIFIED" && platform === "CLOUD_API") {
+      return Object.assign({}, bootstrapResult, {
+        ok: true,
+        registration: { skipped: true, reason: "already_cloud_registered" }
+      });
+    }
+    if (verification !== "NOT_VERIFIED" || platform !== "ON_PREMISE") {
+      return Object.assign({}, bootstrapResult, {
+        ok: false,
+        registration: {
+          skipped: true,
+          reason: "unexpected_registration_state",
+          code_verification_status: verification || null,
+          platform_type: platform || null
+        }
+      });
+    }
+    await channelConnectionProvider.graph(encodeURIComponent(PHONE_NUMBER_ID) + "/register", WA_TOKEN, {
+      method: "POST",
+      data: {
+        messaging_product: "whatsapp",
+        pin: channelConnectionProvider.whatsappRegistrationPin(PHONE_NUMBER_ID)
+      },
+      timeout: 20000
+    });
+    channelRuntimeCache.loaded_at = 0;
+    log("info", "rav_whatsapp_cloud_registration_completed", {
+      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+      phone_number_id: PHONE_NUMBER_ID
+    });
+    return Object.assign({}, bootstrapResult, {
+      ok: true,
+      registration: { skipped: false, registered: true }
+    });
+  } catch (error) {
+    const metaError = error.response && error.response.data && error.response.data.error || {};
+    const message = cleanRuntimeText(metaError.message || error.message, 300) || "registration_failed";
+    log("error", "rav_whatsapp_cloud_registration_failed", {
+      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+      phone_number_id: PHONE_NUMBER_ID,
+      error_code: metaError.code || null,
+      error_subcode: metaError.error_subcode || null,
+      error: message
+    });
+    return Object.assign({}, bootstrapResult, {
+      ok: false,
+      registration: {
+        skipped: false,
+        registered: false,
+        error_code: metaError.code || null,
+        error_subcode: metaError.error_subcode || null,
+        error: message
+      }
+    });
+  }
+}
+
+channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection()
+  .then(registerRavWhatsAppCloudNumberIfNeeded);
 
 function runtimeTenantChannelKey(tenantId, channel) {
   return cleanTenantId(tenantId) + ":" + cleanChannel(channel);

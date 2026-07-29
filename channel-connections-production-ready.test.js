@@ -41,10 +41,15 @@ function waitForServer(child, port) {
 (async function run() {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   const bootstrapStart = source.indexOf("async function bootstrapExistingWhatsAppConnection()");
-  const bootstrapEnd = source.indexOf("channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection();");
+  const bootstrapEnd = source.indexOf("async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult)");
   assert(bootstrapStart >= 0 && bootstrapEnd > bootstrapStart);
   const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
   assert.match(bootstrapSource, /access_token:\s*WA_TOKEN,[\s\S]*?coexistence:\s*true/);
+  assert.match(source, /async function registerRavWhatsAppCloudNumberIfNeeded\(bootstrapResult\)/);
+  assert.match(source, /CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e"/);
+  assert.match(source, /META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606"/);
+  assert.match(source, /PHONE_NUMBER_ID === "334999901166332"/);
+  assert.match(source, /channelConnectionProvider\.whatsappRegistrationPin\(PHONE_NUMBER_ID\)/);
   assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.source === "channel_connection"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
   assert.match(source, /const graphOrigin = instagramGraphOriginForRuntime\(runtime\);[\s\S]*?`\$\{graphOrigin\}\/\$\{META_GRAPH_VERSION\}\/\$\{sendId\}\/messages`/);
   assert.match(source, /instagramRuntimeState\.last_error_code = metaError\.code \|\| null/);
@@ -88,7 +93,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v281-rav-meta-asset-diagnostics"));
+    assert((await response.text()).includes("v282-rav-whatsapp-cloud-registration"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

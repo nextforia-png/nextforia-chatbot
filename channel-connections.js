@@ -752,6 +752,9 @@ function createChannelConnectionService(options) {
   const provider = options.provider;
   const encryptionKey = options.encryptionKey;
   const legacyConnections = Array.isArray(options.legacyConnections) ? options.legacyConnections : [];
+  const allowProtectedLegacyReconnect = typeof options.allowProtectedLegacyReconnect === "function"
+    ? options.allowProtectedLegacyReconnect
+    : function () { return false; };
   const now = typeof options.now === "function" ? options.now : function () { return new Date(); };
 
   if (!store) throw new Error("channel_connection_store_required");
@@ -940,7 +943,8 @@ function createChannelConnectionService(options) {
       // the tenant has a real, encrypted channel record. This is how an
       // existing WhatsApp Business App number completes coexistence safely.
       if (legacy && legacy.protected_legacy &&
-          (!storedConnection || storedConnection.protected_legacy || !storedConnection.credentials_ciphertext)) {
+          (!storedConnection || storedConnection.protected_legacy || !storedConnection.credentials_ciphertext) &&
+          !allowProtectedLegacyReconnect(clean.tenantId, clean.channel)) {
         throw new ChannelConnectionError("legacy_connection_protected", 409);
       }
       await store.upsert({

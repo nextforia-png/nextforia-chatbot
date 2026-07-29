@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v255-meta-coexistence-reconnect";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v256-rav-whatsapp-coexistence";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -882,7 +882,13 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
       store: channelConnectionStore,
       provider: channelConnectionProvider,
       encryptionKey: DATA_ENCRYPTION_KEY,
-      legacyConnections: protectedLegacyChannelConnections
+      legacyConnections: protectedLegacyChannelConnections,
+      allowProtectedLegacyReconnect: function (tenantId, channel) {
+        return channel === "whatsapp" && [
+          DEFAULT_TENANT_ID,
+          CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
+        ].filter(Boolean).includes(cleanTenantId(tenantId));
+      }
     })
   : null;
 let channelConnectionBootstrapPromise = Promise.resolve({ skipped: true });

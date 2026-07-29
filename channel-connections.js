@@ -933,7 +933,16 @@ function createChannelConnectionService(options) {
       const clean = assertTenantChannel(tenantId, channel);
       if (!provider || !provider.configured(clean.channel)) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
       const legacy = legacyFor(clean.tenantId, clean.channel);
-      if (legacy && legacy.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+      let storedConnection = null;
+      try { storedConnection = await store.get(clean.tenantId, clean.channel); }
+      catch (error) { throw mapStoreError(error); }
+      // A protected environment fallback must not block Embedded Signup once
+      // the tenant has a real, encrypted channel record. This is how an
+      // existing WhatsApp Business App number completes coexistence safely.
+      if (legacy && legacy.protected_legacy &&
+          (!storedConnection || storedConnection.protected_legacy || !storedConnection.credentials_ciphertext)) {
+        throw new ChannelConnectionError("legacy_connection_protected", 409);
+      }
       await store.upsert({
         tenant_id: clean.tenantId,
         channel: clean.channel,

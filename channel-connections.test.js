@@ -382,6 +382,15 @@ function expectCode(promise, code) {
   assert.strictEqual(rav.find(function (row) { return row.channel === "whatsapp"; }).protected_legacy, true);
   await expectCode(legacyService.disconnect("rav-toys", "whatsapp", "super-admin"), "legacy_connection_protected");
   await expectCode(legacyService.begin("rav-toys", "whatsapp", "super-admin", state), "legacy_connection_protected");
+  await legacyStore.upsert({
+    tenant_id: "rav-toys",
+    channel: "whatsapp",
+    status: "connected",
+    protected_legacy: false,
+    credentials_ciphertext: "enc:v1:existing-encrypted-credential"
+  });
+  const coexistenceUrl = await legacyService.begin("rav-toys", "whatsapp", "super-admin", state);
+  assert(coexistenceUrl.includes("channel=whatsapp"));
 
   const upMigration = require("fs").readFileSync("docs/migrations/20260726_channel_connections_v1_up.sql", "utf8");
   assert.match(upMigration, /tenant_channel_connections/);

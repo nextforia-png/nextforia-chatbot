@@ -37,7 +37,7 @@
 - La respuesta del panel incluye `integrations`, el semáforo real del bot de citas: ElevenLabs, calendario, WhatsApp, correo, llamadas, Supabase y bloqueadores antes de live.
 - En Customer Panel, el cliente puede iniciar Google Calendar y WhatsApp/Meta desde los conectores existentes; llamadas se muestran como solicitadas/pendientes cuando aplican, pero la asignación real del número ElevenLabs la ejecuta Nextfor desde Super Admin.
 - Citas, conversaciones de agendamiento y recordatorios comparten el identificador de cita para reflejar confirmaciones y handoffs en una sola fuente de verdad.
-- Super Admin ve el mismo gate en `GET /admin/customer-setups/:tenantId` como `appointment_integrations`; la pantalla global no debe leer el HTML del panel ni reconstruir métricas desde la interfaz.
+- Super Admin ve el mismo gate en `GET /admin/customer-setups/:tenantId` como `appointment_integrations`, y la flota de agendamiento en `GET /admin/appointments-overview`; la pantalla global no debe leer el HTML del panel ni reconstruir métricas desde la interfaz.
 - Las acciones del demo mutan únicamente el estado local de la vista. En Customer Panel real, confirmar/cancelar/reprogramar persiste en backend; el envío outbound y la sincronización Google Calendar deben mostrarse como pendientes hasta que el proveedor confirme la ejecución.
 
 ## Información necesaria del cliente

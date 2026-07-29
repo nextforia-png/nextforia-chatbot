@@ -137,6 +137,15 @@ function elevenLabsSignature(body, secret, timestamp) {
     assert.strictEqual(data.metrics.booked, 1);
     assert.strictEqual(data.upcoming.length, 1);
 
+    response = await fetch(base + "/admin/appointments-overview", { headers: { "x-dashboard-key": dashboardKey } });
+    assert.strictEqual(response.status, 200);
+    const overview = await response.json();
+    const dercoOverview = overview.clients.find(function (row) { return row.tenant_id === "grupo-derco"; });
+    assert(dercoOverview, "Super Admin appointment overview should include DERCO");
+    assert.strictEqual(overview.totals.requested, 1);
+    assert.strictEqual(dercoOverview.metrics.booked, 1);
+    assert.strictEqual(dercoOverview.panel_path, "/admin/pilots/derco");
+
     response = await fetch(base + "/admin/pilots/derco", { headers: { "x-dashboard-key": dashboardKey } });
     assert.strictEqual(response.status, 200);
     assert((await response.text()).includes("Grupo Jurídico DERCO S.A.S."));

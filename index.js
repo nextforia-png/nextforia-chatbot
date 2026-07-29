@@ -5499,6 +5499,103 @@ async function appointmentIntegrationsForRecord(record, tenantId, channels) {
   return buildAppointmentIntegrations(record, tenantId, appointmentIntegrationOptions(channels || [], calendarConnection, record, tenantId));
 }
 
+function appointmentOverviewTenantHasModule(tenant, record) {
+  const registered = getRegisteredClient(tenant && tenant.id);
+  if (registered && registered.modules && registered.modules.appointments) return true;
+  if (setupIncludesAppointments(record && record.answers || {})) return true;
+  return customerBusinessHasAppointmentModule({
+    plan_id: tenant && tenant.plan_id,
+    assigned_bot_id: tenant && tenant.assigned_bot_id
+  });
+}
+
+async function buildSuperAdminAppointmentOverview() {
+  const tenantMap = new Map();
+  function addTenant(input) {
+    const id = cleanTenantId(input && (input.id || input.tenant_id));
+    if (!id) return;
+    const previous = tenantMap.get(id) || {};
+    tenantMap.set(id, Object.assign({}, previous, input, {
+      id,
+      tenant_id: id,
+      company_name: input.company_name || input.brand_name || input.name || previous.company_name || previous.brand_name || previous.name || id,
+      name: input.name || input.company_name || input.brand_name || previous.name || previous.company_name || previous.brand_name || id
+    }));
+  }
+  (await listSetupReviewTenants()).forEach(addTenant);
+  listRegisteredClients().forEach(function (client) {
+    addTenant(Object.assign({}, client, {
+      id: client.tenant_id,
+      company_name: client.brand_name || client.short_name || client.tenant_id,
+      name: client.brand_name || client.short_name || client.tenant_id
+    }));
+  });
+  const clients = (await Promise.all(Array.from(tenantMap.values()).map(async function (tenant) {
+    const record = await loadClientOnboarding(false, tenant.id);
+    if (!appointmentOverviewTenantHasModule(tenant, record)) return null;
+    const channels = await setupReviewChannels(tenant.id).catch(function () { return []; });
+    const persistent = await hydrateAppointmentsForTenant(tenant.id);
+    const snapshot = appointmentRegistry.snapshot(tenant.id);
+    const integrations = await appointmentIntegrationsForRecord(record, tenant.id, channels);
+    const review = setupReviewSummary(record);
+    const registered = getRegisteredClient(tenant.id);
+    return {
+      tenant_id: tenant.id,
+      company_name: tenant.company_name || tenant.name || tenant.id,
+      customer_number: tenant.customer_number || registered && registered.customer_number || null,
+      status: tenant.status || registered && registered.status || "setup",
+      review_status: review.status,
+      setup_completed: !!(record && record.setup_completed),
+      source: persistent ? "supabase" : "memory",
+      metrics: snapshot.metrics,
+      upcoming_count: snapshot.upcoming.length,
+      last_updated_at: snapshot.appointments[0] && snapshot.appointments[0].updated_at || record && (record.last_updated_at || record.updated_at) || null,
+      ready_for_testing: integrations.ready_for_testing,
+      ready_for_live: integrations.ready_for_live,
+      blockers: integrations.blockers,
+      integrations: {
+        bot: integrations.bot && integrations.bot.status,
+        calendar: integrations.calendar && integrations.calendar.status,
+        whatsapp: integrations.whatsapp && integrations.whatsapp.status,
+        calls: integrations.calls && integrations.calls.status,
+        persistence: integrations.persistence && integrations.persistence.status
+      },
+      panel_path: tenant.id === DERCO_TENANT_ID ? "/admin/pilots/derco" : "",
+      setup_path: "/admin/super-admin?view=setupReview&tenant_id=" + encodeURIComponent(tenant.id)
+    };
+  }))).filter(Boolean);
+  clients.sort(function (a, b) {
+    return Number(b.ready_for_live) - Number(a.ready_for_live) ||
+      String(b.last_updated_at || "").localeCompare(String(a.last_updated_at || "")) ||
+      String(a.company_name || "").localeCompare(String(b.company_name || ""));
+  });
+  const totals = clients.reduce(function (acc, client) {
+    const metrics = client.metrics || {};
+    acc.appointment_clients += 1;
+    if (client.ready_for_live) acc.live_ready += 1;
+    acc.interactions += Number(metrics.interactions) || 0;
+    acc.requested += Number(metrics.requested) || 0;
+    acc.booked += Number(metrics.booked) || 0;
+    acc.pending += Number(metrics.pending) || 0;
+    acc.cancelled += Number(metrics.cancelled) || 0;
+    acc.failed += Number(metrics.failed) || 0;
+    acc.upcoming += Number(client.upcoming_count) || 0;
+    return acc;
+  }, {
+    appointment_clients: 0,
+    live_ready: 0,
+    interactions: 0,
+    requested: 0,
+    booked: 0,
+    pending: 0,
+    cancelled: 0,
+    failed: 0,
+    upcoming: 0
+  });
+  totals.confirmation_rate = totals.requested ? Math.round(totals.booked / totals.requested * 100) : 0;
+  return { ok: true, checked_at: new Date().toISOString(), totals, clients };
+}
+
 function setupIncludesCustomerService(answers) {
   return answers && (answers.setup_goal === "customer_service" || answers.setup_goal === "both");
 }
@@ -9355,6 +9452,20 @@ app.get("/admin/leads", async (req, res) => {
   } catch (error) {
     console.error("super admin leads error:", error.message);
     res.status(503).json({ ok: false, error: "leads_unavailable" });
+  }
+});
+
+app.get("/admin/appointments-overview", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    res.json(await buildSuperAdminAppointmentOverview());
+  } catch (error) {
+    console.error("super admin appointment overview error:", error.message);
+    res.status(503).json({ ok: false, error: "appointment_overview_unavailable" });
   }
 });
 

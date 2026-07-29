@@ -47,6 +47,9 @@ function waitForServer(child, port) {
   assert.match(bootstrapSource, /access_token:\s*WA_TOKEN,[\s\S]*?coexistence:\s*true/);
   assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.source === "channel_connection"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
   assert.match(source, /const graphOrigin = instagramGraphOriginForRuntime\(runtime\);[\s\S]*?`\$\{graphOrigin\}\/\$\{META_GRAPH_VERSION\}\/\$\{sendId\}\/messages`/);
+  assert.match(source, /instagramRuntimeState\.last_error_code = metaError\.code \|\| null/);
+  assert.match(source, /instagramRuntimeState\.last_error_subcode = metaError\.error_subcode \|\| null/);
+  assert.match(source, /instagramRuntimeState\.last_error_type = metaError\.type \|\| err\.code \|\| null/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -80,7 +83,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v256-rav-whatsapp-coexistence"));
+    assert((await response.text()).includes("v257-meta-delivery-diagnostics"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");
@@ -90,6 +93,14 @@ function waitForServer(child, port) {
     const whatsappHealth = await response.json();
     assert.strictEqual(whatsappHealth.configured, true);
     assert.strictEqual(whatsappHealth.runtime.webhook_requests, 0);
+
+    response = await fetch(base + "/instagram/health");
+    assert.strictEqual(response.status, 503);
+    const instagramHealth = await response.json();
+    assert.strictEqual(instagramHealth.configured, false);
+    assert.strictEqual(instagramHealth.runtime.last_error_code, null);
+    assert.strictEqual(instagramHealth.runtime.last_error_subcode, null);
+    assert.strictEqual(instagramHealth.runtime.last_error_type, null);
 
     response = await fetch(base + "/admin/panel-demo?tab=channels");
     assert.strictEqual(response.status, 200);

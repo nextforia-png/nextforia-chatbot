@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v256-rav-whatsapp-coexistence";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v257-meta-delivery-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -692,6 +692,9 @@ const instagramRuntimeState = {
   last_outbound_at: null,
   last_error_at: null,
   last_error_stage: null,
+  last_error_code: null,
+  last_error_subcode: null,
+  last_error_type: null,
   last_handoff_auto_release_at: null,
   last_webhook_object: null,
   last_entry_shape: null,
@@ -3301,8 +3304,12 @@ async function sendText(to, text, options) {
     return true;
   } catch (err) {
     if (recipient.channel === "instagram") {
+      const metaError = err.response?.data?.error || {};
       instagramRuntimeState.last_error_at = new Date().toISOString();
       instagramRuntimeState.last_error_stage = "send_text";
+      instagramRuntimeState.last_error_code = metaError.code || null;
+      instagramRuntimeState.last_error_subcode = metaError.error_subcode || null;
+      instagramRuntimeState.last_error_type = metaError.type || err.code || null;
     }
     if (recipient.channel === "whatsapp") {
       const metaError = err.response?.data?.error || {};

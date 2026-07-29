@@ -33,10 +33,11 @@
 
 - El módulo vive en `/admin/panel?tab=appointments` y mantiene separadas las métricas de Atención al cliente.
 - `GET /admin/panel/appointments-data` entrega una vista segura y aislada por `tenant_id`; no incluye tokens ni credenciales del proveedor de calendario.
+- `POST /admin/panel/appointments/action` permite al usuario admin confirmar, cancelar o solicitar reprogramación de citas de su propio `tenant_id`; actualiza la fuente real (`AppointmentRegistry` y Supabase si está activo) y deja auditoría cifrada en el payload.
 - La respuesta del panel incluye `integrations`, el semáforo real del bot de citas: ElevenLabs, calendario, WhatsApp, correo, llamadas, Supabase y bloqueadores antes de live.
 - Citas, conversaciones de agendamiento y recordatorios comparten el identificador de cita para reflejar confirmaciones y handoffs en una sola fuente de verdad.
 - Super Admin ve el mismo gate en `GET /admin/customer-setups/:tenantId` como `appointment_integrations`; la pantalla global no debe leer el HTML del panel ni reconstruir métricas desde la interfaz.
-- Las acciones del demo mutan únicamente el estado local de la vista. El envío real, Google Calendar y las mutaciones persistentes se habilitan al conectar los proveedores del cliente.
+- Las acciones del demo mutan únicamente el estado local de la vista. En Customer Panel real, confirmar/cancelar/reprogramar persiste en backend; el envío outbound y la sincronización Google Calendar deben mostrarse como pendientes hasta que el proveedor confirme la ejecución.
 
 ## Información necesaria del cliente
 

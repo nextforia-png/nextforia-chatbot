@@ -25,6 +25,16 @@ function validIsoDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+function validAppointmentAction(value) {
+  const action = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  return ["confirm", "cancel", "reprogram"].includes(action) ? action : "";
+}
+
+function cleanAppointmentActionStatus(value) {
+  const status = cleanText(value, 60).toLowerCase().replace(/[\s-]+/g, "_");
+  return ["queued", "saved", "applied", "synced", "pending", "failed", "not_required"].includes(status) ? status : "";
+}
+
 function analysisValue(collection, key) {
   const entry = collection && collection[key];
   if (entry == null) return "";
@@ -74,7 +84,7 @@ function normalizeAppointment(input) {
   const conversationId = cleanText(input.conversation_id, 160);
   const tenantId = cleanText(input.tenant_id, 80);
   if (!conversationId || !tenantId) return null;
-  return {
+  const normalized = {
     tenant_id: tenantId,
     conversation_id: conversationId,
     agent_id: cleanText(input.agent_id, 160),
@@ -91,6 +101,21 @@ function normalizeAppointment(input) {
     created_at: validIsoDate(input.created_at) || new Date().toISOString(),
     updated_at: validIsoDate(input.updated_at) || new Date().toISOString()
   };
+  const panelAction = validAppointmentAction(input.panel_action);
+  if (panelAction) normalized.panel_action = panelAction;
+  const panelActionStatus = cleanAppointmentActionStatus(input.panel_action_status);
+  if (panelActionStatus) normalized.panel_action_status = panelActionStatus;
+  const calendarSyncStatus = cleanAppointmentActionStatus(input.calendar_sync_status);
+  if (calendarSyncStatus) normalized.calendar_sync_status = calendarSyncStatus;
+  const panelActionAt = validIsoDate(input.panel_action_at);
+  if (panelActionAt) normalized.panel_action_at = panelActionAt;
+  const panelActionBy = cleanText(input.panel_action_by, 160);
+  if (panelActionBy) normalized.panel_action_by = panelActionBy;
+  const panelActionReason = cleanText(input.panel_action_reason, 1000);
+  if (panelActionReason) normalized.panel_action_reason = panelActionReason;
+  const panelActionMessage = cleanText(input.panel_action_message, 1000);
+  if (panelActionMessage) normalized.panel_action_message = panelActionMessage;
+  return normalized;
 }
 
 class AppointmentRegistry {
@@ -153,11 +178,41 @@ class AppointmentRegistry {
     }).sort(function (a, b) { return new Date(a.starts_at) - new Date(b.starts_at); });
     return { tenant_id: tenantId, metrics, appointments: rows.slice(0, 200), upcoming: upcoming.slice(0, 50) };
   }
+
+  async applyPanelAction(tenantId, conversationId, action, options) {
+    const cleanTenantId = cleanText(tenantId, 80);
+    const cleanConversationId = cleanText(conversationId, 160);
+    const cleanAction = validAppointmentAction(action);
+    if (!cleanTenantId || !cleanConversationId || !cleanAction) throw new Error("invalid_appointment_action");
+    const key = cleanTenantId + ":" + cleanConversationId;
+    const existing = this.rows.get(key);
+    if (!existing) throw new Error("appointment_not_found");
+    const now = new Date().toISOString();
+    const statusByAction = { confirm: "booked", cancel: "cancelled", reprogram: "requested" };
+    const actionMessageByAction = {
+      confirm: "Cita confirmada desde el panel Nextfor.",
+      cancel: "Cita cancelada desde el panel Nextfor.",
+      reprogram: "Reprogramación solicitada desde el panel Nextfor."
+    };
+    const row = Object.assign({}, existing, {
+      status: statusByAction[cleanAction],
+      panel_action: cleanAction,
+      panel_action_status: cleanAction === "confirm" ? "saved" : "queued",
+      panel_action_at: now,
+      panel_action_by: cleanText(options && options.actor, 160),
+      panel_action_reason: cleanText(options && options.reason, 1000),
+      panel_action_message: cleanText(options && options.message, 1000) || actionMessageByAction[cleanAction],
+      calendar_sync_status: cleanAction === "confirm" ? cleanText(existing.calendar_sync_status, 60) || "queued" : cleanText(existing.calendar_sync_status, 60) || "not_required",
+      updated_at: now
+    });
+    return this.upsert(row, options && options.persist);
+  }
 }
 
 module.exports = {
   APPOINTMENT_STATUSES,
   AppointmentRegistry,
   appointmentFromElevenLabsEvent,
-  normalizeAppointment
+  normalizeAppointment,
+  validAppointmentAction
 };

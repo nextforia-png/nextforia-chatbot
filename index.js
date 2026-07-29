@@ -10617,6 +10617,66 @@ app.get("/admin/panel/appointments-data", async (req, res) => {
   }));
 });
 
+app.post("/admin/panel/appointments/action", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try {
+    business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  } catch (_) {}
+  if (!customerBusinessHasAppointmentModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
+  const body = req.body || {};
+  const action = String(body.action || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const rawIds = Array.isArray(body.appointment_ids)
+    ? body.appointment_ids
+    : [body.appointment_id || body.conversation_id];
+  const appointmentIds = Array.from(new Set(rawIds.map(function (value) {
+    return String(value || "").trim().slice(0, 160);
+  }).filter(Boolean))).slice(0, 100);
+  if (!["confirm", "cancel", "reprogram"].includes(action) || appointmentIds.length < 1) {
+    res.status(400).json({ ok: false, error: "invalid_appointment_action" });
+    return;
+  }
+  await hydrateAppointmentsForTenant(tenantId);
+  const existingIds = new Set(appointmentRegistry.list(tenantId).map(function (row) { return row.conversation_id; }));
+  const missingId = appointmentIds.find(function (appointmentId) { return !existingIds.has(appointmentId); });
+  if (missingId) {
+    res.status(404).json({ ok: false, error: "appointment_not_found" });
+    return;
+  }
+  const actor = auth.name || auth.email || auth.username || "customer_panel";
+  const updated = [];
+  try {
+    for (const appointmentId of appointmentIds) {
+      const row = await appointmentRegistry.applyPanelAction(tenantId, appointmentId, action, {
+        actor,
+        reason: body.reason,
+        message: body.message,
+        persist: false
+      });
+      await persistAppointment(row);
+      updated.push(row);
+    }
+    const snapshot = appointmentRegistry.snapshot(tenantId);
+    res.json(Object.assign(customerAppointmentSnapshot(snapshot, business), {
+      ok: true,
+      action,
+      updated_count: updated.length,
+      updated_appointments: updated.map(function (row) { return row.conversation_id; })
+    }));
+  } catch (error) {
+    const status = error.message === "appointment_not_found" ? 404 : 400;
+    res.status(status).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/admin/panel/demo-appointments-data", (req, res) => {
   res.json(demoAppointmentSnapshot());
 });

@@ -84,6 +84,11 @@ setup de Atención al Cliente y no repita errores operativos.
    Si falta Google/Meta/ElevenLabs, el panel debe decir si lo hace el cliente,
    Super Admin o infraestructura Nextfor.
 
+9. **Las acciones reales no pueden ser solo UI.**
+   Confirmar, cancelar o reprogramar desde Customer Panel debe persistir por
+   `tenant_id`, quedar visible para Super Admin y distinguir “guardado” de
+   “enviado/sincronizado” cuando el canal externo todavía no confirma ejecución.
+
 ## Criterio de luz verde
 
 Appointment solo está listo cuando hay evidencia de:
@@ -98,4 +103,3 @@ Appointment solo está listo cuando hay evidencia de:
 - persistencia de citas activa;
 - prueba real de cita visible en Customer Panel y Super Admin;
 - aprobación explícita de Super Admin antes de `APPOINTMENTS_PUBLIC_ENABLED=1`.
-

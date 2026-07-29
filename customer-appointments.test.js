@@ -24,6 +24,7 @@ const shaped = customerAppointmentSnapshot({
 
 assert.strictEqual(shaped.tenant_id, "tenant-a");
 assert.strictEqual(shaped.appointments[0].ui_status, "confirmed");
+assert.strictEqual(shaped.appointments[0].sync, "pending");
 assert.strictEqual(shaped.appointments[1].ui_status, "needs_you");
 assert.strictEqual(shaped.appointments.every(function (row) { return row.tenant_id === "tenant-a"; }), true);
 

@@ -50,6 +50,8 @@ function waitForServer(child, port) {
   assert.match(source, /instagramRuntimeState\.last_error_code = metaError\.code \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_subcode = metaError\.error_subcode \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_type = metaError\.type \|\| err\.code \|\| null/);
+  assert.match(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
+  assert.match(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -83,7 +85,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v257-meta-delivery-diagnostics"));
+    assert((await response.text()).includes("v259-channel-tenant-runtime-routing"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

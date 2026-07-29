@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v258-instagram-runtime-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v259-channel-tenant-runtime-routing";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1249,7 +1249,23 @@ async function resolveChannelRuntimeForTenant(tenantId, channel) {
   const clean = cleanChannel(channel);
   if (!cleanTenant || !clean) return null;
   const cache = await loadChannelRuntimeRows(false);
-  return cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
+  const exact = cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
+  // RAV existed before customer-access v2, so historic conversations use the
+  // default tenant while the real OAuth connections belong to the first v2
+  // customer tenant. Prefer that encrypted connection over a stale environment
+  // credential, but only for the explicitly configured RAV bootstrap pair.
+  const ravAliasTenant = cleanTenantId(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID);
+  const aliasTenant = ravAliasTenant && ravAliasTenant !== DEFAULT_TENANT_ID
+    ? (cleanTenant === DEFAULT_TENANT_ID
+        ? ravAliasTenant
+        : cleanTenant === ravAliasTenant ? DEFAULT_TENANT_ID : "")
+    : "";
+  const alias = aliasTenant
+    ? cache.by_tenant_channel.get(runtimeTenantChannelKey(aliasTenant, clean)) || null
+    : null;
+  if (exact && exact.source === "channel_connection") return exact;
+  if (alias && alias.source === "channel_connection") return alias;
+  return exact || alias || null;
 }
 
 async function resolveWhatsAppRuntimeForTenant(tenantId) {

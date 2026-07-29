@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v257-meta-delivery-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v258-instagram-runtime-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -695,6 +695,13 @@ const instagramRuntimeState = {
   last_error_code: null,
   last_error_subcode: null,
   last_error_type: null,
+  last_error_message: null,
+  last_send_runtime_source: null,
+  last_send_tenant_id: null,
+  last_send_destination_suffix: null,
+  last_health_runtime_source: null,
+  last_health_tenant_id: null,
+  last_health_destination_suffix: null,
   last_handoff_auto_release_at: null,
   last_webhook_object: null,
   last_entry_shape: null,
@@ -3265,6 +3272,9 @@ async function sendText(to, text, options) {
       const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
       const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
       const graphOrigin = instagramGraphOriginForRuntime(runtime);
+      instagramRuntimeState.last_send_runtime_source = runtime && runtime.source || "environment";
+      instagramRuntimeState.last_send_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
+      instagramRuntimeState.last_send_destination_suffix = String(sendId || "").slice(-8) || null;
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
         `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
@@ -3310,6 +3320,9 @@ async function sendText(to, text, options) {
       instagramRuntimeState.last_error_code = metaError.code || null;
       instagramRuntimeState.last_error_subcode = metaError.error_subcode || null;
       instagramRuntimeState.last_error_type = metaError.type || err.code || null;
+      instagramRuntimeState.last_error_message = String(metaError.message || err.message || "instagram_send_failed")
+        .replace(/(?:EA[A-Za-z0-9]{20,}|IG[A-Za-z0-9]{20,})/g, "[redacted]")
+        .slice(0, 300);
     }
     if (recipient.channel === "whatsapp") {
       const metaError = err.response?.data?.error || {};
@@ -4398,6 +4411,9 @@ async function instagramConnectionHealth() {
   const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
   const instagramUserId = runtime && runtime.instagramUserId || IG_USER_ID;
   const graphOrigin = instagramGraphOriginForRuntime(runtime);
+  instagramRuntimeState.last_health_runtime_source = runtime && runtime.source || "environment";
+  instagramRuntimeState.last_health_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
+  instagramRuntimeState.last_health_destination_suffix = String(instagramUserId || "").slice(-8) || null;
   if (!accessToken || !instagramUserId) {
     return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt, runtime: { ...instagramRuntimeState } };
   }

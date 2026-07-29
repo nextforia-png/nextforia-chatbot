@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v262-meta-runtime-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v263-meta-waba-subscription";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4557,7 +4557,11 @@ app.get("/whatsapp/health", async (req, res) => {
     );
     const appSubscribed = !!META_APP_ID && (
       subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : []
-    ).some(function (app) { return String(app && app.id) === String(META_APP_ID); });
+    ).some(function (app) {
+      return String(app && (
+        app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id
+      )) === String(META_APP_ID);
+    });
     if (!appSubscribed) {
       return res.status(503).json({
         ok: false,

@@ -685,7 +685,13 @@ class MetaChannelProvider {
       const subscribedApps = subscription.data && Array.isArray(subscription.data.data)
         ? subscription.data.data
         : [];
-      const appSubscribed = subscribedApps.some((app) => String(app && app.id) === String(this.appId));
+      // WhatsApp's current Graph response nests the subscribed app under
+      // whatsapp_business_api_data, while Page subscriptions still expose id
+      // at the top level. Accept both shapes so a valid WABA subscription is
+      // not incorrectly marked as missing.
+      const appSubscribed = subscribedApps.some((app) => String(
+        app && (app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id)
+      ) === String(this.appId));
       return {
         ok: !!(verified.data && String(verified.data.id) === String(targetId) && appSubscribed),
         account_label: cleanText(

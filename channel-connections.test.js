@@ -111,6 +111,35 @@ function expectCode(promise, code) {
   assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
   assert(activationRequests[1].url.endsWith("/phone-rav"));
 
+  const currentWhatsAppSubscriptionShape = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    whatsappConfigId: "wa-config-123",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      if (request.url.endsWith("/waba-rav/subscribed_apps")) {
+        return {
+          data: {
+            data: [{
+              whatsapp_business_api_data: {
+                id: "123456789",
+                name: "NextforIA Chatbot"
+              }
+            }]
+          }
+        };
+      }
+      return { data: { id: "phone-rav", display_phone_number: "+57 301 587 2708" } };
+    }
+  });
+  const currentShapeVerification = await currentWhatsAppSubscriptionShape.verify("whatsapp", {
+    whatsapp_business_account_id: "waba-rav",
+    phone_number_id: "phone-rav",
+    access_token: "whatsapp-access-token"
+  });
+  assert.strictEqual(currentShapeVerification.ok, true);
+
   const provider = {
     configured: function () { return true; },
     authorizationUrl: function (channel, signedState) {

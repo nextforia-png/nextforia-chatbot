@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v280-rav-instagram-login-runtime";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v281-rav-meta-asset-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4575,6 +4575,41 @@ app.get("/whatsapp/health", async (req, res) => {
       registration_ready: String(phone.data && phone.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
         String(phone.data && phone.data.platform_type || "").toUpperCase() === "CLOUD_API"
     };
+    if (whatsappBusinessAccountId) {
+      try {
+        const waba = await axios.get(
+          `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(whatsappBusinessAccountId)}`,
+          {
+            params: { fields: "id,name,owner_business_info,account_review_status" },
+            headers: { Authorization: `Bearer ${accessToken}` },
+            timeout: 10000
+          }
+        );
+        safeRuntime.waba = {
+          id_suffix: String(waba.data && waba.data.id || "").slice(-8) || null,
+          name: cleanRuntimeText(waba.data && waba.data.name, 160) || null,
+          owner_business_id: cleanRuntimeText(
+            waba.data && waba.data.owner_business_info && waba.data.owner_business_info.id,
+            240
+          ) || null,
+          owner_business_name: cleanRuntimeText(
+            waba.data && waba.data.owner_business_info && waba.data.owner_business_info.name,
+            160
+          ) || null,
+          account_review_status: cleanRuntimeText(waba.data && waba.data.account_review_status, 60) || null
+        };
+      } catch (diagnosticError) {
+        safeRuntime.waba = {
+          id_suffix: String(whatsappBusinessAccountId).slice(-8) || null,
+          diagnostic_error: cleanRuntimeText(
+            diagnosticError.response && diagnosticError.response.data &&
+              diagnosticError.response.data.error && diagnosticError.response.data.error.message ||
+              diagnosticError.message,
+            240
+          ) || "waba_lookup_failed"
+        };
+      }
+    }
     if (!safeRuntime.phone.registration_ready) {
       return res.status(503).json({
         ok: false,

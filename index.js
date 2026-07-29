@@ -11404,6 +11404,32 @@ app.get("/", (req, res) => {
   res.send("RAV-Bot " + BOT_VERSION + " (ops dashboard)");
 });
 
+app.get("/ready", async (req, res) => {
+  const appointmentStorageReadyNow = await appointmentsStorageReady(false);
+  res.json({
+    ok: true,
+    bot_version: BOT_VERSION,
+    appointment_pilot: {
+      tenant: DERCO_TENANT_ID,
+      setup_enabled: appointmentSetupEnabledForTenant(DERCO_TENANT_ID),
+      public_enabled: process.env.APPOINTMENTS_PUBLIC_ENABLED === "1",
+      storage_ready: appointmentStorageReadyNow,
+      elevenlabs_ready: !!(
+        ELEVENLABS_API_KEY &&
+        ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID &&
+        ELEVENLABS_APPOINTMENT_TOOL_SECRET.length >= 32 &&
+        ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED
+      ),
+      google_calendar_oauth_ready: !!(
+        GOOGLE_CALENDAR_CLIENT_ID &&
+        GOOGLE_CALENDAR_CLIENT_SECRET &&
+        appointmentCalendarService &&
+        appointmentCalendarService.providerConfigured()
+      )
+    }
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 
 // ─── ADMIN ENDPOINTS (added in v31 — observability + safety net) ────

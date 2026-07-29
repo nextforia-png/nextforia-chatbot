@@ -104,6 +104,17 @@
 15. Ejecutar una llamada o conversación de prueba y confirmar que la cita aparezca en el panel.
 16. Revisar `appointment_readiness` en `/admin/health`; solo activar `APPOINTMENTS_PUBLIC_ENABLED=1` cuando `production_can_be_enabled=true` y Super Admin apruebe.
 
+Verificación operativa repetible:
+
+```bash
+BOT_BASE_URL=https://nextforia.com \
+DASHBOARD_KEY=... \
+EXPECTED_BOT_VERSION=v247-appointment-setup-gate \
+pnpm verify:appointments --require-dashboard-key
+```
+
+Para la aprobación final pública, ejecutar el mismo comando con `APPOINTMENT_VERIFY_REQUIRE_PUBLIC=1` después de activar `APPOINTMENTS_PUBLIC_ENABLED=1`.
+
 Ejemplo de usuario aislado por tenant:
 
 ```json

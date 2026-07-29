@@ -48,6 +48,29 @@ gate = buildAppointmentIntegrations(record, "clinica-a", {
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
   elevenlabsAgentConfigured: true,
+  elevenlabsPhoneNumberMapped: true,
+  googleCalendarOAuthConfigured: true,
+  calendarTenantMap: parseAppointmentCalendarTenantMap({
+    APPOINTMENT_CALENDAR_TENANT_MAP: JSON.stringify({
+      "clinica-a": { provider: "google", status: "connected", calendar_id: "primary" }
+    })
+  }),
+  metaOAuthReady: true,
+  whatsappConnected: true,
+  supabaseAppointmentsEnabled: true
+});
+
+assert.strictEqual(gate.ready_for_live, false);
+assert(gate.blockers.includes("calls_not_ready"));
+assert.strictEqual(gate.calls.status, "needs_phone_assignment");
+
+gate = buildAppointmentIntegrations(record, "clinica-a", {
+  elevenlabsApiKey: "el-key",
+  elevenlabsWebhookSecret: "el-secret",
+  agentTenantMap: { agent_a: "clinica-a" },
+  elevenlabsAgentConfigured: true,
+  elevenlabsPhoneNumberMapped: true,
+  elevenlabsPhoneNumberConfigured: true,
   googleCalendarOAuthConfigured: true,
   calendarTenantMap: parseAppointmentCalendarTenantMap({
     APPOINTMENT_CALENDAR_TENANT_MAP: JSON.stringify({
@@ -71,6 +94,8 @@ gate = buildAppointmentIntegrations(record, "clinica-a", {
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
   elevenlabsAgentConfigured: true,
+  elevenlabsPhoneNumberMapped: true,
+  elevenlabsPhoneNumberConfigured: true,
   googleCalendarOAuthConfigured: true,
   calendarConnection: {
     tenant_id: "clinica-a",

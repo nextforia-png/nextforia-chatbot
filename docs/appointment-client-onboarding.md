@@ -93,17 +93,18 @@
 3. Configurar `ELEVENLABS_WEBHOOK_SECRET`.
 4. Configurar `ELEVENLABS_DERCO_AGENT_ID` con el agente real de DERCO.
 5. Configurar `ELEVENLABS_AGENT_TENANT_MAP` si hay más agentes reales.
-6. Mantener `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=0` hasta confirmar que el mapa `agent_id -> tenant_id` y el webhook son correctos.
-7. Cuando Appointment esté aprobado para Testing, activar `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=1` y usar Super Admin → `Configurar agente real`.
-8. Configurar `GOOGLE_CALENDAR_CLIENT_ID` y `GOOGLE_CALENDAR_CLIENT_SECRET`.
-9. En Google Cloud, agregar redirect URI: `https://nextforia.com/admin/appointment-calendar/google/callback`.
-10. Conectar Google Calendar desde Customer Panel o Super Admin. `APPOINTMENT_CALENDAR_TENANT_MAP` queda solo como fallback temporal operativo.
-11. Activar `SUPABASE_APPOINTMENTS_ENABLED=1`.
-12. Crear un usuario DERCO en `DASHBOARD_USERS` con `tenant_id: "grupo-derco"`.
-13. Conectar WhatsApp desde el panel de canales del cliente usando el flujo de Meta existente.
-14. En ElevenLabs, apuntar el post-call webhook a `https://api.nextforia.com/webhooks/elevenlabs/post-call`.
-15. Ejecutar una llamada o conversación de prueba y confirmar que la cita aparezca en el panel.
-16. Revisar `appointment_readiness` en `/admin/health`; solo activar `APPOINTMENTS_PUBLIC_ENABLED=1` cuando `production_can_be_enabled=true` y Super Admin apruebe.
+6. Si el cliente pidió llamadas, configurar `ELEVENLABS_DERCO_PHONE_NUMBER_ID` o `ELEVENLABS_PHONE_NUMBER_TENANT_MAP` con el `phone_number_id` importado en ElevenLabs.
+7. Mantener `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=0` hasta confirmar que los mapas `agent_id -> tenant_id`, `phone_number_id -> tenant_id` y el webhook son correctos.
+8. Cuando Appointment esté aprobado para Testing, activar `ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED=1` y usar Super Admin → `Configurar agente real`. Esta acción aplica el prompt al agente y, si el cliente pidió llamadas, asigna el `phone_number_id` al agente con la API de ElevenLabs.
+9. Configurar `GOOGLE_CALENDAR_CLIENT_ID` y `GOOGLE_CALENDAR_CLIENT_SECRET`.
+10. En Google Cloud, agregar redirect URI: `https://nextforia.com/admin/appointment-calendar/google/callback`.
+11. Conectar Google Calendar desde Customer Panel o Super Admin. `APPOINTMENT_CALENDAR_TENANT_MAP` queda solo como fallback temporal operativo.
+12. Activar `SUPABASE_APPOINTMENTS_ENABLED=1`.
+13. Crear un usuario DERCO en `DASHBOARD_USERS` con `tenant_id: "grupo-derco"`.
+14. Conectar WhatsApp desde el panel de canales del cliente usando el flujo de Meta existente.
+15. En ElevenLabs, apuntar el post-call webhook a `https://api.nextforia.com/webhooks/elevenlabs/post-call`.
+16. Ejecutar una llamada o conversación de prueba y confirmar que la cita aparezca en el panel.
+17. Revisar `appointment_readiness` en `/admin/health`; solo activar `APPOINTMENTS_PUBLIC_ENABLED=1` cuando `production_can_be_enabled=true` y Super Admin apruebe.
 
 Verificación operativa repetible:
 

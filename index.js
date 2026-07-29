@@ -103,9 +103,15 @@ const {
 } = require("./appointment-integrations");
 const {
   applyElevenLabsAppointmentAgent,
+  applyElevenLabsPhoneNumberAssignment,
   appointmentAgentConfigured,
+  appointmentPhoneNumberConfigured,
+  appointmentPhoneNumberIdForTenant,
   markAppointmentConfigurationElevenLabsApplied,
-  markAppointmentConfigurationElevenLabsFailed
+  markAppointmentConfigurationElevenLabsFailed,
+  markAppointmentConfigurationPhoneApplied,
+  markAppointmentConfigurationPhoneFailed,
+  parsePhoneNumberTenantMap
 } = require("./appointment-elevenlabs");
 const {
   AppointmentCalendarError,
@@ -395,6 +401,7 @@ const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELE
 const ELEVENLABS_API_KEY = String(process.env.ELEVENLABS_API_KEY || "").trim();
 const ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED = process.env.ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED === "1" ||
   (process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1");
+const ELEVENLABS_PHONE_NUMBER_TENANT_MAP = parsePhoneNumberTenantMap(process.env);
 const GOOGLE_CALENDAR_CLIENT_ID = String(process.env.GOOGLE_CALENDAR_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim();
 const GOOGLE_CALENDAR_CLIENT_SECRET = String(process.env.GOOGLE_CALENDAR_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || "").trim();
 const APPOINTMENT_CALENDAR_TENANT_MAP = parseAppointmentCalendarTenantMap(process.env);
@@ -5468,6 +5475,15 @@ function appointmentIntegrationOptions(channels, calendarConnection, record, ten
       tenantId || record && record.tenant_id,
       ELEVENLABS_AGENT_TENANT_MAP
     ),
+    elevenlabsPhoneNumberMapped: !!appointmentPhoneNumberIdForTenant(
+      tenantId || record && record.tenant_id,
+      ELEVENLABS_PHONE_NUMBER_TENANT_MAP
+    ),
+    elevenlabsPhoneNumberConfigured: appointmentPhoneNumberConfigured(
+      record && record.appointment_configuration,
+      tenantId || record && record.tenant_id,
+      ELEVENLABS_PHONE_NUMBER_TENANT_MAP
+    ),
     googleCalendarOAuthConfigured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured()),
     calendarTenantMap: APPOINTMENT_CALENDAR_TENANT_MAP,
     calendarConnected: !!(calendarConnection && calendarConnection.status === "connected"),
@@ -5575,7 +5591,7 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels, appointme
           calendar_not_connected: ["Falta calendario", "El cliente debe conectar o mapear su calendario real."],
           whatsapp_not_connected: ["Falta WhatsApp", "Conecta WhatsApp real desde Meta para este tenant."],
           email_not_ready: ["Falta correo de citas", "Configura el correo si el cliente pidió email."],
-          calls_not_ready: ["Faltan llamadas", "Configura llamadas si el cliente las activó."],
+          calls_not_ready: ["Faltan llamadas", "Mapea y asigna el número de ElevenLabs al agente del tenant si el cliente activó llamadas."],
           appointments_persistence_not_ready: ["Falta persistencia de citas", "Activa Supabase appointments después de aplicar la migración."]
         };
         const item = labels[code] || ["Appointment bloqueado", code];
@@ -5914,11 +5930,47 @@ async function persistSetupReview(tenantId, input, auth) {
         markAppointmentConfigurationElevenLabsApplied(appointmentConfiguration, result, actor),
         { actor, lifecycle: "approved_for_testing" }
       );
+      if (answers.channels && answers.channels.phone_calls) {
+        try {
+          const phoneResult = await applyElevenLabsPhoneNumberAssignment({
+            tenant_id: tenant.id,
+            answers,
+            appointment_configuration: appointmentConfiguration
+          }, tenant.id, {
+            apiKey: ELEVENLABS_API_KEY,
+            agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+            phoneNumberTenantMap: ELEVENLABS_PHONE_NUMBER_TENANT_MAP,
+            writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
+            httpClient: process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1"
+              ? { patch: async function () { return { status: 200 }; } }
+              : axios
+          });
+          appointmentConfiguration = normalizeAppointmentConfiguration(
+            markAppointmentConfigurationPhoneApplied(appointmentConfiguration, phoneResult, actor),
+            { actor, lifecycle: "approved_for_testing" }
+          );
+        } catch (phoneError) {
+          appointmentConfiguration = normalizeAppointmentConfiguration(
+            markAppointmentConfigurationPhoneFailed(appointmentConfiguration, phoneError, actor),
+            { actor, lifecycle: "approved_for_testing" }
+          );
+          phoneError.details = Object.assign({}, phoneError.details || {}, {
+            elevenlabs_phone: {
+              status: "failed",
+              error: phoneError.message,
+              draft: phoneError.draft || null
+            }
+          });
+          throw phoneError;
+        }
+      }
       appointmentLifecycle = "approved_for_testing";
       cleanStatus = "testing";
     } catch (error) {
       appointmentConfiguration = normalizeAppointmentConfiguration(
-        markAppointmentConfigurationElevenLabsFailed(appointmentConfiguration, error, actor),
+        appointmentConfiguration.external_status === "configured" && String(error.message || "").indexOf("elevenlabs_phone") === 0
+          ? markAppointmentConfigurationPhoneFailed(appointmentConfiguration, error, actor)
+          : markAppointmentConfigurationElevenLabsFailed(appointmentConfiguration, error, actor),
         { actor, lifecycle: "approved_for_testing" }
       );
       appointmentLifecycle = "approved_for_testing";
@@ -9497,6 +9549,7 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
       "configuration_not_building",
       "configuration_required",
       "elevenlabs_agent_not_mapped",
+      "elevenlabs_phone_not_mapped",
       "elevenlabs_api_key_missing",
       "elevenlabs_write_disabled",
       "elevenlabs_client_unavailable",

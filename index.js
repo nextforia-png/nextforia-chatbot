@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v251-meta-coexistence";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v252-rav-existing-meta";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -971,7 +971,11 @@ async function bootstrapExistingWhatsAppConnection() {
         meta_business_id: String(process.env.META_BUSINESS_ID || "").trim() || null,
         whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
         phone_number_id: PHONE_NUMBER_ID,
-        access_token: WA_TOKEN
+        access_token: WA_TOKEN,
+        // The environment bootstrap adopts a number that Meta already owns and
+        // has verified. Re-registering that number is both unnecessary and
+        // rejected for WhatsApp Business App coexistence accounts.
+        coexistence: true
       }
     );
     channelRuntimeCache.loaded_at = 0;

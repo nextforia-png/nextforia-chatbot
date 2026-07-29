@@ -3,6 +3,7 @@
 const assert = require("assert");
 const childProcess = require("child_process");
 const crypto = require("crypto");
+const fs = require("fs");
 const net = require("net");
 const path = require("path");
 
@@ -38,6 +39,13 @@ function waitForServer(child, port) {
 }
 
 (async function run() {
+  const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  const bootstrapStart = source.indexOf("async function bootstrapExistingWhatsAppConnection()");
+  const bootstrapEnd = source.indexOf("channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection();");
+  assert(bootstrapStart >= 0 && bootstrapEnd > bootstrapStart);
+  const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
+  assert.match(bootstrapSource, /access_token:\s*WA_TOKEN,[\s\S]*?coexistence:\s*true/);
+
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
   const encryptionKey = crypto.randomBytes(32).toString("base64url");
@@ -70,7 +78,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v251-meta-coexistence"));
+    assert((await response.text()).includes("v252-rav-existing-meta"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

@@ -332,6 +332,7 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };
 const APPOINTMENT_SETUP_ENABLED = process.env.APPOINTMENT_SETUP_ENABLED === "1";
 const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.APPOINTMENT_SETUP_TENANT_IDS || "");
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
@@ -1429,6 +1430,33 @@ async function hydrateAppointmentsForTenant(tenantId) {
     console.error("hydrateAppointmentsForTenant error:", error.message);
     return false;
   }
+}
+
+async function appointmentsStorageReady(force) {
+  if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
+  const now = Date.now();
+  if (!force && appointmentStorageHealth.checked_at && now - appointmentStorageHealth.checked_at < 30000) {
+    return appointmentStorageHealth.ready;
+  }
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE, {
+      params: { select: "id", limit: 1 },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    appointmentStorageHealth.checked_at = now;
+    appointmentStorageHealth.ready = response.status === 200;
+    appointmentStorageHealth.error = "";
+  } catch (error) {
+    appointmentStorageHealth.checked_at = now;
+    appointmentStorageHealth.ready = false;
+    appointmentStorageHealth.error = String(
+      error && error.response && error.response.data && error.response.data.message ||
+      error && error.message ||
+      "appointments_storage_unavailable"
+    ).slice(0, 240);
+  }
+  return appointmentStorageHealth.ready;
 }
 
 async function supabaseInsert(rec) {
@@ -5727,7 +5755,7 @@ async function applyAppointmentCalendarEffect(row, action, actor) {
   }
 }
 
-function appointmentIntegrationOptions(channels, calendarConnection, record, tenantId) {
+function appointmentIntegrationOptions(channels, calendarConnection, record, tenantId, persistenceReady) {
   return {
     elevenlabsApiKey: ELEVENLABS_API_KEY,
     elevenlabsWebhookSecret: ELEVENLABS_WEBHOOK_SECRET,
@@ -5756,13 +5784,20 @@ function appointmentIntegrationOptions(channels, calendarConnection, record, ten
     calendarConnection: calendarConnection || null,
     metaOAuthReady: !!(CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService),
     whatsappConnected: setupChannelConnected(channels, "whatsapp"),
-    supabaseAppointmentsEnabled: SUPABASE_APPOINTMENTS_ENABLED
+    supabaseAppointmentsEnabled: persistenceReady === true
   };
 }
 
 async function appointmentIntegrationsForRecord(record, tenantId, channels) {
-  const calendarConnection = await appointmentCalendarConnectionForTenant(tenantId || record && record.tenant_id);
-  return buildAppointmentIntegrations(record, tenantId, appointmentIntegrationOptions(channels || [], calendarConnection, record, tenantId));
+  const results = await Promise.all([
+    appointmentCalendarConnectionForTenant(tenantId || record && record.tenant_id),
+    appointmentsStorageReady(false)
+  ]);
+  return buildAppointmentIntegrations(
+    record,
+    tenantId,
+    appointmentIntegrationOptions(channels || [], results[0], record, tenantId, results[1])
+  );
 }
 
 function appointmentOverviewTenantHasModule(tenant, record) {
@@ -5940,7 +5975,17 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels, appointme
   }
   if (setupIncludesAppointments(answers)) {
     addOk("appointments_selected", "Agendamiento incluido", "Este setup incluye Appointment Bot.");
-    appointmentGate = appointmentGate || buildAppointmentIntegrations(record, tenant && tenant.id || record && record.tenant_id, appointmentIntegrationOptions(channels || [], null, record, tenant && tenant.id || record && record.tenant_id));
+    appointmentGate = appointmentGate || buildAppointmentIntegrations(
+      record,
+      tenant && tenant.id || record && record.tenant_id,
+      appointmentIntegrationOptions(
+        channels || [],
+        null,
+        record,
+        tenant && tenant.id || record && record.tenant_id,
+        appointmentStorageHealth.ready
+      )
+    );
     if (appointmentGate.blockers && appointmentGate.blockers.length) {
       appointmentGate.blockers.forEach(function (code) {
         const labels = {
@@ -12346,6 +12391,9 @@ async function buildAdminHealthResult() {
   } else {
     result.checks.supabase_conversation_logs = "missing_env";
   }
+  result.checks.supabase_appointments = await appointmentsStorageReady(true)
+    ? "ok"
+    : appointmentStorageHealth.error || "not_configured";
   const blockers = [];
   if (!result.env.anthropic_key_present) blockers.push("missing_anthropic_key");
   if (!result.env.wa_token_present) blockers.push("missing_wa_token");
@@ -12367,11 +12415,13 @@ async function buildAdminHealthResult() {
 
 app.get("/admin/health", async (req, res) => {
   if (!adminAuthOk(req, "viewer")) {
+    const appointmentStorageReadyNow = await appointmentsStorageReady(false);
     res.json({
       ok: true,
       bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
       customer_setup: {
         channel_storage_ready: !!(appendOnlyChannelConnectionStore && SUPABASE_ENABLED),
+        appointment_storage_ready: appointmentStorageReadyNow,
         meta_oauth_ready: !!(channelConnectionProvider && channelConnectionProvider.configured("whatsapp")),
         shopify_install_ready: !!(
           SHOPIFY_APP_INSTALL_URL &&

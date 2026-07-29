@@ -129,6 +129,7 @@ const {
   DERCO_TENANT_ID,
   getRegisteredClient,
   listRegisteredClients,
+  registeredTenantIdForCompany,
   parseAgentTenantMap
 } = require("./client-registry");
 const {
@@ -269,7 +270,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v284-rav-whatsapp-registration-cooldown";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v285-registered-appointment-tenant";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -805,7 +806,8 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
       emailSender: customerAccessEmailSender,
       baseUrl: CUSTOMER_PANEL_BASE_URL,
       fallbackBaseUrls: CUSTOMER_PANEL_FALLBACK_BASE_URLS,
-      inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS
+      inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS,
+      resolveRegisteredTenantId: registeredTenantIdForCompany
     })
   : null;
 const channelConnectionsPreviewOnly = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHANNEL_CONNECTIONS_V1_ENABLED;

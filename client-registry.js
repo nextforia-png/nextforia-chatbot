@@ -28,6 +28,15 @@ function listRegisteredClients() {
   });
 }
 
+function registeredTenantIdForCompany(companyName) {
+  const normalized = String(companyName || "").trim().replace(/\s+/g, " ").toLowerCase();
+  if (!normalized) return "";
+  const match = listRegisteredClients().find(function (client) {
+    return String(client.brand_name || "").trim().replace(/\s+/g, " ").toLowerCase() === normalized;
+  });
+  return match ? match.tenant_id : "";
+}
+
 function parseAgentTenantMap(env) {
   env = env || {};
   const result = {};
@@ -50,5 +59,6 @@ module.exports = {
   DERCO_TENANT_ID,
   getRegisteredClient,
   listRegisteredClients,
+  registeredTenantIdForCompany,
   parseAgentTenantMap
 };

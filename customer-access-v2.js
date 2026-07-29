@@ -180,7 +180,11 @@ class SupabaseCustomerAccessStore {
   }
 
   async createInvitation(input) {
-    const rows = await this.rpc("platform_create_customer_invitation_v2", {
+    const registeredTenantId = String(input.registered_tenant_id || "").trim().toLowerCase();
+    const rpcName = registeredTenantId
+      ? "platform_create_registered_customer_invitation_v1"
+      : "platform_create_customer_invitation_v2";
+    const payload = {
       p_company_name: input.company_name,
       p_admin_email: input.admin_email,
       p_plan_id: input.plan_id,
@@ -188,7 +192,9 @@ class SupabaseCustomerAccessStore {
       p_token_hash: input.token_hash,
       p_expires_at: input.expires_at,
       p_created_by: input.created_by
-    });
+    };
+    if (registeredTenantId) payload.p_registered_tenant_id = registeredTenantId;
+    const rows = await this.rpc(rpcName, payload);
     if (!rows[0]) throw new CustomerAccessError("customer_access_unavailable", 503);
     return rows[0];
   }
@@ -530,10 +536,13 @@ class InMemoryCustomerAccessStore {
     if (!this.plans.some(function (row) { return row.id === input.plan_id && row.active; })) throw new CustomerAccessError("invalid_plan", 400);
     if (!this.bots.some(function (row) { return row.id === input.assigned_bot_id && row.active; })) throw new CustomerAccessError("invalid_assigned_bot", 400);
     if (this.users.some(function (row) { return row.email_normalized === input.admin_email; })) throw new CustomerAccessError("customer_already_exists", 409);
+    const registeredTenantId = String(input.registered_tenant_id || "").trim().toLowerCase();
+    if (registeredTenantId && !/^[a-z0-9][a-z0-9_-]{1,79}$/.test(registeredTenantId)) throw new CustomerAccessError("invalid_request", 400);
     const slug = input.company_name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 45) || "cliente";
     if (this.tenants.some(function (row) { return row.company_name.toLowerCase() === input.company_name.toLowerCase(); })) throw new CustomerAccessError("customer_already_exists", 409);
     const now = new Date().toISOString();
-    const tenant = { id: slug + "-" + crypto.randomBytes(3).toString("hex"), company_name: input.company_name, plan_id: input.plan_id, assigned_bot_id: input.assigned_bot_id, status: "setup", created_at: now, updated_at: now };
+    if (registeredTenantId && this.tenants.some(function (row) { return row.id === registeredTenantId; })) throw new CustomerAccessError("customer_already_exists", 409);
+    const tenant = { id: registeredTenantId || slug + "-" + crypto.randomBytes(3).toString("hex"), company_name: input.company_name, plan_id: input.plan_id, assigned_bot_id: input.assigned_bot_id, status: "setup", created_at: now, updated_at: now };
     const user = { user_id: crypto.randomUUID(), tenant_id: tenant.id, email_normalized: input.admin_email, role: "admin", status: "pending", active: false, password_hash: null, password_salt: null, created_at: now, updated_at: now };
     const invitation = { id: crypto.randomUUID(), tenant_id: tenant.id, tenant_user_id: user.user_id, email_normalized: input.admin_email, company_name: tenant.company_name, plan_id: tenant.plan_id, assigned_bot_id: tenant.assigned_bot_id, role: "admin", token_hash: input.token_hash, delivery_status: "pending", delivery_error: null, provider_message_id: null, created_by: input.created_by, created_at: now, expires_at: input.expires_at, delivered_at: null, used_at: null, revoked_at: null };
     this.tenants.push(tenant);
@@ -707,6 +716,9 @@ function createCustomerAccessService(options) {
   const fallbackBaseUrls = invitationOrigins.slice(1);
   const ttlHours = Math.max(1, Math.min(168, Number(options.inviteTtlHours) || 24));
   const now = typeof options.now === "function" ? options.now : function () { return new Date(); };
+  const resolveRegisteredTenantId = typeof options.resolveRegisteredTenantId === "function"
+    ? options.resolveRegisteredTenantId
+    : function () { return ""; };
   if (store && typeof store.setNow === "function") store.setNow(now);
 
   async function inspectInvitation(tenantId, token) {
@@ -760,6 +772,10 @@ function createCustomerAccessService(options) {
 
     async createInvitation(input, actor) {
       const clean = validateCreateInput(input);
+      const registeredTenantId = String(resolveRegisteredTenantId(clean.company_name) || "").trim().toLowerCase();
+      if (registeredTenantId && !/^[a-z0-9][a-z0-9_-]{1,79}$/.test(registeredTenantId)) {
+        throw new CustomerAccessError("invalid_request", 400);
+      }
       const token = crypto.randomBytes(32).toString("base64url");
       const createdAt = now();
       const expiresAt = new Date(createdAt.getTime() + ttlHours * 60 * 60 * 1000).toISOString();
@@ -768,6 +784,7 @@ function createCustomerAccessService(options) {
         created = await store.createInvitation(Object.assign({}, clean, {
           token_hash: hashInvitationToken(token),
           expires_at: expiresAt,
+          registered_tenant_id: registeredTenantId || null,
           created_by: String(actor && (actor.user_id || actor.email || actor.username) || "super_admin").slice(0, 160)
         }));
       } catch (error) {

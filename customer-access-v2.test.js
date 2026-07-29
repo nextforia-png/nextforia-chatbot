@@ -73,6 +73,26 @@ async function expectError(promise, code, status) {
   assert.strictEqual(appointmentInvitation.tenant.plan_id, "nextfor-tempo");
   assert.strictEqual(appointmentInvitation.tenant.assigned_bot_id, "agendamiento");
 
+  const registeredStore = new InMemoryCustomerAccessStore();
+  const registeredEmail = createMemoryEmailSender();
+  const registeredService = createCustomerAccessService({
+    store: registeredStore,
+    emailSender: registeredEmail,
+    baseUrl: "https://customer-panel.staging.example",
+    resolveRegisteredTenantId: function (companyName) {
+      return companyName === "Grupo Jurídico DERCO S.A.S." ? "grupo-derco" : "";
+    }
+  });
+  const registeredInvitation = await registeredService.createInvitation({
+    company_name: "Grupo Jurídico DERCO S.A.S.",
+    admin_email: "admin@derco.example",
+    plan_id: "nextfor-tempo",
+    assigned_bot_id: "agendamiento"
+  }, { user_id: "platform-user-1", role: "super_admin" });
+  assert.strictEqual(registeredInvitation.tenant.id, "grupo-derco");
+  assert.strictEqual(registeredEmail.outbox.length, 1);
+  assert(registeredEmail.outbox[0].setup_url.includes("/admin/setup/grupo-derco?invite="));
+
   await expectError(service.inspectInvitation("otro-tenant", token), "invalid_invitation", 403);
   await expectError(service.inspectInvitation(created.tenant.id, token.slice(0, -1) + (token.endsWith("A") ? "B" : "A")), "invalid_invitation", 403);
   const inspected = await service.inspectInvitation(created.tenant.id, token);

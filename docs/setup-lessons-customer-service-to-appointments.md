@@ -39,15 +39,19 @@ setup de Atención al Cliente y no repita errores operativos.
 3. **No hardcodear el primer cliente como si fuera el modelo.**  
    DERCO es piloto, no arquitectura. Todo debe funcionar por `tenant_id`.
 
-4. **No fingir Live con demos.**  
+4. **No abrir pilotos como feature global.**
+   Para clientes controlados usar `APPOINTMENT_SETUP_TENANT_IDS`; reservar
+   `APPOINTMENT_SETUP_ENABLED=1` para apertura general.
+
+5. **No fingir Live con demos.**
    Los datos de demo ayudan a diseñar UI, pero la luz verde exige cita real,
    calendario real, canal real y evidencia en panel.
 
-5. **No hacer preguntas largas sin decir para qué sirven.**  
+6. **No hacer preguntas largas sin decir para qué sirven.**
    Cada pregunta debe explicar qué desbloquea: prompt, calendario, canal,
    escalamiento, cumplimiento o medición.
 
-6. **No pedir todo antes de dar avance.**  
+7. **No pedir todo antes de dar avance.**
    El setup debe permitir guardar progreso, dejar opcionales para después y
    mostrar “siguiente bloqueo” en vez de una lista abrumadora.
 

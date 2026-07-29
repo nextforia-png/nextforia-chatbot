@@ -91,7 +91,7 @@
 ## Activación técnica
 
 1. Aplicar `docs/supabase-appointments-pilot.sql`.
-2. Activar `APPOINTMENT_SETUP_ENABLED=1` solo para el piloto controlado.
+2. Para piloto controlado, mantener `APPOINTMENT_SETUP_ENABLED=0` y configurar `APPOINTMENT_SETUP_TENANT_IDS=grupo-derco`. Usar `APPOINTMENT_SETUP_ENABLED=1` únicamente cuando Appointment vaya a quedar disponible para todos los clientes.
 3. Configurar `ELEVENLABS_WEBHOOK_SECRET`.
 4. Configurar `ELEVENLABS_DERCO_AGENT_ID` con el agente real de DERCO.
 5. Configurar `ELEVENLABS_AGENT_TENANT_MAP` si hay más agentes reales.

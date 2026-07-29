@@ -328,6 +328,7 @@ const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENAB
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
 const APPOINTMENT_SETUP_ENABLED = process.env.APPOINTMENT_SETUP_ENABLED === "1";
+const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.APPOINTMENT_SETUP_TENANT_IDS || "");
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
@@ -6735,6 +6736,26 @@ function customerBusinessForAuthAndOnboarding(auth, onboarding) {
   return business;
 }
 
+function parseAppointmentSetupTenantIds(value) {
+  return new Set(String(value || "")
+    .split(",")
+    .map(function (item) {
+      const trimmed = String(item || "").trim();
+      return trimmed === "*" ? "*" : cleanTenantId(trimmed);
+    })
+    .filter(Boolean));
+}
+
+function appointmentSetupEnabledForTenant(tenantId) {
+  if (APPOINTMENT_SETUP_ENABLED) return true;
+  if (APPOINTMENT_SETUP_TENANT_IDS.has("*")) return true;
+  return APPOINTMENT_SETUP_TENANT_IDS.has(cleanTenantId(tenantId));
+}
+
+function appointmentSetupEnabledForAuth(auth) {
+  return appointmentSetupEnabledForTenant(customerTenantForAuth(auth));
+}
+
 function onboardingTenantIdForSave(auth, answers) {
   const defaultTenant = DEFAULT_TENANT_ID;
   if (!auth || auth.version === 2 || auth.role !== "super_admin") return customerTenantForAuth(auth) || defaultTenant;
@@ -6961,15 +6982,22 @@ function publicSignupDefaults(catalogs) {
   };
 }
 
-function ensureInitialProductionCustomerSelection(planId, botId) {
+function ensureInitialProductionCustomerSelection(planId, botId, tenantId) {
   const cleanPlan = String(planId || "").trim().toLowerCase();
   const cleanBot = String(botId || "").trim().toLowerCase();
-  if (cleanPlan && CUSTOMER_VISIBLE_PLAN_IDS.indexOf(cleanPlan) < 0) throw new CatalogError("plan_not_found", 404);
-  if (cleanBot && CUSTOMER_VISIBLE_BOT_IDS.indexOf(cleanBot) < 0) throw new CatalogError("bot_not_found", 404);
+  const appointmentAllowed = appointmentSetupEnabledForTenant(tenantId);
+  const visiblePlanIds = appointmentAllowed
+    ? CUSTOMER_VISIBLE_PLAN_IDS.concat(["nextfor-tempo", "nextfor-atlas"])
+    : CUSTOMER_VISIBLE_PLAN_IDS;
+  const visibleBotIds = appointmentAllowed
+    ? CUSTOMER_VISIBLE_BOT_IDS.concat(["agendamiento"])
+    : CUSTOMER_VISIBLE_BOT_IDS;
+  if (cleanPlan && visiblePlanIds.indexOf(cleanPlan) < 0) throw new CatalogError("plan_not_found", 404);
+  if (cleanBot && visibleBotIds.indexOf(cleanBot) < 0) throw new CatalogError("bot_not_found", 404);
 }
 
-function ensureChatbotOnlyOnboardingAnswers(answers) {
-  if (APPOINTMENT_SETUP_ENABLED) return;
+function ensureChatbotOnlyOnboardingAnswers(answers, tenantId) {
+  if (appointmentSetupEnabledForTenant(tenantId)) return;
   const goal = String(answers && answers.setup_goal || "").trim().toLowerCase();
   if (goal && goal !== "unknown" && goal !== "customer_service") throw new CatalogError("chatbot_only_release", 422);
 }
@@ -7950,7 +7978,11 @@ function sendCatalogError(res, error) {
   res.status(problem.status).json({ ok: false, error: problem.code });
 }
 
-function defaultPlatformCatalogs(customerVisibleOnly) {
+function appointmentPilotCatalogVisible(options) {
+  return !!(options && options.appointmentsVisible);
+}
+
+function defaultPlatformCatalogs(customerVisibleOnly, options) {
   const bots = [
     { id: "atencion-cliente", name: "Atención al cliente", nombre: "Atención al cliente", descripcion: "Atiende, orienta, responde preguntas y escala casos a humanos.", active: true, activo: true, orden: 1 },
     { id: "agendamiento", name: "Agendamiento", nombre: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", active: true, activo: true, orden: 2 },
@@ -7964,17 +7996,42 @@ function defaultPlatformCatalogs(customerVisibleOnly) {
     });
   });
   if (!customerVisibleOnly) return { plans, bots };
+  if (appointmentPilotCatalogVisible(options)) {
+    return {
+      plans: plans.filter(function (plan) { return ["nextfor-uno", "nextfor-aura", "nextfor-tempo", "nextfor-atlas"].includes(plan.id); }),
+      bots: bots.filter(function (bot) { return ["atencion-cliente", "agendamiento"].includes(bot.id); })
+    };
+  }
   return {
     plans: plans.filter(function (plan) { return CUSTOMER_VISIBLE_PLAN_IDS.includes(plan.id); }),
     bots: bots.filter(function (bot) { return CUSTOMER_VISIBLE_BOT_IDS.includes(bot.id); })
   };
 }
 
-function catalogWithDefaults(catalogs, customerVisibleOnly) {
+function catalogWithDefaults(catalogs, customerVisibleOnly, options) {
   catalogs = catalogs || {};
-  const fallback = defaultPlatformCatalogs(customerVisibleOnly);
-  const plans = Array.isArray(catalogs.plans) && catalogs.plans.length ? catalogs.plans : fallback.plans;
-  const bots = Array.isArray(catalogs.bots) && catalogs.bots.length ? catalogs.bots : fallback.bots;
+  const fallback = defaultPlatformCatalogs(customerVisibleOnly, options);
+  let plans = Array.isArray(catalogs.plans) && catalogs.plans.length ? catalogs.plans : fallback.plans;
+  let bots = Array.isArray(catalogs.bots) && catalogs.bots.length ? catalogs.bots : fallback.bots;
+  if (customerVisibleOnly && appointmentPilotCatalogVisible(options)) {
+    const planIds = new Set(plans.map(function (plan) { return String(plan && plan.id || "").toLowerCase(); }));
+    const botIds = new Set(bots.map(function (bot) { return String(bot && bot.id || "").toLowerCase(); }));
+    plans = plans.concat(fallback.plans.filter(function (plan) {
+      const id = String(plan && plan.id || "").toLowerCase();
+      return id && !planIds.has(id);
+    }));
+    bots = bots.concat(fallback.bots.filter(function (bot) {
+      const id = String(bot && bot.id || "").toLowerCase();
+      return id && !botIds.has(id);
+    }));
+  }
+  if (customerVisibleOnly && appointmentPilotCatalogVisible(options)) {
+    return {
+      plans: plans.filter(function (plan) { return ["nextfor-uno", "nextfor-aura", "nextfor-tempo", "nextfor-atlas"].includes(String(plan && plan.id || "").toLowerCase()); }),
+      bots: bots.filter(function (bot) { return ["atencion-cliente", "agendamiento"].includes(String(bot && bot.id || "").toLowerCase()); }),
+      fallback_catalog: plans === fallback.plans || bots === fallback.bots
+    };
+  }
   return { plans, bots, fallback_catalog: plans === fallback.plans || bots === fallback.bots };
 }
 
@@ -8043,10 +8100,12 @@ app.get("/admin/panel/catalogs", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
+  const auth = dashboardAuth(req);
+  const appointmentCatalog = { appointmentsVisible: appointmentSetupEnabledForAuth(auth) };
   try {
-    res.json(Object.assign({ ok: true }, catalogWithDefaults(await catalogService.activeCatalogs(), true)));
+    res.json(Object.assign({ ok: true }, catalogWithDefaults(await catalogService.activeCatalogs(), true, appointmentCatalog)));
   } catch (error) {
-    res.json(Object.assign({ ok: true, warning: "catalog_store_unavailable" }, catalogWithDefaults(null, true)));
+    res.json(Object.assign({ ok: true, warning: "catalog_store_unavailable" }, catalogWithDefaults(null, true, appointmentCatalog)));
   }
 });
 
@@ -8811,9 +8870,11 @@ app.get("/admin/client-onboarding", async (req, res) => {
     return;
   }
   let catalogs = { plans: [], bots: [] };
+  const appointmentSetupVisible = appointmentSetupEnabledForAuth(auth);
+  const appointmentCatalog = { appointmentsVisible: appointmentSetupVisible };
   if (CUSTOMER_ACCESS_V2_ENABLED && catalogService) {
-    try { catalogs = catalogWithDefaults(await catalogService.activeCatalogs(), true); }
-    catch (_) { catalogs = catalogWithDefaults(null, true); }
+    try { catalogs = catalogWithDefaults(await catalogService.activeCatalogs(), true, appointmentCatalog); }
+    catch (_) { catalogs = catalogWithDefaults(null, true, appointmentCatalog); }
   }
   const business = customerBusinessForAuth(auth);
   const plan = (catalogs.plans || []).find(function (item) { return item.id === business.plan_id; }) || null;
@@ -8842,7 +8903,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
     demo: false,
     apiPath: "/admin/client-onboarding/data",
     shopifyConnectPath: "/admin/integrations/shopify/connect",
-    chatbotOnlyRelease: !APPOINTMENT_SETUP_ENABLED,
+    chatbotOnlyRelease: !appointmentSetupVisible,
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
     questionnaire,
     focusPending: req.query.focus === "pending"
@@ -9698,7 +9759,6 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
 	      updated_by: auth.name || auth.username,
 	      questionnaire: await loadCustomerSetupQuestionnaire(true)
 	    });
-	    ensureChatbotOnlyOnboardingAnswers(candidate.answers);
     tenantId = onboardingTenantIdForSave(auth, candidate.answers);
     if (tenantId !== candidate.tenant_id) {
       candidate = createOnboardingRecord(candidate.answers, {
@@ -9707,8 +9767,8 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
         updated_by: auth.name || auth.username,
         questionnaire: await loadCustomerSetupQuestionnaire(true)
       });
-      ensureChatbotOnlyOnboardingAnswers(candidate.answers);
     }
+    ensureChatbotOnlyOnboardingAnswers(candidate.answers, tenantId);
     if (requestedStatus === "completed" && candidate.completion < 100) {
       res.status(422).json({
         ok: false,
@@ -9727,7 +9787,7 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
     }
 	    const selectedPlanId = String(req.body && req.body.plan_id || auth.plan_id || "").trim().toLowerCase();
 	    const selectedBotId = String(req.body && req.body.bot_id || auth.assigned_bot_id || "").trim().toLowerCase();
-	    ensureInitialProductionCustomerSelection(selectedPlanId, selectedBotId);
+	    ensureInitialProductionCustomerSelection(selectedPlanId, selectedBotId, tenantId);
     if (PAYMENTS_V1_ENABLED && requestedStatus === "completed" && (!selectedPlanId || !selectedBotId)) {
       throw new PaymentError("plan_and_bot_required", 400);
     }

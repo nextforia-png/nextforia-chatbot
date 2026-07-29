@@ -53,6 +53,35 @@ function expectCode(promise, code) {
   const instagramUrl = new URL(meta.authorizationUrl("instagram", state));
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));
 
+  const activationRequests = [];
+  const activationMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    whatsappConfigId: "wa-config-123",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      activationRequests.push(request);
+      return {
+        data: request.url.endsWith("/ig-rav")
+          ? { id: "ig-rav", username: "ravtoys", name: "RAV Toys" }
+          : { success: true }
+      };
+    }
+  });
+  const activatedInstagram = await activationMeta.activate("instagram", {
+    page_id: "page-rav",
+    instagram_user_id: "ig-rav",
+    account_label: "@ravtoys",
+    access_token: "page-access-token"
+  });
+  assert.strictEqual(activatedInstagram.account_label, "@ravtoys");
+  assert.strictEqual(
+    activationRequests[0].params.subscribed_fields,
+    "messages,messaging_postbacks,message_reactions,message_reads"
+  );
+  assert(!activationRequests[0].params.subscribed_fields.includes("messaging_seen"));
+
   const provider = {
     configured: function () { return true; },
     authorizationUrl: function (channel, signedState) {

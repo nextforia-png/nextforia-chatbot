@@ -202,6 +202,45 @@ function expectCode(promise, code) {
   assert(adoptedStored.credentials_ciphertext.startsWith("enc:v1:"));
   assert(!adoptedStored.credentials_ciphertext.includes("system-user-token"));
 
+  let repairedSubscriptions = 0;
+  const repairStore = new InMemoryChannelConnectionStore();
+  const repairService = createChannelConnectionService({
+    store: repairStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) { return candidate; },
+      subscribe: async function (channel, credential) {
+        assert.strictEqual(channel, "whatsapp");
+        assert.strictEqual(credential.whatsapp_business_account_id, "waba-repair");
+        assert.strictEqual(credential.access_token, "repair-token");
+        repairedSubscriptions++;
+        return { ok: true };
+      },
+      verify: async function () {
+        return { ok: true, account_label: "+57 301 587 2708" };
+      }
+    },
+    encryptionKey,
+    now: function () { return new Date("2026-07-29T18:00:00.000Z"); }
+  });
+  await repairService.adoptExisting("tenant-repair", "whatsapp", "system:bootstrap", {
+    account_id: "phone-repair",
+    account_label: "+57 301 587 2708",
+    whatsapp_business_account_id: "waba-repair",
+    phone_number_id: "phone-repair",
+    access_token: "repair-token",
+    coexistence: true
+  });
+  const repairedConnection = await repairService.repairSubscription(
+    "tenant-repair",
+    "whatsapp",
+    "system:webhook-repair"
+  );
+  assert.strictEqual(repairedSubscriptions, 1);
+  assert.strictEqual(repairedConnection.status, "connected");
+  assert.strictEqual(repairedConnection.webhook_status, "subscribed");
+  assert(!JSON.stringify(repairedConnection).includes("repair-token"));
+
   const embeddedStore = new InMemoryChannelConnectionStore();
   const embeddedService = createChannelConnectionService({
     store: embeddedStore,

@@ -571,10 +571,7 @@ class MetaChannelProvider {
   async activate(channel, candidate) {
     try {
       if (channel === "whatsapp") {
-        await this.graph(encodeURIComponent(candidate.whatsapp_business_account_id) + "/subscribed_apps", candidate.access_token, {
-          method: "POST",
-          data: {}
-        });
+        await this.subscribe(channel, candidate);
         // Existing WhatsApp Business App numbers use Meta's coexistence flow.
         // Meta rejects /register for these SMB assets because Embedded Signup
         // already performs the phone verification and Cloud API bridge.
@@ -595,15 +592,7 @@ class MetaChannelProvider {
           240
         );
       } else {
-        await this.graph(encodeURIComponent(candidate.page_id) + "/subscribed_apps", candidate.access_token, {
-          method: "POST",
-          params: {
-            subscribed_fields: channel === "instagram"
-              ? "messages,messaging_postbacks,message_reactions,message_reads"
-              : "messages,messaging_postbacks,messaging_optins,message_deliveries,messaging_reads"
-          },
-          data: {}
-        });
+        await this.subscribe(channel, candidate);
         const targetId = channel === "instagram" ? candidate.instagram_user_id : candidate.page_id;
         const fields = channel === "instagram" ? "id,username,name" : "id,name";
         const verified = await this.graph(encodeURIComponent(targetId), candidate.access_token, { params: { fields } });
@@ -618,6 +607,28 @@ class MetaChannelProvider {
     } catch (error) {
       throw new ChannelConnectionError("asset_activation_failed", 422, internalError(error));
     }
+  }
+
+  async subscribe(channel, credential) {
+    const subscriptionId = channel === "whatsapp"
+      ? credential.whatsapp_business_account_id
+      : credential.page_id;
+    if (!subscriptionId || !credential.access_token) {
+      throw new ChannelConnectionError("asset_activation_failed", 422, "Missing Meta subscription credentials");
+    }
+    const request = {
+      method: "POST",
+      data: {}
+    };
+    if (channel !== "whatsapp") {
+      request.params = {
+        subscribed_fields: channel === "instagram"
+          ? "messages,messaging_postbacks,message_reactions,message_reads"
+          : "messages,messaging_postbacks,messaging_optins,message_deliveries,messaging_reads"
+      };
+    }
+    await this.graph(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, request);
+    return { ok: true };
   }
 
   async prepareEmbeddedWhatsApp(code, session, options) {
@@ -1067,6 +1078,44 @@ function createChannelConnectionService(options) {
         details: result.ok ? {} : { error: result.error }
       });
       return publicConnection(row, { superAdmin: true });
+    },
+
+    async repairSubscription(tenantId, channel, actor) {
+      const clean = assertTenantChannel(tenantId, channel);
+      const record = await store.get(clean.tenantId, clean.channel);
+      if (!record) throw new ChannelConnectionError("connection_not_found", 404);
+      if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+      const credential = credentialPayload(record);
+      if (!credential || !provider || typeof provider.subscribe !== "function") {
+        throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+      }
+      try {
+        await provider.subscribe(clean.channel, credential);
+        const result = await provider.verify(clean.channel, credential);
+        if (!result.ok) throw new ChannelConnectionError("connection_failed", 422, result.error);
+        const checkedAt = iso(now());
+        const row = await store.upsert({
+          tenant_id: clean.tenantId,
+          channel: clean.channel,
+          status: "connected",
+          account_label: result.account_label || record.account_label,
+          webhook_status: "subscribed",
+          last_verified_at: checkedAt,
+          last_error: null,
+          last_error_at: null,
+          updated_at: checkedAt
+        }, {
+          action: "subscription_repaired",
+          actor: actorLabel(actor),
+          details: {}
+        });
+        return publicConnection(row, { superAdmin: true });
+      } catch (error) {
+        await markFailure(clean.tenantId, clean.channel, actor, error);
+        throw error instanceof ChannelConnectionError
+          ? error
+          : new ChannelConnectionError("connection_failed", 422, internalError(error));
+      }
     },
 
     async requestReconnect(tenantId, channel, actor) {

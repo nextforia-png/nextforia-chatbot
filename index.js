@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v260-channel-delivery-truth";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v261-meta-webhook-repair";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -998,7 +998,13 @@ async function bootstrapExistingWhatsAppConnection() {
         "whatsapp"
       );
       if (existing && existing.status === "connected" && existing.credentials_ciphertext) {
-        return { skipped: true, reason: "existing_connection_preserved" };
+        const repaired = await channelConnectionService.repairSubscription(
+          CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+          "whatsapp",
+          "system:webhook-repair"
+        );
+        channelRuntimeCache.loaded_at = 0;
+        return { skipped: true, reason: "existing_connection_preserved", repaired };
       }
     }
     const connection = await channelConnectionService.adoptExisting(
@@ -1075,6 +1081,11 @@ function connectionRuntimeFromRecord(record) {
     if (channel === "whatsapp") {
       legacyRuntime.phoneNumberId = cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240);
       legacyRuntime.phone_number_id = legacyRuntime.phoneNumberId;
+      legacyRuntime.whatsappBusinessAccountId = cleanRuntimeText(
+        record.whatsapp_business_account_id || META_WHATSAPP_BUSINESS_ACCOUNT_ID,
+        240
+      );
+      legacyRuntime.whatsapp_business_account_id = legacyRuntime.whatsappBusinessAccountId;
       legacyRuntime.accessToken = WA_TOKEN;
     } else if (channel === "instagram") {
       legacyRuntime.instagramUserId = cleanRuntimeText(record.instagram_user_id || IG_SEND_ID || IG_USER_ID, 240);
@@ -1092,15 +1103,21 @@ function connectionRuntimeFromRecord(record) {
   }
   const credential = credentialPayloadFromConnection(record);
   const accessToken = cleanRuntimeText(credential && credential.access_token, 4096);
-  if (channel === "whatsapp") {
-    const phoneNumberId = cleanRuntimeText(record.phone_number_id || credential && credential.phone_number_id, 240);
-    if (!phoneNumberId || !accessToken) return null;
-    return {
+    if (channel === "whatsapp") {
+      const phoneNumberId = cleanRuntimeText(record.phone_number_id || credential && credential.phone_number_id, 240);
+      const whatsappBusinessAccountId = cleanRuntimeText(
+        record.whatsapp_business_account_id || credential && credential.whatsapp_business_account_id,
+        240
+      );
+      if (!phoneNumberId || !accessToken) return null;
+      return {
       tenantId,
       tenant_id: tenantId,
       channel,
       phoneNumberId,
-      phone_number_id: phoneNumberId,
+        phone_number_id: phoneNumberId,
+        whatsappBusinessAccountId,
+        whatsapp_business_account_id: whatsappBusinessAccountId,
       accessToken,
       access_token: accessToken,
       source: "channel_connection"
@@ -1152,6 +1169,8 @@ async function loadChannelRuntimeRows(force) {
       channel: "whatsapp",
       phoneNumberId: PHONE_NUMBER_ID,
       phone_number_id: PHONE_NUMBER_ID,
+      whatsappBusinessAccountId: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
+      whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
       accessToken: WA_TOKEN,
       access_token: WA_TOKEN,
       source: "environment"
@@ -4478,6 +4497,9 @@ app.get("/whatsapp/health", async (req, res) => {
   const checkedAt = new Date().toISOString();
   const runtime = await resolveWhatsAppRuntimeForTenant(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
   const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+  const whatsappBusinessAccountId = runtime && (
+    runtime.whatsappBusinessAccountId || runtime.whatsapp_business_account_id
+  ) || META_WHATSAPP_BUSINESS_ACCOUNT_ID;
   const accessToken = runtime && runtime.accessToken || WA_TOKEN;
   if (!phoneNumberId || !accessToken) {
     return res.status(503).json({
@@ -4494,6 +4516,34 @@ app.get("/whatsapp/health", async (req, res) => {
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000
     });
+    if (!whatsappBusinessAccountId) {
+      return res.status(503).json({
+        ok: false,
+        configured: true,
+        status: "waba_not_configured",
+        checked_at: checkedAt,
+        runtime: { ...whatsappRuntimeState }
+      });
+    }
+    const subscription = await axios.get(
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(whatsappBusinessAccountId)}/subscribed_apps`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 10000
+      }
+    );
+    const appSubscribed = !!META_APP_ID && (
+      subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : []
+    ).some(function (app) { return String(app && app.id) === String(META_APP_ID); });
+    if (!appSubscribed) {
+      return res.status(503).json({
+        ok: false,
+        configured: true,
+        status: "webhook_not_subscribed",
+        checked_at: checkedAt,
+        runtime: { ...whatsappRuntimeState }
+      });
+    }
     return res.json({
       ok: true,
       configured: true,

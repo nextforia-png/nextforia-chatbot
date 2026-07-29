@@ -442,6 +442,13 @@ class MetaChannelProvider {
     }, settings));
   }
 
+  whatsappRegistrationPin(phoneNumberId) {
+    const digest = crypto.createHmac("sha256", this.appSecret)
+      .update("whatsapp-cloud-registration:" + cleanText(phoneNumberId, 240))
+      .digest();
+    return String(digest.readUInt32BE(0) % 1000000).padStart(6, "0");
+  }
+
   async exchangeCode(code, options) {
     const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
     if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
@@ -548,6 +555,13 @@ class MetaChannelProvider {
         await this.graph(encodeURIComponent(candidate.whatsapp_business_account_id) + "/subscribed_apps", candidate.access_token, {
           method: "POST",
           data: {}
+        });
+        await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
+          method: "POST",
+          data: {
+            messaging_product: "whatsapp",
+            pin: this.whatsappRegistrationPin(candidate.phone_number_id)
+          }
         });
         const verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
           params: { fields: "id,display_phone_number,verified_name,quality_rating" }

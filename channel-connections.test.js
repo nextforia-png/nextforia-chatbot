@@ -82,6 +82,22 @@ function expectCode(promise, code) {
   );
   assert(!activationRequests[0].params.subscribed_fields.includes("messaging_seen"));
 
+  activationRequests.length = 0;
+  const activatedWhatsApp = await activationMeta.activate("whatsapp", {
+    whatsapp_business_account_id: "waba-rav",
+    phone_number_id: "phone-rav",
+    account_label: "+57 301 587 2708",
+    access_token: "whatsapp-access-token"
+  });
+  assert.strictEqual(activatedWhatsApp.account_label, "+57 301 587 2708");
+  assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
+  assert(activationRequests[1].url.endsWith("/phone-rav/register"));
+  assert.strictEqual(activationRequests[1].method, "POST");
+  assert.strictEqual(activationRequests[1].data.messaging_product, "whatsapp");
+  assert.match(activationRequests[1].data.pin, /^\d{6}$/);
+  assert(!JSON.stringify(activationRequests).includes("meta-app-secret"));
+  assert(activationRequests[2].url.endsWith("/phone-rav"));
+
   const provider = {
     configured: function () { return true; },
     authorizationUrl: function (channel, signedState) {

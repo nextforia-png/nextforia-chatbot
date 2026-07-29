@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v253-meta-real-delivery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v254-meta-coexistence-completion";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -973,6 +973,18 @@ async function bootstrapExistingWhatsAppConnection() {
     return { skipped: true };
   }
   try {
+    // Once a customer has completed Embedded Signup, its business token must
+    // remain the source of truth. Never overwrite that live OAuth credential
+    // with the environment bootstrap on a later deploy/restart.
+    if (channelConnectionStore && typeof channelConnectionStore.get === "function") {
+      const existing = await channelConnectionStore.get(
+        CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+        "whatsapp"
+      );
+      if (existing && existing.status === "connected" && existing.credentials_ciphertext) {
+        return { skipped: true, reason: "existing_connection_preserved" };
+      }
+    }
     const connection = await channelConnectionService.adoptExisting(
       CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
       "whatsapp",

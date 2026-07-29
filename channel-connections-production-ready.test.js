@@ -46,6 +46,7 @@ function waitForServer(child, port) {
   const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
   assert.match(bootstrapSource, /access_token:\s*WA_TOKEN,[\s\S]*?coexistence:\s*true/);
   assert.match(source, /async function registerRavWhatsAppCloudNumberIfNeeded\(bootstrapResult\)/);
+  assert.doesNotMatch(source, /process\.env\.NODE_ENV === "production" &&[\s\S]{0,120}CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e"/);
   assert.match(source, /CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e"/);
   assert.match(source, /META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606"/);
   assert.match(source, /PHONE_NUMBER_ID === "334999901166332"/);
@@ -93,7 +94,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v282-rav-whatsapp-cloud-registration"));
+    assert((await response.text()).includes("v283-rav-whatsapp-cloud-registration"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

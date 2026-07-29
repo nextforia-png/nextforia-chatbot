@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v282-rav-whatsapp-cloud-registration";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v283-rav-whatsapp-cloud-registration";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1065,7 +1065,6 @@ async function bootstrapExistingWhatsAppConnection() {
 
 async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult) {
   const isRavSpecialCase =
-    process.env.NODE_ENV === "production" &&
     CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e" &&
     META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606" &&
     PHONE_NUMBER_ID === "334999901166332" &&
@@ -4621,7 +4620,8 @@ app.get("/whatsapp/health", async (req, res) => {
       ok: bootstrap && bootstrap.ok !== false,
       skipped: !!(bootstrap && bootstrap.skipped),
       reason: bootstrap && bootstrap.reason || null,
-      error: bootstrap && bootstrap.error ? String(bootstrap.error).slice(0, 300) : null
+      error: bootstrap && bootstrap.error ? String(bootstrap.error).slice(0, 300) : null,
+      registration: bootstrap && bootstrap.registration || null
     }
   });
   if (!phoneNumberId || !accessToken) {

@@ -1063,7 +1063,7 @@ openModal("botEditorModal","botNombre");}
 function closeBotEditor(){closeModal("botEditorModal");}
 function openModal(id,focusId){var layer=document.getElementById(id);if(!layer)return;lastFocus=document.activeElement;layer.classList.add("open");layer.setAttribute("aria-hidden","false");document.body.style.overflow="hidden";var target=document.getElementById(focusId);if(target)target.focus();}
 function closeModal(id){var layer=document.getElementById(id);if(!layer)return;layer.classList.remove("open");layer.setAttribute("aria-hidden","true");document.body.style.overflow="";if(lastFocus&&lastFocus.focus)lastFocus.focus();}
-function postJson(url,payload){return fetch(url,{method:"POST",headers:{"content-type":"application/json",accept:"application/json"},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});});}
+function postJson(url,payload){return fetch(url,{method:"POST",headers:{"content-type":"application/json",accept:"application/json","x-nextforia-panel-origin":location.origin},body:JSON.stringify(payload)}).then(function(r){return r.json().then(function(b){if(!r.ok)throw new Error(b.error||"catalog_unavailable");return b;});});}
 /* ── Cuestionario de Customer Setup ─────────────────────────────────── */
 var questionnaireCache={version:1,questions:[]},currentQuestionBot="customer_service";
 var QUESTION_TYPES=[["text","Respuesta corta"],["email","Correo"],["tel","Teléfono"],["textarea","Respuesta larga"],["choice","Sí / No / No sé"],["checkbox","Casilla"]];

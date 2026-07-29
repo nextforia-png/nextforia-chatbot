@@ -100,6 +100,9 @@ function evaluateAppointmentLiveReadiness(input) {
     const readiness = fullHealth.appointment_readiness;
     if (!readiness) failures.push("Health autenticado no incluye appointment_readiness.");
     else {
+      if (readiness.setup_enabled_for_pilot !== true) {
+        failures.push("Setup Appointment no está habilitado para el piloto DERCO. Configura APPOINTMENT_SETUP_TENANT_IDS=grupo-derco o APPOINTMENT_SETUP_ENABLED=1.");
+      }
       if (readiness.production_can_be_enabled !== true) {
         failures.push("Appointment aún no puede activarse: " + ((readiness.blockers || []).join(", ") || "sin blockers detallados") + ".");
       }

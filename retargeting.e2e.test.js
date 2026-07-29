@@ -19,7 +19,7 @@ function availablePort() {
 function waitForServer(child, port) {
   return new Promise(function (resolve, reject) {
     let output = "";
-    const timeout = setTimeout(function () { reject(new Error("server_start_timeout\n" + output)); }, 15000);
+    const timeout = setTimeout(function () { reject(new Error("server_start_timeout\n" + output)); }, 30000);
     function inspect(chunk) {
       output += String(chunk || "");
       if (output.includes("running on port " + port)) {

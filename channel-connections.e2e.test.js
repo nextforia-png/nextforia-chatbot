@@ -177,7 +177,22 @@ async function login(base, body) {
     });
     assert.strictEqual(response.status, 200, "RAV customer must connect its own tenant-scoped WhatsApp account");
     body = await response.json();
-    assert(new URL(body.authorization_url).searchParams.get("scope").includes("whatsapp_business_management"));
+    assert.strictEqual(body.embedded_signup.app_id, "123456789");
+    assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-config");
+    assert.strictEqual(body.embedded_signup.graph_version, "v23.0");
+    assert(body.embedded_signup.oauth_state);
+    assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie },
+      body: JSON.stringify({
+        state: body.embedded_signup.oauth_state + "altered",
+        code: "fake",
+        session: { waba_id: "waba-a", phone_number_id: "phone-a" }
+      })
+    });
+    assert.strictEqual(response.status, 403);
 
     response = await fetch(base + "/admin/panel/channel-connections/instagram/connect", {
       method: "POST",

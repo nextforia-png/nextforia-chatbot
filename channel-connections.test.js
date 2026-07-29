@@ -98,6 +98,19 @@ function expectCode(promise, code) {
   assert(!JSON.stringify(activationRequests).includes("meta-app-secret"));
   assert(activationRequests[2].url.endsWith("/phone-rav"));
 
+  activationRequests.length = 0;
+  const activatedCoexistence = await activationMeta.activate("whatsapp", {
+    whatsapp_business_account_id: "waba-rav",
+    phone_number_id: "phone-rav",
+    account_label: "+57 301 587 2708",
+    access_token: "whatsapp-access-token",
+    coexistence: true
+  });
+  assert.strictEqual(activatedCoexistence.account_label, "+57 301 587 2708");
+  assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
+  assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
+  assert(activationRequests[1].url.endsWith("/phone-rav"));
+
   const provider = {
     configured: function () { return true; },
     authorizationUrl: function (channel, signedState) {
@@ -188,6 +201,46 @@ function expectCode(promise, code) {
   assert.strictEqual(adoptedStored.credential_source, "oauth");
   assert(adoptedStored.credentials_ciphertext.startsWith("enc:v1:"));
   assert(!adoptedStored.credentials_ciphertext.includes("system-user-token"));
+
+  const embeddedStore = new InMemoryChannelConnectionStore();
+  const embeddedService = createChannelConnectionService({
+    store: embeddedStore,
+    provider: {
+      configured: function () { return true; },
+      prepareEmbeddedWhatsApp: async function (code, session) {
+        assert.strictEqual(code, "embedded-code");
+        assert.strictEqual(session.waba_id, "waba-smb");
+        assert.strictEqual(session.phone_number_id, "phone-smb");
+        return {
+          id: "wa:phone-smb",
+          account_id: "phone-smb",
+          account_label: "+57 301 587 2708",
+          whatsapp_business_account_id: "waba-smb",
+          phone_number_id: "phone-smb",
+          access_token: "embedded-business-token",
+          coexistence: true
+        };
+      },
+      activate: async function (channel, candidate) {
+        assert.strictEqual(channel, "whatsapp");
+        assert.strictEqual(candidate.coexistence, true);
+        return candidate;
+      }
+    },
+    encryptionKey,
+    now: function () { return new Date("2026-07-28T22:00:00.000Z"); }
+  });
+  const embedded = await embeddedService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-smb",
+    actor: "owner@smb.example",
+    code: "embedded-code",
+    session: { waba_id: "waba-smb", phone_number_id: "phone-smb" }
+  });
+  assert.strictEqual(embedded.connection.status, "connected");
+  assert.strictEqual(embedded.connection.account_label, "+57 301 587 2708");
+  assert(!JSON.stringify(embedded).includes("embedded-business-token"));
+  const embeddedStored = await embeddedStore.get("tenant-smb", "whatsapp");
+  assert(embeddedStored.credentials_ciphertext.startsWith("enc:v1:"));
 
   const beginUrl = await service.begin("tenant-a", "instagram", "admin@a.example", state);
   assert(beginUrl.startsWith("https://www.facebook.com/"));

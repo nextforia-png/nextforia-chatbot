@@ -128,19 +128,21 @@ function securityHeaders(req, res, next) {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
-  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  const customerPanel = String(req.originalUrl || "").startsWith("/admin/panel");
+  res.setHeader("Cross-Origin-Opener-Policy", customerPanel ? "same-origin-allow-popups" : "same-origin");
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.setHeader("Content-Security-Policy", [
     "default-src 'self'",
     "base-uri 'none'",
     "frame-ancestors 'none'",
-    "form-action 'self'",
+    "form-action 'self' https://www.facebook.com",
     "object-src 'none'",
-    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
+    "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://connect.facebook.net",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: https:",
-    "connect-src 'self'",
+    "connect-src 'self' https://graph.facebook.com https://www.facebook.com",
+    "frame-src https://www.facebook.com https://web.facebook.com",
     "upgrade-insecure-requests"
   ].join("; "));
   if (req.secure || firstForwardedValue(req.get("x-forwarded-proto")) === "https") {

@@ -470,6 +470,25 @@ class MetaChannelProvider {
     }
   }
 
+  async extendUserAccessToken(accessToken) {
+    try {
+      const response = await this.axios.get(this.graphOrigin + "/" + this.graphVersion + "/oauth/access_token", {
+        params: {
+          grant_type: "fb_exchange_token",
+          client_id: this.appId,
+          client_secret: this.appSecret,
+          fb_exchange_token: cleanText(accessToken, 4096)
+        },
+        timeout: 10000
+      });
+      return cleanText(response.data && response.data.access_token, 4096) || accessToken;
+    } catch (_) {
+      // Some Embedded Signup codes already return a business token that cannot
+      // be exchanged with fb_exchange_token. Keep it and verify the asset below.
+      return accessToken;
+    }
+  }
+
   async discoverWhatsApp(accessToken) {
     const candidates = [];
     const businesses = await this.graph("me/businesses", accessToken, {
@@ -556,13 +575,18 @@ class MetaChannelProvider {
           method: "POST",
           data: {}
         });
-        await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
-          method: "POST",
-          data: {
-            messaging_product: "whatsapp",
-            pin: this.whatsappRegistrationPin(candidate.phone_number_id)
-          }
-        });
+        // Existing WhatsApp Business App numbers use Meta's coexistence flow.
+        // Meta rejects /register for these SMB assets because Embedded Signup
+        // already performs the phone verification and Cloud API bridge.
+        if (!candidate.coexistence) {
+          await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
+            method: "POST",
+            data: {
+              messaging_product: "whatsapp",
+              pin: this.whatsappRegistrationPin(candidate.phone_number_id)
+            }
+          });
+        }
         const verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
           params: { fields: "id,display_phone_number,verified_name,quality_rating" }
         });
@@ -593,6 +617,40 @@ class MetaChannelProvider {
       return candidate;
     } catch (error) {
       throw new ChannelConnectionError("asset_activation_failed", 422, internalError(error));
+    }
+  }
+
+  async prepareEmbeddedWhatsApp(code, session, options) {
+    const wabaId = cleanText(session && session.waba_id, 240);
+    const phoneNumberId = cleanText(session && session.phone_number_id, 240);
+    const businessId = cleanText(session && session.business_id, 240);
+    if (!wabaId || !phoneNumberId) {
+      throw new ChannelConnectionError("invalid_authorization", 422, "Embedded Signup did not return the WhatsApp asset IDs");
+    }
+    const accessToken = await this.exchangeCode(code, options);
+    try {
+      const phones = await this.graph(encodeURIComponent(wabaId) + "/phone_numbers", accessToken, {
+        params: { fields: "id,display_phone_number,verified_name,quality_rating", limit: 100 }
+      });
+      const phone = (phones.data && phones.data.data || []).find(function (item) {
+        return String(item && item.id) === phoneNumberId;
+      });
+      if (!phone) {
+        throw new ChannelConnectionError("invalid_authorization", 422, "The selected phone number does not belong to the selected WhatsApp account");
+      }
+      return {
+        id: "wa:" + phoneNumberId,
+        account_id: phoneNumberId,
+        account_label: cleanText(phone.display_phone_number || phone.verified_name || phoneNumberId, 240),
+        meta_business_id: businessId || null,
+        whatsapp_business_account_id: wabaId,
+        phone_number_id: phoneNumberId,
+        access_token: accessToken,
+        coexistence: true
+      };
+    } catch (error) {
+      if (error instanceof ChannelConnectionError) throw error;
+      throw new ChannelConnectionError("invalid_authorization", 422, internalError(error));
     }
   }
 
@@ -895,7 +953,10 @@ function createChannelConnectionService(options) {
     async completeAuthorization(input) {
       const clean = assertTenantChannel(input && input.tenant_id, input && input.channel);
       try {
-        const accessToken = await provider.exchangeCode(input.code, { redirectUri: input && input.redirect_uri });
+        let accessToken = await provider.exchangeCode(input.code, { redirectUri: input && input.redirect_uri });
+        if (clean.channel !== "whatsapp" && typeof provider.extendUserAccessToken === "function") {
+          accessToken = await provider.extendUserAccessToken(accessToken);
+        }
         const candidates = await provider.discoverAssets(clean.channel, accessToken);
         if (!candidates.length) throw new ChannelConnectionError("no_eligible_assets", 422);
         if (candidates.length === 1) {
@@ -921,6 +982,27 @@ function createChannelConnectionService(options) {
           details: { asset_count: pendingAssets.length }
         });
         return { status: "selection_required", connection: publicConnection(row) };
+      } catch (error) {
+        await markFailure(clean.tenantId, clean.channel, input.actor, error);
+        throw error instanceof ChannelConnectionError
+          ? error
+          : new ChannelConnectionError("connection_failed", 422, internalError(error));
+      }
+    },
+
+    async completeEmbeddedWhatsApp(input) {
+      const clean = assertTenantChannel(input && input.tenant_id, "whatsapp");
+      if (!provider || typeof provider.prepareEmbeddedWhatsApp !== "function") {
+        throw new ChannelConnectionError("channel_oauth_not_configured", 503);
+      }
+      try {
+        const candidate = await provider.prepareEmbeddedWhatsApp(
+          input && input.code,
+          input && input.session,
+          { redirectUri: input && input.redirect_uri }
+        );
+        const row = await connectCandidate(clean.tenantId, clean.channel, input.actor, candidate);
+        return { status: "connected", connection: publicConnection(row) };
       } catch (error) {
         await markFailure(clean.tenantId, clean.channel, input.actor, error);
         throw error instanceof ChannelConnectionError

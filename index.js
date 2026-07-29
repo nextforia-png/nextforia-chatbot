@@ -264,7 +264,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v250-meta-whatsapp-cloud-registration";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v251-meta-coexistence";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -10182,9 +10182,62 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
     const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state, {
       redirectUri
     });
+    if (channel === "whatsapp") {
+      res.json({
+        ok: true,
+        embedded_signup: {
+          app_id: META_APP_ID,
+          configuration_id: META_WHATSAPP_CONFIG_ID,
+          graph_version: META_GRAPH_VERSION,
+          oauth_state: state
+        }
+      });
+      return;
+    }
     res.json({ ok: true, authorization_url: authorizationUrl });
   } catch (error) {
     console.error("customer channel connect start error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  const state = readOAuthState(DASHBOARD_SESSION_SECRET, req.body && req.body.state);
+  const tenantId = customerChannelTenantForAuth(auth);
+  if (!state || state.channel !== "whatsapp" || usedChannelOAuthNonces.has(state.nonce) ||
+      state.tenant_id !== tenantId ||
+      String(state.actor_id) !== String(auth.user_id || auth.username)) {
+    res.status(403).json({ ok: false, error: "invalid_authorization" });
+    return;
+  }
+  usedChannelOAuthNonces.add(state.nonce);
+  if (usedChannelOAuthNonces.size > 10000) {
+    usedChannelOAuthNonces.delete(usedChannelOAuthNonces.values().next().value);
+  }
+  try {
+    const result = await channelConnectionService.completeEmbeddedWhatsApp({
+      tenant_id: tenantId,
+      actor: auth,
+      redirect_uri: state.redirect_uri || channelConnectionCallbackUrlForRequest(req),
+      code: req.body && req.body.code,
+      session: req.body && req.body.session
+    });
+    res.json({ ok: true, connection: result.connection });
+  } catch (error) {
+    console.error("WhatsApp Embedded Signup failed:", error.internalMessage || error.message);
     channelConnectionErrorResponse(res, error);
   }
 });

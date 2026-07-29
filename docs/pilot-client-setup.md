@@ -38,6 +38,7 @@ Alcance inicial: RAV Toys y hasta tres comercios similares, cada uno en un entor
 - `api.nextforia.com`: webhooks y API.
 
 Mientras el dominio se configura, cada piloto puede usar temporalmente la URL segura de su servicio.
+Para webhooks reales, `api.nextforia.com` debe aceptar `POST`; si el dominio principal responde `405` en rutas de webhook, no sirve como reemplazo. La prueba mínima correcta es que `POST /webhooks/elevenlabs/post-call` responda `401` sin firma, porque eso demuestra que llega al backend y que el secreto está protegiendo el endpoint.
 
 ## Regla de salida
 

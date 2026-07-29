@@ -103,18 +103,30 @@
 12. Activar `SUPABASE_APPOINTMENTS_ENABLED=1`.
 13. Crear un usuario DERCO en `DASHBOARD_USERS` con `tenant_id: "grupo-derco"`.
 14. Conectar WhatsApp desde el panel de canales del cliente usando el flujo de Meta existente.
-15. En ElevenLabs, apuntar el post-call webhook a `https://api.nextforia.com/webhooks/elevenlabs/post-call`.
-16. Ejecutar una llamada o conversación de prueba y confirmar que la cita aparezca en el panel.
-17. Revisar `appointment_readiness` en `/admin/health`; solo activar `APPOINTMENTS_PUBLIC_ENABLED=1` cuando `production_can_be_enabled=true` y Super Admin apruebe.
+15. En Cloudflare, crear/verificar `api.nextforia.com` apuntando al servicio Render del backend (`rav-whatsapp-bot.onrender.com`) y validar que `POST https://api.nextforia.com/webhooks/elevenlabs/post-call` responda `401` sin firma. Ese `401` confirma que el endpoint existe y está protegido.
+16. En ElevenLabs, apuntar el post-call webhook a `https://api.nextforia.com/webhooks/elevenlabs/post-call`.
+17. Ejecutar una llamada o conversación de prueba y confirmar que la cita aparezca en el panel.
+18. Revisar `appointment_readiness` en `/admin/health`; solo activar `APPOINTMENTS_PUBLIC_ENABLED=1` cuando `production_can_be_enabled=true` y Super Admin apruebe.
 
 Verificación operativa repetible:
 
 ```bash
 BOT_BASE_URL=https://nextforia.com \
 DASHBOARD_KEY=... \
-EXPECTED_BOT_VERSION=v247-appointment-setup-gate \
+EXPECTED_BOT_VERSION=v250-meta-whatsapp-cloud-registration \
 pnpm verify:appointments --require-dashboard-key
 ```
+
+Si `api.nextforia.com` todavía no resuelve, el mismo verifier debe fallar. Como diagnóstico aislado del backend, se puede probar temporalmente el origin directo:
+
+```bash
+BOT_BASE_URL=https://rav-whatsapp-bot.onrender.com \
+APPOINTMENT_API_HOST=rav-whatsapp-bot.onrender.com \
+ELEVENLABS_WEBHOOK_URL=https://rav-whatsapp-bot.onrender.com/webhooks/elevenlabs/post-call \
+pnpm verify:appointments
+```
+
+Ese origin solo sirve para comprobar que Render/Express responden; para piloto live debe quedar el dominio `api.nextforia.com`.
 
 Para la aprobación final pública, ejecutar el mismo comando con `APPOINTMENT_VERIFY_REQUIRE_PUBLIC=1` después de activar `APPOINTMENTS_PUBLIC_ENABLED=1`.
 

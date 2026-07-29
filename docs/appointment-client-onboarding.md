@@ -5,6 +5,7 @@
 - Grupo Jurídico DERCO S.A.S. es el cliente registrado #1 de Nextfor IA.
 - RAV Toys se conserva como entorno legado/demostración y no ocupa un número del nuevo registro.
 - Cada cliente recibe un `tenant_id`, usuarios propios, agente de ElevenLabs derivado de la plantilla y una integración de calendario independiente.
+- El setup de Appointment debe seguir las lecciones del primer setup de Atención al Cliente: ver `docs/setup-lessons-customer-service-to-appointments.md`.
 
 ## Qué pasa con un cliente nuevo
 

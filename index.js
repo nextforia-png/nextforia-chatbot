@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v252-rav-existing-meta";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v253-meta-real-delivery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -696,6 +696,19 @@ const instagramRuntimeState = {
   last_webhook_object: null,
   last_entry_shape: null,
   last_event_shape: null,
+  last_skip_reason: null
+};
+const whatsappRuntimeState = {
+  webhook_requests: 0,
+  inbound_messages: 0,
+  outbound_messages: 0,
+  last_webhook_at: null,
+  last_inbound_at: null,
+  last_outbound_at: null,
+  last_error_at: null,
+  last_error_stage: null,
+  last_error_code: null,
+  last_webhook_object: null,
   last_skip_reason: null
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
@@ -1329,6 +1342,15 @@ async function outboundRuntimeForConversation(userId, options) {
     access_token: WA_TOKEN,
     source: "environment"
   };
+}
+
+function instagramGraphOriginForRuntime(runtime) {
+  // Connections created through Facebook Login use a Page access token and the
+  // Instagram Messaging API hosted on graph.facebook.com. The legacy
+  // Instagram Login integration keeps its explicitly configured origin.
+  return runtime && runtime.source === "channel_connection"
+    ? "https://graph.facebook.com"
+    : IG_GRAPH_BASE_URL;
 }
 // Catálogo editable de planes y bots. Comparte el gate de customer access v2.
 const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
@@ -2012,7 +2034,8 @@ async function refreshInstagramProfile(userId) {
   instagramProfileCache.set(cleanUserId, { username: "", fetched_at: Date.now() });
   try {
     const instagramScopedId = conversationExternalId(cleanUserId);
-    const response = await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramScopedId)}`, {
+    const graphOrigin = instagramGraphOriginForRuntime(runtime);
+    const response = await axios.get(`${graphOrigin}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramScopedId)}`, {
       params: { fields: "id,username" },
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 8000
@@ -3220,9 +3243,10 @@ async function sendText(to, text, options) {
       const runtime = await outboundRuntimeForConversation(to, options);
       const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
       const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      const graphOrigin = instagramGraphOriginForRuntime(runtime);
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
-        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${sendId}/messages`,
+        `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
         { recipient: { id: recipient.id }, message: { text: String(text || "").slice(0, 2000) } },
         { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
@@ -3253,12 +3277,20 @@ async function sendText(to, text, options) {
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
+    whatsappRuntimeState.outbound_messages++;
+    whatsappRuntimeState.last_outbound_at = new Date().toISOString();
     console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
     return true;
   } catch (err) {
     if (recipient.channel === "instagram") {
       instagramRuntimeState.last_error_at = new Date().toISOString();
       instagramRuntimeState.last_error_stage = "send_text";
+    }
+    if (recipient.channel === "whatsapp") {
+      const metaError = err.response?.data?.error || {};
+      whatsappRuntimeState.last_error_at = new Date().toISOString();
+      whatsappRuntimeState.last_error_stage = "send_text";
+      whatsappRuntimeState.last_error_code = metaError.code || null;
     }
     console.error(`${channelLabel(to)} text error:`, err.response?.data?.error || err.message);
     return false;
@@ -3339,9 +3371,10 @@ async function sendImage(to, imageUrl, caption, options) {
       const runtime = await outboundRuntimeForConversation(to, options);
       const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
       const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      const graphOrigin = instagramGraphOriginForRuntime(runtime);
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
-        `${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${sendId}/messages`,
+        `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
         { recipient: { id: recipient.id }, message: { attachment: { type: "image", payload: { url: imageUrl } } } },
         { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
@@ -4249,17 +4282,31 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
-  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
+  whatsappRuntimeState.webhook_requests++;
+  whatsappRuntimeState.last_webhook_at = new Date().toISOString();
+  whatsappRuntimeState.last_webhook_object = String(req.body?.object || "missing").slice(0, 60);
+  if (!validMetaWebhookSignature(req)) {
+    whatsappRuntimeState.last_error_at = new Date().toISOString();
+    whatsappRuntimeState.last_error_stage = "webhook_signature";
+    return res.sendStatus(401);
+  }
   res.sendStatus(200);
   try {
-    if (req.body?.object !== "whatsapp_business_account") return;
+    if (req.body?.object !== "whatsapp_business_account") {
+      whatsappRuntimeState.last_skip_reason = "unsupported_object";
+      return;
+    }
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const messages = value?.messages;
-    if (!messages || messages.length === 0) return;
+    if (!messages || messages.length === 0) {
+      whatsappRuntimeState.last_skip_reason = "no_messages";
+      return;
+    }
     const destination = await resolveWhatsAppDestinationRuntime(value);
     if (!destination.ok) {
+      whatsappRuntimeState.last_skip_reason = destination.reason || "destination_rejected";
       log("warn", "whatsapp_destination_rejected", {
         tenant_id: DEFAULT_TENANT_ID,
         reason: destination.reason,
@@ -4268,8 +4315,14 @@ app.post("/webhook", async (req, res) => {
       return;
     }
     const message = messages[0];
-    if (!acceptMetaEventId(message.id)) return;
+    if (!acceptMetaEventId(message.id)) {
+      whatsappRuntimeState.last_skip_reason = "duplicate_event";
+      return;
+    }
     const from = message.from;
+    whatsappRuntimeState.inbound_messages++;
+    whatsappRuntimeState.last_inbound_at = new Date().toISOString();
+    whatsappRuntimeState.last_skip_reason = null;
     rememberConversationRuntime(from, destination);
     const type = message.type;
     const inboundText = type === "text" ? message.text && message.text.body || "" : "";
@@ -4315,14 +4368,19 @@ app.post("/webhook", async (req, res) => {
 // internally so conversation state and outbound replies stay on the right channel.
 async function instagramConnectionHealth() {
   const checkedAt = new Date().toISOString();
-  if (!IG_ACCESS_TOKEN || !IG_USER_ID || !IG_SEND_ID) {
+  const tenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
+  const runtime = await resolveChannelRuntimeForTenant(tenantId, "instagram");
+  const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
+  const instagramUserId = runtime && runtime.instagramUserId || IG_USER_ID;
+  const graphOrigin = instagramGraphOriginForRuntime(runtime);
+  if (!accessToken || !instagramUserId) {
     return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt, runtime: { ...instagramRuntimeState } };
   }
 
   try {
-    await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(IG_USER_ID)}`, {
+    await axios.get(`${graphOrigin}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramUserId)}`, {
       params: { fields: "id,username" },
-      headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000
     });
     return { ok: true, configured: true, status: "connected", checked_at: checkedAt, runtime: { ...instagramRuntimeState } };
@@ -4343,6 +4401,47 @@ async function instagramConnectionHealth() {
 app.get("/instagram/health", async (req, res) => {
   const health = await instagramConnectionHealth();
   res.status(health.ok ? 200 : 503).json(health);
+});
+
+app.get("/whatsapp/health", async (req, res) => {
+  const checkedAt = new Date().toISOString();
+  const runtime = await resolveWhatsAppRuntimeForTenant(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
+  const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+  const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+  if (!phoneNumberId || !accessToken) {
+    return res.status(503).json({
+      ok: false,
+      configured: false,
+      status: "not_configured",
+      checked_at: checkedAt,
+      runtime: { ...whatsappRuntimeState }
+    });
+  }
+  try {
+    await axios.get(`https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(phoneNumberId)}`, {
+      params: { fields: "id,display_phone_number,verified_name,quality_rating" },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+    return res.json({
+      ok: true,
+      configured: true,
+      status: "connected",
+      checked_at: checkedAt,
+      runtime: { ...whatsappRuntimeState }
+    });
+  } catch (err) {
+    const metaError = err.response?.data?.error || {};
+    return res.status(503).json({
+      ok: false,
+      configured: true,
+      status: "api_error",
+      error_code: metaError.code || null,
+      error_type: metaError.type || "request_failed",
+      checked_at: checkedAt,
+      runtime: { ...whatsappRuntimeState }
+    });
+  }
 });
 
 app.get("/instagram/webhook", (req, res) => {
@@ -7780,7 +7879,12 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       group.last_text = eventText;
     } else if (replyText) {
       const actor = customerPanelReplyActor(turn);
-      group.messages.push({ ts, author: actor, text: replyText });
+      group.messages.push({
+        ts,
+        author: actor,
+        text: replyText,
+        delivery_status: turn.status === "error" ? "failed" : "sent"
+      });
       if (actor === "human") group.last_human_reply_ms = Math.max(group.last_human_reply_ms, tsMs);
       group.last_text = replyText;
     }

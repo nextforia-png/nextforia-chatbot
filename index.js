@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v273-rav-handoff-repair-form";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v274-rav-instagram-handoff-migration";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -9288,6 +9288,46 @@ function releaseAdminConversation(req, res) {
 
 app.post("/admin/release/:userId", releaseAdminConversation);
 
+const RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT = "rav-toys-adac1e";
+const RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER = "repair:rav-instagram-handoff-v274";
+
+async function runRavInstagramHandoffRepairOnce() {
+  if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
+    return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
+  }
+  const rows = await supabaseFetchRecent(500, { tenantId: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
+  if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
+  const turns = rows.map(normalizeTurnRow).filter(function (turn) {
+    return cleanTenantId(turn.tenantId || turn.tenant_id) === RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT;
+  });
+  const alreadyApplied = turns.some(function (turn) {
+    return Array.isArray(turn.tools) &&
+      turn.tools.includes("admin_release") &&
+      String(turn.botReply || "").includes(RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER);
+  });
+  if (alreadyApplied) return { ok: true, skipped: true, reason: "already_applied" };
+  const states = inferHandoffStates(turns, []);
+  const userIds = Object.keys(states).filter(function (userId) {
+    return states[userId].active && conversationChannel(userId) === "instagram";
+  });
+  for (const userId of userIds) {
+    humanHandoff.delete(userId);
+    await recordAdminEvent(
+      userId,
+      "admin_release",
+      "[Soporte NexforIA] Conversación devuelta a la IA (" + RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER + ").",
+      "ok",
+      false,
+      { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
+    );
+  }
+  log("info", "rav_instagram_handoff_repair", {
+    tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
+    released_count: userIds.length
+  });
+  return { ok: true, skipped: false, released_count: userIds.length };
+}
+
 app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok || auth.role !== "super_admin") {
@@ -13363,6 +13403,16 @@ app.listen(PORT, () => {
         console.error("Customer access clean slate failed:", error.message);
       });
   }
+  const ravInstagramHandoffRepairTimer = setTimeout(function () {
+    runRavInstagramHandoffRepairOnce()
+      .then(function (result) {
+        console.log("RAV Instagram handoff repair:", JSON.stringify(result));
+      })
+      .catch(function (error) {
+        console.error("RAV Instagram handoff repair failed:", error.message);
+      });
+  }, 5000);
+  ravInstagramHandoffRepairTimer.unref();
   if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;
     const runSelfCheck = async function () {

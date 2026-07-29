@@ -1,9 +1,12 @@
 "use strict";
 
 const assert = require("assert");
+const vm = require("vm");
 const {
+  clientScript,
   customerAppointmentSnapshot,
-  demoAppointmentSnapshot
+  demoAppointmentSnapshot,
+  styles
 } = require("./customer-appointments");
 
 const demo = demoAppointmentSnapshot(new Date("2026-07-15T12:00:00-05:00"));
@@ -27,5 +30,9 @@ assert.strictEqual(shaped.appointments[0].ui_status, "confirmed");
 assert.strictEqual(shaped.appointments[0].sync, "pending");
 assert.strictEqual(shaped.appointments[1].ui_status, "needs_you");
 assert.strictEqual(shaped.appointments.every(function (row) { return row.tenant_id === "tenant-a"; }), true);
+new vm.Script(clientScript);
+assert(clientScript.includes("Conectar Meta"));
+assert(clientScript.includes("Lo activa Nextfor desde Super Admin."));
+assert(styles.includes("auto-fit"));
 
 console.log("customer appointment panel tests: ok");

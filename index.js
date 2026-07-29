@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v263-meta-waba-subscription";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v264-meta-signature-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -704,6 +704,9 @@ const instagramRuntimeState = {
   last_health_destination_suffix: null,
   last_handoff_auto_release_at: null,
   last_webhook_object: null,
+  last_signature_present: null,
+  last_signature_format_valid: null,
+  last_raw_body_present: null,
   last_entry_shape: null,
   last_event_shape: null,
   last_skip_reason: null
@@ -719,6 +722,9 @@ const whatsappRuntimeState = {
   last_error_stage: null,
   last_error_code: null,
   last_webhook_object: null,
+  last_signature_present: null,
+  last_signature_format_valid: null,
+  last_raw_body_present: null,
   last_skip_reason: null
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
@@ -4368,6 +4374,10 @@ app.post("/webhook", async (req, res) => {
   whatsappRuntimeState.webhook_requests++;
   whatsappRuntimeState.last_webhook_at = new Date().toISOString();
   whatsappRuntimeState.last_webhook_object = String(req.body?.object || "missing").slice(0, 60);
+  const suppliedSignature = String(req.get("x-hub-signature-256") || "");
+  whatsappRuntimeState.last_signature_present = !!suppliedSignature;
+  whatsappRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
+  whatsappRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
   if (!validMetaWebhookSignature(req)) {
     whatsappRuntimeState.last_error_at = new Date().toISOString();
     whatsappRuntimeState.last_error_stage = "webhook_signature";
@@ -4639,6 +4649,10 @@ app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.webhook_requests++;
   instagramRuntimeState.last_webhook_at = new Date().toISOString();
   instagramRuntimeState.last_webhook_object = String(req.body?.object || "missing").slice(0, 40);
+  const suppliedSignature = String(req.get("x-hub-signature-256") || "");
+  instagramRuntimeState.last_signature_present = !!suppliedSignature;
+  instagramRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
+  instagramRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
   if (!validMetaWebhookSignature(req)) {
     instagramRuntimeState.last_error_at = new Date().toISOString();
     instagramRuntimeState.last_error_stage = "webhook_signature";

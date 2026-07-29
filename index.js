@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v276-rav-instagram-cross-scope-repair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v277-appointment-automatic-provisioning";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -332,6 +332,8 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
+  process.env.APPOINTMENT_STORAGE_TEST_READY === "1";
 const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };
 const APPOINTMENT_SETUP_ENABLED = process.env.APPOINTMENT_SETUP_ENABLED === "1";
 const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.APPOINTMENT_SETUP_TENANT_IDS || "");
@@ -1538,6 +1540,12 @@ async function hydrateAppointmentsForTenant(tenantId) {
 }
 
 async function appointmentsStorageReady(force) {
+  if (APPOINTMENT_STORAGE_TEST_READY) {
+    appointmentStorageHealth.checked_at = Date.now();
+    appointmentStorageHealth.ready = true;
+    appointmentStorageHealth.error = "";
+    return true;
+  }
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const now = Date.now();
   if (!force && appointmentStorageHealth.checked_at && now - appointmentStorageHealth.checked_at < 30000) {
@@ -6366,11 +6374,33 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels, appointme
     addWarning("appointment_configuration_auto_build", "Appointment se generará automáticamente", "Al aceptar, Super Admin construirá el prompt desde el setup del cliente.");
   }
 
+  const automaticBlockerCodes = new Set([
+    "appointment_appointment_not_in_testing",
+    "appointment_elevenlabs_agent_not_mapped",
+    "appointment_elevenlabs_agent_not_configured"
+  ]);
+  const callsCanBeAutomated = !!(
+    appointmentGate &&
+    appointmentGate.calls &&
+    appointmentGate.calls.phone_number_mapped &&
+    ["needs_agent", "needs_configuration", "needs_phone_assignment"].includes(appointmentGate.calls.status)
+  );
+  const automaticBlockers = blockers.filter(function (item) {
+    return automaticBlockerCodes.has(item.code) ||
+      (item.code === "appointment_calls_not_ready" && callsCanBeAutomated);
+  });
+  const externalBlockers = blockers.filter(function (item) {
+    return !automaticBlockers.some(function (automatic) { return automatic.code === item.code; });
+  });
+
   return {
     ready: blockers.length === 0,
+    automation_ready: blockers.length > 0 && externalBlockers.length === 0,
     tenant_id: tenant && tenant.id || record && record.tenant_id || "",
     status: review.status,
     blockers,
+    automatic_blockers: automaticBlockers,
+    external_blockers: externalBlockers,
     warnings,
     checks
   };
@@ -6530,7 +6560,8 @@ async function persistSetupReview(tenantId, input, auth) {
     const setupStatus = configurationTarget === "appointments"
       ? previous.answers && previous.answers.appointment_setup && previous.answers.appointment_setup.setup_status
       : previous.answers && previous.answers.customer_service_setup && previous.answers.customer_service_setup.setup_status;
-    if (!previous.setup_completed || fallbackStatus !== "ready" || !["approved", "active"].includes(setupStatus)) {
+    if (!previous.setup_completed || !["ready", "building", "testing"].includes(fallbackStatus) ||
+        !["approved", "active"].includes(setupStatus)) {
       throw setupReviewFailure("setup_must_be_approved");
     }
     if (configurationTarget === "appointments") {
@@ -6781,6 +6812,135 @@ async function persistSetupReview(tenantId, input, auth) {
     }
   });
   return appendClientOnboardingRecord(record, tenant.id);
+}
+
+async function approveAndLaunchSetup(tenantId, input, auth) {
+  input = input || {};
+  if (input.launch_confirmed !== true) {
+    throw setupReviewFailure("launch_confirmation_required", 400);
+  }
+  const tenant = await setupReviewTenant(tenantId);
+  if (!tenant) throw setupReviewFailure("tenant_not_found", 404);
+  let record = await loadClientOnboarding(false, tenant.id);
+  if (setupReviewSummary(record).status === "live") return record;
+
+  const questionnaire = await loadCustomerSetupQuestionnaire(false);
+  const editedAnswers = input.answers && typeof input.answers === "object"
+    ? input.answers
+    : record.answers;
+  const candidateRecord = createOnboardingRecord(editedAnswers, {
+    tenant_id: tenant.id,
+    status: record.status || "completed",
+    updated_by: auth && (auth.name || auth.username || auth.email),
+    previous: record,
+    questionnaire,
+    review_status: setupReviewSummary(record).status,
+    customer_service_configuration: input.customer_service_configuration || record.customer_service_configuration,
+    appointment_configuration: input.appointment_configuration || record.appointment_configuration
+  });
+  const channels = await setupReviewChannels(tenant.id).catch(function () { return []; });
+  const preflight = await buildSetupLaunchReadiness(tenant, candidateRecord, questionnaire, channels);
+  if (!preflight.ready && !preflight.automation_ready) {
+    const error = setupReviewFailure("launch_blocked", 409);
+    error.details = preflight;
+    throw error;
+  }
+
+  if (setupIncludesAppointments(editedAnswers)) {
+    const approvedAnswers = JSON.parse(JSON.stringify(editedAnswers));
+    approvedAnswers.appointment_setup = approvedAnswers.appointment_setup || {};
+    if (!["approved", "active"].includes(approvedAnswers.appointment_setup.setup_status)) {
+      approvedAnswers.appointment_setup.setup_status = "approved";
+    }
+    record = await persistSetupReview(tenant.id, {
+      action: "update",
+      answers: approvedAnswers,
+      review_note: input.review_note,
+      requested_changes: input.requested_changes
+    }, auth);
+
+    const hasEditedAppointmentConfiguration = !!(
+      input.appointment_configuration &&
+      typeof input.appointment_configuration === "object"
+    );
+    let currentConfiguration = hasEditedAppointmentConfiguration
+      ? input.appointment_configuration
+      : record.appointment_configuration;
+    const configurationBeforeBuild = currentConfiguration;
+    if (!record.appointment_configuration) {
+      record = await persistSetupReview(tenant.id, {
+        action: "build_configuration",
+        configuration_bot_type: "appointments",
+        answers: approvedAnswers,
+        review_note: input.review_note
+      }, auth);
+      currentConfiguration = record.appointment_configuration;
+    } else if (setupReviewSummary(record).status === "ready") {
+      record = await persistSetupReview(tenant.id, {
+        action: "build_configuration",
+        configuration_bot_type: "appointments",
+        answers: approvedAnswers,
+        review_note: input.review_note
+      }, auth);
+      currentConfiguration = record.appointment_configuration;
+      if (hasEditedAppointmentConfiguration) {
+        record = await persistSetupReview(tenant.id, {
+          action: "save_configuration",
+          configuration_bot_type: "appointments",
+          appointment_configuration: configurationBeforeBuild,
+          answers: approvedAnswers,
+          review_note: input.review_note
+        }, auth);
+        currentConfiguration = record.appointment_configuration;
+      }
+    } else if (hasEditedAppointmentConfiguration ||
+        setupReviewSummary(record).status === "testing" &&
+        currentConfiguration.lifecycle !== "approved_for_testing") {
+      record = await persistSetupReview(tenant.id, {
+        action: "save_configuration",
+        configuration_bot_type: "appointments",
+        appointment_configuration: currentConfiguration,
+        answers: approvedAnswers,
+        review_note: input.review_note
+      }, auth);
+      currentConfiguration = record.appointment_configuration;
+    }
+
+    if (!currentConfiguration || currentConfiguration.lifecycle !== "approved_for_testing" ||
+        setupReviewSummary(record).status !== "testing") {
+      record = await persistSetupReview(tenant.id, {
+        action: "approve_configuration",
+        configuration_bot_type: "appointments",
+        appointment_configuration: currentConfiguration,
+        answers: approvedAnswers,
+        review_note: input.review_note
+      }, auth);
+    }
+
+    const appointmentGate = await appointmentIntegrationsForRecord(
+      record,
+      tenant.id,
+      await setupReviewChannels(tenant.id).catch(function () { return []; })
+    );
+    if (appointmentGate.bot.status !== "ready" ||
+        appointmentGate.calls.status === "needs_phone_assignment") {
+      record = await persistSetupReview(tenant.id, {
+        action: "configure_appointment_agent",
+        configuration_bot_type: "appointments",
+        appointment_configuration: record.appointment_configuration,
+        answers: approvedAnswers,
+        review_note: input.review_note
+      }, auth);
+    }
+  }
+
+  return persistSetupReview(tenant.id, Object.assign({}, input, {
+    action: "launch_live",
+    answers: record.answers,
+    customer_service_configuration: input.customer_service_configuration || record.customer_service_configuration,
+    appointment_configuration: record.appointment_configuration,
+    launch_confirmed: true
+  }), auth);
 }
 
 function parseCustomerSetupQuestionnaireTurn(turn) {
@@ -7560,6 +7720,9 @@ async function customerPanelNextPathAfterSetup(auth, record, source) {
     try { billing = await paymentService.tenantBilling(auth.tenant_id); }
     catch (_) {}
     if (!billingMakesCustomer(billing)) return "/admin/panel?tab=plan&from=" + encodeURIComponent(source || "onboarding");
+  }
+  if (setupIncludesAppointments(record && record.answers || {})) {
+    return "/admin/panel?tab=appointments&from=" + encodeURIComponent(source || "onboarding");
   }
   if (await onboardingNeedsConnectionFollowup(auth, record)) {
     return customerSetupCompletionPath(auth, source);
@@ -10466,7 +10629,9 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
     return;
   }
   try {
-    const record = await persistSetupReview(req.params.tenantId, req.body || {}, auth);
+    const record = String(req.body && req.body.action || "").toLowerCase() === "launch_live"
+      ? await approveAndLaunchSetup(req.params.tenantId, req.body || {}, auth)
+      : await persistSetupReview(req.params.tenantId, req.body || {}, auth);
     const tenant = await setupReviewTenant(req.params.tenantId);
     const questionnaire = await loadCustomerSetupQuestionnaire(false);
     const channels = tenant ? await setupReviewChannels(tenant.id).catch(function () { return []; }) : [];

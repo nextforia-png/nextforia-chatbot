@@ -258,7 +258,7 @@ app.use(express.json({
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v247-appointment-setup-gate";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v248-meta-existing-asset";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -411,6 +411,14 @@ const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
 const META_APP_ID = String(process.env.META_APP_ID || "").trim();
 const META_WHATSAPP_CONFIG_ID = String(process.env.META_WHATSAPP_CONFIG_ID || "").trim();
+const META_WHATSAPP_BUSINESS_ACCOUNT_ID = String(
+  process.env.META_WHATSAPP_BUSINESS_ACCOUNT_ID || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || ""
+).trim();
+const CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID = cleanTenantId(
+  process.env.CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || ""
+);
+const CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID =
+  CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
 const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
   ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
   : "";
@@ -840,6 +848,7 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
       legacyConnections: protectedLegacyChannelConnections
     })
   : null;
+let channelConnectionBootstrapPromise = Promise.resolve({ skipped: true });
 const usedChannelOAuthNonces = new Set();
 function parseAppendOnlyAppointmentCalendarTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
@@ -917,6 +926,49 @@ const channelRuntimeCache = {
 function cleanRuntimeText(value, max) {
   return String(value || "").trim().slice(0, max || 4096);
 }
+
+async function bootstrapExistingWhatsAppConnection() {
+  if (!channelConnectionService ||
+      !CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID ||
+      !META_WHATSAPP_BUSINESS_ACCOUNT_ID ||
+      !PHONE_NUMBER_ID ||
+      !WA_TOKEN) {
+    return { skipped: true };
+  }
+  try {
+    const connection = await channelConnectionService.adoptExisting(
+      CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+      "whatsapp",
+      "system:environment-bootstrap",
+      {
+        id: "wa:" + PHONE_NUMBER_ID,
+        account_id: PHONE_NUMBER_ID,
+        account_label: process.env.TENANT_DISPLAY_PHONE || "WhatsApp Business",
+        meta_business_id: String(process.env.META_BUSINESS_ID || "").trim() || null,
+        whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
+        phone_number_id: PHONE_NUMBER_ID,
+        access_token: WA_TOKEN
+      }
+    );
+    channelRuntimeCache.loaded_at = 0;
+    log("info", "whatsapp_existing_asset_adopted", {
+      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+      phone_number_id: PHONE_NUMBER_ID,
+      status: connection.status
+    });
+    return { skipped: false, ok: true, connection };
+  } catch (error) {
+    channelRuntimeCache.loaded_at = 0;
+    log("error", "whatsapp_existing_asset_adoption_failed", {
+      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
+      phone_number_id: PHONE_NUMBER_ID,
+      error: error.internalMessage || error.message
+    });
+    return { skipped: false, ok: false, error: error.internalMessage || error.message };
+  }
+}
+
+channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection();
 
 function runtimeTenantChannelKey(tenantId, channel) {
   return cleanTenantId(tenantId) + ":" + cleanChannel(channel);
@@ -1020,13 +1072,14 @@ function connectionRuntimeFromRecord(record) {
 }
 
 async function loadChannelRuntimeRows(force) {
+  await channelConnectionBootstrapPromise;
   const now = Date.now();
   if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < 15000) return channelRuntimeCache;
   const rows = [];
   if (PHONE_NUMBER_ID && WA_TOKEN) {
     rows.push({
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
+      tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
+      tenant_id: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
       channel: "whatsapp",
       phoneNumberId: PHONE_NUMBER_ID,
       phone_number_id: PHONE_NUMBER_ID,
@@ -1135,30 +1188,31 @@ async function resolveWhatsAppRuntimeForTenant(tenantId) {
 }
 
 async function resolveWhatsAppDestinationRuntime(webhookValue) {
-  const legacy = validateWhatsAppDestination(TENANT_CONFIG, webhookValue, { requireMetadata: process.env.NODE_ENV === "production" });
-  if (legacy.ok) {
-    return Object.assign({}, legacy, {
-      accessToken: WA_TOKEN,
-      access_token: WA_TOKEN,
-      source: "legacy_destination"
-    });
-  }
   const incomingPhoneNumberId = cleanRuntimeText(webhookValue && webhookValue.metadata && webhookValue.metadata.phone_number_id, 240);
-  if (!incomingPhoneNumberId) return legacy;
-  const cache = await loadChannelRuntimeRows(false);
-  const runtime = cache.by_whatsapp_phone_id.get(incomingPhoneNumberId);
-  if (!runtime) return legacy;
-  return {
-    ok: true,
-    reason: "channel_connection_matched",
-    tenantId: runtime.tenantId,
-    tenant_id: runtime.tenantId,
-    phoneNumberId: runtime.phoneNumberId,
-    phone_number_id: runtime.phoneNumberId,
-    accessToken: runtime.accessToken,
-    access_token: runtime.accessToken,
-    source: runtime.source
-  };
+  if (incomingPhoneNumberId) {
+    const cache = await loadChannelRuntimeRows(false);
+    const runtime = cache.by_whatsapp_phone_id.get(incomingPhoneNumberId);
+    if (runtime) {
+      return {
+        ok: true,
+        reason: "channel_connection_matched",
+        tenantId: runtime.tenantId,
+        tenant_id: runtime.tenantId,
+        phoneNumberId: runtime.phoneNumberId,
+        phone_number_id: runtime.phoneNumberId,
+        accessToken: runtime.accessToken,
+        access_token: runtime.accessToken,
+        source: runtime.source
+      };
+    }
+  }
+  const legacy = validateWhatsAppDestination(TENANT_CONFIG, webhookValue, { requireMetadata: process.env.NODE_ENV === "production" });
+  if (!legacy.ok) return legacy;
+  return Object.assign({}, legacy, {
+    accessToken: WA_TOKEN,
+    access_token: WA_TOKEN,
+    source: "legacy_destination"
+  });
 }
 
 async function resolveInstagramDestinationRuntime(entry, events) {
@@ -1238,8 +1292,8 @@ async function outboundRuntimeForConversation(userId, options) {
     };
   }
   return {
-    tenantId: DEFAULT_TENANT_ID,
-    tenant_id: DEFAULT_TENANT_ID,
+    tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
+    tenant_id: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
     channel: "whatsapp",
     phoneNumberId: PHONE_NUMBER_ID,
     phone_number_id: PHONE_NUMBER_ID,
@@ -9905,6 +9959,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
   }
   try {
     const tenantId = customerChannelTenantForAuth(auth);
+    await channelConnectionBootstrapPromise;
     let channels = await channelConnectionService.listTenant(tenantId);
     // A "connected" badge must represent a live Meta credential and webhook
     // subscription, not only a previously saved OAuth result. Refresh stale

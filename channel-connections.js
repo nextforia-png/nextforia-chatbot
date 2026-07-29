@@ -784,6 +784,29 @@ function createChannelConnectionService(options) {
       return !!(provider && provider.configured(cleanChannel(channel)));
     },
 
+    async adoptExisting(tenantId, channel, actor, candidate) {
+      const clean = assertTenantChannel(tenantId, channel);
+      const asset = candidate && typeof candidate === "object" ? Object.assign({}, candidate) : null;
+      if (!provider || !provider.configured(clean.channel)) {
+        throw new ChannelConnectionError("channel_oauth_not_configured", 503);
+      }
+      if (!asset || !cleanText(asset.access_token, 4096)) {
+        throw new ChannelConnectionError("existing_asset_credentials_required", 400);
+      }
+      if (clean.channel === "whatsapp" &&
+          (!cleanText(asset.whatsapp_business_account_id, 240) || !cleanText(asset.phone_number_id, 240))) {
+        throw new ChannelConnectionError("existing_asset_identity_required", 400);
+      }
+      try {
+        return publicConnection(await connectCandidate(clean.tenantId, clean.channel, actor, asset), { superAdmin: true });
+      } catch (error) {
+        await markFailure(clean.tenantId, clean.channel, actor, error);
+        throw error instanceof ChannelConnectionError
+          ? error
+          : new ChannelConnectionError("connection_failed", 422, internalError(error));
+      }
+    },
+
     async listTenant(tenantId, options) {
       const cleanTenant = cleanTenantId(tenantId);
       if (!cleanTenant) throw new ChannelConnectionError("invalid_channel_request", 400);

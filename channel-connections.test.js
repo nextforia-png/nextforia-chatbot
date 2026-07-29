@@ -109,6 +109,41 @@ function expectCode(promise, code) {
     now: function () { return new Date("2026-07-26T12:00:00.000Z"); }
   });
 
+  const adoptedStore = new InMemoryChannelConnectionStore();
+  const adoptedService = createChannelConnectionService({
+    store: adoptedStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (channel, candidate) {
+        assert.strictEqual(channel, "whatsapp");
+        assert.strictEqual(candidate.whatsapp_business_account_id, "waba-existing");
+        assert.strictEqual(candidate.phone_number_id, "phone-existing");
+        return Object.assign({}, candidate, {
+          account_id: candidate.phone_number_id,
+          account_label: "+57 301 587 2708"
+        });
+      }
+    },
+    encryptionKey,
+    now: function () { return new Date("2026-07-26T11:00:00.000Z"); }
+  });
+  const adopted = await adoptedService.adoptExisting("tenant-rav", "whatsapp", "system:environment", {
+    id: "wa:phone-existing",
+    account_id: "phone-existing",
+    account_label: "+57 301 587 2708",
+    whatsapp_business_account_id: "waba-existing",
+    phone_number_id: "phone-existing",
+    access_token: "system-user-token"
+  });
+  assert.strictEqual(adopted.status, "connected");
+  assert.strictEqual(adopted.tenant_id, "tenant-rav");
+  assert.strictEqual(adopted.phone_number_id, "phone-existing");
+  assert(!JSON.stringify(adopted).includes("system-user-token"));
+  const adoptedStored = await adoptedStore.get("tenant-rav", "whatsapp");
+  assert.strictEqual(adoptedStored.credential_source, "oauth");
+  assert(adoptedStored.credentials_ciphertext.startsWith("enc:v1:"));
+  assert(!adoptedStored.credentials_ciphertext.includes("system-user-token"));
+
   const beginUrl = await service.begin("tenant-a", "instagram", "admin@a.example", state);
   assert(beginUrl.startsWith("https://www.facebook.com/"));
   let tenantA = await service.listTenant("tenant-a");

@@ -113,6 +113,8 @@ function emptyConnection(tenantId, channel) {
 
 function publicConnection(record, options) {
   const safe = Object.assign(emptyConnection(record && record.tenant_id, record && record.channel), record || {});
+  const allowProtectedReconnect = !!(options && options.allowProtectedReconnect);
+  const reconnectAllowed = !safe.protected_legacy || allowProtectedReconnect;
   delete safe.credentials_ciphertext;
   delete safe.credential_source;
   safe.pending_assets = safe.status === "connecting"
@@ -126,8 +128,8 @@ function publicConnection(record, options) {
     : [];
   safe.requires_selection = safe.status === "connecting" && safe.pending_assets.length > 1;
   safe.disconnect_available = !safe.protected_legacy && ["connected", "needs_attention", "connecting"].includes(safe.status);
-  safe.reconnect_available = !safe.protected_legacy && (
-    ["needs_attention", "disconnected"].includes(safe.status)
+  safe.reconnect_available = reconnectAllowed && (
+    ["connected", "needs_attention", "disconnected"].includes(safe.status)
     || (safe.status === "connecting" && safe.pending_assets.length === 0)
   );
   safe.connect_available = !safe.protected_legacy && ["not_connected", "disconnected"].includes(safe.status);
@@ -868,6 +870,7 @@ function createChannelConnectionService(options) {
       disconnected_at: null,
       connected_by: actorLabel(actor),
       disconnected_by: null,
+      protected_legacy: false,
       updated_at: connectedAt,
       pending_assets: [],
       credentials_ciphertext: encryptedCredential({
@@ -937,7 +940,12 @@ function createChannelConnectionService(options) {
             status: "not_connected"
           });
         }
-        return Object.assign({}, definition, publicConnection(byChannel.get(definition.id) || emptyConnection(cleanTenant, definition.id), options));
+        return Object.assign({}, definition, publicConnection(
+          byChannel.get(definition.id) || emptyConnection(cleanTenant, definition.id),
+          Object.assign({}, options || {}, {
+            allowProtectedReconnect: allowProtectedLegacyReconnect(cleanTenant, definition.id)
+          })
+        ));
       });
     },
 

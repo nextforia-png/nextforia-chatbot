@@ -483,6 +483,10 @@ function expectCode(promise, code) {
       return tenantId === "rav-toys" && channel === "whatsapp";
     }
   });
+  const optedInLegacyRows = await optedInLegacyService.listTenant("rav-toys");
+  const optedInWhatsApp = optedInLegacyRows.find(function (row) { return row.channel === "whatsapp"; });
+  assert.strictEqual(optedInWhatsApp.reconnect_available, true);
+  assert.strictEqual(optedInWhatsApp.disconnect_available, false);
   const optedInUrl = await optedInLegacyService.begin("rav-toys", "whatsapp", "super-admin", state);
   assert(optedInUrl.includes("channel=whatsapp"));
 

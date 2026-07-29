@@ -269,7 +269,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v265-whatsapp-registration-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v266-whatsapp-registration-gate";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -4558,6 +4558,15 @@ app.get("/whatsapp/health", async (req, res) => {
       registration_ready: String(phone.data && phone.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
         String(phone.data && phone.data.platform_type || "").toUpperCase() === "CLOUD_API"
     };
+    if (!safeRuntime.phone.registration_ready) {
+      return res.status(503).json({
+        ok: false,
+        configured: true,
+        status: "registration_incomplete",
+        checked_at: checkedAt,
+        runtime: safeRuntime
+      });
+    }
     if (!whatsappBusinessAccountId) {
       return res.status(503).json({
         ok: false,

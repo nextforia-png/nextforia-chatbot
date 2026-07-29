@@ -65,6 +65,13 @@ function expectCode(promise, code) {
       return {
         data: request.url.endsWith("/ig-rav")
           ? { id: "ig-rav", username: "ravtoys", name: "RAV Toys" }
+          : request.url.endsWith("/phone-rav")
+            ? {
+                id: "phone-rav",
+                display_phone_number: "+57 301 587 2708",
+                code_verification_status: "VERIFIED",
+                platform_type: "CLOUD_API"
+              }
           : { success: true }
       };
     }
@@ -130,7 +137,14 @@ function expectCode(promise, code) {
           }
         };
       }
-      return { data: { id: "phone-rav", display_phone_number: "+57 301 587 2708" } };
+      return {
+        data: {
+          id: "phone-rav",
+          display_phone_number: "+57 301 587 2708",
+          code_verification_status: "VERIFIED",
+          platform_type: "CLOUD_API"
+        }
+      };
     }
   });
   const currentShapeVerification = await currentWhatsAppSubscriptionShape.verify("whatsapp", {

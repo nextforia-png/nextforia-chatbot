@@ -585,8 +585,20 @@ class MetaChannelProvider {
           });
         }
         const verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
-          params: { fields: "id,display_phone_number,verified_name,quality_rating" }
+          params: {
+            fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type"
+          }
         });
+        const registrationReady =
+          String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
+          String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
+        if (!registrationReady) {
+          throw new ChannelConnectionError(
+            "asset_activation_failed",
+            422,
+            "WhatsApp number has not completed Cloud API registration"
+          );
+        }
         candidate.account_label = cleanText(
           verified.data && (verified.data.display_phone_number || verified.data.verified_name) || candidate.account_label,
           240
@@ -673,7 +685,7 @@ class MetaChannelProvider {
           ? credential.instagram_user_id
           : credential.page_id;
       const fields = channel === "whatsapp"
-        ? "id,display_phone_number,verified_name"
+        ? "id,display_phone_number,verified_name,code_verification_status,platform_type"
         : channel === "instagram" ? "id,username,name" : "id,name";
       const verified = await this.graph(encodeURIComponent(targetId), credential.access_token, { params: { fields } });
       const subscriptionId = channel === "whatsapp" ? credential.whatsapp_business_account_id : credential.page_id;
@@ -692,13 +704,21 @@ class MetaChannelProvider {
       const appSubscribed = subscribedApps.some((app) => String(
         app && (app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id)
       ) === String(this.appId));
+      const registrationReady = channel !== "whatsapp" || (
+        String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
+        String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API"
+      );
       return {
-        ok: !!(verified.data && String(verified.data.id) === String(targetId) && appSubscribed),
+        ok: !!(verified.data && String(verified.data.id) === String(targetId) && appSubscribed && registrationReady),
         account_label: cleanText(
           verified.data && (verified.data.display_phone_number || verified.data.username && "@" + verified.data.username || verified.data.name),
           240
         ),
-        error: appSubscribed ? null : "Meta webhook subscription is missing"
+        error: !appSubscribed
+          ? "Meta webhook subscription is missing"
+          : !registrationReady
+            ? "WhatsApp number has not completed Cloud API registration"
+            : null
       };
     } catch (error) {
       return { ok: false, error: internalError(error) };

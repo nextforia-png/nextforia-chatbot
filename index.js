@@ -278,7 +278,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v291-appointment-phone-panel";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v292-calendar-in-channels";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -777,6 +777,11 @@ if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_USERS) {
       if (fixture.setup_completed === false) return;
       const answers = defaultClientOnboarding();
       const email = String(fixture.email || "").trim().toLowerCase();
+      const fixturePlanId = String(fixture.plan_id || "").trim().toLowerCase();
+      const fixtureBotId = String(fixture.assigned_bot_id || "").trim().toLowerCase();
+      if (fixturePlanId === "nextfor-atlas" || ["both", "duo"].includes(fixtureBotId)) answers.setup_goal = "both";
+      else if (fixturePlanId === "nextfor-tempo" || ["agendamiento", "appointments", "appointment"].includes(fixtureBotId)) answers.setup_goal = "appointments";
+      else answers.setup_goal = "customer_service";
       answers.business.brand_name = String(fixture.company_name || fixture.tenant_id || "Empresa");
       answers.business.contact_email = email;
       answers.business.contact_phone = "+57 300 000 0000";
@@ -11808,9 +11813,32 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
       }
     }
     channels = await channelConnectionService.listTenant(tenantId);
+    let appointmentCalendar = null;
+    if (await customerAppointmentCalendarVisibleForPanelAuth(auth)) {
+      let calendarConnection = await appointmentCalendarService.get(tenantId);
+      if (calendarConnection && calendarConnection.status === "connected") {
+        const verifiedAt = Date.parse(calendarConnection.last_verified_at || "");
+        if (!Number.isFinite(verifiedAt) || Date.now() - verifiedAt >= 2 * 60 * 1000) {
+          try {
+            calendarConnection = await appointmentCalendarService.verify(tenantId, auth);
+          } catch (error) {
+            console.error("customer appointment calendar verify error:", error.message);
+            calendarConnection = await appointmentCalendarService.get(tenantId);
+          }
+        }
+      }
+      appointmentCalendar = Object.assign({
+        id: "google-calendar",
+        provider: "google",
+        name: "Google Calendar",
+        description: "Conecta el calendario donde Nextfor debe revisar disponibilidad y registrar citas.",
+        authorization_available: appointmentCalendarService.providerConfigured()
+      }, calendarConnection || {});
+    }
     res.json({
       ok: true,
       channels,
+      appointment_calendar: appointmentCalendar,
       meta_authorization_available: {
         whatsapp: channelConnectionService.providerConfigured("whatsapp"),
         instagram: channelConnectionService.providerConfigured("instagram"),
@@ -12197,12 +12225,15 @@ app.post("/admin/panel/appointment-calendar/google/connect", async (req, res) =>
   try {
     const tenantId = customerTenantForAuth(auth);
     const redirectUri = appointmentCalendarCallbackUrlForRequest(req);
+    const returnPath = req.body && req.body.return_to === "channels"
+      ? "/admin/panel?tab=channels"
+      : "/admin/panel?tab=appointments";
     const state = createCalendarOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenantId,
       actor_id: auth.user_id || auth.username,
       actor: channelConnectionActor(auth),
       redirect_uri: redirectUri,
-      return_path: "/admin/panel?tab=appointments"
+      return_path: returnPath
     });
     const authorizationUrl = await appointmentCalendarService.begin(tenantId, auth, state, { redirectUri });
     res.json({ ok: true, authorization_url: authorizationUrl });

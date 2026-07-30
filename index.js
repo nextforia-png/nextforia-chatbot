@@ -277,7 +277,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v286-bot-personality-studio";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v287-customer-account-profile";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -5474,6 +5474,61 @@ async function validatePublicCustomerAccessSession(session) {
   });
 }
 
+async function changePublicCustomerAccessPassword(session, input) {
+  const stored = await loadPublicCustomerAccessUser(session && session.email);
+  if (!stored ||
+      String(stored.user_id) !== String(session && session.user_id) ||
+      cleanTenantId(stored.tenant_id) !== cleanTenantId(session && session.tenant_id)) {
+    throw new CustomerAccessError("invalid_credentials", 401);
+  }
+  let currentHash = "";
+  try {
+    currentHash = hashDashboardPassword(
+      input && input.current_password,
+      Buffer.from(stored.password_salt, "base64url")
+    );
+  } catch (_) {
+    throw new CustomerAccessError("invalid_current_password", 401);
+  }
+  if (!safeEqualText(currentHash, stored.password_hash)) {
+    throw new CustomerAccessError("invalid_current_password", 401);
+  }
+  const password = String(input && input.password || "");
+  const confirmation = String(input && input.password_confirmation || "");
+  if (password !== confirmation) throw new CustomerAccessError("password_mismatch", 400);
+  if (password.length < 12 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    throw new CustomerAccessError("weak_password", 400);
+  }
+  if (password === String(input && input.current_password || "")) {
+    throw new CustomerAccessError("password_reuse", 400);
+  }
+  const salt = crypto.randomBytes(16);
+  const updatedAt = new Date().toISOString();
+  const updated = Object.assign({}, stored, {
+    password_hash: hashDashboardPassword(password, salt),
+    password_salt: salt.toString("base64url"),
+    updated_at: updatedAt
+  });
+  const rec = {
+    ts: updatedAt,
+    userId: publicCustomerAccessRecordId(updated.email),
+    tenantId: DEFAULT_TENANT_ID,
+    userMessage: "",
+    botReply: "[PublicCustomerAccess] " + JSON.stringify(updated),
+    tools: [PUBLIC_CUSTOMER_ACCESS_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: PUBLIC_CUSTOMER_ACCESS_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  return { ok: true, updated_at: updatedAt };
+}
+
 async function persistDashboardCustomerUser(input) {
   const salt = crypto.randomBytes(16);
   const createdAt = new Date().toISOString();
@@ -7660,9 +7715,21 @@ function customerBusinessForAuth(auth) {
 }
 
 function customerBusinessForAuthAndOnboarding(auth, onboarding) {
-  const business = customerBusinessForAuth(auth);
+  let business = customerBusinessForAuth(auth);
   if (!auth || auth.version !== 2 || !onboarding || !onboarding.answers) return business;
-  const goal = String(onboarding.answers.setup_goal || "").trim().toLowerCase();
+  const answers = onboarding.answers;
+  const configuredName = String(answers.business && answers.business.brand_name || "").trim().slice(0, 120);
+  const configuredLogo = String(
+    answers.business && answers.business.logo_data_url ||
+    onboarding.bot_personality && onboarding.bot_personality.profile && onboarding.bot_personality.profile.avatar_url ||
+    ""
+  ).trim();
+  business = Object.assign({}, business, {
+    name: configuredName || business.name,
+    company_name: configuredName || business.company_name,
+    logo_data_url: configuredLogo
+  });
+  const goal = String(answers.setup_goal || "").trim().toLowerCase();
   if (goal === "customer_service") {
     return Object.assign({}, business, {
       plan_id: business.plan_id || "nextfor-aura",
@@ -7682,6 +7749,59 @@ function customerBusinessForAuthAndOnboarding(auth, onboarding) {
     });
   }
   return business;
+}
+
+function cleanCustomerAccountLogo(value) {
+  const image = String(value || "").trim();
+  if (!image) return "";
+  if (/^https:\/\//i.test(image) && image.length <= 1200) {
+    try {
+      const url = new URL(image);
+      if (!url.username && !url.password) return url.toString();
+    } catch (_) {}
+  }
+  if (image.length > 90000) throw new Error("profile_image_too_large");
+  if (!/^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=\r\n]+$/i.test(image)) {
+    throw new Error("profile_image_invalid");
+  }
+  return image.replace(/[\r\n]/g, "");
+}
+
+function customerAccountProfile(auth, onboarding) {
+  const answers = onboarding && onboarding.answers || {};
+  const businessAnswers = answers.business || {};
+  const teamAnswers = answers.team || {};
+  const business = customerBusinessForAuthAndOnboarding(auth, onboarding);
+  return {
+    tenant_id: customerTenantForAuth(auth),
+    business_name: String(businessAnswers.brand_name || business.name || "").trim().slice(0, 120),
+    administrator_name: String(teamAnswers.admin_name || businessAnswers.contact_name || "").trim().slice(0, 120),
+    administrator_email: normalizeDashboardUsername(auth && auth.email || teamAnswers.admin_email || businessAnswers.contact_email),
+    contact_phone: cleanPublicSignupPhone(
+      businessAnswers.contact_phone ||
+      teamAnswers.notification_phone ||
+      ""
+    ),
+    logo_data_url: cleanCustomerAccountLogo(
+      businessAnswers.logo_data_url ||
+      onboarding && onboarding.bot_personality && onboarding.bot_personality.profile && onboarding.bot_personality.profile.avatar_url ||
+      ""
+    )
+  };
+}
+
+async function updateCustomerTenantName(tenantId, companyName) {
+  if (!SUPABASE_ENABLED) return;
+  const response = await axios.patch(SUPABASE_URL + "/rest/v1/tenants", {
+    company_name: companyName,
+    updated_at: new Date().toISOString()
+  }, {
+    params: { id: "eq." + cleanTenantId(tenantId) },
+    headers: Object.assign({ Prefer: "return=representation" }, SB_HEADERS),
+    timeout: 8000
+  });
+  const rows = Array.isArray(response.data) ? response.data : [];
+  if (!rows[0]) throw new Error("tenant_profile_not_found");
 }
 
 function parseAppointmentSetupTenantIds(value) {
@@ -10973,6 +11093,144 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       return;
     }
     res.status(503).json({ ok: false, error: "onboarding_store_unavailable", message: "No pudimos guardar el proceso. Intenta nuevamente." });
+  }
+});
+
+app.get("/admin/panel/account-profile", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const onboarding = await loadClientOnboarding(false, tenantId);
+    res.json({
+      ok: true,
+      can_edit: !!customerPanelCapabilities(auth.role).configure_bot,
+      profile: customerAccountProfile(auth, onboarding)
+    });
+  } catch (error) {
+    console.error("customer account profile load error:", error.message);
+    res.status(503).json({
+      ok: false,
+      error: "account_profile_unavailable",
+      message: "No pudimos cargar los datos de tu cuenta."
+    });
+  }
+});
+
+app.put("/admin/panel/account-profile", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (process.env.NODE_ENV === "production" && !SUPABASE_ENABLED) {
+    res.status(503).json({
+      ok: false,
+      error: "persistent_profile_store_unavailable",
+      message: "No se puede guardar el perfil porque la persistencia no está disponible."
+    });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const businessName = String(req.body && req.body.business_name || "").trim().slice(0, 120);
+    const administratorName = String(req.body && req.body.administrator_name || "").trim().slice(0, 120);
+    const contactPhone = cleanPublicSignupPhone(req.body && req.body.contact_phone);
+    const logoDataUrl = cleanCustomerAccountLogo(req.body && req.body.logo_data_url);
+    if (!businessName) {
+      res.status(400).json({ ok: false, error: "business_name_required", message: "Escribe el nombre del negocio." });
+      return;
+    }
+    const previous = await loadClientOnboarding(false, tenantId);
+    const record = JSON.parse(JSON.stringify(previous || {}));
+    record.version = [1, 2].includes(record.version) ? record.version : 2;
+    record.tenant_id = tenantId;
+    record.answers = record.answers || defaultClientOnboarding();
+    record.answers.business = record.answers.business || {};
+    record.answers.team = record.answers.team || {};
+    record.answers.business.brand_name = businessName;
+    record.answers.business.contact_name = administratorName;
+    record.answers.business.contact_phone = contactPhone;
+    record.answers.business.logo_data_url = logoDataUrl;
+    record.answers.team.admin_name = administratorName;
+    record.answers.team.notification_phone = contactPhone;
+    const now = new Date().toISOString();
+    const business = customerBusinessForAuthAndOnboarding(auth, record);
+    const planId = business.plan_id || "nextfor-uno";
+    const personality = normalizeBotPersonality(record.bot_personality, {
+      fallback: personalityForOnboarding(record, planId),
+      plan_id: planId,
+      updated_at: now,
+      updated_by: auth.name || auth.email || auth.username || "customer"
+    });
+    personality.profile.avatar_url = logoDataUrl;
+    personality.profile.display_name = personality.profile.display_name || businessName;
+    record.bot_personality = personality;
+    record.updated_at = now;
+    record.last_updated_at = now;
+    record.updated_by = auth.name || auth.email || auth.username || "customer";
+    await appendClientOnboardingRecord(record, tenantId);
+    try {
+      await updateCustomerTenantName(tenantId, businessName);
+    } catch (error) {
+      console.error("customer tenant display name sync error:", error.message);
+    }
+    res.json({
+      ok: true,
+      can_edit: true,
+      profile: customerAccountProfile(auth, record)
+    });
+  } catch (error) {
+    console.error("customer account profile save error:", error.message);
+    const invalidImage = ["profile_image_too_large", "profile_image_invalid"].includes(error.message);
+    res.status(invalidImage ? 400 : 503).json({
+      ok: false,
+      error: invalidImage ? error.message : "account_profile_save_failed",
+      message: invalidImage
+        ? "Usa una imagen PNG, JPG o WebP de menor tamaño."
+        : "No pudimos guardar los datos de tu cuenta."
+    });
+  }
+});
+
+app.post("/admin/panel/account-password", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth || auth.version !== 2) {
+    res.status(400).json({
+      ok: false,
+      error: "password_change_unavailable",
+      message: "El cambio de contraseña está disponible para cuentas de clientes."
+    });
+    return;
+  }
+  try {
+    if (auth.fallback_access) {
+      await changePublicCustomerAccessPassword(auth, req.body || {});
+    } else {
+      await customerAccessService.changePassword(auth, req.body || {});
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    const code = error instanceof CustomerAccessError ? error.code : "customer_access_unavailable";
+    const status = error instanceof CustomerAccessError ? error.status || 400 : 503;
+    res.status(status).json({
+      ok: false,
+      error: code,
+      message: ({
+        invalid_current_password: "La contraseña actual no es correcta.",
+        invalid_credentials: "No pudimos validar tu cuenta.",
+        password_mismatch: "Las contraseñas nuevas no coinciden.",
+        weak_password: "Usa al menos 12 caracteres, una letra y un número.",
+        password_reuse: "La nueva contraseña debe ser diferente a la actual."
+      })[code] || "No pudimos cambiar la contraseña. Intenta de nuevo."
+    });
   }
 });
 

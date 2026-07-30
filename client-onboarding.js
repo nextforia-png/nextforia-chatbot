@@ -10,7 +10,8 @@ const DEFAULT_ONBOARDING = Object.freeze({
     contact_email: "",
     contact_phone: "",
     website: "",
-    privacy_policy_url: ""
+    privacy_policy_url: "",
+    logo_data_url: ""
   },
   meta: {
     business_portfolio_ready: "unknown",
@@ -422,6 +423,14 @@ function text(value, max) {
   return String(value == null ? "" : value).replace(/\u0000/g, "").trim().slice(0, max || 2000);
 }
 
+function imageDataUrl(value) {
+  const clean = String(value == null ? "" : value).trim();
+  if (!clean) return "";
+  return /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(clean) && clean.length <= 90000
+    ? clean
+    : "";
+}
+
 function choice(value, allowed, fallback) {
   const clean = text(value, 60).toLowerCase();
   return allowed.includes(clean) ? clean : fallback;
@@ -470,7 +479,8 @@ function normalizeOnboarding(input) {
       contact_email: text(business.contact_email, 180).toLowerCase(),
       contact_phone: text(business.contact_phone, 40),
       website: text(business.website, 500),
-      privacy_policy_url: text(business.privacy_policy_url, 500)
+      privacy_policy_url: text(business.privacy_policy_url, 500),
+      logo_data_url: imageDataUrl(business.logo_data_url)
     },
     meta: {
       business_portfolio_ready: choice(meta.business_portfolio_ready, yesNoUnknown, "unknown"),

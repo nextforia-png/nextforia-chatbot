@@ -61,6 +61,15 @@ assert.deepStrictEqual(normalized.payments.methods, ["card"]);
 assert.strictEqual(normalized.faqs[0].question, "¿Horario?");
 assert.strictEqual(normalized.extra_context.length, 5000);
 assert.strictEqual(normalized.updated_by, "admin@example.com");
+const tinyImage = "data:image/png;base64,iVBORw0KGgo=";
+const withUploadedLogo = normalizeBotConfiguration({
+  profile: { avatar_url: tinyImage }
+}, { fallback: defaults, plan_id: "nextfor-aura" });
+assert.strictEqual(withUploadedLogo.profile.avatar_url, tinyImage);
+const withUnsafeLogo = normalizeBotConfiguration({
+  profile: { avatar_url: "data:image/svg+xml;base64,PHN2Zz4=" }
+}, { fallback: defaults, plan_id: "nextfor-aura" });
+assert.strictEqual(withUnsafeLogo.profile.avatar_url, defaults.profile.avatar_url);
 
 const stored = configurationForOnboarding(Object.assign({}, onboarding, {
   bot_personality: normalized

@@ -41,7 +41,7 @@ const axiosClient = {
     if (String(body).includes("grant_type=refresh_token")) {
       return { data: { access_token: "access-refreshed", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events" } };
     }
-    return { data: { access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly" } };
+    return { data: { access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendarlist.readonly" } };
   },
   async get(url, options) {
     calls.push(["get", url, options && options.headers && options.headers.Authorization]);

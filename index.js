@@ -29,6 +29,11 @@ const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
+  renderGoogleOAuthHomepage,
+  renderPrivacyPolicy,
+  renderTermsOfService
+} = require("./google-oauth-public-pages");
+const {
   CatalogError,
   CUSTOMER_VISIBLE_BOT_IDS,
   CUSTOMER_VISIBLE_PLAN_IDS,
@@ -276,9 +281,12 @@ app.use(express.json({
 app.post("/webhooks/elevenlabs/appointments/:tenantId/availability", receiveElevenLabsAppointmentAvailabilityTool);
 app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAppointmentBookingTool);
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
+app.get("/google-oauth", (req, res) => res.type("html").send(renderGoogleOAuthHomepage()));
+app.get("/privacy", (req, res) => res.type("html").send(renderPrivacyPolicy()));
+app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v291-appointment-phone-panel";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v292-google-oauth-verification";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";

@@ -5,7 +5,8 @@ const { decryptStoredText, encryptStoredText, safeEqualText } = require("./secur
 
 const CALENDAR_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events",
-  "https://www.googleapis.com/auth/calendar.readonly"
+  "https://www.googleapis.com/auth/calendar.freebusy",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
 ];
 const CALENDAR_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
 

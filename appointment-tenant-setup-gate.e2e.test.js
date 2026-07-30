@@ -133,6 +133,7 @@ function appointmentAnswers(company) {
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_PANEL_BASE_URL: "https://customer-panel.staging.example",
       APPOINTMENT_SETUP_ENABLED: "0",
+      CUSTOMER_ALL_PLANS_ENABLED: "0",
       APPOINTMENT_SETUP_TENANT_IDS: "tenant-appointments-c"
     }),
     stdio: ["ignore", "pipe", "pipe"]

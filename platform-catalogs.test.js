@@ -112,11 +112,10 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   assert.strictEqual(tenants.length, 1);
   assert.strictEqual(tenants[0].status, "activo");
 
-  await assert.rejects(function () {
-    return service.selectTenantPlan("panaderia-espiga", "nextfor-atlas", "atencion-cliente", { username: "duenio@espiga.example" });
-  }, /plan_not_found/, "Atlas queda preparado en Super Admin, pero no se ofrece al cliente en la primera producción");
+  const atlasSelected = await service.selectTenantPlan("panaderia-espiga", "nextfor-atlas", "atencion-cliente", { username: "duenio@espiga.example" });
+  assert.strictEqual(atlasSelected.plan_id, "nextfor-atlas", "el cliente puede elegir Nextfor Atlas");
   const selected = await service.selectTenantPlan("panaderia-espiga", "nextfor-aura", "atencion-cliente", { username: "duenio@espiga.example" });
-  assert.strictEqual(selected.plan_id, "nextfor-aura", "el cliente puede elegir Nextfor Aura");
+  assert.strictEqual(selected.plan_id, "nextfor-aura", "el cliente puede cambiar de vuelta a Nextfor Aura");
 
   // Supabase puede devolver 204/sin representación aunque el PATCH haya aplicado.
   // En ese caso la app lee el tenant actualizado antes de bloquear el onboarding.

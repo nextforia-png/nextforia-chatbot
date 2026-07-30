@@ -286,7 +286,7 @@ app.get("/privacy", (req, res) => res.type("html").send(renderPrivacyPolicy()));
 app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v293-google-oauth-verification";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v294-notification-navigation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -10226,6 +10226,7 @@ app.get("/admin/client-onboarding", async (req, res) => {
     shopifyConnectPath: "/admin/integrations/shopify/connect",
     chatbotOnlyRelease: !appointmentSetupVisible,
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
+    returnPath: req.query.edit === "1" ? "/admin/panel?tab=notifications" : "",
     questionnaire,
     focusPending: req.query.focus === "pending"
   });

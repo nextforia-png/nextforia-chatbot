@@ -21,6 +21,7 @@ renderClientOnboarding(res, {
     setup_completed: false,
     answers: { setup_goal: "customer_service" }
   },
+  returnPath: "/admin/panel?tab=notifications",
   questionnaire: {
     questions: [{
       id: "new_real_setup_question",
@@ -44,6 +45,12 @@ assert.match(html, /data-field="appointment_setup\.calls_enabled"/);
 assert.match(html, /Sí, activar llamadas/);
 assert.match(html, /El número aparecerá en tu Customer Panel listo para compartir/);
 assert.match(html, /Nextfor asignará el número automáticamente/);
+assert.match(html, /class="returnLink" href="\/admin\/panel\?tab=notifications"/);
+assert.match(html, /← Volver al Panel de Control/);
+assert.match(html, /function prepareOnboardingExternalTab\(label\)/);
+assert.match(html, /window\.open\("about:blank","_blank"\)/);
+assert.match(html, /navigateOnboardingExternalTab\(externalTab,shopifyConnectButton\.href\)/);
+assert.doesNotMatch(html, /location\.href=shopifyConnectButton\.href/);
 
 let partialCatalogHtml = "";
 renderClientOnboarding({

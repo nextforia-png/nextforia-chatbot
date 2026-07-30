@@ -357,6 +357,15 @@ function signedSessionCookie(secret, user) {
     assert(!shellA.includes(">RAV Toys<"));
     assert(!shellA.includes(">Empresa B<"));
 
+    response = await fetch(base + "/admin/client-onboarding?edit=1&focus=pending&return_to=%2Fadmin%2Fpanel%3Ftab%3Dnotifications", {
+      headers: { cookie: userA.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    const onboardingEditA = await response.text();
+    assert(onboardingEditA.includes('class="returnLink" href="/admin/panel?tab=notifications"'));
+    assert(onboardingEditA.includes("← Volver al Panel de Control"));
+    assert(!onboardingEditA.includes("Empresa B"));
+
     response = await fetch(base + "/admin/logout", {
       method: "POST",
       headers: { origin: base, cookie: userA.cookie }

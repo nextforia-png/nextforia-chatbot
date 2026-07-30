@@ -16,12 +16,14 @@ const state = createCalendarOAuthState(secret, {
   actor_id: "admin@derco.example",
   actor: "Admin DERCO",
   redirect_uri: "https://nextforia.com/admin/appointment-calendar/google/callback",
-  return_path: "/admin/panel?tab=appointments"
+  return_path: "/admin/panel?tab=appointments",
+  return_mode: "popup"
 }, 1000);
 const parsed = readCalendarOAuthState(secret, state, 1001);
 assert.strictEqual(parsed.tenant_id, "grupo-derco");
 assert.strictEqual(parsed.provider, "google");
 assert.strictEqual(parsed.actor_id, "admin@derco.example");
+assert.strictEqual(parsed.return_mode, "popup");
 assert.strictEqual(readCalendarOAuthState(secret, state.slice(0, -1) + (state.endsWith("x") ? "y" : "x"), 1001), null);
 assert.strictEqual(readCalendarOAuthState(secret, state, 1000 + 11 * 60 * 1000), null);
 

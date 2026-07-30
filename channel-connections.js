@@ -159,6 +159,7 @@ function createOAuthState(secret, input, now) {
     actor: cleanText(input && input.actor, 200),
     redirect_uri: cleanText(input && input.redirect_uri, 500),
     return_path: cleanText(input && input.return_path, 500),
+    return_mode: input && input.return_mode === "popup" ? "popup" : "",
     nonce: crypto.randomBytes(24).toString("base64url"),
     exp: Number(now || Date.now()) + 10 * 60 * 1000
   })).toString("base64url");
@@ -177,6 +178,7 @@ function readOAuthState(secret, token, now) {
     payload.tenant_id = cleanTenantId(payload.tenant_id);
     payload.channel = cleanChannel(payload.channel);
     payload.redirect_uri = cleanText(payload.redirect_uri, 500);
+    payload.return_mode = payload.return_mode === "popup" ? "popup" : "";
     if (!payload.tenant_id || !payload.channel || !payload.nonce || !payload.actor_id) return null;
     return payload;
   } catch (_) {

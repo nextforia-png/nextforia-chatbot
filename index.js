@@ -286,7 +286,7 @@ app.get("/privacy", (req, res) => res.type("html").send(renderPrivacyPolicy()));
 app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v296-appointment-calls";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v297-appointment-calls";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -8034,6 +8034,72 @@ function appointmentCalendarCallbackUrlForRequest(req) {
   return APPOINTMENT_CALENDAR_CALLBACK_URL;
 }
 
+function externalIntegrationCallbackPage(res, options) {
+  const status = ["success", "select", "error"].includes(options && options.status)
+    ? options.status
+    : "error";
+  const provider = String(options && options.provider || "integration").replace(/[^a-z0-9_-]/gi, "").slice(0, 30) || "integration";
+  const returnPath = String(options && options.returnPath || "/admin/panel?tab=channels");
+  const success = status === "success";
+  const selection = status === "select";
+  const title = success ? "Conexión completada" : selection ? "Falta elegir una cuenta" : "No pudimos completar la conexión";
+  const copy = success
+    ? "La autorización quedó guardada. Volverás al Customer Panel para ver el canal actualizado."
+    : selection
+      ? "La autorización quedó guardada. Vuelve al Customer Panel para elegir la cuenta que usará tu Nextfor."
+      : "Vuelve al Customer Panel e intenta nuevamente. Si el error continúa, habla con el equipo de NextforIA.";
+  const badge = success ? "✓ Todo listo" : selection ? "→ Un paso más" : "Revisar conexión";
+  const nonce = crypto.randomBytes(18).toString("base64url");
+  const payload = JSON.stringify({
+    type: "nextfor-integration-result",
+    provider,
+    status,
+    return_path: returnPath
+  }).replace(/</g, "\\u003c");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Security-Policy",
+    "default-src 'none'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; " +
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+  res.type("html").send(`<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>${escapeHtml(title)} · Nextfor IA</title>
+  <style nonce="${nonce}">
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#f3f7fc;color:#091a38;font-family:Arial,sans-serif}
+    main{width:min(620px,100%);padding:48px 36px;border:1px solid #d8e3f1;border-radius:28px;background:#fff;box-shadow:0 24px 70px rgba(8,28,61,.12);text-align:center}
+    .brand{display:inline-flex;align-items:center;gap:10px;margin-bottom:28px;font-weight:800}.logo{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;background:linear-gradient(135deg,#27c1fa,#078ed7);color:#fff}
+    .badge{display:inline-block;padding:10px 16px;border-radius:999px;background:${status === "error" ? "#fff0ec" : "#e7f9f2"};color:${status === "error" ? "#b83f20" : "#087953"};font-weight:800}
+    h1{margin:22px 0 12px;font-size:clamp(30px,5vw,48px);line-height:1.05}p{margin:0 auto 28px;max-width:500px;color:#64738e;font-size:18px;line-height:1.55}
+    a,button{display:inline-flex;justify-content:center;align-items:center;min-height:52px;padding:0 24px;border:0;border-radius:14px;background:#0aa7ed;color:#fff;font:800 16px Arial,sans-serif;text-decoration:none;cursor:pointer}
+    .hint{display:block;margin-top:18px;color:#8b99af;font-size:14px}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><span class="logo">N</span> Nextfor IA</div><br>
+    <span class="badge">${escapeHtml(badge)}</span>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(copy)}</p>
+    <button id="closeIntegrationTab" type="button">Volver al Customer Panel</button>
+    <span class="hint">Si esta pestaña no se cierra, usa el botón para regresar.</span>
+  </main>
+  <script nonce="${nonce}">
+  (function(){
+    var result=${payload};
+    try{var channel=new BroadcastChannel("nextfor-integrations");channel.postMessage(result);channel.close();}catch(_){}
+    try{localStorage.setItem("nextfor-integration-result",JSON.stringify(Object.assign({created_at:Date.now()},result)));}catch(_){}
+    function returnToPanel(){try{window.close();}catch(_){}setTimeout(function(){if(!window.closed)location.href=result.return_path;},250);}
+    document.getElementById("closeIntegrationTab").addEventListener("click",returnToPanel);
+    ${status === "error" ? "" : "setTimeout(returnToPanel,1400);"}
+  })();
+  </script>
+</body>
+</html>`);
+}
+
 function customerSetupCompletionPath(auth, source) {
   const cleanSource = String(source || "onboarding").replace(/[^a-z0-9_-]/gi, "").slice(0, 40) || "onboarding";
   return customerChannelConnectionsVisibleForAuth(auth)
@@ -11883,7 +11949,9 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
       channel,
       actor_id: auth.user_id || auth.username,
       actor: channelConnectionActor(auth),
-      redirect_uri: redirectUri
+      redirect_uri: redirectUri,
+      return_path: "/admin/panel?tab=channels",
+      return_mode: "popup"
     });
     const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state, {
       redirectUri
@@ -11984,10 +12052,21 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
       redirect_uri: state.redirect_uri || channelConnectionCallbackUrlForRequest(req),
       code: req.query.error ? "" : req.query.code
     });
-    res.redirect(channelConnectionReturnUrl(state, result.status === "selection_required" ? "select" : "success"));
+    const resultStatus = result.status === "selection_required" ? "select" : "success";
+    const returnUrl = channelConnectionReturnUrl(state, resultStatus);
+    if (state.return_mode === "popup") {
+      externalIntegrationCallbackPage(res, { provider: "meta", status: resultStatus, returnPath: returnUrl });
+      return;
+    }
+    res.redirect(returnUrl);
   } catch (error) {
     console.error("Meta channel authorization failed:", state.channel, error.internalMessage || error.message);
-    res.redirect(channelConnectionReturnUrl(state, "error"));
+    const returnUrl = channelConnectionReturnUrl(state, "error");
+    if (state.return_mode === "popup") {
+      externalIntegrationCallbackPage(res, { provider: "meta", status: "error", returnPath: returnUrl });
+      return;
+    }
+    res.redirect(returnUrl);
   }
 });
 
@@ -12242,7 +12321,8 @@ app.post("/admin/panel/appointment-calendar/google/connect", async (req, res) =>
       actor_id: auth.user_id || auth.username,
       actor: channelConnectionActor(auth),
       redirect_uri: redirectUri,
-      return_path: returnPath
+      return_path: returnPath,
+      return_mode: "popup"
     });
     const authorizationUrl = await appointmentCalendarService.begin(tenantId, auth, state, { redirectUri });
     res.json({ ok: true, authorization_url: authorizationUrl });
@@ -12283,10 +12363,20 @@ app.get("/admin/appointment-calendar/google/callback", async (req, res) => {
       redirect_uri: state.redirect_uri || appointmentCalendarCallbackUrlForRequest(req),
       code: req.query.error ? "" : req.query.code
     });
-    res.redirect(calendarReturnUrl(state, "success"));
+    const returnUrl = calendarReturnUrl(state, "success");
+    if (state.return_mode === "popup") {
+      externalIntegrationCallbackPage(res, { provider: "google-calendar", status: "success", returnPath: returnUrl });
+      return;
+    }
+    res.redirect(returnUrl);
   } catch (error) {
     console.error("Google calendar authorization failed:", state.tenant_id, error.internalMessage || error.message);
-    res.redirect(calendarReturnUrl(state, "error"));
+    const returnUrl = calendarReturnUrl(state, "error");
+    if (state.return_mode === "popup") {
+      externalIntegrationCallbackPage(res, { provider: "google-calendar", status: "error", returnPath: returnUrl });
+      return;
+    }
+    res.redirect(returnUrl);
   }
 });
 

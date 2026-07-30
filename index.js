@@ -286,7 +286,7 @@ app.get("/privacy", (req, res) => res.type("html").send(renderPrivacyPolicy()));
 app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v294-notification-navigation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v295-external-auth-tabs";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";

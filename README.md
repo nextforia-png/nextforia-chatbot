@@ -89,7 +89,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |
 | `CUSTOMER_INVITE_FROM_EMAIL` | Remitente verificado del entorno de Staging |
 | `RESEND_API_KEY` | API key exclusiva de Staging para entregar invitaciones; nunca se registra ni se devuelve |
-| `APPOINTMENT_SETUP_ENABLED` | Habilita que clientes piloto elijan/configuren Appointment Bot desde el setup; no activa operación pública |
+| `CUSTOMER_ALL_PLANS_ENABLED` | Expone Uno, Aura, Tempo y Atlas en el setup de clientes; activo por defecto, `0` sirve como rollback |
+| `APPOINTMENT_SETUP_ENABLED` | Gate heredado para pilotos de Appointment cuando `CUSTOMER_ALL_PLANS_ENABLED=0` |
 | `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |
 | `ELEVENLABS_DERCO_AGENT_ID` | ID del agente de DERCO; lo vincula al tenant `grupo-derco` |
 | `ELEVENLABS_AGENT_TENANT_MAP` | Mapa JSON opcional `agent_id -> tenant_id` para más clientes |

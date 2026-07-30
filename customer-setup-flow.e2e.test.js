@@ -250,8 +250,8 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("tu negocio."));
     assert(setupHtml.includes("¿Qué quieres que NextforIA impulse primero?"));
     assert(setupHtml.includes('name="setupGoal"'));
-    assert(!setupHtml.includes('name="setupGoal" data-field="setup_goal" value="appointments"'), "customer setup must not offer appointments in the first production release");
-    assert(!setupHtml.includes('name="setupGoal" data-field="setup_goal" value="both"'), "customer setup must not offer both bots in the first production release");
+    assert(setupHtml.includes('name="setupGoal" data-field="setup_goal" value="appointments"'), "customer setup must offer appointment training");
+    assert(setupHtml.includes('name="setupGoal" data-field="setup_goal" value="both"'), "customer setup must offer both bots");
     assert(setupHtml.includes("TODO GRAN VENDEDOR EMPIEZA CONOCIENDO SU EMPRESA"));
     assert(setupHtml.includes("Enséñale a Nextfor lo esencial de tu negocio"));
     assert(setupHtml.includes("¿Qué vende tu empresa?"));
@@ -267,8 +267,8 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("Atención al cliente: clientes atendidos al mes"));
     assert(setupHtml.includes("operations.monthly_customer_volume"));
     assert(setupHtml.includes("customer_service_setup.business_offer_type"));
-    assert(!setupHtml.includes('name="selected_plan" value="nextfor-tempo"'), "customer setup must not offer Nextfor Tempo");
-    assert(!setupHtml.includes('name="selected_plan" value="nextfor-atlas"'), "customer setup must not offer Nextfor Atlas");
+    assert(setupHtml.includes('name="selected_plan" value="nextfor-tempo"'), "customer setup must offer Nextfor Tempo");
+    assert(setupHtml.includes('name="selected_plan" value="nextfor-atlas"'), "customer setup must offer Nextfor Atlas");
     assert(!setupHtml.includes('name="selected_plan" value="nextfor-signature"'), "customer setup must not offer Nextfor Signature");
     assert(setupHtml.includes("Terminar el entrenamiento de Nextfor"));
     assert(setupHtml.includes("lumen-entrenando.png"));
@@ -646,20 +646,31 @@ function bothBotAnswers(company, email) {
     response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: cookieC },
-      body: JSON.stringify({ status: "completed", answers: appointmentStageOneAnswers("Empresa Citas C") })
+      body: JSON.stringify({
+        status: "completed",
+        plan_id: "nextfor-tempo",
+        bot_id: "agendamiento",
+        answers: appointmentStageOneAnswers("Empresa Citas C")
+      })
     });
-    assert.strictEqual(response.status, 422, "appointments setup is not allowed in the first production release");
+    assert.strictEqual(response.status, 200, "Nextfor Tempo can complete the customer setup");
     payload = await response.json();
-    assert.strictEqual(payload.error, "chatbot_only_release");
+    assert.strictEqual(payload.selected_plan_id, "nextfor-tempo");
+    assert.strictEqual(payload.selected_bot_id, "agendamiento");
 
     response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",
       headers: { "content-type": "application/json", origin: base, cookie: cookieD },
-      body: JSON.stringify({ status: "completed", answers: bothBotAnswers("Empresa Ambos D", fixtures[3].email) })
+      body: JSON.stringify({
+        status: "completed",
+        plan_id: "nextfor-atlas",
+        bot_id: "atencion-cliente",
+        answers: bothBotAnswers("Empresa Ambos D", fixtures[3].email)
+      })
     });
-    assert.strictEqual(response.status, 422, "both-bots setup is not allowed in the first production release");
+    assert.strictEqual(response.status, 200, "Nextfor Atlas can complete the customer setup");
     payload = await response.json();
-    assert.strictEqual(payload.error, "chatbot_only_release");
+    assert.strictEqual(payload.selected_plan_id, "nextfor-atlas");
 
     console.log("customer-setup-flow.e2e.test.js: ok");
   } finally {

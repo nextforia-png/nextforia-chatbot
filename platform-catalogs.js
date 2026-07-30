@@ -24,12 +24,10 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{1,63}$/;
 const TENANT_STATUSES = ["setup", "activo", "suspendido", "archivado"];
 // Estados heredados de la migración anterior. Se leen, no se escriben.
 const LEGACY_STATUS_ALIASES = { live: "activo", paused: "suspendido", pilot: "setup" };
-// Primera producción NextforIA: el catálogo completo sigue disponible para
-// Super Admin, pero el cliente solo puede contratar Chatbot/Atención al cliente
-// con Nextfor Uno o Nextfor Aura. Agendamiento/Atlas/Signature quedan preparados
-// para una fase posterior, sin exponerse en flujos customer-facing.
-const CUSTOMER_VISIBLE_PLAN_IDS = ["nextfor-uno", "nextfor-aura"];
-const CUSTOMER_VISIBLE_BOT_IDS = ["atencion-cliente"];
+// Catálogo estándar que el cliente puede contratar directamente. Signature
+// permanece como propuesta comercial a la medida y no se activa desde el setup.
+const CUSTOMER_VISIBLE_PLAN_IDS = ["nextfor-uno", "nextfor-aura", "nextfor-tempo", "nextfor-atlas"];
+const CUSTOMER_VISIBLE_BOT_IDS = ["atencion-cliente", "agendamiento"];
 const NEXTFOR_PRICING_JULY_2026 = [
   {
     id: "nextfor-uno",

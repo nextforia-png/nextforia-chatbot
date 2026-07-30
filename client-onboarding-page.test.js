@@ -21,6 +21,7 @@ renderClientOnboarding(res, {
     setup_completed: false,
     answers: { setup_goal: "customer_service" }
   },
+  returnPath: "/admin/panel?tab=notifications",
   questionnaire: {
     questions: [{
       id: "new_real_setup_question",
@@ -40,6 +41,8 @@ assert.match(html, /createQuestionField\(question\)/);
 assert.match(html, /question\.path!=="setup_goal"&&questionApplies\(question\)/);
 assert.match(html, /grid\.querySelector\(fieldSelector\(question\.path\)\)/);
 assert.match(html, /customer_service_setup\.new_training_rule/);
+assert.match(html, /class="returnLink" href="\/admin\/panel\?tab=notifications"/);
+assert.match(html, /← Volver al Panel de Control/);
 
 let partialCatalogHtml = "";
 renderClientOnboarding({

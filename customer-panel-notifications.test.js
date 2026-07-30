@@ -18,8 +18,12 @@ renderCustomerPanel(res, {
 });
 
 assert(html.includes("function notificationCardKey"));
+assert(html.includes("function notificationActionUrl"));
 assert(html.includes('data-action-url="'));
 assert(html.includes('notificationAction(this.dataset.actionUrl)'));
+assert(html.includes('target.searchParams.set("return_to","/admin/panel?tab=notifications")'));
+assert(html.includes('window.addEventListener("pageshow"'));
+assert(html.includes('window.addEventListener("popstate"'));
 assert(!html.includes('onclick="notificationAction("+JSON.stringify'));
 
 console.log("customer-panel-notifications.test.js OK");

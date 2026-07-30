@@ -1714,6 +1714,27 @@ function navigateExternalIntegrationTab(tab,url){
   state.externalIntegrationPending=true;
   return true;
 }
+function refreshExternalIntegrationState(payload){
+  if(!payload||payload.type!=="nextfor-integration-result")return;
+  state.externalIntegrationPending=false;
+  if(state.tab==="channels"){
+    state.channelConnections=null;
+    loadChannelConnections(true);
+    loadClientOnboardingSummary();
+    if(payload.status==="success")setChannelConnectionMessage("Listo. La conexión quedó guardada y el canal se está actualizando.","success");
+    else if(payload.status==="select")setChannelConnectionMessage("Autorización lista. Elige la cuenta correcta para terminar.");
+    else setChannelConnectionMessage("No pudimos completar la conexión. Intenta nuevamente.","error");
+  }
+  if(state.tab==="plan")loadBilling(true);
+}
+try{
+  var externalIntegrationChannel=new BroadcastChannel("nextfor-integrations");
+  externalIntegrationChannel.onmessage=function(event){refreshExternalIntegrationState(event&&event.data);};
+}catch(_){}
+window.addEventListener("storage",function(event){
+  if(event.key!=="nextfor-integration-result"||!event.newValue)return;
+  try{refreshExternalIntegrationState(JSON.parse(event.newValue));}catch(_){}
+});
 function openShopifyConnection(){
   var tab=prepareExternalIntegrationTab("Shopify");
   if(!tab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}

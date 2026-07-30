@@ -43,6 +43,10 @@ assert.match(html, /grid\.querySelector\(fieldSelector\(question\.path\)\)/);
 assert.match(html, /customer_service_setup\.new_training_rule/);
 assert.match(html, /class="returnLink" href="\/admin\/panel\?tab=notifications"/);
 assert.match(html, /← Volver al Panel de Control/);
+assert.match(html, /function prepareOnboardingExternalTab\(label\)/);
+assert.match(html, /window\.open\("about:blank","_blank"\)/);
+assert.match(html, /navigateOnboardingExternalTab\(externalTab,shopifyConnectButton\.href\)/);
+assert.doesNotMatch(html, /location\.href=shopifyConnectButton\.href/);
 
 let partialCatalogHtml = "";
 renderClientOnboarding({

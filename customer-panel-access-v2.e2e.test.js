@@ -342,8 +342,7 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(response.status, 200);
     const shellA = await response.text();
     assert(shellA.includes("<title>Nextfor IA · Empresa A</title>"));
-    assert(shellA.includes("<h1>Nextfor IA</h1>"));
-    assert(shellA.includes('<span id="brandBusinessName">Empresa A</span>'));
+    assert(shellA.includes('<h1><span id="brandBusinessName">Empresa A</span></h1><p>con <span>Nextfor IA</span></p>'));
     assert(shellA.includes("Plan Nextfor Aura"));
     assert(shellA.includes('id="bot-support"'));
     assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
@@ -377,8 +376,7 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(response.status, 200);
     const shellB = await response.text();
     assert(shellB.includes("<title>Nextfor IA · Empresa B</title>"));
-    assert(shellB.includes("<h1>Nextfor IA</h1>"));
-    assert(shellB.includes('<span id="brandBusinessName">Empresa B</span>'));
+    assert(shellB.includes('<h1><span id="brandBusinessName">Empresa B</span></h1><p>con <span>Nextfor IA</span></p>'));
     assert(shellB.includes("Plan Nextfor Uno"));
     assert(!shellB.includes('id="bot-appointments"'));
     assert(!shellB.includes('id="navAppointments"'));

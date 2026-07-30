@@ -221,8 +221,8 @@ button{cursor:pointer}
 .ravLogo{width:48px;height:48px;border-radius:13px;background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));display:grid;place-items:center;font-size:19px;font-weight:800;letter-spacing:-.04em;box-shadow:0 10px 22px rgba(18,168,244,.22);flex:0 0 auto;overflow:hidden}.ravLogo img{width:100%;height:100%;object-fit:cover}
 .brand{width:100%;border:0;background:transparent;color:#fff;cursor:pointer;text-align:left;display:flex;align-items:center;gap:13px;padding:8px;border-radius:14px;transition:background .15s}
 .brand:hover{background:rgba(255,255,255,.05)}
-.brand h1{color:#fff;font-family:var(--font-display);font-size:19px;line-height:1;font-weight:800;letter-spacing:-.03em}
-.brand p{margin-top:5px;color:#96A7C4;font-size:12.5px;font-weight:600}
+.brand h1{color:#fff;font-family:var(--font-display);font-size:22px;line-height:1.08;font-weight:800;letter-spacing:-.035em}
+.brand p{margin-top:4px;color:#96A7C4;font-size:11.5px;font-weight:600}
 .brand p span{color:var(--cyan-400)}
 .brandInfo{flex:1;min-width:0}
 .brandEdit{opacity:0;color:#93A4C2;display:inline-flex;flex:0 0 auto;transition:opacity .15s}
@@ -651,8 +651,8 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .mobileLogout{height:34px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(255,255,255,.08);color:#fff;padding:0 12px;font-size:12px;font-weight:900}
 .mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
   .mobileBrand .ravLogo{width:42px;height:42px;border-radius:13px;font-size:17px}
-  .mobileBrand h1{font-family:var(--font-display);font-size:17px;line-height:1;font-weight:800;letter-spacing:-.03em;color:#fff}
-  .mobileBrand p{font-size:12px;color:#9FB0CA;font-weight:700;margin-top:3px}
+  .mobileBrand h1{font-family:var(--font-display);font-size:18px;line-height:1.08;font-weight:800;letter-spacing:-.03em;color:#fff}
+  .mobileBrand p{font-size:11px;color:#9FB0CA;font-weight:700;margin-top:3px}
   .mobileBrand p span{color:var(--cyan-400)}
   .mobileAvatar{width:40px;height:40px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.15);color:#fff;display:grid;place-items:center;font-weight:950}
   .mobileModuleBar{display:none}
@@ -1146,7 +1146,7 @@ ${customerBotConfiguration.styles}
 <body>
 <div class="app">
   <header class="mobileTop">
-    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1>Nextfor IA</h1><p>Empresa · <span id="mobileBrandBusinessName">${escapeHtml(panelContext.businessName)}</span></p></div></div>
+    <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1><span id="mobileBrandBusinessName">${escapeHtml(panelContext.businessName)}</span></h1><p>con <span>Nextfor IA</span></p></div></div>
     <div class="mobileTopActions"><button class="mobileLogout" type="button" onclick="logoutCustomerPanel()">Salir</button><div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
   </header>
   <div class="mobileBotSwitch" aria-label="Tus bots">
@@ -1156,7 +1156,7 @@ ${customerBotConfiguration.styles}
   <aside class="sidebar">
     <button class="brand" type="button" onclick="openProfile()" aria-label="Editar perfil del negocio">
       <span class="brandAvatar"><span class="ravLogo" id="brandLogo">${escapeHtml(panelContext.initials)}</span></span>
-      <span class="brandInfo"><h1>Nextfor IA</h1><p>Empresa · <span id="brandBusinessName">${escapeHtml(panelContext.businessName)}</span></p></span>
+      <span class="brandInfo"><h1><span id="brandBusinessName">${escapeHtml(panelContext.businessName)}</span></h1><p>con <span>Nextfor IA</span></p></span>
       <span class="brandEdit" aria-hidden="true">${PANEL_ICONS.edit}</span>
     </button>
     <div class="botSwitch" aria-label="Tus bots">
@@ -1689,7 +1689,7 @@ function profileLogoDrag(event,active){if(event){event.preventDefault();event.st
 function profileLogoDrop(event){profileLogoDrag(event,false);var file=event&&event.dataTransfer&&event.dataTransfer.files&&event.dataTransfer.files[0];if(file)processProfileLogo(file);}
 function processProfileLogo(file){preparePanelImage(file).then(function(image){state.accountLogo=image;var name=document.getElementById("profileNameInput");applyPanelLogo(image,name&&name.value);profileStatus("Imagen lista. Guarda los cambios para aplicarla.",false);}).catch(function(error){profileStatus(error.message||"No pudimos procesar la imagen.",true);});}
 function handleLogoFile(input){var file=input.files&&input.files[0];if(file)processProfileLogo(file);input.value="";}
-function saveProfile(){var button=document.getElementById("profileSaveBtn"),name=document.getElementById("profileNameInput"),admin=document.getElementById("profileAdminName"),phone=document.getElementById("profilePhone"),value=name&&(name.value||"").trim();if(!value){profileStatus("Escribe el nombre del negocio.",true);if(name)name.focus();return;}if(button){button.disabled=true;button.textContent="Guardando…";}profileStatus("Guardando cambios…",false);api(PANEL_ACCOUNT_PATH,{method:"PUT",body:JSON.stringify({business_name:value,administrator_name:admin&&(admin.value||"").trim(),contact_phone:phone&&(phone.value||"").trim(),logo_data_url:state.accountLogo||""})}).then(function(payload){fillAccountProfile(payload);PANEL_CONTEXT.businessName=value;text("brandName",value);var mobileName=document.querySelector(".mobileBrand h1");if(mobileName)mobileName.textContent=value;applyPanelLogo(state.accountLogo,value);profileStatus("Perfil actualizado.",false);}).catch(function(error){profileStatus(error.body&&error.body.message||"No pudimos guardar el perfil.",true);}).finally(function(){if(button){button.disabled=false;button.textContent="Guardar cambios";}});}
+function saveProfile(){var button=document.getElementById("profileSaveBtn"),name=document.getElementById("profileNameInput"),admin=document.getElementById("profileAdminName"),phone=document.getElementById("profilePhone"),value=name&&(name.value||"").trim();if(!value){profileStatus("Escribe el nombre del negocio.",true);if(name)name.focus();return;}if(button){button.disabled=true;button.textContent="Guardando…";}profileStatus("Guardando cambios…",false);api(PANEL_ACCOUNT_PATH,{method:"PUT",body:JSON.stringify({business_name:value,administrator_name:admin&&(admin.value||"").trim(),contact_phone:phone&&(phone.value||"").trim(),logo_data_url:state.accountLogo||""})}).then(function(payload){fillAccountProfile(payload);PANEL_CONTEXT.businessName=value;text("brandBusinessName",value);text("mobileBrandBusinessName",value);applyPanelLogo(state.accountLogo,value);profileStatus("Perfil actualizado.",false);}).catch(function(error){profileStatus(error.body&&error.body.message||"No pudimos guardar el perfil.",true);}).finally(function(){if(button){button.disabled=false;button.textContent="Guardar cambios";}});}
 function togglePasswordForm(){var form=document.getElementById("profilePasswordForm");if(!form)return;form.classList.toggle("open");if(form.classList.contains("open")){var field=document.getElementById("profileCurrentPassword");if(field)field.focus();}}
 function changeAccountPassword(){var current=document.getElementById("profileCurrentPassword"),password=document.getElementById("profileNewPassword"),confirmation=document.getElementById("profileConfirmPassword"),button=document.getElementById("profilePasswordBtn"),currentValue=current&&current.value||"",nextValue=password&&password.value||"",confirmationValue=confirmation&&confirmation.value||"";if(nextValue.length<12||!/[A-Za-z]/.test(nextValue)||!/[0-9]/.test(nextValue)){profileStatus("La nueva contraseña necesita 12 caracteres, una letra y un número.",true);return;}if(nextValue!==confirmationValue){profileStatus("Las contraseñas nuevas no coinciden.",true);return;}if(button){button.disabled=true;button.textContent="Actualizando…";}profileStatus("Actualizando contraseña…",false);api(PANEL_PASSWORD_PATH,{method:"POST",body:JSON.stringify({current_password:currentValue,password:nextValue,password_confirmation:confirmationValue})}).then(function(){[current,password,confirmation].forEach(function(field){if(field)field.value="";});profileStatus("Contraseña actualizada correctamente.",false);var form=document.getElementById("profilePasswordForm");if(form)form.classList.remove("open");}).catch(function(error){profileStatus(error.body&&error.body.message||"No pudimos cambiar la contraseña.",true);}).finally(function(){if(button){button.disabled=false;button.textContent="Guardar contraseña";}});}
 function api(url,opts){opts=opts||{};opts.headers=Object.assign({accept:"application/json","x-nextforia-panel-origin":location.origin},opts.headers||{});if(opts.body&&!opts.headers["content-type"])opts.headers["content-type"]="application/json";var redirectOnAuth=opts.redirectOnAuth;return fetch(url,opts).then(function(response){return response.json().catch(function(){return {};}).then(function(body){if(response.status===401){if(redirectOnAuth&&PANEL_LOGIN_PATH)location.href=PANEL_LOGIN_PATH;var authError=new Error("Sesión vencida");authError.status=401;throw authError;}if(!response.ok){var error=new Error(body.message||body.error||("HTTP "+response.status));error.status=response.status;error.body=body;throw error;}return body;});});}

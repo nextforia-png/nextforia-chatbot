@@ -33,8 +33,8 @@ function layout(title, description, content) {
 <body>
   <header class="top">
     <nav class="nav" aria-label="Principal">
-      <a class="brand" href="/nextfor-appointment-bot"><img src="/admin/assets/nexfor-mark-light.png" alt="">Nextfor Appointment Bot</a>
-      <div class="navlinks"><a href="/nextfor-appointment-bot">Producto</a><a href="/privacy">Privacidad</a><a href="/terms">Términos</a></div>
+      <a class="brand" href="/admin/nextfor-appointment-bot"><img src="/admin/assets/nexfor-mark-light.png" alt="">Nextfor Appointment Bot</a>
+      <div class="navlinks"><a href="/admin/nextfor-appointment-bot">Producto</a><a href="/admin/privacy">Privacidad</a><a href="/admin/terms">Términos</a></div>
     </nav>
   </header>
   ${content}
@@ -51,7 +51,7 @@ function renderGoogleOAuthHomepage() {
       <div class="eyebrow">Integración oficial de Nextfor IA</div>
       <h1>Nextfor Appointment Bot</h1>
       <p>Nextfor Appointment Bot es una aplicación de gestión de citas para empresas. Su propósito es consultar disponibilidad y crear, reprogramar o cancelar citas autorizadas por el usuario mediante Google Calendar.</p>
-      <div class="actions"><a class="button" href="https://nextforia.com/admin/panel">Abrir Customer Panel</a><a class="button secondary" href="/privacy">Cómo protegemos tus datos</a></div>
+      <div class="actions"><a class="button" href="https://nextforia.com/admin/panel">Abrir Customer Panel</a><a class="button secondary" href="/admin/privacy">Cómo protegemos tus datos</a></div>
     </div></section>
     <main><section class="card">
       <h2>Propósito de Nextfor Appointment Bot</h2>
@@ -71,7 +71,7 @@ function renderGoogleOAuthHomepage() {
         <li>Nextfor usa esos permisos para consultar disponibilidad y gestionar las citas del negocio.</li>
         <li>El administrador puede desconectar Google Calendar y eliminar las credenciales almacenadas.</li>
       </ol>
-      <div class="legal-nav"><a href="/privacy">Política de Privacidad</a><a href="/terms">Condiciones del Servicio</a><a href="mailto:${SUPPORT_EMAIL}">Soporte</a></div>
+      <div class="legal-nav"><a href="/admin/privacy">Política de Privacidad</a><a href="/admin/terms">Condiciones del Servicio</a><a href="mailto:${SUPPORT_EMAIL}">Soporte</a></div>
     </section></main>`
   );
 }
@@ -128,7 +128,7 @@ function renderPrivacyPolicy() {
       <h2>10. Cambios</h2>
       <p>Podemos actualizar esta Política para reflejar cambios legales, técnicos o del servicio. Publicaremos la fecha de vigencia y, cuando el cambio sea material, lo comunicaremos por medios razonables.</p>
 
-      <div class="legal-nav"><a href="/nextfor-appointment-bot">Volver al producto</a><a href="/terms">Condiciones del Servicio</a><a href="mailto:${SUPPORT_EMAIL}">Contactar a Nextfor</a></div>
+      <div class="legal-nav"><a href="/admin/nextfor-appointment-bot">Volver al producto</a><a href="/admin/terms">Condiciones del Servicio</a><a href="mailto:${SUPPORT_EMAIL}">Contactar a Nextfor</a></div>
     </article></main>`
   );
 }
@@ -187,7 +187,7 @@ function renderTermsOfService() {
       <h2>15. Cambios</h2>
       <p>Podemos actualizar estas Condiciones para reflejar cambios del servicio o de la ley. Publicaremos la versión vigente y comunicaremos los cambios materiales cuando corresponda.</p>
 
-      <div class="legal-nav"><a href="/nextfor-appointment-bot">Volver al producto</a><a href="/privacy">Política de Privacidad</a><a href="mailto:${SUPPORT_EMAIL}">Contactar a Nextfor</a></div>
+      <div class="legal-nav"><a href="/admin/nextfor-appointment-bot">Volver al producto</a><a href="/admin/privacy">Política de Privacidad</a><a href="mailto:${SUPPORT_EMAIL}">Contactar a Nextfor</a></div>
     </article></main>`
   );
 }

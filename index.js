@@ -283,11 +283,14 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 app.get("/google-oauth", (req, res) => res.type("html").send(renderGoogleOAuthHomepage()));
 app.get("/nextfor-appointment-bot", (req, res) => res.type("html").send(renderGoogleOAuthHomepage()));
+app.get("/admin/nextfor-appointment-bot", (req, res) => res.type("html").send(renderGoogleOAuthHomepage()));
 app.get("/privacy", (req, res) => res.type("html").send(renderPrivacyPolicy()));
+app.get("/admin/privacy", (req, res) => res.type("html").send(renderPrivacyPolicy()));
 app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
+app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v299-appointment-calls-google-brand";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v300-appointment-calls-google-brand";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";

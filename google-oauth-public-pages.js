@@ -33,7 +33,7 @@ function layout(title, description, content) {
 <body>
   <header class="top">
     <nav class="nav" aria-label="Principal">
-      <a class="brand" href="/google-oauth"><img src="/admin/assets/nexfor-mark-light.png" alt="">Nextfor IA</a>
+      <a class="brand" href="/google-oauth"><img src="/admin/assets/nexfor-mark-light.png" alt="">Nextfor Appointment Bot</a>
       <div class="navlinks"><a href="/google-oauth">Producto</a><a href="/privacy">Privacidad</a><a href="/terms">Términos</a></div>
     </nav>
   </header>
@@ -50,7 +50,7 @@ function renderGoogleOAuthHomepage() {
     `<section class="top"><div class="hero">
       <div class="eyebrow">Integración oficial de Nextfor IA</div>
       <h1>Nextfor Appointment Bot</h1>
-      <p>Un asistente de agendamiento para empresas que consulta disponibilidad y sincroniza citas autorizadas por el usuario con Google Calendar.</p>
+      <p><strong>Nextfor Appointment Bot</strong> es una aplicación de gestión de citas para empresas. Su propósito es consultar disponibilidad y crear, reprogramar o cancelar citas autorizadas por el usuario mediante Google Calendar.</p>
       <div class="actions"><a class="button" href="https://nextforia.com/admin/panel">Abrir Customer Panel</a><a class="button secondary" href="/privacy">Cómo protegemos tus datos</a></div>
     </div></section>
     <main><section class="card">

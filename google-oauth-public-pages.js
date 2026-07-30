@@ -20,7 +20,7 @@ function layout(title, description, content) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="${escapeHtml(description)}">
-  <title>${escapeHtml(title)} · Nextfor IA</title>
+  <title>${escapeHtml(title)}</title>
   <style>
     :root{color-scheme:light;--navy:#071832;--blue:#006fc4;--cyan:#08aeea;--ink:#15253d;--muted:#5f7087;--line:#dce6f1;--bg:#f6f9fc;--card:#fff}
     *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65}
@@ -50,10 +50,13 @@ function renderGoogleOAuthHomepage() {
     `<section class="top"><div class="hero">
       <div class="eyebrow">Integración oficial de Nextfor IA</div>
       <h1>Nextfor Appointment Bot</h1>
-      <p><strong>Nextfor Appointment Bot</strong> es una aplicación de gestión de citas para empresas. Su propósito es consultar disponibilidad y crear, reprogramar o cancelar citas autorizadas por el usuario mediante Google Calendar.</p>
+      <p>Nextfor Appointment Bot es una aplicación de gestión de citas para empresas. Su propósito es consultar disponibilidad y crear, reprogramar o cancelar citas autorizadas por el usuario mediante Google Calendar.</p>
       <div class="actions"><a class="button" href="https://nextforia.com/admin/panel">Abrir Customer Panel</a><a class="button secondary" href="/privacy">Cómo protegemos tus datos</a></div>
     </div></section>
     <main><section class="card">
+      <h2>Propósito de Nextfor Appointment Bot</h2>
+      <p>Nextfor Appointment Bot permite que los administradores de empresas conecten voluntariamente Google Calendar para consultar espacios disponibles, evitar cruces y sincronizar las citas que sus clientes solicitan.</p>
+      <p lang="en">Nextfor Appointment Bot is a business appointment management application. Its purpose is to check availability and create, reschedule or cancel user-authorized appointments through Google Calendar.</p>
       <h2>Qué hace la integración</h2>
       <div class="grid">
         <article class="feature"><strong>Consulta disponibilidad</strong><p>Revisa espacios ocupados para evitar cruces al ofrecer una cita.</p></article>

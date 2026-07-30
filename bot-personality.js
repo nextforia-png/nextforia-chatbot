@@ -30,6 +30,21 @@ function cleanText(value, max) {
     .slice(0, max || 5000);
 }
 
+function cleanAvatarImage(value) {
+  const clean = String(value == null ? "" : value).trim();
+  if (!clean) return "";
+  if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(clean)) {
+    return clean.length <= 90000 ? clean : "";
+  }
+  try {
+    const url = new URL(clean);
+    if (url.protocol !== "https:" || url.username || url.password) return "";
+    return clean.slice(0, 1200);
+  } catch (_) {
+    return "";
+  }
+}
+
 function cleanChoice(value, allowed, fallback) {
   const clean = cleanText(value, 80).toLowerCase();
   return allowed.includes(clean) ? clean : fallback;
@@ -177,7 +192,7 @@ function defaultsFromOnboarding(record, planId) {
     response_length: "muy_breve",
     emoji_level: "pocos",
     profile: {
-      avatar_url: cleanText(service.company_logo, 1200),
+      avatar_url: cleanAvatarImage(service.company_logo),
       display_name: botName,
       description: cleanText(service.value_proposition || service.business_offer_description, 300)
     },
@@ -307,7 +322,7 @@ function normalizeBotConfiguration(input, meta) {
       cleanChoice(fallback.emoji_level, EMOJI_LEVELS, "pocos")
     ),
     profile: {
-      avatar_url: cleanText(profile.avatar_url != null ? profile.avatar_url : profileFallback.avatar_url, 1200),
+      avatar_url: cleanAvatarImage(profile.avatar_url != null ? profile.avatar_url : profileFallback.avatar_url),
       display_name: cleanText(profile.display_name != null ? profile.display_name : profileFallback.display_name, 120),
       description: cleanText(profile.description != null ? profile.description : profileFallback.description, 300)
     },

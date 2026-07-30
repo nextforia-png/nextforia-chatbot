@@ -12,6 +12,9 @@ assert(configurationUi.clientScript.includes('["shipping","Datos para un envío"
 assert(configurationUi.clientScript.includes('["reminders","Recordatorio de cita o reserva","Con Tempo o Atlas"]'));
 assert(configurationUi.clientScript.includes("nxConfigSaveSequence+=1"));
 assert(configurationUi.clientScript.includes('typeof payload.can_edit==="boolean"'));
+assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
+assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
+assert(!configurationUi.clientScript.includes("URL del logo o imagen"));
 new Function(configurationUi.clientScript);
 
 function render(role, tenant) {
@@ -39,6 +42,11 @@ const auraHtml = render("admin", {
 });
 assert(auraHtml.includes("Tu bot ya está atendiendo. Ahora afínalo."));
 assert(auraHtml.includes('PANEL_PERSONALITY_PATH="/admin/panel/bot-personality"'));
+assert(auraHtml.includes('PANEL_ACCOUNT_PATH="/admin/panel/account-profile"'));
+assert(auraHtml.includes("Administrador de la cuenta"));
+assert(auraHtml.includes("Celular de contacto"));
+assert(auraHtml.includes("Cambiar contraseña"));
+assert(auraHtml.includes("preparePanelImage"));
 assert(auraHtml.includes("loadBotSetup();loadBotPersonality(false)"));
 assert(auraHtml.includes("Versión v-config-test"));
 assert(!auraHtml.includes(">RAV Toys<"));

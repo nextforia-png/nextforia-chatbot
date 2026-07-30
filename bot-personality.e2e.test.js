@@ -157,6 +157,67 @@ async function requestJson(base, pathName, cookie, options) {
     });
     assert.strictEqual(result.response.status, 401);
 
+    result = await requestJson(base, "/admin/panel/account-profile", cookieA);
+    assert.strictEqual(result.response.status, 200);
+    assert.strictEqual(result.body.profile.tenant_id, "config-a");
+    assert.strictEqual(result.body.profile.administrator_email, "admin@config-a.example");
+    assert.strictEqual(result.body.can_edit, true);
+
+    const logo = "data:image/png;base64,iVBORw0KGgo=";
+    result = await requestJson(base, "/admin/panel/account-profile", cookieA, {
+      method: "PUT",
+      headers: { cookie: cookieA, "content-type": "application/json", origin: base },
+      body: JSON.stringify({
+        tenant_id: "config-b",
+        business_name: "Config A Actualizada",
+        administrator_name: "Administradora A",
+        contact_phone: "+57 301 111 2233",
+        logo_data_url: logo
+      })
+    });
+    assert.strictEqual(result.response.status, 200);
+    assert.strictEqual(result.body.profile.tenant_id, "config-a", "el tenant siempre se deriva de la sesión");
+    assert.strictEqual(result.body.profile.business_name, "Config A Actualizada");
+    assert.strictEqual(result.body.profile.administrator_name, "Administradora A");
+    assert.strictEqual(result.body.profile.contact_phone, "+57 301 111 2233");
+    assert.strictEqual(result.body.profile.logo_data_url, logo);
+
+    result = await requestJson(base, "/admin/panel/account-profile", cookieB);
+    assert.strictEqual(result.response.status, 200);
+    assert.strictEqual(result.body.profile.tenant_id, "config-b");
+    assert.notStrictEqual(result.body.profile.business_name, "Config A Actualizada");
+    assert(!JSON.stringify(result.body).includes("Administradora A"));
+
+    result = await requestJson(base, "/admin/panel/account-profile", cookieViewer, {
+      method: "PUT",
+      headers: { cookie: cookieViewer, "content-type": "application/json", origin: base },
+      body: JSON.stringify({ business_name: "No autorizado" })
+    });
+    assert.strictEqual(result.response.status, 401);
+
+    result = await requestJson(base, "/admin/panel/account-password", cookieA, {
+      method: "POST",
+      headers: { cookie: cookieA, "content-type": "application/json", origin: base },
+      body: JSON.stringify({
+        current_password: "TenantPassword2026",
+        password: "ChangedTenantPassword2026",
+        password_confirmation: "ChangedTenantPassword2026"
+      })
+    });
+    assert.strictEqual(result.response.status, 200);
+    let loginResponse = await fetch(base + "/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ email: "admin@config-a.example", password: "TenantPassword2026" })
+    });
+    assert.strictEqual(loginResponse.status, 401);
+    loginResponse = await fetch(base + "/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base },
+      body: JSON.stringify({ email: "admin@config-a.example", password: "ChangedTenantPassword2026" })
+    });
+    assert.strictEqual(loginResponse.status, 200);
+
     const anonymous = await fetch(base + "/admin/panel/bot-personality");
     assert.strictEqual(anonymous.status, 401);
 

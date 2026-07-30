@@ -334,6 +334,31 @@ class SupabaseCustomerAccessStore {
     }
   }
 
+  async updatePassword(input) {
+    try {
+      const response = await this.axios.patch(this.url + "/rest/v1/tenant_users", {
+        password_hash: input.password_hash,
+        password_salt: input.password_salt,
+        updated_at: new Date().toISOString()
+      }, {
+        params: {
+          user_id: "eq." + cleanIdentifier(input.user_id),
+          tenant_id: "eq." + cleanIdentifier(input.tenant_id),
+          email_normalized: "eq." + normalizeEmail(input.email),
+          active: "eq.true"
+        },
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (!rows[0]) throw new CustomerAccessError("invalid_credentials", 401);
+      return rows[0];
+    } catch (error) {
+      if (error instanceof CustomerAccessError) throw error;
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
   async listInvitations() {
     return this.rpc("platform_list_customer_invitations_v2", {});
   }
@@ -643,6 +668,26 @@ class InMemoryCustomerAccessStore {
     });
   }
 
+  async updatePassword(input) {
+    const row = this.users.find(function (item) {
+      return item.user_id === input.user_id &&
+        item.tenant_id === input.tenant_id &&
+        item.email_normalized === normalizeEmail(input.email) &&
+        item.active;
+    });
+    if (!row) throw new CustomerAccessError("invalid_credentials", 401);
+    row.password_hash = input.password_hash;
+    row.password_salt = input.password_salt;
+    row.updated_at = new Date().toISOString();
+    this.audit.push({
+      action: "customer_password_changed",
+      tenant_id: row.tenant_id,
+      actor: row.user_id,
+      created_at: row.updated_at
+    });
+    return Object.assign({}, row);
+  }
+
   async listInvitations() {
     return this.invitations.map(function (row) { return Object.assign({}, row, { token_hash: undefined }); });
   }
@@ -762,6 +807,42 @@ function createCustomerAccessService(options) {
       created_at: user.created_at || null,
       updated_at: user.updated_at || null
     };
+  }
+
+  async function changePassword(session, input) {
+    const email = normalizeEmail(session && session.email);
+    const userId = String(session && session.user_id || "");
+    const tenantId = String(session && session.tenant_id || "").trim().toLowerCase();
+    if (!validEmail(email) || !userId || !tenantId) throw new CustomerAccessError("invalid_credentials", 401);
+    const authenticated = await authenticateCustomer(email, input && input.current_password);
+    if (!authenticated ||
+        String(authenticated.user_id) !== userId ||
+        String(authenticated.tenant_id) !== tenantId) {
+      throw new CustomerAccessError("invalid_current_password", 401);
+    }
+    const password = validatePassword(
+      input && input.password,
+      input && input.password_confirmation
+    );
+    if (password === String(input && input.current_password || "")) {
+      throw new CustomerAccessError("password_reuse", 400);
+    }
+    if (!store || typeof store.updatePassword !== "function") {
+      throw new CustomerAccessError("customer_access_unavailable", 503);
+    }
+    const salt = crypto.randomBytes(16);
+    try {
+      await store.updatePassword({
+        user_id: userId,
+        tenant_id: tenantId,
+        email,
+        password_hash: hashPassword(password, salt),
+        password_salt: salt.toString("base64url")
+      });
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+    return { ok: true, user_id: userId, tenant_id: tenantId, email };
   }
 
   return {
@@ -959,6 +1040,7 @@ function createCustomerAccessService(options) {
     },
 
     authenticate: authenticateCustomer,
+    changePassword,
 
     async validateSession(session) {
       const email = normalizeEmail(session && session.email);

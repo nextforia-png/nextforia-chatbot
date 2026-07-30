@@ -119,10 +119,39 @@ async function expectError(promise, code, status) {
   assert.strictEqual(authenticated.company_name, "Empresa A");
   assert.strictEqual(authenticated.plan_id, "nextfor-aura");
   assert.strictEqual(authenticated.assigned_bot_id, "atencion-cliente");
+  await expectError(service.changePassword({
+    user_id: user.user_id,
+    email: user.email,
+    tenant_id: user.tenant_id
+  }, {
+    current_password: "incorrect-current-password",
+    password: "ChangedPassword2026",
+    password_confirmation: "ChangedPassword2026"
+  }), "invalid_current_password", 401);
+  await expectError(service.changePassword({
+    user_id: user.user_id,
+    email: user.email,
+    tenant_id: "otro-tenant"
+  }, {
+    current_password: "SecurePassword2026",
+    password: "ChangedPassword2026",
+    password_confirmation: "ChangedPassword2026"
+  }), "invalid_current_password", 401);
+  await service.changePassword({
+    user_id: user.user_id,
+    email: user.email,
+    tenant_id: user.tenant_id
+  }, {
+    current_password: "SecurePassword2026",
+    password: "ChangedPassword2026",
+    password_confirmation: "ChangedPassword2026"
+  });
+  assert.strictEqual(await service.authenticate(user.email, "SecurePassword2026"), null);
+  assert(await service.authenticate(user.email, "ChangedPassword2026"));
   const confirmedExisting = await service.confirmExistingAccess({
     tenant_id: created.tenant.id,
     token: token,
-    password: "SecurePassword2026"
+    password: "ChangedPassword2026"
   });
   assert.strictEqual(confirmedExisting.user_id, user.user_id);
   assert.strictEqual(confirmedExisting.tenant_id, created.tenant.id);
@@ -134,7 +163,7 @@ async function expectError(promise, code, status) {
   await expectError(service.confirmExistingAccess({
     tenant_id: "otro-tenant",
     token: token,
-    password: "SecurePassword2026"
+    password: "ChangedPassword2026"
   }), "invalid_invitation", 403);
   assert.strictEqual(await service.authenticate("admin@empresa.example", "wrong-password"), null);
   const outboxBeforePublicSignup = email.outbox.length;

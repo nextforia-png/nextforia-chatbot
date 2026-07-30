@@ -136,6 +136,7 @@ const DEFAULT_ONBOARDING = Object.freeze({
     operational_channels: "",
     instagram_username: "",
     channel_email: "",
+    calls_enabled: "unknown",
     other_channels: "",
     social_accounts: "",
     data_consent: false,
@@ -211,7 +212,8 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "appointment_channel_whatsapp", path: "meta.whatsapp_number", section: "appointments_channels", order: 701, active: true, required: true, type: "tel", label: "WhatsApp + número" },
   { id: "appointment_instagram_username", path: "appointment_setup.instagram_username", section: "appointments_channels", order: 702, active: true, required: false, type: "text", label: "Instagram + usuario" },
   { id: "appointment_channel_email", path: "appointment_setup.channel_email", section: "appointments_channels", order: 703, active: true, required: false, type: "email", label: "Correo electrónico" },
-  { id: "appointment_other_channels", path: "appointment_setup.other_channels", section: "appointments_channels", order: 704, active: true, required: false, type: "textarea", label: "Otros canales" },
+  { id: "appointment_calls_enabled", path: "appointment_setup.calls_enabled", section: "appointments_channels", order: 704, active: true, required: false, type: "choice", label: "¿Quieres que tus clientes puedan llamar al bot?" },
+  { id: "appointment_other_channels", path: "appointment_setup.other_channels", section: "appointments_channels", order: 705, active: true, required: false, type: "textarea", label: "Otros canales" },
   { id: "appointment_social_accounts", path: "appointment_setup.social_accounts", section: "appointments_channels", order: 710, active: false, required: false, type: "textarea", label: "Redes del negocio" },
   { id: "appointment_data_consent", path: "appointment_setup.data_consent", section: "appointments_review", order: 800, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" }
 ]);
@@ -469,6 +471,13 @@ function normalizeOnboarding(input) {
         ? "pending_customer"
         : "not_requested";
   const setupGoal = choice(input.setup_goal, ["customer_service", "appointments", "both", "unknown"], "unknown");
+  const appointmentCallsEnabled = choice(
+    appointmentSetup.calls_enabled,
+    ["yes", "no", "unknown"],
+    "unknown"
+  ) === "unknown" && channels.phone_calls === true
+    ? "yes"
+    : choice(appointmentSetup.calls_enabled, ["yes", "no", "unknown"], "unknown");
   return {
     setup_goal: setupGoal,
     business: {
@@ -503,7 +512,7 @@ function normalizeOnboarding(input) {
       messenger: !!channels.messenger,
       web_chat: !!channels.web_chat,
       email: !!channels.email,
-      phone_calls: !!channels.phone_calls,
+      phone_calls: appointmentCallsEnabled === "yes",
       other: !!channels.other,
       service_email: text(channels.service_email, 180).toLowerCase(),
       web_chat_url: text(channels.web_chat_url, 500),
@@ -626,6 +635,7 @@ function normalizeOnboarding(input) {
       operational_channels: text(appointmentSetup.operational_channels, 2500),
       instagram_username: text(appointmentSetup.instagram_username, 120),
       channel_email: text(appointmentSetup.channel_email, 180).toLowerCase(),
+      calls_enabled: appointmentCallsEnabled,
       other_channels: text(appointmentSetup.other_channels, 2500),
       social_accounts: text(appointmentSetup.social_accounts, 2500),
       data_consent: !!appointmentSetup.data_consent,

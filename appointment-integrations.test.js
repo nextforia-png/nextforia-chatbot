@@ -164,4 +164,26 @@ const notSelected = buildAppointmentIntegrations({ setup_completed: true, answer
 assert.strictEqual(notSelected.selected, false);
 assert(notSelected.blockers.includes("appointment_not_selected"));
 
+const callsSelectedInSetup = buildAppointmentIntegrations({
+  setup_completed: true,
+  setup_review: { status: "testing" },
+  answers: {
+    setup_goal: "appointments",
+    appointment_setup: {
+      calls_enabled: "yes",
+      appointment_whatsapp_enabled: false,
+      calendar_provider: "google"
+    }
+  }
+}, "tenant-c", Object.assign({}, provisioning, {
+  elevenLabsApiKey: "el-key",
+  elevenLabsWebhookSecret: "el-secret",
+  elevenLabsPhoneAutoAssignmentEnabled: true,
+  googleCalendarOAuthConfigured: true,
+  calendarConnection: { status: "connected", calendar_id: "primary" },
+  supabaseAppointmentsEnabled: true
+}));
+assert.strictEqual(callsSelectedInSetup.calls.requested, true);
+assert.strictEqual(callsSelectedInSetup.calls.status, "needs_agent");
+
 console.log("appointment integration gate tests: ok");

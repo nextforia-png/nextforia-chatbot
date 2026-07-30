@@ -87,7 +87,10 @@ function buildAppointmentIntegrations(record, tenantId, options) {
     record && record.appointment_configuration && record.appointment_configuration.external_phone_provider,
     40
   );
-  const voiceRequested = !!(answers.channels && answers.channels.phone_calls) || appointment.calls_enabled === true || appointment.phone_calls === true;
+  const voiceRequested = !!(answers.channels && answers.channels.phone_calls) ||
+    appointment.calls_enabled === true ||
+    appointment.calls_enabled === "yes" ||
+    appointment.phone_calls === true;
   const calendarProvider = cleanText(appointment.calendar_provider || "", 80).toLowerCase();
   const normalizedProvider = calendarProvider === "google_calendar" ? "google" : calendarProvider;
   const calendarEmail = cleanText(appointment.calendar_email || "", 180).toLowerCase();

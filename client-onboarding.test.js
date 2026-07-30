@@ -30,6 +30,12 @@ assert.deepStrictEqual(
 assert.strictEqual(new Set(CUSTOMER_SETUP_QUESTIONS.map(function (question) { return question.id; })).size, CUSTOMER_SETUP_QUESTIONS.length);
 assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.path && question.type; }));
 assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) { return question.id === "whatsapp_integration_intent" && question.active === false && question.required === false; }));
+assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) {
+  return question.id === "appointment_calls_enabled" &&
+    question.path === "appointment_setup.calls_enabled" &&
+    question.active === true &&
+    question.required === false;
+}));
 assert.deepStrictEqual(SETUP_REVIEW_STATUSES, ["incomplete", "ready", "building", "testing", "live"]);
 
 const normalized = normalizeOnboarding({
@@ -58,6 +64,21 @@ assert.strictEqual(normalized.commerce.orders_required, false);
 assert.strictEqual(normalized.commerce.shopify_pairing_expires_at, "2026-07-28T18:00:00.000Z");
 assert.strictEqual(normalized.commerce.shopify_pairing_bot_id, "atencion-cliente");
 assert.strictEqual(normalized.confirmations.owns_information, true);
+
+const normalizedAppointmentCalls = normalizeOnboarding({
+  setup_goal: "appointments",
+  appointment_setup: { calls_enabled: "yes" }
+});
+assert.strictEqual(normalizedAppointmentCalls.appointment_setup.calls_enabled, "yes");
+assert.strictEqual(normalizedAppointmentCalls.channels.phone_calls, true);
+
+const normalizedAppointmentCallsDisabled = normalizeOnboarding({
+  setup_goal: "appointments",
+  channels: { phone_calls: true },
+  appointment_setup: { calls_enabled: "no" }
+});
+assert.strictEqual(normalizedAppointmentCallsDisabled.appointment_setup.calls_enabled, "no");
+assert.strictEqual(normalizedAppointmentCallsDisabled.channels.phone_calls, false);
 
 const record = createOnboardingRecord(normalized, { tenant_id: "pilot-2", status: "submitted", updated_by: "Admin" });
 assert.strictEqual(record.version, 2);

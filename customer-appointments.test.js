@@ -32,7 +32,9 @@ assert.strictEqual(shaped.appointments[1].ui_status, "needs_you");
 assert.strictEqual(shaped.appointments.every(function (row) { return row.tenant_id === "tenant-a"; }), true);
 new vm.Script(clientScript);
 assert(clientScript.includes("Conectar Meta"));
-assert(clientScript.includes("Lo activa Nextfor desde Super Admin."));
+assert(clientScript.includes("Número público para compartir en tus canales."));
+assert(clientScript.includes("copyAppointmentCallNumber"));
+assert(styles.includes("apptGatePhone"));
 assert(styles.includes("auto-fit"));
 
 console.log("customer appointment panel tests: ok");

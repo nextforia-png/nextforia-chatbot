@@ -196,8 +196,28 @@ async function resolveElevenLabsPhoneNumber(record, tenantId, options) {
     appointmentPhoneNumberIdForTenant(tenantId || record && record.tenant_id, options.phoneNumberTenantMap),
     160
   );
+  const http = options.httpClient;
   if (configuredPhoneNumberId) {
-    return { phone_number_id: configuredPhoneNumberId, source: "configured" };
+    if (options.apiKey && http && typeof http.get === "function") {
+      try {
+        const configuredResponse = await http.get("https://api.elevenlabs.io/v1/convai/phone-numbers", {
+          headers: { "Content-Type": "application/json", "xi-api-key": options.apiKey },
+          timeout: options.timeoutMs || 15000
+        });
+        const configuredRow = (Array.isArray(configuredResponse && configuredResponse.data) ? configuredResponse.data : []).find(function (row) {
+          return cleanText(row && (row.phone_number_id || row.phoneNumberId), 160) === configuredPhoneNumberId;
+        });
+        if (configuredRow) {
+          return {
+            phone_number_id: configuredPhoneNumberId,
+            phone_number: cleanText(configuredRow.phone_number || configuredRow.phoneNumber, 40),
+            provider: cleanText(configuredRow.provider, 40),
+            source: "configured"
+          };
+        }
+      } catch (_) {}
+    }
+    return { phone_number_id: configuredPhoneNumberId, phone_number: "", provider: "", source: "configured" };
   }
   if (options.autoAssignEnabled !== true) {
     const error = new Error("elevenlabs_phone_not_mapped");
@@ -209,7 +229,6 @@ async function resolveElevenLabsPhoneNumber(record, tenantId, options) {
     error.status = 422;
     throw error;
   }
-  const http = options.httpClient;
   if (!http || typeof http.get !== "function") {
     const error = new Error("elevenlabs_client_unavailable");
     error.status = 503;
@@ -508,6 +527,8 @@ async function applyElevenLabsPhoneNumberAssignment(record, tenantId, options) {
     applied: true,
     agent_id: draft.agent_id,
     phone_number_id: draft.phone_number_id,
+    phone_number: cleanText(options.phoneNumber || options.phone_number, 40),
+    phone_provider: cleanText(options.phoneProvider || options.phone_provider, 40),
     tenant_id: draft.tenant_id,
     provider_response_status: response && response.status || 200,
     payload: draft.payload
@@ -530,6 +551,8 @@ function markAppointmentConfigurationPhoneApplied(configuration, result, actor, 
   return Object.assign({}, configuration, {
     external_phone_status: "configured",
     external_phone_number_id: cleanText(result && result.phone_number_id, 160),
+    external_phone_number: cleanText(result && result.phone_number, 40),
+    external_phone_provider: cleanText(result && result.phone_provider, 40),
     external_phone_agent_id: cleanText(result && result.agent_id, 160),
     external_phone_configured_at: cleanText(now, 40) || new Date().toISOString(),
     external_phone_configured_by: cleanText(actor, 160),

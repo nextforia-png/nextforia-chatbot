@@ -238,6 +238,10 @@ function appointmentAnswers() {
       body.onboarding.appointment_configuration.external_phone_number_id,
       "phone_test_available"
     );
+    assert.strictEqual(
+      body.onboarding.appointment_configuration.external_phone_number,
+      "+15550001111"
+    );
     const actions = body.review.history.map(function (event) { return event.action; });
     assert(actions.includes("build_configuration"));
     assert(actions.includes("approve_configuration"));

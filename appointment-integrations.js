@@ -79,6 +79,14 @@ function buildAppointmentIntegrations(record, tenantId, options) {
   const phoneNumberMapped = options.elevenlabsPhoneNumberMapped === true;
   const phoneNumberAutoAssignable = options.elevenlabsPhoneAutoAssignmentEnabled === true;
   const phoneNumberConfigured = options.elevenlabsPhoneNumberConfigured === true;
+  const publicPhoneNumber = cleanText(
+    record && record.appointment_configuration && record.appointment_configuration.external_phone_number,
+    40
+  );
+  const phoneProvider = cleanText(
+    record && record.appointment_configuration && record.appointment_configuration.external_phone_provider,
+    40
+  );
   const voiceRequested = !!(answers.channels && answers.channels.phone_calls) || appointment.calls_enabled === true || appointment.phone_calls === true;
   const calendarProvider = cleanText(appointment.calendar_provider || "", 80).toLowerCase();
   const normalizedProvider = calendarProvider === "google_calendar" ? "google" : calendarProvider;
@@ -178,6 +186,8 @@ function buildAppointmentIntegrations(record, tenantId, options) {
       phone_number_mapped: phoneNumberMapped,
       phone_number_auto_assignable: phoneNumberAutoAssignable,
       phone_number_configured: phoneNumberConfigured,
+      number: publicPhoneNumber,
+      provider: phoneProvider,
       label: callsStatus === "ready" ? "Llamadas listas para este tenant" : voiceRequested ? "Falta conectar voz para este tenant" : "No solicitadas por el cliente"
     },
     persistence: { provider: "supabase", status: persistenceStatus }

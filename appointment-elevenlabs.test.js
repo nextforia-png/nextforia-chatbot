@@ -151,7 +151,7 @@ assert.throws(function () {
             { phone_number_id: "phone_reserved", label: "Nextfor citas" },
             { phone_number_id: "phone_busy", assigned_agent_id: "agent_other" },
             { phone_number_id: "phone_generic", label: "General" },
-            { phone_number_id: "phone_nextfor", label: "Nextfor Appointment" }
+            { phone_number_id: "phone_nextfor", phone_number: "+15550001111", label: "Nextfor Appointment", provider: "twilio" }
           ]
         };
       }
@@ -159,8 +159,30 @@ assert.throws(function () {
   });
   assert.strictEqual(selectedPhone.phone_number_id, "phone_nextfor");
   assert.strictEqual(selectedPhone.source, "available_inventory");
+  const configuredPhone = await resolveElevenLabsPhoneNumber({
+    tenant_id: "clinica-a",
+    appointment_configuration: Object.assign({}, appointmentConfiguration, {
+      external_agent_id: "agent_clinica_a",
+      external_phone_number_id: "phone_configured"
+    })
+  }, "clinica-a", {
+    apiKey: "el-key",
+    httpClient: {
+      get: async function () {
+        return {
+          data: [
+            { phone_number_id: "phone_configured", phone_number: "+15552223333", provider: "twilio" }
+          ]
+        };
+      }
+    }
+  });
+  assert.strictEqual(configuredPhone.phone_number, "+15552223333");
+  assert.strictEqual(configuredPhone.provider, "twilio");
   const phoneResult = await applyElevenLabsPhoneNumberAssignment({ tenant_id: "clinica-a", appointment_configuration: marked }, "clinica-a", {
     apiKey: "el-key",
+    phoneNumber: "+15550001111",
+    phoneProvider: "twilio",
     agentTenantMap: { agent_a: "clinica-a" },
     phoneNumberTenantMap: phoneMap,
     writeEnabled: true,
@@ -172,7 +194,11 @@ assert.throws(function () {
     }
   });
   assert.strictEqual(phoneResult.applied, true);
+  assert.strictEqual(phoneResult.phone_number, "+15550001111");
+  assert.strictEqual(phoneResult.phone_provider, "twilio");
   const phoneMarked = markAppointmentConfigurationPhoneApplied(marked, phoneResult, "root", "2026-07-28T12:05:00.000Z");
+  assert.strictEqual(phoneMarked.external_phone_number, "+15550001111");
+  assert.strictEqual(phoneMarked.external_phone_provider, "twilio");
   assert.strictEqual(appointmentPhoneNumberConfigured(phoneMarked, "clinica-a", phoneMap), true);
   assert.strictEqual(appointmentPhoneNumberConfigured({
     external_status: "configured",

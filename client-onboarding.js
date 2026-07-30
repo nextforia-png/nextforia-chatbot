@@ -989,6 +989,8 @@ function normalizeAppointmentConfiguration(input, meta) {
     external_last_error: text(source.external_last_error, 500),
     external_phone_status: choice(source.external_phone_status, ["", "configured", "failed"], ""),
     external_phone_number_id: text(source.external_phone_number_id, 160),
+    external_phone_number: text(source.external_phone_number, 40),
+    external_phone_provider: text(source.external_phone_provider, 40),
     external_phone_agent_id: text(source.external_phone_agent_id, 160),
     external_phone_configured_at: text(source.external_phone_configured_at, 40),
     external_phone_configured_by: text(source.external_phone_configured_by, 160),

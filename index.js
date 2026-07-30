@@ -6983,6 +6983,8 @@ async function persistSetupReview(tenantId, input, auth) {
             apiKey: ELEVENLABS_API_KEY,
             agentId: appointmentConfiguration.external_agent_id,
             phoneNumberId: phoneSelection.phone_number_id,
+            phoneNumber: phoneSelection.phone_number,
+            phoneProvider: phoneSelection.provider,
             agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
             phoneNumberTenantMap: ELEVENLABS_PHONE_NUMBER_TENANT_MAP,
             writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,

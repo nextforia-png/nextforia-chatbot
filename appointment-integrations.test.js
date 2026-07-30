@@ -25,6 +25,12 @@ const record = {
     }
   }
 };
+const recordWithPublicPhone = Object.assign({}, record, {
+  appointment_configuration: {
+    external_phone_number: "+15550001111",
+    external_phone_provider: "twilio"
+  }
+});
 const provisioning = {
   elevenlabsTemplateAgentId: "agent_template",
   elevenlabsAppointmentToolSecret: "nextfor-appointment-tool-secret-2026-secure",
@@ -86,7 +92,7 @@ assert.strictEqual(gate.calls.status, "needs_phone_assignment");
 assert.strictEqual(gate.calls.phone_number_auto_assignable, true);
 assert(gate.blockers.includes("calls_not_ready"));
 
-gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
+gate = buildAppointmentIntegrations(recordWithPublicPhone, "clinica-a", Object.assign({}, provisioning, {
   elevenlabsApiKey: "el-key",
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
@@ -110,6 +116,8 @@ assert.strictEqual(gate.bot.status, "ready");
 assert.strictEqual(gate.calendar.status, "ready");
 assert.strictEqual(gate.whatsapp.status, "ready");
 assert.strictEqual(gate.calls.status, "ready");
+assert.strictEqual(gate.calls.number, "+15550001111");
+assert.strictEqual(gate.calls.provider, "twilio");
 
 gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
   elevenlabsApiKey: "el-key",

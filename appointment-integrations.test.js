@@ -75,6 +75,22 @@ gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provi
   elevenlabsWebhookSecret: "el-secret",
   agentTenantMap: { agent_a: "clinica-a" },
   elevenlabsAgentConfigured: true,
+  elevenlabsPhoneAutoAssignmentEnabled: true,
+  googleCalendarOAuthConfigured: true,
+  calendarConnection: { status: "connected", calendar_id: "primary" },
+  metaOAuthReady: true,
+  whatsappConnected: true,
+  supabaseAppointmentsEnabled: true
+}));
+assert.strictEqual(gate.calls.status, "needs_phone_assignment");
+assert.strictEqual(gate.calls.phone_number_auto_assignable, true);
+assert(gate.blockers.includes("calls_not_ready"));
+
+gate = buildAppointmentIntegrations(record, "clinica-a", Object.assign({}, provisioning, {
+  elevenlabsApiKey: "el-key",
+  elevenlabsWebhookSecret: "el-secret",
+  agentTenantMap: { agent_a: "clinica-a" },
+  elevenlabsAgentConfigured: true,
   elevenlabsPhoneNumberMapped: true,
   elevenlabsPhoneNumberConfigured: true,
   googleCalendarOAuthConfigured: true,

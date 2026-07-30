@@ -170,9 +170,8 @@ function appointmentAnswers() {
       ELEVENLABS_APPOINTMENT_TOOL_BASE_URL: "https://api.nextforia.com",
       ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED: "1",
       ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE: "1",
-      ELEVENLABS_PHONE_NUMBER_TENANT_MAP: JSON.stringify({
-        "elevenlabs-phone-appointment-auto": tenantId
-      }),
+      ELEVENLABS_PHONE_NUMBER_TENANT_MAP: "{}",
+      ELEVENLABS_PHONE_AUTO_ASSIGN_ENABLED: "1",
       SUPABASE_URL: "",
       SUPABASE_KEY: ""
     }),
@@ -205,6 +204,10 @@ function appointmentAnswers() {
     assert.strictEqual(response.status, 200);
     body = await response.json();
     assert.strictEqual(body.review.status, "ready");
+    assert.strictEqual(body.onboarding.appointment_configuration.lifecycle, "draft");
+    assert(body.review.history.some(function (event) {
+      return event.action === "auto_build_configuration";
+    }));
     assert.strictEqual(body.launch.ready, false);
     assert.strictEqual(body.launch.automation_ready, true);
     assert(body.launch.automatic_blockers.some(function (item) {
@@ -233,7 +236,7 @@ function appointmentAnswers() {
     assert.strictEqual(body.onboarding.appointment_configuration.external_phone_status, "configured");
     assert.strictEqual(
       body.onboarding.appointment_configuration.external_phone_number_id,
-      "elevenlabs-phone-appointment-auto"
+      "phone_test_available"
     );
     const actions = body.review.history.map(function (event) { return event.action; });
     assert(actions.includes("build_configuration"));

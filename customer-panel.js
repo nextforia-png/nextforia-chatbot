@@ -1717,7 +1717,7 @@ function renderConnectionHub(){
   if(root){
     var cards=[
       ["Cuestionario",onboarding.setup_completed?"Completo":"En progreso",onboarding.setup_completed?"Tu información quedó guardada en el registro compartido.":"Puedes terminarlo sin empezar de cero."],
-      ["Bot",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,onboarding.setup_completed?"Listo para que NextforIA lo configure; no se activa automáticamente.":"Se define al cerrar el cuestionario."],
+      ["Bot",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,onboarding.setup_completed?"Borrador generado automáticamente; queda pendiente la aprobación final de NextforIA.":"Se define al cerrar el cuestionario."],
       ["Canales",connected?connected+" conectado(s)":hints.length?hints.map(function(item){return channelConnectionInitial(item);}).join(" · ")+" pendiente(s)":"Por elegir","Conecta solo los canales que vas a usar ahora; los demás pueden esperar."],
       ["Comercio",commerceRequested?commercePlatformLabel(commercePlatform):"Opcional",commerceRequested?commerceStatusLabel(commerceStatus)+" · "+setupShort(commerceStore,"sin URL"):"Si vendes online, puedes solicitar Shopify o WooCommerce aquí."]
     ];

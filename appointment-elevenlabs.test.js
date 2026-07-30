@@ -13,7 +13,8 @@ const {
   createElevenLabsAppointmentAgentFromTemplate,
   markAppointmentConfigurationElevenLabsApplied,
   markAppointmentConfigurationPhoneApplied,
-  parsePhoneNumberTenantMap
+  parsePhoneNumberTenantMap,
+  resolveElevenLabsPhoneNumber
 } = require("./appointment-elevenlabs");
 
 const appointmentConfiguration = {
@@ -131,6 +132,33 @@ assert.throws(function () {
   assert.strictEqual(createdPayload.conversation_config.agent.prompt.knowledge_base, undefined);
   assert.match(createdPayload.conversation_config.agent.prompt.prompt, /APPOINTMENT BOT/);
   assert.strictEqual(createdPayload.conversation_config.agent.first_message.includes("Luciana"), true);
+  const selectedPhone = await resolveElevenLabsPhoneNumber({
+    tenant_id: "clinica-a",
+    appointment_configuration: Object.assign({}, appointmentConfiguration, {
+      external_agent_id: "agent_clinica_a"
+    })
+  }, "clinica-a", {
+    apiKey: "el-key",
+    agentId: "agent_clinica_a",
+    phoneNumberTenantMap: { phone_reserved: "clinica-b" },
+    autoAssignEnabled: true,
+    httpClient: {
+      get: async function (url, options) {
+        assert.match(url, /\/v1\/convai\/phone-numbers$/);
+        assert.strictEqual(options.headers["xi-api-key"], "el-key");
+        return {
+          data: [
+            { phone_number_id: "phone_reserved", label: "Nextfor citas" },
+            { phone_number_id: "phone_busy", assigned_agent_id: "agent_other" },
+            { phone_number_id: "phone_generic", label: "General" },
+            { phone_number_id: "phone_nextfor", label: "Nextfor Appointment" }
+          ]
+        };
+      }
+    }
+  });
+  assert.strictEqual(selectedPhone.phone_number_id, "phone_nextfor");
+  assert.strictEqual(selectedPhone.source, "available_inventory");
   const phoneResult = await applyElevenLabsPhoneNumberAssignment({ tenant_id: "clinica-a", appointment_configuration: marked }, "clinica-a", {
     apiKey: "el-key",
     agentTenantMap: { agent_a: "clinica-a" },
@@ -146,6 +174,13 @@ assert.throws(function () {
   assert.strictEqual(phoneResult.applied, true);
   const phoneMarked = markAppointmentConfigurationPhoneApplied(marked, phoneResult, "root", "2026-07-28T12:05:00.000Z");
   assert.strictEqual(appointmentPhoneNumberConfigured(phoneMarked, "clinica-a", phoneMap), true);
+  assert.strictEqual(appointmentPhoneNumberConfigured({
+    external_status: "configured",
+    external_agent_id: "agent_clinica_a",
+    external_phone_status: "configured",
+    external_phone_number_id: "phone_auto",
+    external_phone_agent_id: "agent_clinica_a"
+  }, "clinica-a", {}), true);
   console.log("appointment elevenlabs tests: ok");
 })().catch(function (error) {
   console.error(error);

@@ -1232,7 +1232,7 @@ function createOnboardingRecord(input, meta) {
   if (meta.review_status === "incomplete") {
     if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "changes_requested";
     if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "changes_requested";
-  } else if (meta.review_status === "ready" && meta.approve_setup === true) {
+  } else if (meta.approve_setup === true) {
     if (answers.setup_goal === "appointments" || answers.setup_goal === "both") answers.appointment_setup.setup_status = "approved";
     if (answers.setup_goal === "customer_service" || answers.setup_goal === "both") answers.customer_service_setup.setup_status = "approved";
   } else if (meta.review_status === "live") {

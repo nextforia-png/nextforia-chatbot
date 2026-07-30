@@ -283,7 +283,7 @@ function bothBotAnswers(company, email) {
     assert(setupHtml.includes("Elige el plan para tu empresa"));
     assert(setupHtml.includes("No requiere autorización de Super Admin"));
     assert(!setupHtml.includes("¿Quieres integrar este WhatsApp con Meta desde Nextfor IA?"));
-    assert(setupHtml.includes("La conexión técnica se hará más adelante"));
+    assert(setupHtml.includes("Usaremos este número para guiar la conexión oficial con Meta"));
     assert(setupHtml.includes("WhatsApp + número"));
     assert(setupHtml.includes("Instagram + usuario"));
     assert(setupHtml.includes("Te falta completar: "));
@@ -418,7 +418,11 @@ function bothBotAnswers(company, email) {
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.review.status, "ready");
-    assert.strictEqual(payload.onboarding.customer_service_configuration, null);
+    assert.strictEqual(payload.onboarding.customer_service_configuration.bot_type, "customer_service");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "draft");
+    assert(payload.review.history.some(function (event) {
+      return event.action === "auto_build_configuration";
+    }));
 
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {
       method: "PUT",
@@ -444,7 +448,7 @@ function bothBotAnswers(company, email) {
     });
     assert.strictEqual(response.status, 200);
     payload = await response.json();
-    assert.strictEqual(payload.review.status, "ready");
+    assert.strictEqual(payload.review.status, "building");
     assert.strictEqual(payload.onboarding.answers.customer_service_setup.setup_status, "approved");
 
     response = await fetch(base + "/admin/customer-setups/tenant-setup-a", {

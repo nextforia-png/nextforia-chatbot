@@ -77,6 +77,7 @@ function buildAppointmentIntegrations(record, tenantId, options) {
     appointmentToolBaseUrlReady && agentWriteEnabled;
   const agentConfigured = options.elevenlabsAgentConfigured === true;
   const phoneNumberMapped = options.elevenlabsPhoneNumberMapped === true;
+  const phoneNumberAutoAssignable = options.elevenlabsPhoneAutoAssignmentEnabled === true;
   const phoneNumberConfigured = options.elevenlabsPhoneNumberConfigured === true;
   const voiceRequested = !!(answers.channels && answers.channels.phone_calls) || appointment.calls_enabled === true || appointment.phone_calls === true;
   const calendarProvider = cleanText(appointment.calendar_provider || "", 80).toLowerCase();
@@ -112,6 +113,7 @@ function buildAppointmentIntegrations(record, tenantId, options) {
   let callsStatus = "not_requested";
   if (voiceRequested && agentMapped && webhookReady && agentConfigured && phoneNumberMapped && phoneNumberConfigured) callsStatus = "ready";
   else if (voiceRequested && agentMapped && webhookReady && agentConfigured && phoneNumberMapped && !phoneNumberConfigured) callsStatus = "needs_phone_assignment";
+  else if (voiceRequested && agentMapped && webhookReady && agentConfigured && phoneNumberAutoAssignable) callsStatus = "needs_phone_assignment";
   else if (voiceRequested && agentMapped && webhookReady && agentConfigured && !phoneNumberMapped) callsStatus = "needs_phone_number";
   else if (voiceRequested && agentMapped && webhookReady && !agentConfigured) callsStatus = "needs_configuration";
   else if (voiceRequested && !agentMapped) callsStatus = "needs_agent";
@@ -174,6 +176,7 @@ function buildAppointmentIntegrations(record, tenantId, options) {
       readonly: true,
       status: callsStatus,
       phone_number_mapped: phoneNumberMapped,
+      phone_number_auto_assignable: phoneNumberAutoAssignable,
       phone_number_configured: phoneNumberConfigured,
       label: callsStatus === "ready" ? "Llamadas listas para este tenant" : voiceRequested ? "Falta conectar voz para este tenant" : "No solicitadas por el cliente"
     },

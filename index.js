@@ -121,7 +121,8 @@ const {
   markAppointmentConfigurationPhoneApplied,
   markAppointmentConfigurationPhoneFailed,
   createElevenLabsAppointmentAgentFromTemplate,
-  parsePhoneNumberTenantMap
+  parsePhoneNumberTenantMap,
+  resolveElevenLabsPhoneNumber
 } = require("./appointment-elevenlabs");
 const {
   AppointmentCalendarError,
@@ -277,7 +278,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v287-customer-account-profile";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v288-automated-bot-provisioning";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -425,6 +426,7 @@ const ELEVENLABS_APPOINTMENT_TOOL_BASE_URL = String(
 ).replace(/\/+$/, "");
 const ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED = process.env.ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED === "1" ||
   (process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1");
+const ELEVENLABS_PHONE_AUTO_ASSIGN_ENABLED = process.env.ELEVENLABS_PHONE_AUTO_ASSIGN_ENABLED !== "0";
 const ELEVENLABS_PHONE_NUMBER_TENANT_MAP = parsePhoneNumberTenantMap(process.env);
 const GOOGLE_CALENDAR_CLIENT_ID = String(process.env.GOOGLE_CALENDAR_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim();
 const GOOGLE_CALENDAR_CLIENT_SECRET = String(process.env.GOOGLE_CALENDAR_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || "").trim();
@@ -6000,13 +6002,58 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const previous = await loadClientOnboarding(false, tenantId);
   const questionnaire = await loadCustomerSetupQuestionnaire(false);
-  const record = createOnboardingRecord(answers, {
+  let record = createOnboardingRecord(answers, {
     tenant_id: tenantId,
     status: ["submitted", "completed"].includes(status) ? status : "draft",
     updated_by: auth && (auth.name || auth.username),
     previous,
     questionnaire
   });
+  if (status === "completed" && setupReviewSummary(record).status !== "live") {
+    const automationActor = "Nextfor automation";
+    let customerServiceConfiguration = record.customer_service_configuration;
+    let appointmentConfiguration = record.appointment_configuration;
+    let generated = false;
+    if (setupIncludesCustomerService(record.answers) &&
+        (!customerServiceConfiguration ||
+          customerServiceConfiguration.lifecycle === "draft" &&
+          customerServiceConfiguration.updated_by === automationActor)) {
+      customerServiceConfiguration = generateCustomerServiceConfiguration(record.answers, {
+        actor: automationActor,
+        source_setup_updated_at: record.last_updated_at || record.updated_at
+      });
+      generated = generated || !!customerServiceConfiguration;
+    }
+    if (setupIncludesAppointments(record.answers) &&
+        (!appointmentConfiguration ||
+          appointmentConfiguration.lifecycle === "draft" &&
+          appointmentConfiguration.updated_by === automationActor)) {
+      appointmentConfiguration = generateAppointmentConfiguration(record.answers, {
+        actor: automationActor,
+        source_setup_updated_at: record.last_updated_at || record.updated_at
+      });
+      generated = generated || !!appointmentConfiguration;
+    }
+    if (generated) {
+      record = createOnboardingRecord(record.answers, {
+        tenant_id: tenantId,
+        status: "completed",
+        updated_by: auth && (auth.name || auth.username),
+        previous: record,
+        questionnaire,
+        review_status: setupReviewSummary(record).status,
+        review_actor: automationActor,
+        customer_service_configuration: customerServiceConfiguration,
+        appointment_configuration: appointmentConfiguration,
+        configuration_lifecycle: customerServiceConfiguration && customerServiceConfiguration.lifecycle || "draft",
+        appointment_configuration_lifecycle: appointmentConfiguration && appointmentConfiguration.lifecycle || "draft",
+        review_event: {
+          action: "auto_build_configuration",
+          note: "Borradores generados automáticamente al completar el setup."
+        }
+      });
+    }
+  }
   const rec = {
     ts: record.updated_at,
     userId: clientOnboardingRecordId(tenantId),
@@ -6283,10 +6330,15 @@ function appointmentIntegrationOptions(channels, calendarConnection, record, ten
       tenantId || record && record.tenant_id,
       ELEVENLABS_AGENT_TENANT_MAP
     ),
-    elevenlabsPhoneNumberMapped: !!appointmentPhoneNumberIdForTenant(
+    elevenlabsPhoneNumberMapped: !!(
+      record && record.appointment_configuration &&
+      record.appointment_configuration.external_phone_number_id
+    ) || !!appointmentPhoneNumberIdForTenant(
       tenantId || record && record.tenant_id,
       ELEVENLABS_PHONE_NUMBER_TENANT_MAP
     ),
+    elevenlabsPhoneAutoAssignmentEnabled: ELEVENLABS_PHONE_AUTO_ASSIGN_ENABLED &&
+      !!ELEVENLABS_API_KEY && ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
     elevenlabsPhoneNumberConfigured: appointmentPhoneNumberConfigured(
       record && record.appointment_configuration,
       tenantId || record && record.tenant_id,
@@ -6605,7 +6657,7 @@ function setupLaunchReadiness(tenant, record, questionnaire, channels, appointme
   const callsCanBeAutomated = !!(
     appointmentGate &&
     appointmentGate.calls &&
-    appointmentGate.calls.phone_number_mapped &&
+    (appointmentGate.calls.phone_number_mapped || appointmentGate.calls.phone_number_auto_assignable) &&
     ["needs_agent", "needs_configuration", "needs_phone_assignment"].includes(appointmentGate.calls.status)
   );
   const automaticBlockers = blockers.filter(function (item) {
@@ -6769,9 +6821,7 @@ async function persistSetupReview(tenantId, input, auth) {
     appointmentConfiguration = null;
   } else if (action === "approve") {
     if (!previous.setup_completed) throw setupReviewFailure("setup_not_completed");
-    cleanStatus = "ready";
-    customerServiceConfiguration = null;
-    appointmentConfiguration = null;
+    cleanStatus = customerServiceConfiguration || appointmentConfiguration ? "building" : "ready";
   } else if (action === "build_configuration") {
     const setupGoal = previous.answers && previous.answers.setup_goal;
     if (configurationTarget === "customer_service" && setupGoal !== "customer_service" && setupGoal !== "both") {
@@ -6862,7 +6912,15 @@ async function persistSetupReview(tenantId, input, auth) {
       let elevenLabsTestToolCounter = 0;
       const elevenLabsHttpClient = process.env.NODE_ENV === "test" && process.env.ELEVENLABS_APPOINTMENT_AGENT_TEST_MODE === "1"
         ? {
-            get: async function () { return { status: 200, data: { conversation_config: { agent: { prompt: {} } }, tags: ["template"] } }; },
+            get: async function (url) {
+              if (/\/v1\/convai\/phone-numbers$/.test(url)) {
+                return {
+                  status: 200,
+                  data: [{ phone_number_id: "phone_test_available", phone_number: "+15550001111", label: "Nextfor test", provider: "twilio" }]
+                };
+              }
+              return { status: 200, data: { conversation_config: { agent: { prompt: {} } }, tags: ["template"] } };
+            },
             post: async function (url) {
               if (/\/v1\/convai\/tools$/.test(url)) {
                 elevenLabsTestToolCounter += 1;
@@ -6905,6 +6963,18 @@ async function persistSetupReview(tenantId, input, auth) {
       );
       if (answers.channels && answers.channels.phone_calls) {
         try {
+          const phoneSelection = await resolveElevenLabsPhoneNumber({
+            tenant_id: tenant.id,
+            answers,
+            appointment_configuration: appointmentConfiguration
+          }, tenant.id, {
+            apiKey: ELEVENLABS_API_KEY,
+            agentId: appointmentConfiguration.external_agent_id,
+            agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+            phoneNumberTenantMap: ELEVENLABS_PHONE_NUMBER_TENANT_MAP,
+            autoAssignEnabled: ELEVENLABS_PHONE_AUTO_ASSIGN_ENABLED,
+            httpClient: elevenLabsHttpClient
+          });
           const phoneResult = await applyElevenLabsPhoneNumberAssignment({
             tenant_id: tenant.id,
             answers,
@@ -6912,6 +6982,7 @@ async function persistSetupReview(tenantId, input, auth) {
           }, tenant.id, {
             apiKey: ELEVENLABS_API_KEY,
             agentId: appointmentConfiguration.external_agent_id,
+            phoneNumberId: phoneSelection.phone_number_id,
             agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
             phoneNumberTenantMap: ELEVENLABS_PHONE_NUMBER_TENANT_MAP,
             writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
@@ -10947,6 +11018,7 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
       "configuration_required",
       "elevenlabs_agent_not_mapped",
       "elevenlabs_phone_not_mapped",
+      "elevenlabs_phone_unavailable",
       "elevenlabs_api_key_missing",
       "elevenlabs_write_disabled",
       "elevenlabs_client_unavailable",

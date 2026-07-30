@@ -166,11 +166,88 @@ async function createElevenLabsAppointmentAgentFromTemplate(record, tenantId, op
 
 function appointmentPhoneNumberConfigured(configuration, tenantId, phoneNumberTenantMap) {
   const config = configuration && typeof configuration === "object" ? configuration : {};
-  const phoneNumberId = appointmentPhoneNumberIdForTenant(tenantId, phoneNumberTenantMap);
+  const phoneNumberId = cleanText(config.external_phone_number_id, 160) ||
+    appointmentPhoneNumberIdForTenant(tenantId, phoneNumberTenantMap);
   if (!phoneNumberId) return false;
   return config.external_phone_status === "configured" &&
     config.external_phone_number_id === phoneNumberId &&
     config.external_phone_agent_id === config.external_agent_id;
+}
+
+function assignedAgentId(phoneNumber) {
+  const assigned = phoneNumber && phoneNumber.assigned_agent;
+  return cleanText(
+    assigned && (assigned.agent_id || assigned.agentId) ||
+    phoneNumber && (phoneNumber.assigned_agent_id || phoneNumber.assignedAgentId),
+    160
+  );
+}
+
+async function resolveElevenLabsPhoneNumber(record, tenantId, options) {
+  options = options || {};
+  const configuration = record && record.appointment_configuration || {};
+  const agentId = cleanText(
+    options.agentId || configuration.external_agent_id ||
+    appointmentAgentIdForTenant(tenantId || record && record.tenant_id, options.agentTenantMap),
+    160
+  );
+  const configuredPhoneNumberId = cleanText(
+    options.phoneNumberId || configuration.external_phone_number_id ||
+    appointmentPhoneNumberIdForTenant(tenantId || record && record.tenant_id, options.phoneNumberTenantMap),
+    160
+  );
+  if (configuredPhoneNumberId) {
+    return { phone_number_id: configuredPhoneNumberId, source: "configured" };
+  }
+  if (options.autoAssignEnabled !== true) {
+    const error = new Error("elevenlabs_phone_not_mapped");
+    error.status = 422;
+    throw error;
+  }
+  if (!options.apiKey) {
+    const error = new Error("elevenlabs_api_key_missing");
+    error.status = 422;
+    throw error;
+  }
+  const http = options.httpClient;
+  if (!http || typeof http.get !== "function") {
+    const error = new Error("elevenlabs_client_unavailable");
+    error.status = 503;
+    throw error;
+  }
+  const response = await http.get("https://api.elevenlabs.io/v1/convai/phone-numbers", {
+    headers: { "Content-Type": "application/json", "xi-api-key": options.apiKey },
+    timeout: options.timeoutMs || 15000
+  });
+  const rows = Array.isArray(response && response.data) ? response.data : [];
+  const reserved = new Set(Object.keys(options.phoneNumberTenantMap || {}).map(function (id) {
+    return cleanText(id, 160);
+  }).filter(Boolean));
+  const candidates = rows.filter(function (row) {
+    const id = cleanText(row && (row.phone_number_id || row.phoneNumberId), 160);
+    const assigned = assignedAgentId(row);
+    return id && (!assigned || assigned === agentId) && (!reserved.has(id) || assigned === agentId);
+  }).sort(function (a, b) {
+    const aAssigned = assignedAgentId(a) === agentId ? 0 : 1;
+    const bAssigned = assignedAgentId(b) === agentId ? 0 : 1;
+    if (aAssigned !== bAssigned) return aAssigned - bAssigned;
+    const aPreferred = /nextfor|appointment|citas/i.test(cleanText(a && a.label, 160)) ? 0 : 1;
+    const bPreferred = /nextfor|appointment|citas/i.test(cleanText(b && b.label, 160)) ? 0 : 1;
+    if (aPreferred !== bPreferred) return aPreferred - bPreferred;
+    return cleanText(a && (a.phone_number_id || a.phoneNumberId), 160)
+      .localeCompare(cleanText(b && (b.phone_number_id || b.phoneNumberId), 160));
+  });
+  if (!candidates[0]) {
+    const error = new Error("elevenlabs_phone_unavailable");
+    error.status = 409;
+    throw error;
+  }
+  return {
+    phone_number_id: cleanText(candidates[0].phone_number_id || candidates[0].phoneNumberId, 160),
+    phone_number: cleanText(candidates[0].phone_number || candidates[0].phoneNumber, 40),
+    provider: cleanText(candidates[0].provider, 40),
+    source: assignedAgentId(candidates[0]) === agentId ? "already_assigned" : "available_inventory"
+  };
 }
 
 function appointmentFirstMessage(configuration) {
@@ -322,7 +399,11 @@ function buildElevenLabsPhoneNumberAssignmentPayload(record, tenantId, options) 
   options = options || {};
   const configuration = record && record.appointment_configuration || {};
   const agentId = cleanText(options.agentId || configuration.external_agent_id || appointmentAgentIdForTenant(tenantId || record && record.tenant_id, options.agentTenantMap), 160);
-  const phoneNumberId = cleanText(options.phoneNumberId || appointmentPhoneNumberIdForTenant(tenantId || record && record.tenant_id, options.phoneNumberTenantMap), 160);
+  const phoneNumberId = cleanText(
+    options.phoneNumberId || configuration.external_phone_number_id ||
+    appointmentPhoneNumberIdForTenant(tenantId || record && record.tenant_id, options.phoneNumberTenantMap),
+    160
+  );
   if (configuration.bot_type !== "appointments") {
     const error = new Error("appointment_not_selected");
     error.status = 422;
@@ -492,5 +573,6 @@ module.exports = {
   markAppointmentConfigurationElevenLabsFailed,
   markAppointmentConfigurationPhoneApplied,
   markAppointmentConfigurationPhoneFailed,
-  parsePhoneNumberTenantMap
+  parsePhoneNumberTenantMap,
+  resolveElevenLabsPhoneNumber
 };

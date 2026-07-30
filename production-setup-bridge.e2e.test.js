@@ -156,6 +156,10 @@ function completedAnswers() {
     assert(Array.isArray(payload.channels), "setup detail exposes real channel connection states when available");
     assert.strictEqual(payload.onboarding.answers.meta.whatsapp_number, "+57 300 000 0000");
     assert.strictEqual(payload.onboarding.answers.commerce.platform, "none");
+    assert.strictEqual(payload.onboarding.customer_service_configuration.lifecycle, "draft");
+    assert(payload.review.history.some(function (event) {
+      return event.action === "auto_build_configuration";
+    }));
 
     console.log("production-setup-bridge.e2e.test.js: ok");
   } finally {

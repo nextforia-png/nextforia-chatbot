@@ -19,8 +19,9 @@ function render(options) {
 }
 
 const legacy = render();
-assert(legacy.includes("<title>Panel de control · RAV Toys</title>"));
-assert(legacy.includes('<h1 id="brandName">RAV Toys</h1>'));
+assert(legacy.includes("<title>Nextfor IA · RAV Toys</title>"));
+assert(legacy.includes("<h1>Nextfor IA</h1>"));
+assert(legacy.includes('<span id="brandBusinessName">RAV Toys</span>'));
 assert(legacy.includes('id="bot-support"'));
 assert(legacy.includes('id="bot-appointments"'));
 assert(legacy.includes("2 bots activos"));
@@ -29,8 +30,9 @@ assert(legacy.includes("Atención al cliente · Plan Growth"));
 const tenantA = render({
   tenantContext: { id: "tenant-a", company_name: "Empresa A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente", status: "live" }
 });
-assert(tenantA.includes("<title>Panel de control · Empresa A</title>"));
-assert(tenantA.includes('<h1 id="brandName">Empresa A</h1>'));
+assert(tenantA.includes("<title>Nextfor IA · Empresa A</title>"));
+assert(tenantA.includes("<h1>Nextfor IA</h1>"));
+assert(tenantA.includes('<span id="brandBusinessName">Empresa A</span>'));
 assert(tenantA.includes('id="bot-support"'));
 assert(!tenantA.includes('id="bot-appointments"'));
 assert(!tenantA.includes('id="navAppointments"'));
@@ -50,8 +52,9 @@ assert(!tenantA.includes(">RAV Toys<"));
 const tenantB = render({
   tenantContext: { id: "tenant-b", company_name: "Empresa B", plan_id: "nextfor-uno", assigned_bot_id: "atencion-cliente", status: "live" }
 });
-assert(tenantB.includes("<title>Panel de control · Empresa B</title>"));
-assert(tenantB.includes('<h1 id="brandName">Empresa B</h1>'));
+assert(tenantB.includes("<title>Nextfor IA · Empresa B</title>"));
+assert(tenantB.includes("<h1>Nextfor IA</h1>"));
+assert(tenantB.includes('<span id="brandBusinessName">Empresa B</span>'));
 assert(tenantB.includes('id="bot-support"'));
 assert(!tenantB.includes('id="bot-appointments"'));
 assert(!tenantB.includes('id="navAppointments"'));

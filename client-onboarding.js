@@ -1284,6 +1284,9 @@ function createOnboardingRecord(input, meta) {
     setup_review: setupReview,
     customer_service_configuration: customerServiceConfiguration,
     appointment_configuration: appointmentConfiguration,
+    bot_personality: previous.bot_personality && typeof previous.bot_personality === "object"
+      ? JSON.parse(JSON.stringify(previous.bot_personality))
+      : null,
     last_updated_at: now,
     answers,
     updated_at: now,

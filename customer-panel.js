@@ -1,4 +1,5 @@
 const customerAppointments = require("./customer-appointments");
+const customerBotConfiguration = require("./customer-bot-configuration");
 
 function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
@@ -42,7 +43,7 @@ function customerPanelContext(options) {
   const assignedBotId = supportOnlyPlans.includes(planId)
     ? "atencion-cliente"
     : (appointmentOnlyPlans.includes(planId) ? "agendamiento" : (combinedPlans.includes(planId) ? "both" : rawAssignedBotId));
-  const planNames = { starter: "Starter", growth: "Growth", scale: "Scale", "nextfor-uno": "Nextfor Uno", "nextfor-aura": "Nextfor Aura" };
+  const planNames = { starter: "Starter", growth: "Growth", scale: "Scale", "nextfor-uno": "Nextfor Uno", "nextfor-aura": "Nextfor Aura", "nextfor-tempo": "Nextfor Tempo", "nextfor-atlas": "Nextfor Atlas" };
   const botNames = { "atencion-cliente": "Atención al cliente", agendamiento: "Agendamiento", commerce: "Commerce", duo: "Atención al cliente + Agendamiento", both: "Atención al cliente + Agendamiento" };
   const supportBots = ["atencion-cliente", "commerce", "duo", "both"];
   const appointmentBots = ["agendamiento", "duo", "both"];
@@ -88,7 +89,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const capabilities = options.capabilities || {};
   const dataPath = options.dataPath || "/admin/panel/data?limit=500";
   const healthPath = options.healthPath === null ? "" : (options.healthPath || "/admin/panel/health");
-  const setupPath = options.setupPath || "/admin/bot-setup";
+  const setupPath = options.setupPath === null ? "" : (options.setupPath || "/admin/bot-setup");
   const retargetingPath = options.retargetingPath || "/admin/retargeting";
   const appointmentsPath = options.appointmentsPath || "/admin/panel/appointments-data";
   const loginPath = options.loginPath === null ? "" : (options.loginPath || "/admin/panel");
@@ -913,6 +914,48 @@ body.conversations-view .listColumn,body.conversations-view .chatColumn,body.con
 .setupConfigCard small{display:block;color:#057BB6;font-size:10px;font-weight:950;letter-spacing:.1em;text-transform:uppercase}
 .setupConfigCard strong{display:block;margin-top:7px;color:var(--navy-900);font-size:17px;font-weight:950;line-height:1.2}
 .setupConfigCard p{margin-top:7px;color:var(--slate-500);font-size:12.5px;line-height:1.45;font-weight:650}
+.personalityStudio{border:1px solid #CDEAF9;border-radius:22px;background:#fff;box-shadow:var(--shadow);overflow:hidden}
+.personalityHead{padding:22px 24px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+.personalityHead small{display:block;color:#057BB6;font-size:10px;font-weight:950;letter-spacing:.12em;text-transform:uppercase}
+.personalityHead h3{margin-top:5px;color:var(--navy-900);font-size:23px;font-weight:950;letter-spacing:-.035em}
+.personalityHead p{margin-top:5px;color:var(--slate-500);font-size:13px;line-height:1.5;max-width:690px}
+.personalityStatus{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;border-radius:999px;padding:8px 11px;background:var(--slate-100);color:var(--slate-600);font-size:11px;font-weight:900}
+.personalityStatus:before{content:"";width:7px;height:7px;border-radius:50%;background:#94A3B8}
+.personalityStatus.live{background:var(--green-100);color:#087E50}
+.personalityStatus.live:before{background:var(--green-500)}
+.personalityWorkspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(330px,.82fr);gap:0}
+.personalityControls{padding:22px 24px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;border-right:1px solid var(--line)}
+.personalityControls .wide{grid-column:1/-1}
+.personalityField{display:grid;gap:7px}
+.personalityField>span{color:var(--slate-700);font-size:12px;font-weight:900}
+.personalityField small{color:var(--slate-500);font-size:10.5px;line-height:1.4}
+.personalityField input,.personalityField textarea,.personalityField select{width:100%;border:1px solid var(--line);border-radius:12px;background:#fff;padding:12px 13px;color:var(--slate-900);font:inherit;font-size:13px}
+.personalityField textarea{min-height:82px;line-height:1.5;resize:vertical}
+.personalityField input:focus,.personalityField textarea:focus,.personalityField select:focus{outline:3px solid rgba(18,168,244,.16);border-color:var(--cyan-500)}
+.personalityLength{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.personalityLength label{position:relative;cursor:pointer}
+.personalityLength input{position:absolute;opacity:0;pointer-events:none}
+.personalityLength span{min-height:44px;border:1.5px solid var(--line);border-radius:11px;display:grid;place-items:center;text-align:center;padding:7px;color:var(--slate-600);font-size:11px;font-weight:900}
+.personalityLength input:checked+span{border-color:var(--cyan-500);background:var(--cyan-050);color:#057BB6;box-shadow:0 0 0 3px rgba(18,168,244,.10)}
+.personalityActions{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding-top:2px}
+.personalityActions p{margin-right:auto;color:var(--slate-500);font-size:11px}
+.personalityPreview{padding:22px;background:#F3F8FC;display:grid;align-content:start;gap:13px}
+.personalityPreviewHead{display:flex;align-items:center;gap:10px}
+.personalityBotAvatar{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--navy-700),var(--cyan-500));color:#fff;display:grid;place-items:center;font-weight:950}
+.personalityPreviewHead strong{display:block;font-size:13px;font-weight:950}
+.personalityPreviewHead span{display:block;color:var(--green-600);font-size:10.5px;font-weight:800;margin-top:2px}
+.personalityChat{min-height:220px;border:1px solid var(--line);border-radius:16px;background:#EAF2F8;padding:15px;display:flex;flex-direction:column;gap:10px}
+.personalityBubble{max-width:88%;border-radius:14px;padding:11px 13px;font-size:12.5px;line-height:1.5;white-space:pre-wrap}
+.personalityBubble.user{align-self:flex-start;background:#fff;color:var(--slate-800);border-bottom-left-radius:4px}
+.personalityBubble.bot{align-self:flex-end;background:linear-gradient(135deg,#20B4F3,#0798DC);color:#fff;border-bottom-right-radius:4px}
+.personalityTestRow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+.personalityTestRow input{min-width:0;height:44px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:0 12px;color:var(--slate-900);font:inherit;font-size:12px}
+.personalityTestRow button{min-height:44px;padding:0 15px}
+.personalitySamples{display:flex;gap:6px;flex-wrap:wrap}
+.personalitySamples button{border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--slate-600);padding:6px 9px;font-size:10px;font-weight:850;cursor:pointer}
+.personalitySamples button:hover{border-color:#8DDAFC;color:#057BB6}
+.personalitySafety{color:var(--slate-500);font-size:10px;line-height:1.4}
+.personalityStudio,.setupSummaryPanel{display:none!important}
 .channelPlan{border-top:1px solid var(--line);padding-top:18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
 .channelPlan h4{font-size:17px;font-weight:950;color:var(--navy-900)}
 .channelPlan p{margin-top:4px;color:var(--slate-500);font-size:13px;font-weight:650;line-height:1.45}
@@ -1057,6 +1100,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
 }
 @media(max-width:760px){
   .panelVersionFixed{display:none}.setupView{gap:14px}.setupSummaryPanel{padding:18px 16px;border-radius:17px}.setupSummaryHead{display:grid}.setupFlowSteps,.setupConfigGrid,.questionnaireList{grid-template-columns:1fr}.channelPlan{grid-template-columns:1fr}.setupDetailsToggle{width:100%}.setupProgressPanel{padding:18px 16px;border-radius:17px}.setupProgressBody{gap:12px;align-items:flex-start}.setupStory{font-size:15px;line-height:1.42;padding-right:2px}.setupEyebrow{font-size:9.5px;margin-bottom:6px}.setupStatus{position:static;width:max-content;margin-bottom:8px;padding:5px 9px}.setupProgressRing{width:72px;height:72px;padding:5px}.setupProgressRing strong{font-size:18px}.setupProgressRing span{font-size:6.5px;letter-spacing:.08em}.setupStepper{grid-column:1/-1;margin-top:15px;max-width:none}.setupStepLine{min-width:4px;margin:0 2px}.setupStepDot{width:26px;height:26px;font-size:10.5px}.setupNotice{padding:12px 14px;font-size:12px}.setupGrid,.industryQuestions,.setupAccountsGrid{grid-template-columns:1fr}.setupGrid .wide,.setupAccounts{grid-column:auto}.channelChoices{grid-template-columns:1fr 1fr}.setupStep{padding:18px 16px;border-radius:16px}.setupStepHead{grid-template-columns:38px 1fr;gap:11px;margin-bottom:18px}.setupStepNumber{width:38px;height:38px;font-size:16px}.setupStepHead h4{font-size:17px}.setupStepHead p{font-size:12px}.setupAccounts{padding:15px}.setupActions{display:grid;grid-template-columns:auto 1fr;bottom:76px;padding:12px}.setupActions p{grid-column:1/-1;order:-1;margin:0}.setupActions .setupSaveBtn{display:none}.setupActions .primaryBtn{width:100%}.setupActions.firstStep .primaryBtn{grid-column:1/-1}.setupActions .setupBackBtn{width:44px;padding:0}.retargetingPolicy{grid-column:auto}.policyGuardrails{grid-template-columns:1fr}.rtgHero,.rtgMainGrid{grid-template-columns:1fr}.rtgHero{padding:22px}.rtgSafetyCard{padding:16px}.rtgMetrics{grid-template-columns:1fr 1fr}.rtgJob{grid-template-columns:1fr}.rtgJobActions{justify-content:flex-start}
+  .personalityHead{display:grid;padding:18px 16px}.personalityHead h3{font-size:20px}.personalityStatus{width:max-content}.personalityWorkspace{grid-template-columns:1fr}.personalityControls{grid-template-columns:1fr;padding:18px 16px;border-right:0;border-bottom:1px solid var(--line)}.personalityControls .wide,.personalityActions{grid-column:auto}.personalityActions{display:grid;grid-template-columns:1fr}.personalityActions p{margin:0}.personalityActions button{width:100%}.personalityPreview{padding:16px}.personalityChat{min-height:190px}.personalityTestRow{grid-template-columns:1fr}.personalityTestRow button{width:100%}
   body.conversations-view .content{padding:0}
   body.conversations-view .inboxShell{height:auto;min-height:calc(100vh - 174px);display:block}
   body.conversations-view .listColumn,body.conversations-view .chatColumn{border-radius:0;box-shadow:none;min-height:calc(100vh - 174px)}
@@ -1090,6 +1134,7 @@ body.conversations-view:not(.chat-open) .thread{height:100%;padding:15px}
   .profileColumn{display:none}
 }
 ${customerAppointments.styles}
+${customerBotConfiguration.styles}
 </style>
 </head>
 <body>
@@ -1302,6 +1347,90 @@ ${customerAppointments.styles}
 
       <section class="${viewClass('panel-setup')}" id="panel-setup">
         <div class="setupView">
+          ${customerBotConfiguration.markup}
+          <section class="personalityStudio" id="personalityStudio">
+            <div class="personalityHead">
+              <div>
+                <small>✧ Personalidad del bot</small>
+                <h3>Haz que responda como tu equipo.</h3>
+                <p>Controla qué tan corto responde, su tono, los emojis y el saludo. Pruébalo aquí antes de aplicarlo a conversaciones nuevas.</p>
+              </div>
+              <span class="personalityStatus" id="personalityStatus">Cargando configuración</span>
+            </div>
+            <div class="personalityWorkspace">
+              <div class="personalityControls" id="personalityControls">
+                <div class="personalityField wide">
+                  <span>¿Qué tan largas deben ser las respuestas?</span>
+                  <div class="personalityLength">
+                    <label><input type="radio" name="personalityLength" value="muy_breve" checked onchange="markPersonalityDirty()"><span>Muy cortas</span></label>
+                    <label><input type="radio" name="personalityLength" value="breve" onchange="markPersonalityDirty()"><span>Equilibradas</span></label>
+                    <label><input type="radio" name="personalityLength" value="detallada" onchange="markPersonalityDirty()"><span>Detalladas</span></label>
+                  </div>
+                  <small>“Muy cortas” responde normalmente en una o dos frases y evita menús innecesarios.</small>
+                </div>
+                <label class="personalityField">
+                  <span>Tono</span>
+                  <select id="personalityTone" onchange="markPersonalityDirty()">
+                    <option value="cercano_directo">Cercano y directo</option>
+                    <option value="calido">Cálido y empático</option>
+                    <option value="profesional">Profesional</option>
+                    <option value="energetico">Ágil y entusiasta</option>
+                    <option value="personalizado">Personalizado</option>
+                  </select>
+                </label>
+                <label class="personalityField">
+                  <span>Emojis</span>
+                  <select id="personalityEmojis" onchange="markPersonalityDirty()">
+                    <option value="ninguno">Sin emojis</option>
+                    <option value="pocos">Pocos</option>
+                    <option value="moderados">Moderados</option>
+                  </select>
+                </label>
+                <label class="personalityField wide" id="personalityCustomToneField" hidden>
+                  <span>Describe el tono</span>
+                  <input id="personalityCustomTone" maxlength="1200" placeholder="Ej. como un asesor experto, amable y colombiano." oninput="markPersonalityDirty()">
+                </label>
+                <label class="personalityField wide">
+                  <span>Saludo</span>
+                  <textarea id="personalityGreeting" maxlength="500" placeholder="Ej. ¡Hola! Soy RAV-Bot 😊 ¿Qué juguete buscas hoy?" oninput="markPersonalityDirty();previewPersonalityGreeting()"></textarea>
+                  <small>Úsalo solo al iniciar una conversación. Recomendamos una frase y una pregunta.</small>
+                </label>
+                <label class="personalityField">
+                  <span>Palabras que sí debe usar</span>
+                  <textarea id="personalityPreferredWords" maxlength="1200" placeholder="Ej. regalo, juguete ideal, con gusto" oninput="markPersonalityDirty()"></textarea>
+                </label>
+                <label class="personalityField">
+                  <span>Palabras que debe evitar</span>
+                  <textarea id="personalityAvoidedWords" maxlength="1200" placeholder="Ej. barato, garantizado, estimado usuario" oninput="markPersonalityDirty()"></textarea>
+                </label>
+                <label class="personalityField wide">
+                  <span>Instrucciones adicionales</span>
+                  <textarea id="personalityInstructions" maxlength="3000" placeholder="Ej. responde primero y luego haz una sola pregunta; no repitas el nombre de la marca." oninput="markPersonalityDirty()"></textarea>
+                </label>
+                <div class="personalityActions">
+                  <p id="personalityMessage">Los cambios se aplican únicamente cuando presionas guardar.</p>
+                  <button class="primaryBtn" id="savePersonalityBtn" type="button" onclick="saveBotPersonality()">Guardar y aplicar</button>
+                </div>
+              </div>
+              <aside class="personalityPreview">
+                <div class="personalityPreviewHead"><span class="personalityBotAvatar">${escapeHtml(panelContext.initials)}</span><div><strong>Prueba privada</strong><span>no se envía al cliente</span></div></div>
+                <div class="personalityChat" aria-live="polite">
+                  <div class="personalityBubble user" id="personalityUserBubble">Hola</div>
+                  <div class="personalityBubble bot" id="personalityBotBubble">Cargando tu saludo…</div>
+                </div>
+                <div class="personalitySamples">
+                  <button type="button" onclick="setPersonalitySample('Hola')">Saludo</button>
+                  <button type="button" onclick="setPersonalitySample('Busco un regalo para una niña de 7 años')">Recomendación</button>
+                  <button type="button" onclick="setPersonalitySample('¿Cuánto tarda el envío?')">Envíos</button>
+                </div>
+                <div class="personalityTestRow">
+                  <input id="personalityTestInput" maxlength="800" value="Hola" placeholder="Escribe como si fueras un cliente" onkeydown="if(event.key==='Enter'){event.preventDefault();testBotPersonality()}">
+                  <button class="primaryBtn" id="testPersonalityBtn" type="button" onclick="testBotPersonality()">Probar respuesta</button>
+                </div>
+                <p class="personalitySafety">La prueba usa la información real de tu empresa, pero no crea una conversación ni envía mensajes por WhatsApp o Instagram.</p>
+              </aside>
+            </div>
+          </section>
           <section class="setupSummaryPanel">
             <div class="setupSummaryHead">
               <div><h3>Configuración de tu bot</h3><p>Este es el resumen práctico de lo que entrenaste. Los detalles completos quedan guardados en el mismo registro de tu empresa para el Customer Panel y Super Admin.</p></div>
@@ -1516,9 +1645,9 @@ ${customerAppointments.styles}
 </div>
 <div class="panelVersionFixed" aria-label="Versión del Customer Panel">Versión ${escapeHtml(botVersion)}</div>
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_ENABLED=${channelConnectionsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_DEMO=${safeJson(channelConnectionsDemo)};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_PERSONALITY_PATH="/admin/panel/bot-personality",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_ENABLED=${channelConnectionsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_DEMO=${safeJson(channelConnectionsDemo)};
 var PLAN_DATA=${safeJson(planData)};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,channelConnections:null,channelConnectionsLoading:false,whatsappEmbedded:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,onboarding:null,onboardingLoading:false,setupDetailsOpen:false,notifications:null,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,channelConnections:null,channelConnectionsLoading:false,whatsappEmbedded:null,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,onboarding:null,onboardingLoading:false,setupDetailsOpen:false,personality:null,personalityDirty:false,personalityLoading:false,personalityCanEdit:false,notifications:null,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
@@ -1690,7 +1819,7 @@ function showTab(name){
   text("pageSubtitle",pageSubtitle);
   if(window.innerWidth<=760&&name!=="appointments"){var activeMobileModule=document.getElementById("mobileModule-"+name);if(activeMobileModule)activeMobileModule.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});}
   try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("channel");url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}
-  if(name==="channels")loadChannelConnections(false);if(name==="setup")loadBotSetup();if(name==="notifications")renderNextforNotifications();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
+  if(name==="channels")loadChannelConnections(false);if(name==="setup"){loadBotSetup();loadBotPersonality(false);}if(name==="notifications")renderNextforNotifications();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
 }
 function loadPanelData(manual){if(state.loading)return;state.loading=true;if(manual)text("chatStatus","Actualizando datos...");api(PANEL_DATA_PATH,{redirectOnAuth:true}).then(function(data){state.data=data;state.notifications=data.nextfor_notifications||state.notifications;state.allConversations=data.conversations||[];applyChannelData();if(!DEMO_MODE)SERVER_CAPABILITIES=data.user&&data.user.capabilities||SERVER_CAPABILITIES;renderBusinessContext(data.business);renderChannelState();renderHeader();renderSummary();renderInbox();renderNextforNotifications();if(manual)text("chatStatus","Datos actualizados.");}).catch(function(error){text("chatStatus","No se pudieron actualizar los datos: "+error.message);}).finally(function(){state.loading=false;});}
 function loadPanelHealth(){if(!PANEL_HEALTH_PATH)return;api(PANEL_HEALTH_PATH).then(function(health){state.health=health;renderChannelState();}).catch(function(){});}
@@ -1842,6 +1971,7 @@ function setupGoalLabel(goal){goal=String(goal||"unknown");if(goal==="both")retu
 function renderOnboardingSummary(payload){var box=document.getElementById("setupConfigSummary"),details=document.getElementById("onboardingQuestionnaireList");if(!box)return;var onboarding=payload&&payload.onboarding||{},answers=onboarding.answers||{},appt=answers.appointment_setup||{},svc=answers.customer_service_setup||{},goal=answers.setup_goal,business=setupPathGet(answers,"business.brand_name")||appt.business_name||PANEL_CONTEXT.businessName,clients=setupPathGet(answers,"operations.monthly_customer_volume"),tone=svc.tone||appt.assistant_tone||setupPathGet(answers,"voice.formality"),whatsapp=setupPathGet(answers,"meta.whatsapp_number"),instagram=appt.instagram_username||setupPathGet(answers,"meta.instagram_account"),email=appt.channel_email||setupPathGet(answers,"business.contact_email"),other=appt.other_channels,commerce=answers.commerce||{},channels=[whatsapp?("WhatsApp "+whatsapp):"",instagram?("Instagram "+instagram):"",email?("Correo "+email):"",other].filter(Boolean).join(" · "),commerceLabel=commerce.platform&&commerce.platform!=="unknown"&&commerce.platform!=="none"?commercePlatformLabel(commerce.platform)+" · "+commerceStatusLabel(commerce.integration_status):"Opcional",updated=onboarding.last_updated_at||onboarding.updated_at||"",status=onboarding.setup_completed?"Cuestionario completo":"En progreso";var cards=[["Empresa",business,"Marca y cuenta asociada al tenant."],["Bot contratado",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,"Plan: "+(PANEL_CONTEXT.planName||"Asignado")],["Clientes al mes",clients,"Aproximado para dimensionar plan y consumo."],["Cómo debe hablar",tone,"Voz base para responder como tu equipo."],["Canales recopilados",channels,"Datos guardados; se conectan desde el hub."],["Commerce connector",commerceLabel,"Shopify/WooCommerce queda como conector opcional."],["Estado",status,updated?("Última actualización: "+when(updated)):"Se actualizará al guardar."]];box.innerHTML=cards.map(function(item){return '<article class="setupConfigCard"><small>'+esc(item[0])+'</small><strong>'+esc(setupShort(item[1]))+'</strong><p>'+esc(item[2])+'</p></article>';}).join("");text("channelConnectionSummary",PANEL_CHANNEL_CONNECTIONS_ENABLED?"Conecta "+(channels||"los canales elegidos")+" con la autorización oficial de Meta. Si algo queda pendiente, lo terminarás desde el panel sin repetir el cuestionario.":"La conexión de canales todavía no está disponible para esta cuenta.");if(details){var questions=payload&&payload.questionnaire&&payload.questionnaire.questions||[],rows=[];questions.filter(function(question){return question&&question.active!==false&&question.path;}).sort(function(a,b){return(Number(a.order)||0)-(Number(b.order)||0);}).forEach(function(question){var value=setupPathGet(answers,question.path);var readable=readableSetupValue(value);if(!readable||readable==="unknown")return;rows.push([question.section||"general",question.label||question.path,readable]);});["meta.whatsapp_number","appointment_setup.instagram_username","appointment_setup.channel_email","appointment_setup.other_channels","commerce.platform","commerce.store_url","commerce.integration_intent"].forEach(function(path){var exists=rows.some(function(row){return row[1]===path;}),value=setupPathGet(answers,path);if(!exists&&readableSetupValue(value))rows.push(["pendientes",path,readableSetupValue(value)]);});details.innerHTML=rows.length?rows.map(function(row){return '<article class="questionnaireItem"><small>'+esc(row[0])+'</small><strong>'+esc(row[1])+'</strong><p>'+esc(setupShort(row[2]))+'</p></article>';}).join(""):'<article class="questionnaireItem"><small>Cuestionario</small><strong>Aún no hay respuestas guardadas.</strong></article>';}if(state.channelConnections)renderChannelConnections();else renderConnectionHub();}
 function loadClientOnboardingSummary(){if(state.onboardingLoading)return;state.onboardingLoading=true;api(PANEL_ONBOARDING_PATH).then(function(payload){state.onboarding=payload;if(payload&&payload.pending_questions&&(!state.notifications||!state.notifications.pending_questions)){state.notifications={pending_count:payload.pending_questions.length,pending_questions:payload.pending_questions,items:payload.pending_questions.length?[{id:"setup-questionnaire-pending",type:"setup_improvement",priority:"high",title:"Nextfor tiene una mejora para tu bot",message:"Agregamos "+payload.pending_questions.length+" dato"+(payload.pending_questions.length===1?"":"s")+" para entrenarlo mejor. Puedes completarlo sin repetir todo el setup.",action_label:"Completar información",action_url:"/admin/client-onboarding?edit=1&focus=pending",pending_questions:payload.pending_questions}]:[]};renderNextforNotifications();}renderOnboardingSummary(payload);}).catch(function(error){var box=document.getElementById("setupConfigSummary");if(box)box.innerHTML='<article class="setupConfigCard"><small>Configuración</small><strong>No se pudo cargar</strong><p>'+esc(error.message||"Intenta de nuevo en unos minutos.")+'</p></article>';}).finally(function(){state.onboardingLoading=false;});}
 function toggleSetupDetails(){state.setupDetailsOpen=!state.setupDetailsOpen;var panel=document.getElementById("setupDetailsPanel"),details=document.getElementById("onboardingDetails"),button=document.getElementById("setupDetailsToggle");if(panel)panel.hidden=!state.setupDetailsOpen;if(details)details.classList.toggle("open",state.setupDetailsOpen);if(button)button.textContent=state.setupDetailsOpen?"Ocultar detalles":"Ver cuestionario completo";}
+${customerBotConfiguration.clientScript}
 var SETUP_STEP_TITLES=["Tu negocio","Sedes y horarios","Oferta y condiciones","Tu industria","Personalidad y canales","Autonomía del bot","Resultados"];
 var SETUP_DEFAULT_BOT_NAME=PANEL_CONTEXT.v2?"tu bot":"RAV-Bot";
 var SETUP_STEP_MESSAGES=[
@@ -1863,7 +1993,7 @@ function setupPrimaryAction(){if(state.setupStep<6){goSetupStep(state.setupStep+
 function renderSetupHome(completion,live){completion=Math.max(0,Math.min(100,Number(completion)||0));var pending=Number(state.notifications&&state.notifications.pending_count)||0;if(pending){renderPendingSetupReminder(pending);return;}var card=document.getElementById("setupHomeCard"),bar=document.getElementById("setupHomeProgressBar"),button=document.getElementById("setupHomeButton"),complete=completion>=100; if(button)button.onclick=function(){showTab("setup")};text("setupHomeProgress",completion+"%");if(bar)bar.style.width=completion+"%";if(card)card.classList.toggle("complete",complete&&live);if(complete&&live){text("setupHomeTitle","Tu Nextfor IA está configurada y activa");text("setupHomeCopy","Puedes revisar o actualizar su conocimiento, personalidad y reglas cuando lo necesites.");text("setupHomeButton","Revisar configuración");}else if(complete){text("setupHomeTitle","Tu configuración está lista para activar");text("setupHomeCopy","Revisa la información y publícala para aplicarla a los mensajes nuevos.");text("setupHomeButton","Revisar y activar");}else if(live){text("setupHomeTitle","Tu Nextfor IA está activa, pero puedes completarla mejor");text("setupHomeCopy","Añade la información pendiente para darle más contexto y precisión en cada conversación.");text("setupHomeButton","Continuar configuración");}else{text("setupHomeTitle","Termina de configurar tu Nextfor IA");text("setupHomeCopy","Completa la información de tu negocio para que el bot responda con tu voz, políticas y objetivos.");text("setupHomeButton","Continuar configuración");}}
 function renderIndustryQuestions(){if(!state.setup)return;var answers=collectSetupAnswers(),industry=setupPathGet(answers,"business.industry")||"other",profile=state.setup.industries&&state.setup.industries[industry],box=document.getElementById("industryQuestions");if(!profile||!box)return;state.setup.current.answers=answers;text("industryHelp","Preguntas para "+profile.label+". Cambian automáticamente si eliges otra industria.");box.innerHTML=(profile.questions||[]).map(function(question){var value=setupPathGet(answers,"industry_answers."+question.id)||"";return '<label class="setupField"><span>'+esc(question.label)+'</span><textarea data-setup="industry_answers.'+attr(question.id)+'" placeholder="'+attr(question.placeholder||"")+'">'+esc(value)+'</textarea></label>';}).join("");}
 function fillSetupForm(){if(!state.setup)return;var current=state.setup.current||{},answers=current.answers||{},industry=document.getElementById("setupIndustry"),industries=state.setup.industries||{},industryOrder=["commerce","professional_services","health","restaurants","education","real_estate","beauty","other"];if(industry){industry.innerHTML=industryOrder.filter(function(key){return industries[key];}).map(function(key){return '<option value="'+attr(key)+'">'+esc(industries[key].label)+'</option>';}).join("");}document.querySelectorAll("[data-setup]").forEach(function(field){var value=setupPathGet(answers,field.getAttribute("data-setup"));if(field.type==="checkbox")field.checked=!!value;else if(value!=null)field.value=value;});renderIndustryQuestions();var canEdit=!!state.setup.can_edit;document.querySelectorAll("#botSetupForm input,#botSetupForm textarea,#botSetupForm select").forEach(function(field){field.disabled=!canEdit;});var save=document.getElementById("saveSetupBtn"),completion=current.completion==null?setupCompletionEstimate(answers):current.completion;if(save)save.disabled=!canEdit;var live=!!state.setup.published,moduleStatus=document.getElementById("moduleStatus-setup");state.setupActivated=live;if(moduleStatus){moduleStatus.textContent=live?"Activo":completion+"% completo";moduleStatus.classList.toggle("off",!live);}text("mobileModule-setup","Configuración de tu Nextfor IA · "+(live?"Activa":completion+"%"));renderSetupHome(completion,live);state.setupDirty=false;renderSetupWizard();}
-function loadBotSetup(){if(state.setupLoading)return;if(state.setup&&!state.setupDirty){fillSetupForm();return;}state.setupLoading=true;text("setupMessage","Cargando configuración…");api(PANEL_SETUP_PATH).then(function(data){state.setup=data;fillSetupForm();}).catch(function(error){text("setupMessage",error&&error.status===401?"La configuración guiada del bot todavía no está disponible para tu cuenta.":"No se pudo cargar la configuración: "+error.message);}).finally(function(){state.setupLoading=false;});}
+function loadBotSetup(){if(!PANEL_SETUP_PATH||state.setupLoading)return;if(state.setup&&!state.setupDirty){fillSetupForm();return;}state.setupLoading=true;text("setupMessage","Cargando configuración…");api(PANEL_SETUP_PATH).then(function(data){state.setup=data;fillSetupForm();}).catch(function(error){text("setupMessage",error&&error.status===401?"La configuración guiada del bot todavía no está disponible para tu cuenta.":"No se pudo cargar la configuración: "+error.message);}).finally(function(){state.setupLoading=false;});}
 function markSetupDirty(){if(!state.setup||!state.setup.can_edit)return;state.setupDirty=true;var answers=collectSetupAnswers(),completion=setupCompletionEstimate(answers);state.setup.current.answers=answers;renderSetupHome(completion,!!state.setup.published);renderSetupWizard();text("setupMessage","Tienes cambios sin guardar.");}
 function setSetupBusy(busy,action){var save=document.getElementById("saveSetupBtn"),publish=document.getElementById("publishSetupBtn"),back=document.getElementById("setupBackBtn");if(save){save.disabled=busy;save.textContent=busy&&action==="save"?"Guardando…":"Guardar avance";}if(publish){publish.disabled=busy;if(busy&&action==="publish")publish.textContent="Activando…";}if(back)back.disabled=busy;if(!busy)renderSetupWizard();}
 function saveBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),save=document.getElementById("saveSetupBtn"),feedback="";setSetupBusy(true,"save");text("setupMessage","Guardando tu avance…");api("/admin/bot-setup",{method:"PUT",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setupDirty=false;fillSetupForm();feedback="✓ Avance guardado. El bot activo todavía no cambió.";}).catch(function(error){feedback="No se pudo guardar: "+error.message;}).finally(function(){setSetupBusy(false,"save");text("setupMessage",feedback||"Completa la información a tu ritmo.");if(feedback.indexOf("✓")===0&&save){save.textContent="Avance guardado ✓";setTimeout(function(){save.textContent="Guardar avance";},2000);}});}

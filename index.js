@@ -89,6 +89,13 @@ const {
   normalizeMemory
 } = require("./customer-intelligence");
 const {
+  buildBotPersonalityPrompt,
+  maxTokensForPersonality,
+  normalizeBotPersonality,
+  personalityForOnboarding,
+  planFeatures
+} = require("./bot-personality");
+const {
   RetargetingEngine,
   REAL_SENDS_ENABLED: RETARGETING_REAL_SENDS_ENABLED,
   AUTOMATIC_MODE_ENABLED: RETARGETING_AUTOMATIC_MODE_ENABLED,
@@ -270,7 +277,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v285-registered-appointment-tenant";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v286-bot-personality-studio";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1524,6 +1531,35 @@ const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
       : new SupabaseCatalogStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
   : null;
 const catalogService = CUSTOMER_ACCESS_V2_ENABLED ? createCatalogService({ store: catalogStore }) : null;
+let runtimeTenantPlansCache = { loaded_at: 0, plans: new Map() };
+
+async function runtimeTenantPlanId(tenantId, fallbackPlanId) {
+  const fallback = String(fallbackPlanId || "").trim().toLowerCase();
+  if (!CUSTOMER_ACCESS_V2_ENABLED || !catalogService) return fallback;
+  const now = Date.now();
+  if (now - runtimeTenantPlansCache.loaded_at > 60000) {
+    try {
+      const tenants = await catalogService.listTenants();
+      runtimeTenantPlansCache = {
+        loaded_at: now,
+        plans: new Map((tenants || []).map(function (tenant) {
+          return [
+            cleanTenantId(tenant && tenant.id),
+            String(tenant && tenant.plan_id || "").trim().toLowerCase()
+          ];
+        }).filter(function (entry) {
+          return entry[0] && entry[1];
+        }))
+      };
+    } catch (error) {
+      log("warn", "tenant_plan_runtime_lookup_failed", {
+        tenant_id: cleanTenantId(tenantId),
+        error: cleanRuntimeText(error && error.message, 240)
+      });
+    }
+  }
+  return runtimeTenantPlansCache.plans.get(cleanTenantId(tenantId)) || fallback;
+}
 const paymentStore = PAYMENTS_V1_ENABLED
   ? (PAYMENTS_TEST_MODE
       ? new InMemoryPaymentStore()
@@ -4165,6 +4201,17 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     usesAppointmentBot ? appointmentConfiguration.system_prompt : "",
     usesAppointmentBot ? APPOINTMENT_OPERATIONAL_PROMPT : ""
   ].filter(Boolean);
+  const storedPersonalityPlan = activeClientOnboarding && activeClientOnboarding.bot_personality &&
+    activeClientOnboarding.bot_personality.plan_id;
+  const activeTenantPlanId = usesCustomerServiceBot && activeClientOnboarding.bot_personality
+    ? await runtimeTenantPlanId(tenantId, storedPersonalityPlan)
+    : storedPersonalityPlan;
+  const botPersonalityPrompt = usesCustomerServiceBot && activeClientOnboarding.bot_personality
+    ? buildBotPersonalityPrompt(
+        personalityForOnboarding(activeClientOnboarding, activeTenantPlanId),
+        { plan_id: activeTenantPlanId }
+      )
+    : "";
   const configuredTenantBot = tenantConfigurationPrompts.length > 0;
   const conversationSystemPrompt = configuredTenantBot
     ? "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad."
@@ -4252,6 +4299,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
           system: [
         { type: "text", text: conversationSystemPrompt, cache_control: { type: "ephemeral" } },
         ...tenantConfigurationPrompts.map(function (prompt) { return { type: "text", text: prompt, cache_control: { type: "ephemeral" } }; }),
+        ...(botPersonalityPrompt ? [{ type: "text", text: botPersonalityPrompt, cache_control: { type: "ephemeral" } }] : []),
         ...(publishedSetupPrompt ? [{ type: "text", text: publishedSetupPrompt, cache_control: { type: "ephemeral" } }] : []),
         ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
         ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
@@ -10928,6 +10976,166 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
   }
 });
 
+app.get("/admin/panel/bot-personality", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const onboarding = await loadClientOnboarding(false, tenantId);
+    const business = customerBusinessForAuthAndOnboarding(auth, onboarding);
+    const planId = business.plan_id || "nextfor-uno";
+    res.json({
+      ok: true,
+      tenant_id: tenantId,
+      can_edit: !!customerPanelCapabilities(auth.role).configure_bot,
+      active: !!(onboarding && onboarding.bot_personality),
+      plan_id: planId,
+      features: planFeatures(planId),
+      personality: personalityForOnboarding(onboarding, planId)
+    });
+  } catch (error) {
+    console.error("bot personality load error:", error.message);
+    res.status(503).json({
+      ok: false,
+      error: "bot_personality_unavailable",
+      message: "No pudimos cargar la personalidad del bot."
+    });
+  }
+});
+
+app.put("/admin/panel/bot-personality", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (process.env.NODE_ENV === "production" && !SUPABASE_ENABLED) {
+    res.status(503).json({
+      ok: false,
+      error: "persistent_setup_store_unavailable",
+      message: "No se puede aplicar la personalidad porque la persistencia no está disponible."
+    });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const previous = await loadClientOnboarding(false, tenantId);
+    const business = customerBusinessForAuthAndOnboarding(auth, previous);
+    const planId = business.plan_id || "nextfor-uno";
+    const now = new Date().toISOString();
+    const personality = normalizeBotPersonality(req.body && req.body.personality || req.body, {
+      fallback: personalityForOnboarding(previous, planId),
+      plan_id: planId,
+      updated_at: now,
+      updated_by: auth.name || auth.email || auth.username || "customer"
+    });
+    const record = JSON.parse(JSON.stringify(previous || {}));
+    record.version = [1, 2].includes(record.version) ? record.version : 2;
+    record.tenant_id = tenantId;
+    record.bot_personality = personality;
+    record.last_updated_at = now;
+    record.updated_at = now;
+    record.updated_by = personality.updated_by;
+    await appendClientOnboardingRecord(record, tenantId);
+    res.json({
+      ok: true,
+      active: true,
+      can_edit: true,
+      applies_to_new_messages: true,
+      plan_id: planId,
+      features: planFeatures(planId),
+      personality
+    });
+  } catch (error) {
+    console.error("bot personality save error:", error.message);
+    res.status(503).json({
+      ok: false,
+      error: "bot_personality_save_failed",
+      message: "No pudimos aplicar los cambios. Intenta de nuevo."
+    });
+  }
+});
+
+app.post("/admin/panel/bot-personality/test", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const onboarding = await loadClientOnboarding(false, tenantId);
+    const business = customerBusinessForAuthAndOnboarding(auth, onboarding);
+    const planId = business.plan_id || "nextfor-uno";
+    const message = cleanRuntimeText(req.body && req.body.message, 800);
+    if (!message) {
+      res.status(400).json({ ok: false, error: "message_required", message: "Escribe un mensaje para probar." });
+      return;
+    }
+    const goal = String(onboarding && onboarding.answers && onboarding.answers.setup_goal || "").toLowerCase();
+    if (!["customer_service", "both"].includes(goal)) {
+      res.status(409).json({
+        ok: false,
+        error: "customer_service_not_contracted",
+        message: "Esta empresa no tiene contratado el bot de atención al cliente."
+      });
+      return;
+    }
+    const personality = normalizeBotPersonality(req.body && req.body.personality, {
+      fallback: personalityForOnboarding(onboarding, planId),
+      plan_id: planId,
+      updated_at: onboarding && onboarding.bot_personality && onboarding.bot_personality.updated_at || null,
+      updated_by: auth.name || auth.email || auth.username || "customer"
+    });
+    const customerConfig = onboarding && onboarding.customer_service_configuration;
+    const system = [
+      "Eres una vista previa segura del bot de atención de esta empresa. No envías mensajes reales. No inventes datos ausentes.",
+      customerConfig && customerConfig.system_prompt || "",
+      buildBotPersonalityPrompt(personality, { plan_id: planId })
+    ].filter(Boolean).join("\n\n");
+    const response = await axios.post(
+      "https://api.anthropic.com/v1/messages",
+      {
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: maxTokensForPersonality(personality),
+        system,
+        messages: [{ role: "user", content: message }]
+      },
+      {
+        headers: {
+          "x-api-key": ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json"
+        },
+        timeout: 40000
+      }
+    );
+    trackAnthropicUsage(response.data && response.data.usage);
+    const reply = (response.data && Array.isArray(response.data.content) ? response.data.content : [])
+      .filter(function (block) { return block && block.type === "text"; })
+      .map(function (block) { return String(block.text || ""); })
+      .join("\n")
+      .trim();
+    if (!reply) throw new Error("empty_preview");
+    res.json({
+      ok: true,
+      delivered: false,
+      reply,
+      personality
+    });
+  } catch (error) {
+    console.error("bot personality test error:", error.message);
+    res.status(503).json({
+      ok: false,
+      error: "bot_personality_test_failed",
+      message: "No pudimos generar la prueba. Intenta de nuevo."
+    });
+  }
+});
+
 app.get("/admin/bot-setup", async (req, res) => {
   if (!adminAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -12528,6 +12736,8 @@ app.get("/admin/panel", async (req, res) => {
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     paymentGateRequired,
     channelConnectionsV1Enabled: channelConnectionsVisibleForCustomer,
+    setupPath: auth.version === 2 ? null : undefined,
+    healthPath: auth.version === 2 ? null : undefined,
     botVersion: BOT_VERSION
   });
 });

@@ -57,7 +57,7 @@ async function login(base, body) {
   const fixtures = [
     { user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: "TenantPassword2026", role: "admin" },
     { user_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: "TenantPassword2026", role: "admin" },
-    { user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tenant_id: "tenant-c", company_name: "Agenda C", email: "admin@c.example", password: "TenantPassword2026", role: "admin", assigned_bot_id: "agendamiento" },
+    { user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", tenant_id: "tenant-c", company_name: "Agenda C", email: "admin@c.example", password: "TenantPassword2026", role: "admin", plan_id: "nextfor-tempo", assigned_bot_id: "agendamiento" },
     { user_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", tenant_id: "rav-customer-account", company_name: "RAV Toys", email: "admin@ravtoys.example", password: "TenantPassword2026", role: "admin" }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
@@ -129,12 +129,18 @@ async function login(base, body) {
     assert(appointmentPanel.includes("Finaliza el entrenamiento de tu Nextfor"));
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentUser.cookie } });
     assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.appointment_calendar.name, "Google Calendar");
+    assert.strictEqual(body.appointment_calendar.status, "not_connected");
+    assert.strictEqual(body.appointment_calendar.authorization_available, false);
+    assert(!JSON.stringify(body).includes("google-calendar-secret"));
 
     response = await fetch(base + "/admin/panel/channel-connections?tenant_id=tenant-b", {
       headers: { cookie: userA.cookie }
     });
     assert.strictEqual(response.status, 200);
     body = await response.json();
+    assert.strictEqual(body.appointment_calendar, null);
     assert.deepStrictEqual(body.channels.map(function (row) { return row.name; }), [
       "WhatsApp", "Instagram", "Facebook Messenger"
     ]);

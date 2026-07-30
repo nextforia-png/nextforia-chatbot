@@ -278,7 +278,7 @@ app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAp
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v288-automated-bot-provisioning";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v290-all-customer-plans";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -342,6 +342,10 @@ const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
   process.env.APPOINTMENT_STORAGE_TEST_READY === "1";
 const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };
 const APPOINTMENT_SETUP_ENABLED = process.env.APPOINTMENT_SETUP_ENABLED === "1";
+// Standard customer plans (Uno, Aura, Tempo and Atlas) are public by default.
+// Set to 0 only as an emergency rollback; the legacy appointment pilot flags
+// remain available for controlled environments.
+const CUSTOMER_ALL_PLANS_ENABLED = process.env.CUSTOMER_ALL_PLANS_ENABLED !== "0";
 const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.APPOINTMENT_SETUP_TENANT_IDS || "");
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
@@ -7888,6 +7892,7 @@ function parseAppointmentSetupTenantIds(value) {
 }
 
 function appointmentSetupEnabledForTenant(tenantId) {
+  if (CUSTOMER_ALL_PLANS_ENABLED) return true;
   if (APPOINTMENT_SETUP_ENABLED) return true;
   if (APPOINTMENT_SETUP_TENANT_IDS.has("*")) return true;
   return APPOINTMENT_SETUP_TENANT_IDS.has(cleanTenantId(tenantId));
@@ -9190,6 +9195,13 @@ function catalogWithDefaults(catalogs, customerVisibleOnly, options) {
       fallback_catalog: plans === fallback.plans || bots === fallback.bots
     };
   }
+  if (customerVisibleOnly) {
+    return {
+      plans: plans.filter(function (plan) { return ["nextfor-uno", "nextfor-aura"].includes(String(plan && plan.id || "").toLowerCase()); }),
+      bots: bots.filter(function (bot) { return String(bot && bot.id || "").toLowerCase() === "atencion-cliente"; }),
+      fallback_catalog: plans === fallback.plans || bots === fallback.bots
+    };
+  }
   return { plans, bots, fallback_catalog: plans === fallback.plans || bots === fallback.bots };
 }
 
@@ -10094,7 +10106,7 @@ app.get("/admin/client-onboarding-demo", (req, res) => {
     paymentsV1Enabled: true,
     demoPaymentPath: "/admin/client-onboarding-demo/payment",
     questionnaire,
-    chatbotOnlyRelease: !APPOINTMENT_SETUP_ENABLED
+    chatbotOnlyRelease: !appointmentSetupEnabledForTenant("pilot-demo")
   });
 });
 
@@ -13616,7 +13628,8 @@ async function buildAdminHealthResult() {
     appointment_readiness: {
       pilot_tenant: DERCO_TENANT_ID,
       setup_enabled_for_pilot: appointmentSetupEnabledForTenant(DERCO_TENANT_ID),
-      setup_enabled_publicly: APPOINTMENT_SETUP_ENABLED,
+      setup_enabled_publicly: CUSTOMER_ALL_PLANS_ENABLED || APPOINTMENT_SETUP_ENABLED,
+      all_customer_plans_enabled: CUSTOMER_ALL_PLANS_ENABLED,
       setup_tenant_allowlist_count: APPOINTMENT_SETUP_TENANT_IDS.size,
       elevenlabs_template_configured: !!ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID,
       elevenlabs_tool_secret_configured: ELEVENLABS_APPOINTMENT_TOOL_SECRET.length >= 32,

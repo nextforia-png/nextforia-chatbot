@@ -341,8 +341,9 @@ function signedSessionCookie(secret, user) {
     response = await fetch(base + "/admin/panel?tab=appointments", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
     const shellA = await response.text();
-    assert(shellA.includes("<title>Panel de control · Empresa A</title>"));
-    assert(shellA.includes('<h1 id="brandName">Empresa A</h1>'));
+    assert(shellA.includes("<title>Nextfor IA · Empresa A</title>"));
+    assert(shellA.includes("<h1>Nextfor IA</h1>"));
+    assert(shellA.includes('<span id="brandBusinessName">Empresa A</span>'));
     assert(shellA.includes("Plan Nextfor Aura"));
     assert(shellA.includes('id="bot-support"'));
     assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
@@ -366,8 +367,9 @@ function signedSessionCookie(secret, user) {
     response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: userB.cookie } });
     assert.strictEqual(response.status, 200);
     const shellB = await response.text();
-    assert(shellB.includes("<title>Panel de control · Empresa B</title>"));
-    assert(shellB.includes('<h1 id="brandName">Empresa B</h1>'));
+    assert(shellB.includes("<title>Nextfor IA · Empresa B</title>"));
+    assert(shellB.includes("<h1>Nextfor IA</h1>"));
+    assert(shellB.includes('<span id="brandBusinessName">Empresa B</span>'));
     assert(shellB.includes("Plan Nextfor Uno"));
     assert(!shellB.includes('id="bot-appointments"'));
     assert(!shellB.includes('id="navAppointments"'));

@@ -117,6 +117,7 @@ function render(renderer, options) {
   const form = render(renderSignatureForm, { token: created.token });
   assert.strictEqual(form.statusCode, 200);
   assert.ok(form.body.includes("/admin/assets/lumen.png"));
+  assert.ok(form.body.includes("/admin/signature/client-api/"));
   assert.ok(!form.body.includes("lumen-atlas"));
   assert.ok(!form.body.includes("lumen-aura"));
   assert.ok(!form.body.includes("lumen-tempo"));
@@ -128,6 +129,7 @@ function render(renderer, options) {
   assert.ok(admin.body.includes("Ver como cliente"));
   assert.ok(admin.body.includes("Editar formulario"));
   assert.ok(admin.body.includes("/admin/assets/lumen.png"));
+  assert.ok(admin.body.includes("/admin/signature/client/"));
 
   console.log("signature tests passed");
 })().catch(function (error) {

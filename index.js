@@ -296,7 +296,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v302-nextfor-signature";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v303-signature-public-route";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -640,13 +640,14 @@ const loginRateLimiter = createRateLimiter({
   }
 });
 app.use("/admin", adminRateLimiter);
-app.use("/signature", function protectSignatureCaching(req, res, next) {
+app.use(["/signature", "/admin/signature/client", "/admin/signature/client-api"], function protectSignatureCaching(req, res, next) {
   res.setHeader("cache-control", "no-store, max-age=0");
   res.setHeader("pragma", "no-cache");
   res.setHeader("x-robots-tag", "noindex, nofollow, noarchive");
   next();
 });
 app.use("/signature/api", signatureRateLimiter);
+app.use("/admin/signature/client-api", signatureRateLimiter);
 app.use("/admin", async function revalidateCustomerSession(req, res, next) {
   if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
   const session = readDashboardSession(req);
@@ -13092,14 +13093,14 @@ function signatureWriteOriginOk(req) {
 
 function signaturePublicUrl(req, token) {
   const base = PUBLIC_BASE_URL || ((req.secure ? "https" : "http") + "://" + req.get("host"));
-  return base.replace(/\/+$/, "") + "/signature/" + encodeURIComponent(token);
+  return base.replace(/\/+$/, "") + "/admin/signature/client/" + encodeURIComponent(token);
 }
 
-app.get("/signature/:token", (req, res) => {
+app.get(["/signature/:token", "/admin/signature/client/:token"], (req, res) => {
   renderSignatureForm(res, { token: req.params.token });
 });
 
-app.get("/signature/api/:token", async (req, res) => {
+app.get(["/signature/api/:token", "/admin/signature/client-api/:token"], async (req, res) => {
   try {
     const diagnosis = await signatureService.get(req.params.token);
     if (!diagnosis) {
@@ -13113,7 +13114,7 @@ app.get("/signature/api/:token", async (req, res) => {
   }
 });
 
-app.patch("/signature/api/:token", async (req, res) => {
+app.patch(["/signature/api/:token", "/admin/signature/client-api/:token"], async (req, res) => {
   if (!signatureWriteOriginOk(req)) {
     res.status(403).json({ ok: false, error: "invalid_request_origin" });
     return;
@@ -13132,7 +13133,7 @@ app.patch("/signature/api/:token", async (req, res) => {
   }
 });
 
-app.post("/signature/api/:token/submit", async (req, res) => {
+app.post(["/signature/api/:token/submit", "/admin/signature/client-api/:token/submit"], async (req, res) => {
   if (!signatureWriteOriginOk(req)) {
     res.status(403).json({ ok: false, error: "invalid_request_origin" });
     return;
@@ -13160,7 +13161,7 @@ app.post("/signature/api/:token/submit", async (req, res) => {
   }
 });
 
-app.post("/signature/api/:token/files", express.raw({ type: "application/octet-stream", limit: "10mb" }), async (req, res) => {
+app.post(["/signature/api/:token/files", "/admin/signature/client-api/:token/files"], express.raw({ type: "application/octet-stream", limit: "10mb" }), async (req, res) => {
   if (!signatureWriteOriginOk(req)) {
     res.status(403).json({ ok: false, error: "invalid_request_origin" });
     return;
@@ -13216,7 +13217,7 @@ app.post("/signature/api/:token/files", express.raw({ type: "application/octet-s
   }
 });
 
-app.delete("/signature/api/:token/files/:fileId", async (req, res) => {
+app.delete(["/signature/api/:token/files/:fileId", "/admin/signature/client-api/:token/files/:fileId"], async (req, res) => {
   if (!signatureWriteOriginOk(req)) {
     res.status(403).json({ ok: false, error: "invalid_request_origin" });
     return;

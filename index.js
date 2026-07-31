@@ -21,6 +21,7 @@ const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
 const renderSuperAdminPanel = require("./super-admin-panel");
 const renderSuperAdminLogin = require("./super-admin-login");
+const renderSuperAdminInviteSetup = require("./super-admin-invite-setup");
 const { renderSignatureAdmin, renderSignatureForm } = require("./signature-pages");
 const {
   SIGNATURE_TOOL,
@@ -296,7 +297,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v305-signature-native-scroll";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v306-super-admin-partner-invites";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -544,6 +545,8 @@ const INSTAGRAM_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const INSTAGRAM_PROFILE_RETRY_MS = 15 * 60 * 1000;
 const DASHBOARD_CUSTOMER_USER_TOOL = "dashboard_customer_user_v1";
 const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:" + DEFAULT_TENANT_ID + ":primary-admin";
+const SUPER_ADMIN_ACCESS_TOOL = "super_admin_access_v1";
+const SUPER_ADMIN_ACCESS_RECORD_ID = "super-admin-access:platform";
 const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
 const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":draft";
 const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":published";
@@ -773,6 +776,7 @@ const whatsappRuntimeState = {
   last_skip_reason: null
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
+let superAdminAccessCache = { loaded_at: 0, users: [], invitations: [] };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 const clientOnboardingCacheByTenant = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
@@ -2046,6 +2050,11 @@ function isCustomerMetaTurn(turn) {
 function isDashboardCustomerUserTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(DASHBOARD_CUSTOMER_USER_TOOL);
+}
+
+function isSuperAdminAccessTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(SUPER_ADMIN_ACCESS_TOOL);
 }
 
 function isBotSetupTurn(turn) {
@@ -7703,6 +7712,8 @@ async function dashboardUserFromCredentials(username, password, options) {
     (user.email && user.email === normalizedUser)
   ) && safeEqualText(user.password, cleanPass));
   if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
+  const platformUser = await dashboardPlatformUserFromCredentials(normalizedUser, cleanPass);
+  if (platformUser) return platformUser;
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
     let customerAccessUser = null;
     try {
@@ -7738,6 +7749,232 @@ function sendCustomerAccessError(res, error) {
   const payload = { ok: false, error: problem.code };
   if (problem.details && typeof problem.details === "object") Object.assign(payload, problem.details);
   res.status(problem.status).json(payload);
+}
+
+function tokenHash(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function platformAccessError(code, status) {
+  const err = new Error(code);
+  err.code = code;
+  err.status = status || 400;
+  return err;
+}
+
+function validatePlatformAccessPassword(password, confirmation) {
+  const value = String(password || "");
+  if (value.length < 12 || value.length > 128 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(value) || !/\d/.test(value)) {
+    throw platformAccessError("weak_password", 400);
+  }
+  if (value !== String(confirmation || "")) throw platformAccessError("password_mismatch", 400);
+  return value;
+}
+
+function parseSuperAdminAccessTurn(turn) {
+  if (!isSuperAdminAccessTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[SuperAdminAccess\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || !parsed.type) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function reduceSuperAdminAccessEvents(events) {
+  const usersByEmail = new Map();
+  const invitationsById = new Map();
+  events.forEach(function (event) {
+    const type = String(event.type || "");
+    if (type === "user") {
+      const email = normalizeDashboardUsername(event.email);
+      if (!email || !event.password_hash || !event.salt) return;
+      usersByEmail.set(email, {
+        user_id: String(event.user_id || email),
+        username: email,
+        email,
+        name: String(event.name || email).slice(0, 100),
+        role: "super_admin",
+        tenant_id: null,
+        password_hash: String(event.password_hash),
+        salt: String(event.salt),
+        created_at: event.created_at || null,
+        method: "platform_user"
+      });
+      return;
+    }
+    if (type === "invitation") {
+      const id = String(event.id || "");
+      const email = normalizeDashboardUsername(event.email);
+      if (!id || !email || !event.token_hash) return;
+      invitationsById.set(id, {
+        id,
+        email,
+        name_hint: String(event.name_hint || "").slice(0, 100),
+        token_hash: String(event.token_hash),
+        status: "pending",
+        created_by: String(event.created_by || "super_admin").slice(0, 160),
+        created_at: event.created_at || null,
+        expires_at: event.expires_at || null,
+        used_at: null,
+        revoked_at: null
+      });
+      return;
+    }
+    if (type === "invitation_used" || type === "invitation_revoked") {
+      const invitation = invitationsById.get(String(event.invitation_id || ""));
+      if (!invitation) return;
+      if (type === "invitation_used") {
+        invitation.status = "used";
+        invitation.used_at = event.used_at || event.created_at || new Date().toISOString();
+      } else {
+        invitation.status = "revoked";
+        invitation.revoked_at = event.revoked_at || event.created_at || new Date().toISOString();
+      }
+    }
+  });
+  const now = Date.now();
+  const users = Array.from(usersByEmail.values());
+  const invitations = Array.from(invitationsById.values()).map(function (invitation) {
+    if (invitation.status === "pending" && Date.parse(invitation.expires_at || "") <= now) invitation.status = "expired";
+    return invitation;
+  }).sort(function (a, b) { return Date.parse(b.created_at || "") - Date.parse(a.created_at || ""); });
+  return { users, invitations };
+}
+
+async function loadSuperAdminAccess(force) {
+  const now = Date.now();
+  if (!force && superAdminAccessCache.loaded_at && now - superAdminAccessCache.loaded_at < 30000) return superAdminAccessCache;
+  let turns = conversationLogs.slice().reverse().filter(isSuperAdminAccessTurn);
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(SUPER_ADMIN_ACCESS_RECORD_ID, 100);
+    if (rows) turns = rows.map(normalizeTurnRow).filter(isSuperAdminAccessTurn);
+  }
+  const state = reduceSuperAdminAccessEvents(turns.map(parseSuperAdminAccessTurn).filter(Boolean).reverse());
+  superAdminAccessCache = { loaded_at: now, users: state.users, invitations: state.invitations };
+  return superAdminAccessCache;
+}
+
+function buildSuperAdminAccessRecord(event) {
+  const createdAt = event.created_at || new Date().toISOString();
+  return {
+    ts: createdAt,
+    userId: SUPER_ADMIN_ACCESS_RECORD_ID,
+    userMessage: "",
+    botReply: "[SuperAdminAccess] " + JSON.stringify(Object.assign({ version: 1, created_at: createdAt }, event)),
+    tools: [SUPER_ADMIN_ACCESS_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: SUPER_ADMIN_ACCESS_TOOL }
+  };
+}
+
+async function persistSuperAdminAccessEvent(event) {
+  if (!SUPABASE_ENABLED) throw platformAccessError("persistent_user_store_unavailable", 503);
+  const rec = buildSuperAdminAccessRecord(event);
+  await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  superAdminAccessCache.loaded_at = 0;
+  return rec;
+}
+
+async function createSuperAdminInvitation(input, auth, req) {
+  const email = normalizeDashboardUsername(input && input.email);
+  const nameHint = String(input && input.name || "").trim().slice(0, 100);
+  if (!validEmailIdentity(email)) throw platformAccessError("invalid_email", 400);
+  const existingEnv = DASHBOARD_USERS.some(function (user) {
+    return user.role === "super_admin" && (normalizeDashboardUsername(user.username) === email || normalizeDashboardUsername(user.email) === email);
+  });
+  const state = await loadSuperAdminAccess(true);
+  if (existingEnv || state.users.some(function (user) { return user.email === email; })) {
+    throw platformAccessError("super_admin_already_exists", 409);
+  }
+  if (state.invitations.some(function (invitation) { return invitation.email === email && invitation.status === "pending"; })) {
+    throw platformAccessError("super_admin_invitation_already_open", 409);
+  }
+  const token = crypto.randomBytes(32).toString("base64url");
+  const id = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + CUSTOMER_INVITE_TTL_HOURS * 60 * 60 * 1000).toISOString();
+  await persistSuperAdminAccessEvent({
+    type: "invitation",
+    id,
+    email,
+    name_hint: nameHint,
+    token_hash: tokenHash(token),
+    expires_at: expiresAt,
+    created_by: auth && (auth.email || auth.username || auth.name) || "super_admin"
+  });
+  const requestOrigin = requestHeaderOrigin(req.get("x-nextforia-panel-origin")) ||
+    requestHeaderOrigin(req.get("origin")) ||
+    requestHeaderOrigin(req.get("referer"));
+  const baseUrl = requestOrigin || PUBLIC_BASE_URL || req.protocol + "://" + req.get("host");
+  return {
+    id,
+    email,
+    name_hint: nameHint,
+    expires_at: expiresAt,
+    setup_url: baseUrl + "/admin/super-admin/setup?invite=" + encodeURIComponent(token)
+  };
+}
+
+async function inspectSuperAdminInvitation(token) {
+  const hash = tokenHash(token);
+  const state = await loadSuperAdminAccess(true);
+  const invitation = state.invitations.find(function (item) { return item.token_hash === hash; });
+  if (!invitation) throw platformAccessError("invalid_invitation", 403);
+  if (invitation.status === "used") throw platformAccessError("invitation_already_used", 409);
+  if (invitation.status === "revoked") throw platformAccessError("invitation_revoked", 403);
+  if (invitation.status === "expired") throw platformAccessError("invitation_expired", 410);
+  return invitation;
+}
+
+async function consumeSuperAdminInvitation(input) {
+  const token = String(input && input.invite || "");
+  const invitation = await inspectSuperAdminInvitation(token);
+  const password = validatePlatformAccessPassword(input && input.password, input && input.password_confirmation);
+  const name = String(input && input.name || invitation.name_hint || invitation.email).trim().slice(0, 100);
+  const salt = crypto.randomBytes(16);
+  const createdAt = new Date().toISOString();
+  await persistSuperAdminAccessEvent({
+    type: "user",
+    user_id: crypto.randomUUID(),
+    email: invitation.email,
+    username: invitation.email,
+    name,
+    role: "super_admin",
+    salt: salt.toString("base64url"),
+    password_hash: hashDashboardPassword(password, salt),
+    created_at: createdAt,
+    invitation_id: invitation.id
+  });
+  await persistSuperAdminAccessEvent({
+    type: "invitation_used",
+    invitation_id: invitation.id,
+    email: invitation.email,
+    used_at: createdAt
+  });
+  const state = await loadSuperAdminAccess(true);
+  return state.users.find(function (user) { return user.email === invitation.email; });
+}
+
+async function dashboardPlatformUserFromCredentials(username, password) {
+  const normalizedUser = normalizeDashboardUsername(username);
+  const state = await loadSuperAdminAccess(false);
+  const user = state.users.find(function (item) { return item.email === normalizedUser || normalizeDashboardUsername(item.username) === normalizedUser; });
+  if (!user) return null;
+  let candidate = "";
+  try {
+    candidate = hashDashboardPassword(password, Buffer.from(user.salt, "base64url"));
+  } catch (_) {
+    return null;
+  }
+  return safeEqualText(candidate, user.password_hash) ? user : null;
 }
 
 async function resetCustomerPanelAccess(actor, options) {
@@ -13096,6 +13333,11 @@ function signaturePublicUrl(req, token) {
   return base.replace(/\/+$/, "") + "/admin/signature/client/" + encodeURIComponent(token);
 }
 
+function sendPlatformAccessError(res, error) {
+  const status = Number(error && error.status) || 503;
+  res.status(status).json({ ok: false, error: error && error.code || "platform_access_unavailable" });
+}
+
 app.get(["/signature/:token", "/admin/signature/client/:token"], (req, res) => {
   renderSignatureForm(res, { token: req.params.token });
 });
@@ -13502,6 +13744,74 @@ app.get("/admin/super-admin/login", (req, res) => {
     currentRole: auth.ok ? auth.role : "none",
     currentRoleLabel: auth.ok ? (DASHBOARD_ROLE_LABELS[auth.role] || auth.role) : ""
   });
+});
+
+app.post("/admin/super-admin/invitations", loginRateLimiter, async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const invitation = await createSuperAdminInvitation(req.body || {}, auth, req);
+    res.status(201).json({ ok: true, invitation });
+  } catch (error) {
+    sendPlatformAccessError(res, error);
+  }
+});
+
+app.get("/admin/super-admin/setup", async (req, res) => {
+  const invite = String(req.query.invite || "");
+  try {
+    const invitation = await inspectSuperAdminInvitation(invite);
+    renderSuperAdminInviteSetup(res, {
+      valid: true,
+      invite,
+      email: invitation.email,
+      nameHint: invitation.name_hint,
+      expiresAt: invitation.expires_at
+    });
+  } catch (error) {
+    const reasons = {
+      invitation_expired: "Esta invitación venció. Pide una nueva a otro Super Admin.",
+      invitation_revoked: "Esta invitación fue revocada por NexforIA.",
+      invitation_already_used: "Esta invitación ya fue usada. Ingresa con tu correo y contraseña.",
+      invalid_invitation: "El enlace no es válido o pertenece a otra invitación."
+    };
+    renderSuperAdminInviteSetup(res, {
+      valid: false,
+      status: Number(error && error.status) || 403,
+      reason: reasons[error && error.code] || "No pudimos validar este acceso en este momento."
+    });
+  }
+});
+
+app.post("/admin/super-admin/setup", loginRateLimiter, async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  const keys = Object.keys(req.body || {});
+  const allowed = ["invite", "name", "password", "password_confirmation"];
+  if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
+    res.status(400).json({ ok: false, error: "invalid_request" });
+    return;
+  }
+  try {
+    const user = await consumeSuperAdminInvitation(req.body || {});
+    setDashboardSessionCookie(req, res, user);
+    res.status(201).json({
+      ok: true,
+      user: { user_id: user.user_id || null, email: user.email, username: user.username, name: user.name, role: user.role },
+      redirect: "/admin/super-admin"
+    });
+  } catch (error) {
+    sendPlatformAccessError(res, error);
+  }
 });
 
 function canAccessRegisteredClient(auth, tenantId) {

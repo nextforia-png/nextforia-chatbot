@@ -118,6 +118,10 @@ function render(renderer, options) {
   assert.strictEqual(form.statusCode, 200);
   assert.ok(form.body.includes("/admin/assets/lumen.png"));
   assert.ok(form.body.includes("/admin/signature/client-api/"));
+  assert.ok(form.body.includes('addEventListener("wheel"'));
+  assert.ok(form.body.includes("overscroll-behavior:contain"));
+  assert.ok(form.body.includes("overflow:visible;scrollbar-gutter:auto"));
+  assert.ok(form.body.includes("100dvh"));
   assert.ok(!form.body.includes("lumen-atlas"));
   assert.ok(!form.body.includes("lumen-aura"));
   assert.ok(!form.body.includes("lumen-tempo"));

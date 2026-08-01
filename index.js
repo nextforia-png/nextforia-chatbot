@@ -115,6 +115,11 @@ const {
 } = require("./retargeting");
 const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
 const { cleanShopifyShop, createPairingToken, verifyPairingToken } = require("./commerce/pairing-token");
+const {
+  contactsFromChange: whatsappContactsFromChange,
+  echoTurnsFromChange: whatsappEchoTurnsFromChange,
+  historyTurnsFromChange: whatsappHistoryTurnsFromChange
+} = require("./whatsapp-coexistence");
 const { AppointmentRegistry } = require("./appointments");
 const {
   buildAppointmentIntegrations,
@@ -297,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v307-customer-name-memory";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v308-whatsapp-coexistence-history";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2500,30 +2505,42 @@ async function inferRecentHandoffs(limit) {
 
 function recordTurn(userId, userMessage, botReply, status, meta) {
   try {
+    meta = meta || {};
     const cleanUserId = normalizeConversationUserId(userId) || userId;
     const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+    const tenantId = cleanTenantId(meta.tenantId || meta.tenant_id) ||
       cleanTenantId(remembered && remembered.tenantId) ||
       DEFAULT_TENANT_ID;
-    const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
+    const phoneNumberId = cleanRuntimeText(meta.phoneNumberId || meta.phone_number_id, 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
       PHONE_NUMBER_ID ||
       null;
+    const requestedTs = new Date(meta.ts || meta.sourceAt || meta.source_at || "");
+    const timestamp = Number.isFinite(requestedTs.getTime()) && requestedTs.getTime() <= Date.now() + 5 * 60 * 1000
+      ? requestedTs.toISOString()
+      : new Date().toISOString();
+    const tools = Array.isArray(meta.tools)
+      ? meta.tools.map(function (tool) { return String(tool || "").trim().slice(0, 80); }).filter(Boolean).slice(0, 20)
+      : turnTools.slice();
+    const zeroResultQueries = Array.isArray(meta.zeroResultQueries || meta.zero_result_queries)
+      ? (meta.zeroResultQueries || meta.zero_result_queries).map(function (query) { return String(query || "").trim().slice(0, 240); }).filter(Boolean).slice(0, 20)
+      : turnZeroQueries.slice();
     const rec = {
-      ts: new Date().toISOString(),
+      ts: timestamp,
       tenantId,
       phoneNumberId,
       channel: conversationChannel(cleanUserId),
       userId: cleanUserId,
       userMessage: String(userMessage || "").slice(0, 500),
       botReply: String(botReply || "").slice(0, 1000),
-      tools: turnTools.slice(),
-      zeroResultQueries: turnZeroQueries.slice(),
-      handoff: turnHandoff,
-      rating: turnRating,
-      numTools: turnTools.length,
+      tools,
+      zeroResultQueries,
+      handoff: typeof meta.handoff === "boolean" ? meta.handoff : turnHandoff,
+      rating: meta.rating !== undefined ? meta.rating : turnRating,
+      numTools: tools.length,
       status: status || "ok"
     };
+    if (meta.eval !== undefined) rec.eval = meta.eval;
     conversationLogs.push(rec);
     if (conversationLogs.length > 100) conversationLogs.shift();
     supabaseInsert(rec);
@@ -4665,6 +4682,85 @@ app.get("/webhook", (req, res) => {
   }
 });
 
+function whatsappCoexistenceTurnEventId(kind, turn, destination) {
+  if (turn && turn.sourceEventId) return String(turn.sourceEventId);
+  return kind + ":" + crypto.createHash("sha256").update(JSON.stringify({
+    tenant_id: destination && destination.tenantId,
+    phone_number_id: destination && destination.phoneNumberId,
+    user_id: turn && turn.userId,
+    ts: turn && turn.ts,
+    user_message: turn && turn.userMessage,
+    bot_reply: turn && turn.botReply
+  })).digest("hex");
+}
+
+async function recordWhatsAppCoexistenceTurn(turn, destination, kind) {
+  const eventId = whatsappCoexistenceTurnEventId(kind, turn, destination);
+  if (!acceptMetaEventId(eventId)) return false;
+  rememberConversationRuntime(turn.userId, destination);
+  const outbound = !!turn.botReply;
+  const tools = kind === "history"
+    ? ["whatsapp_history_import"].concat(outbound ? ["whatsapp_history_outbound"] : [])
+    : ["whatsapp_business_app_echo"];
+  recordTurn(turn.userId, turn.userMessage, turn.botReply, "ok", {
+    tenant_id: destination.tenantId,
+    phone_number_id: destination.phoneNumberId,
+    ts: turn.ts,
+    tools,
+    handoff: false,
+    eval: {
+      skip: true,
+      reason: kind === "history" ? "whatsapp_history_import" : "whatsapp_business_app_echo",
+      source_event_id: eventId
+    }
+  });
+  return true;
+}
+
+async function recordWhatsAppSyncedContact(contact, destination) {
+  const userId = normalizeConversationUserId(contact && contact.userId);
+  if (!userId || !contact.fullName) return false;
+  rememberConversationRuntime(userId, destination);
+  const current = normalizeMemory(await loadCustomerMemory(userId));
+  if (current.preferred_name) return false;
+  const next = normalizeMemory(Object.assign({}, current, {
+    preferred_name: contact.fullName,
+    source_signals: (current.source_signals || []).concat(["whatsapp_contact_sync"]),
+    updated_at: contact.ts || new Date().toISOString()
+  }));
+  return !!recordCustomerMemory(userId, next);
+}
+
+async function processWhatsAppCoexistenceChange(change) {
+  if (!change || !["history", "smb_message_echoes", "smb_app_state_sync"].includes(change.field)) return 0;
+  const value = change.value || {};
+  const destination = await resolveWhatsAppDestinationRuntime(value);
+  if (!destination.ok) {
+    log("warn", "whatsapp_coexistence_destination_rejected", {
+      reason: destination.reason || "destination_rejected",
+      field: change.field
+    });
+    return 0;
+  }
+  let imported = 0;
+  for (const turn of whatsappHistoryTurnsFromChange(change)) {
+    if (await recordWhatsAppCoexistenceTurn(turn, destination, "history")) imported++;
+  }
+  for (const turn of whatsappEchoTurnsFromChange(change)) {
+    if (await recordWhatsAppCoexistenceTurn(turn, destination, "echo")) imported++;
+  }
+  for (const contact of whatsappContactsFromChange(change)) {
+    if (await recordWhatsAppSyncedContact(contact, destination)) imported++;
+  }
+  log("info", "whatsapp_coexistence_sync_processed", {
+    tenant_id: destination.tenantId,
+    phone_number_id: destination.phoneNumberId,
+    field: change.field,
+    records: imported
+  });
+  return imported;
+}
+
 app.post("/webhook", async (req, res) => {
   whatsappRuntimeState.webhook_requests++;
   whatsappRuntimeState.last_webhook_at = new Date().toISOString();
@@ -4684,12 +4780,18 @@ app.post("/webhook", async (req, res) => {
       whatsappRuntimeState.last_skip_reason = "unsupported_object";
       return;
     }
+    let coexistenceRecords = 0;
+    for (const webhookEntry of Array.isArray(req.body.entry) ? req.body.entry : []) {
+      for (const webhookChange of Array.isArray(webhookEntry && webhookEntry.changes) ? webhookEntry.changes : []) {
+        coexistenceRecords += await processWhatsAppCoexistenceChange(webhookChange);
+      }
+    }
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const messages = value?.messages;
     if (!messages || messages.length === 0) {
-      whatsappRuntimeState.last_skip_reason = "no_messages";
+      whatsappRuntimeState.last_skip_reason = coexistenceRecords ? null : "no_messages";
       return;
     }
     const destination = await resolveWhatsAppDestinationRuntime(value);
@@ -8862,7 +8964,12 @@ function customerPanelControlEvent(turn) {
 function customerPanelReplyActor(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   if (customerPanelControlEvent(turn)) return "system";
-  if (tools.includes("admin_send_message") || String(turn && turn.botReply || "").indexOf("[Humano]") === 0) return "human";
+  if (
+    tools.includes("admin_send_message") ||
+    tools.includes("whatsapp_business_app_echo") ||
+    tools.includes("whatsapp_history_outbound") ||
+    String(turn && turn.botReply || "").indexOf("[Humano]") === 0
+  ) return "human";
   return "bot";
 }
 
@@ -9071,7 +9178,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       }
       if (evalData.resuelto === "parcial") group.partial_resolution = true;
     }
-    if (customerText && turn.status === "ok" && customerClosureSignal(customerText) && !group.current_handoff) {
+    if (customerText && turn.status === "ok" && !tools.includes("whatsapp_history_import") && customerClosureSignal(customerText) && !group.current_handoff) {
       group.resolved_by = "bot";
       group.resolved_at_ms = tsMs || group.last_ts_ms;
     }

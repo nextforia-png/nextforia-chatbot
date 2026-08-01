@@ -127,6 +127,14 @@ function expectCode(promise, code) {
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
   assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
   assert(activationRequests[1].url.endsWith("/phone-rav"));
+  const coexistenceSyncRequests = activationRequests.filter(function (request) {
+    return request.url.endsWith("/phone-rav/smb_app_data");
+  });
+  assert.deepStrictEqual(coexistenceSyncRequests.map(function (request) {
+    return request.data && request.data.sync_type;
+  }), ["smb_app_state_sync", "history"]);
+  assert.strictEqual(activatedCoexistence.coexistence_sync.history.requested, true);
+  assert.strictEqual(activatedCoexistence.coexistence_sync.smb_app_state_sync.requested, true);
 
   const currentWhatsAppSubscriptionShape = new MetaChannelProvider({
     appId: "123456789",

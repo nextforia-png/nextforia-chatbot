@@ -607,6 +607,9 @@ class MetaChannelProvider {
           verified.data && (verified.data.display_phone_number || verified.data.verified_name) || candidate.account_label,
           240
         );
+        if (candidate.coexistence) {
+          candidate.coexistence_sync = await this.requestWhatsAppBusinessAppSync(candidate);
+        }
       } else {
         await this.subscribe(channel, candidate);
         const targetId = channel === "instagram" ? candidate.instagram_user_id : candidate.page_id;
@@ -645,6 +648,37 @@ class MetaChannelProvider {
     }
     await this.graph(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, request);
     return { ok: true };
+  }
+
+  async requestWhatsAppBusinessAppSync(candidate) {
+    const result = {};
+    for (const syncType of ["smb_app_state_sync", "history"]) {
+      try {
+        const response = await this.graph(
+          encodeURIComponent(candidate.phone_number_id) + "/smb_app_data",
+          candidate.access_token,
+          {
+            method: "POST",
+            data: {
+              messaging_product: "whatsapp",
+              sync_type: syncType
+            }
+          }
+        );
+        result[syncType] = {
+          requested: true,
+          request_id: cleanText(response && response.data && response.data.request_id, 240) || null
+        };
+      } catch (error) {
+        // A customer may decline chat sharing. The WhatsApp connection must
+        // remain usable even if either optional synchronization is unavailable.
+        result[syncType] = {
+          requested: false,
+          error: internalError(error)
+        };
+      }
+    }
+    return result;
   }
 
   async prepareEmbeddedWhatsApp(code, session, options) {

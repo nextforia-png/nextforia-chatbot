@@ -51,7 +51,10 @@ function waitForServer(child, port) {
   assert.match(source, /META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606"/);
   assert.match(source, /PHONE_NUMBER_ID === "334999901166332"/);
   assert.match(source, /channelConnectionProvider\.whatsappRegistrationPin\(PHONE_NUMBER_ID\)/);
-  assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.instagramLoginType === "instagram"[\s\S]*?"https:\/\/graph\.instagram\.com"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
+  assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.instagramLoginType \|\| runtime\.instagram_login_type[\s\S]*?=== "instagram"[\s\S]*?"https:\/\/graph\.instagram\.com"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
+  assert.match(source, /function rememberConversationRuntime\(userId, runtime\)[\s\S]*?instagramLoginType: cleanRuntimeText\(runtime\.instagramLoginType \|\| runtime\.instagram_login_type/);
+  assert.match(source, /async function outboundRuntimeForConversation\(userId, options\)[\s\S]*?instagramLoginType: cleanRuntimeText\(options && \(options\.instagramLoginType \|\| options\.instagram_login_type\)/);
+  assert.match(source, /await handleConversation\(userId, event\.message\.text,[\s\S]*?instagram_login_type: destination\.instagramLoginType \|\| destination\.instagram_login_type/);
   assert.match(source, /const INSTAGRAM_LOGIN_APP_ID =[\s\S]*?2073069230231933/);
   assert.match(source, /instagramLoginEnabled: INSTAGRAM_LOGIN_ENABLED/);
   assert.match(source, /tenantAliases: CHANNEL_CONNECTION_TENANT_ALIASES/);
@@ -59,6 +62,7 @@ function waitForServer(child, port) {
   assert.match(source, /instagramRuntimeState\.last_error_code = metaError\.code \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_subcode = metaError\.error_subcode \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_type = metaError\.type \|\| err\.code \|\| null/);
+  assert.match(source, /record\.protected_legacy && record\.status === "needs_attention"/);
   assert.match(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
   assert.match(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
   assert.match(source, /const RAV_INSTAGRAM_LOGIN_OVERRIDE = process\.env\.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1"/);
@@ -99,7 +103,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v313-instagram-direct-login"));
+    assert((await response.text()).includes("v314-meta-outbound-runtime"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

@@ -1853,6 +1853,11 @@ function completeWhatsAppEmbeddedSignup(){
     state.whatsappEmbedded=null;setChannelConnectionMessage(error.body&&error.body.message||"Meta no pudo terminar la conexión. Intenta de nuevo.","error");loadChannelConnections(true);
   });
 }
+function whatsappEmbeddedErrorMessage(payload){
+  var detail=String(payload&&payload.data&&(payload.data.error_message||payload.data.message)||"").toLowerCase();
+  if(/already|registered|another business|otro negocio|portfolio|portafolio|linked|vinculad/.test(detail))return"Este número ya está vinculado a otro portafolio de Meta. Desconéctalo allí o pide a soporte que lo mueva antes de volver a intentarlo.";
+  return"La conexión con Meta quedó incompleta. Puedes retomarla cuando quieras.";
+}
 function launchWhatsAppEmbeddedSignup(config){
   state.whatsappEmbedded={config:config,code:null,session:null,completing:false};
   loadMetaSdk(config).then(function(FB){
@@ -1882,7 +1887,7 @@ window.addEventListener("message",function(event){
     state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:String(session.phone_number_id),business_id:session.business_id?String(session.business_id):""};
     completeWhatsAppEmbeddedSignup();
   }else if(payload.event==="CANCEL"||payload.event==="ERROR"){
-    state.whatsappEmbedded=null;setChannelConnectionMessage("La conexión con Meta quedó incompleta. Puedes retomarla cuando quieras.","error");
+    state.whatsappEmbedded=null;setChannelConnectionMessage(whatsappEmbeddedErrorMessage(payload),"error");
   }
 });
 function connectChannel(channel){if(DEMO_MODE){setChannelConnectionMessage("Demo: aquí continuarías con Meta para elegir la cuenta de tu negocio.","success");return;}var externalTab=channel==="whatsapp"?null:prepareExternalIntegrationTab("Meta");if(channel!=="whatsapp"&&!externalTab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}setChannelConnectionMessage(channel==="whatsapp"?"Abriendo la conexión segura de WhatsApp…":"Meta se abrirá en una pestaña nueva…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/connect",{method:"POST",body:"{}"}).then(function(body){if(channel==="whatsapp"&&body.embedded_signup){launchWhatsAppEmbeddedSignup(body.embedded_signup);return;}if(!body.authorization_url)throw new Error("authorization_unavailable");if(!navigateExternalIntegrationTab(externalTab,body.authorization_url))throw new Error("popup_navigation_failed");setChannelConnectionMessage("Meta se abrió en una pestaña nueva. Termina allí y luego vuelve a este panel.","success");}).catch(function(error){closeExternalIntegrationTab(externalTab);setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");loadChannelConnections(true);});}

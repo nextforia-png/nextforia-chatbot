@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v313-instagram-direct-login";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v314-meta-outbound-runtime";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1258,7 +1258,11 @@ function credentialPayloadFromConnection(record) {
 function connectionRuntimeFromRecord(record) {
   const channel = cleanChannel(record && record.channel);
   const tenantId = cleanTenantId(record && record.tenant_id);
-  if (!tenantId || !channel || !record || record.status !== "connected") return null;
+  const runtimeEligible = record && (
+    record.status === "connected" ||
+    (record.protected_legacy && record.status === "needs_attention")
+  );
+  if (!tenantId || !channel || !runtimeEligible) return null;
   if (record.protected_legacy) {
     const legacyRuntime = {
       tenantId,
@@ -1471,6 +1475,8 @@ function rememberConversationRuntime(userId, runtime) {
     phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
     instagramUserId: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
     instagram_user_id: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
+    instagramLoginType: cleanRuntimeText(runtime.instagramLoginType || runtime.instagram_login_type, 40),
+    instagram_login_type: cleanRuntimeText(runtime.instagramLoginType || runtime.instagram_login_type, 40),
     pageId: cleanRuntimeText(runtime.pageId || runtime.page_id, 240),
     page_id: cleanRuntimeText(runtime.pageId || runtime.page_id, 240),
     accessToken: cleanRuntimeText(runtime.accessToken || runtime.access_token, 4096),
@@ -1575,6 +1581,8 @@ async function outboundRuntimeForConversation(userId, options) {
     phone_number_id: cleanRuntimeText(options && (options.phoneNumberId || options.phone_number_id), 240),
     instagramUserId: cleanRuntimeText(options && (options.instagramUserId || options.instagram_user_id), 240),
     instagram_user_id: cleanRuntimeText(options && (options.instagramUserId || options.instagram_user_id), 240),
+    instagramLoginType: cleanRuntimeText(options && (options.instagramLoginType || options.instagram_login_type), 40),
+    instagram_login_type: cleanRuntimeText(options && (options.instagramLoginType || options.instagram_login_type), 40),
     pageId: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
     page_id: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
     accessToken: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
@@ -1634,7 +1642,7 @@ function instagramGraphOriginForRuntime(runtime) {
   // Instagram Login does not require a Facebook Page and uses the Instagram
   // Graph host. Facebook Login connections keep using their Page token and the
   // Facebook Graph host.
-  if (runtime && runtime.instagramLoginType === "instagram") return "https://graph.instagram.com";
+  if (runtime && (runtime.instagramLoginType || runtime.instagram_login_type) === "instagram") return "https://graph.instagram.com";
   return runtime && runtime.source === "channel_connection" ? "https://graph.facebook.com" : IG_GRAPH_BASE_URL;
 }
 // Catálogo editable de planes y bots. Comparte el gate de customer access v2.
@@ -4489,6 +4497,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     channel: conversationChannel(userId),
     phone_number_id: conversationMeta.phone_number_id,
     instagram_user_id: conversationMeta.instagram_user_id,
+    instagram_login_type: conversationMeta.instagram_login_type,
     page_id: conversationMeta.page_id,
     access_token: conversationMeta.access_token,
     source: conversationMeta.source || "inbound_webhook"
@@ -4500,6 +4509,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
     instagramUserId: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
     instagram_user_id: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
+    instagramLoginType: cleanRuntimeText(conversationMeta.instagram_login_type, 40),
+    instagram_login_type: cleanRuntimeText(conversationMeta.instagram_login_type, 40),
     pageId: cleanRuntimeText(conversationMeta.page_id, 240),
     page_id: cleanRuntimeText(conversationMeta.page_id, 240),
     accessToken: cleanRuntimeText(conversationMeta.access_token, 4096),
@@ -5302,6 +5313,7 @@ app.post("/instagram/webhook", async (req, res) => {
           await handleConversation(userId, event.message.text, {
             tenant_id: destination.tenantId,
             instagram_user_id: destination.instagramUserId,
+            instagram_login_type: destination.instagramLoginType || destination.instagram_login_type,
             page_id: destination.pageId,
             access_token: destination.accessToken,
             source: destination.source || "instagram_webhook",

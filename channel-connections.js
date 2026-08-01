@@ -809,7 +809,7 @@ class MetaChannelProvider {
       request.params = {
         subscribed_fields: channel === "instagram"
           ? "messages,messaging_postbacks,message_reactions,message_reads"
-          : "messages,messaging_postbacks,messaging_optins,message_deliveries,messaging_reads"
+          : "messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads"
       };
     }
     if (channel === "instagram" && credential.login_type === "instagram") {
@@ -888,9 +888,10 @@ class MetaChannelProvider {
       // whatsapp_business_api_data, while Page subscriptions still expose id
       // at the top level. Accept both shapes so a valid WABA subscription is
       // not incorrectly marked as missing.
+      const expectedAppId = directInstagram ? this.instagramAppId : this.appId;
       const appSubscribed = subscribedApps.some((app) => String(
         app && (app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id)
-      ) === String(this.appId));
+      ) === String(expectedAppId));
       const registrationReady = channel !== "whatsapp" || (
         String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
         String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API"
@@ -935,7 +936,7 @@ function createLegacyConnections(options) {
   const rows = [];
   if (options.whatsapp && options.whatsapp.configured) {
     rows.push(Object.assign(emptyConnection(tenantId, "whatsapp"), {
-      status: options.whatsapp.needsAttention ? "needs_attention" : "connected",
+      status: options.whatsapp.needsAttention || !now ? "needs_attention" : "connected",
       account_id: cleanText(options.whatsapp.phoneNumberId, 240) || null,
       account_label: cleanText(options.whatsapp.displayPhone, 240) || "WhatsApp Business",
       phone_number_id: cleanText(options.whatsapp.phoneNumberId, 240) || null,
@@ -947,7 +948,7 @@ function createLegacyConnections(options) {
   }
   if (options.instagram && options.instagram.configured) {
     rows.push(Object.assign(emptyConnection(tenantId, "instagram"), {
-      status: options.instagram.needsAttention ? "needs_attention" : "connected",
+      status: options.instagram.needsAttention || !now ? "needs_attention" : "connected",
       account_id: cleanText(options.instagram.userId, 240) || null,
       account_label: cleanText(options.instagram.label, 240) || "Instagram profesional",
       instagram_user_id: cleanText(options.instagram.userId, 240) || null,
@@ -959,7 +960,7 @@ function createLegacyConnections(options) {
   }
   if (options.messenger && options.messenger.configured) {
     rows.push(Object.assign(emptyConnection(tenantId, "messenger"), {
-      status: options.messenger.needsAttention ? "needs_attention" : "connected",
+      status: options.messenger.needsAttention || !now ? "needs_attention" : "connected",
       account_id: cleanText(options.messenger.pageId, 240) || null,
       account_label: cleanText(options.messenger.label, 240) || "Facebook Page",
       page_id: cleanText(options.messenger.pageId, 240) || null,

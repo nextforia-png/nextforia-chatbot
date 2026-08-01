@@ -70,6 +70,9 @@ function expectCode(promise, code) {
     if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps") && request.method === "POST") {
       return { data: { success: true } };
     }
+    if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps")) {
+      return { data: { data: [{ id: "2073069230231933" }] } };
+    }
     if (request.url.endsWith("/v25.0/ig-direct")) {
       return { data: { id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
     }
@@ -122,6 +125,8 @@ function expectCode(promise, code) {
   assert(directInstagramRequests.some(function (request) {
     return request.url && request.url.includes("graph.instagram.com/v25.0/ig-direct/subscribed_apps");
   }));
+  const directInstagramVerification = await directInstagramMeta.verify("instagram", activatedDirectInstagram);
+  assert.strictEqual(directInstagramVerification.ok, true);
 
   const portfolioRequests = [];
   const portfolioMeta = new MetaChannelProvider({
@@ -210,6 +215,18 @@ function expectCode(promise, code) {
     "messages,messaging_postbacks,message_reactions,message_reads"
   );
   assert(!activationRequests[0].params.subscribed_fields.includes("messaging_seen"));
+
+  activationRequests.length = 0;
+  await activationMeta.activate("messenger", {
+    page_id: "page-rav",
+    account_label: "RAV Toys",
+    access_token: "page-access-token"
+  });
+  assert.strictEqual(
+    activationRequests[0].params.subscribed_fields,
+    "messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads"
+  );
+  assert(!activationRequests[0].params.subscribed_fields.includes("messaging_reads"));
 
   activationRequests.length = 0;
   const activatedWhatsApp = await activationMeta.activate("whatsapp", {
@@ -651,6 +668,7 @@ function expectCode(promise, code) {
   });
   const rav = await legacyService.listTenant("rav-toys", { superAdmin: true });
   assert.strictEqual(rav.find(function (row) { return row.channel === "whatsapp"; }).protected_legacy, true);
+  assert.strictEqual(rav.find(function (row) { return row.channel === "whatsapp"; }).status, "needs_attention");
   await expectCode(legacyService.disconnect("rav-toys", "whatsapp", "super-admin"), "legacy_connection_protected");
   await expectCode(legacyService.begin("rav-toys", "whatsapp", "super-admin", state), "legacy_connection_protected");
   await legacyStore.upsert({
@@ -662,7 +680,7 @@ function expectCode(promise, code) {
     credentials_ciphertext: null
   });
   const ravWithStaleRow = await legacyService.listTenant("rav-toys", { superAdmin: true });
-  assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).status, "connected");
+  assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).status, "needs_attention");
   assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).account_id, "rav-phone");
   await legacyStore.upsert({
     tenant_id: "tenant-wrong-owner",

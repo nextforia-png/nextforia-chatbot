@@ -45,6 +45,13 @@ assert(tenantA.includes('item.last_delivery_status==="failed"'));
 assert(tenantA.includes("Meta rechazó el envío"));
 assert(tenantA.includes('m.delivery_status==="failed"'));
 assert(tenantA.includes("No enviado"));
+assert(tenantA.includes('id="customerProfileName"'), "el perfil debe permitir guardar el nombre del cliente");
+assert(tenantA.includes('id="mobileCustomerProfileName"'), "el chat móvil debe permitir guardar el nombre del cliente");
+assert(tenantA.includes('id="nameSuggestion"'), "el perfil debe mostrar la sugerencia de Nextfor");
+assert(tenantA.includes('id="mobileNameSuggestion"'), "el chat móvil debe mostrar la sugerencia de Nextfor");
+assert(tenantA.includes("Nextfor sugiere"));
+assert(tenantA.includes("Guardar perfil"));
+assert(tenantA.includes("name:customerNameValue()"), "el nombre confirmado debe enviarse al endpoint de metadata");
 assert(!tenantA.includes(">Empresa B<"));
 assert(!tenantA.includes(">RAV Toys<"));
 

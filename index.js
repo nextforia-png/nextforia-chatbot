@@ -297,7 +297,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v306-super-admin-partner-invites";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v307-customer-name-memory";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -2132,6 +2132,14 @@ function normalizeCustomerNote(note) {
   return String(note || "").replace(/\s+\n/g, "\n").trim().slice(0, 1200);
 }
 
+function normalizeCustomerName(name) {
+  return String(name || "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
 function normalizeConversationUserId(value) {
   const raw = String(value || "").trim();
   const instagram = /^ig:/i.test(raw);
@@ -2216,6 +2224,7 @@ function parseCustomerMetaTurn(turn) {
     return {
       tags: normalizeCustomerTags(parsed.tags),
       note: normalizeCustomerNote(parsed.note),
+      name: normalizeCustomerName(parsed.name),
       updated_at: turn.ts || null
     };
   } catch (e) {
@@ -2418,7 +2427,8 @@ function queueInstagramProfileRefreshes(turns) {
 function recordCustomerMeta(userId, meta) {
   const payload = {
     tags: normalizeCustomerTags(meta && meta.tags),
-    note: normalizeCustomerNote(meta && meta.note)
+    note: normalizeCustomerNote(meta && meta.note),
+    name: normalizeCustomerName(meta && meta.name)
   };
   const rec = {
     ts: new Date().toISOString(),
@@ -9077,7 +9087,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
 
   const conversations = Object.keys(groups).map(function (userId) {
     const group = groups[userId];
-    const meta = metaByCustomer[userId] || { tags: [], note: "", updated_at: null };
+    const meta = metaByCustomer[userId] || { tags: [], note: "", name: "", updated_at: null };
     const memory = normalizeMemory(memoriesByCustomer[userId]);
     const active = !!(states[userId] && states[userId].active);
     const tags = normalizeCustomerTags(meta.tags);
@@ -9098,7 +9108,9 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const channelDisplayName = group.channel === "instagram"
       ? (instagramUsername ? "@" + instagramUsername : "Instagram · …" + suffix)
       : group.channel === "messenger" ? "Messenger · …" + suffix : "+" + group.external_id;
-    const displayName = memory.preferred_name || channelDisplayName;
+    const savedCustomerName = normalizeCustomerName(meta.name);
+    const suggestedCustomerName = normalizeCustomerName(memory.preferred_name);
+    const displayName = savedCustomerName || suggestedCustomerName || channelDisplayName;
     const copyValue = group.channel === "instagram"
       ? (instagramUsername ? "@" + instagramUsername : group.external_id)
       : group.channel === "messenger" ? group.external_id : "+" + group.external_id;
@@ -9110,6 +9122,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       instagram_username: instagramUsername || null,
       messenger_username: null,
       display_name: displayName,
+      customer_name: savedCustomerName || null,
+      suggested_name: suggestedCustomerName && suggestedCustomerName !== savedCustomerName ? suggestedCustomerName : null,
       copy_value: copyValue,
       last_ts: group.last_ts,
       last_text: group.last_text,
@@ -10489,7 +10503,7 @@ app.get("/admin/customer-meta", async (req, res) => {
   });
 });
 
-app.post("/admin/customer-meta/:userId", (req, res) => {
+app.post("/admin/customer-meta/:userId", async (req, res) => {
   if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
@@ -10501,8 +10515,18 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
   }
   const meta = recordCustomerMeta(userId, {
     tags: req.body && req.body.tags,
-    note: req.body && req.body.note
+    note: req.body && req.body.note,
+    name: req.body && req.body.name
   });
+  if (meta.name) {
+    const currentMemory = normalizeMemory(await loadCustomerMemory(userId));
+    if (currentMemory.preferred_name !== meta.name) {
+      recordCustomerMemory(userId, Object.assign({}, currentMemory, {
+        preferred_name: meta.name,
+        updated_at: new Date().toISOString()
+      }));
+    }
+  }
   res.json({ ok: true, userId, meta });
 });
 

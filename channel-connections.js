@@ -489,17 +489,23 @@ class MetaChannelProvider {
     if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
     if (cleanChannel(options && options.channel) === "instagram" && this.instagramLoginEnabled) {
       try {
-        const form = new URLSearchParams();
-        form.set("client_id", this.instagramAppId);
-        form.set("client_secret", this.instagramAppSecret);
-        form.set("grant_type", "authorization_code");
-        form.set("redirect_uri", redirectUri);
-        form.set("code", cleanText(code, 2000));
-        const response = await this.axios.post(this.instagramApiOrigin + "/oauth/access_token", form.toString(), {
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          timeout: 10000
-        });
-        const token = cleanText(response.data && response.data.access_token, 4096);
+        const payload = {
+          client_id: this.instagramAppId,
+          client_secret: this.instagramAppSecret,
+          grant_type: "authorization_code",
+          redirect_uri: redirectUri,
+          code: cleanText(code, 2000)
+        };
+        const endpoint = this.instagramApiOrigin + "/oauth/access_token";
+        const response = typeof this.axios.postForm === "function"
+          ? await this.axios.postForm(endpoint, payload, { timeout: 10000 })
+          : await this.axios.post(endpoint, new URLSearchParams(payload).toString(), {
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              timeout: 10000
+            });
+        const responseData = response.data || {};
+        const firstResult = Array.isArray(responseData.data) ? responseData.data[0] || {} : {};
+        const token = cleanText(responseData.access_token || firstResult.access_token, 4096);
         if (!token) throw new Error("Instagram did not return an access token");
         return { access_token: token, login_type: "instagram" };
       } catch (error) {

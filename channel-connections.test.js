@@ -87,6 +87,15 @@ function expectCode(promise, code) {
     assert(!String(body).includes("state-secret-value"));
     return { data: { access_token: "short-instagram-token", user_id: "ig-direct" } };
   };
+  directInstagramAxios.postForm = async function (url, body, options) {
+    directInstagramRequests.push({ method: "POST_FORM", url, body, options });
+    assert(url.endsWith("/oauth/access_token"));
+    assert.strictEqual(body.client_id, "2073069230231933");
+    assert.strictEqual(body.redirect_uri, "https://nextforia.com/admin/channel-connections/meta/callback");
+    assert.strictEqual(body.code, "instagram-code");
+    assert(!JSON.stringify(body).includes("state-secret-value"));
+    return { data: { data: [{ access_token: "short-instagram-token", user_id: "ig-direct" }] } };
+  };
   directInstagramAxios.get = async function (url, options) {
     directInstagramRequests.push({ method: "GET", url, options });
     if (url.endsWith("/access_token")) return { data: { access_token: "long-instagram-token" } };
@@ -119,6 +128,7 @@ function expectCode(promise, code) {
   directCredential = await directInstagramMeta.extendUserAccessToken(directCredential);
   assert.strictEqual(directCredential.login_type, "instagram");
   assert.strictEqual(directCredential.access_token, "long-instagram-token");
+  assert(directInstagramRequests.some(function (request) { return request.method === "POST_FORM"; }));
   const directCandidates = await directInstagramMeta.discoverAssets("instagram", directCredential);
   assert.strictEqual(directCandidates.length, 1);
   assert.strictEqual(directCandidates[0].account_label, "@nextfor.ia");
@@ -139,6 +149,7 @@ function expectCode(promise, code) {
     error.response = { data: { error_type: "OAuthException", code: 400, error_message: "Invalid platform app" } };
     throw error;
   };
+  failedDirectInstagramAxios.postForm = failedDirectInstagramAxios.post;
   const failedDirectInstagramMeta = new MetaChannelProvider({
     instagramAppId: "2073069230231933",
     instagramAppSecret: "instagram-app-secret",

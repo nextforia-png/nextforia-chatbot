@@ -176,6 +176,10 @@ const {
   classifyServiceAreaReply,
   serviceAreaCheckForPhone
 } = require("./service-area");
+const {
+  createMultimodalAgent,
+  multimodalConfigFromEnv
+} = require("./multimodal-agent");
 
 function boundedEnvInt(name, fallback, min, max) {
   const parsed = Number(process.env[name]);
@@ -297,7 +301,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v309-meta-portfolio-picker";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v310-meta-portfolios-rav-multimodal";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -435,8 +439,8 @@ const PAYMENTS_PRODUCTION_AUTO_ENABLED = process.env.PAYMENTS_V1_ENABLED !== "0"
 const PAYMENTS_V1_ENABLED = PAYMENTS_V1_GATE || PAYMENTS_TEST_MODE || PAYMENTS_PRODUCTION_AUTO_ENABLED;
 const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
-const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
 const ELEVENLABS_API_KEY = String(process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY || "webhook-verification-only" });
 const ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID = String(
   process.env.ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID ||
   process.env.ELEVENLABS_LUCIANA_AGENT_ID ||
@@ -505,6 +509,11 @@ const APPOINTMENT_CALENDAR_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BAS
 const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
 const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
+const MULTIMODAL_CONFIG = multimodalConfigFromEnv(process.env);
+const OPENAI_TRANSCRIPTION_MODEL = String(process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe").trim();
+const OPENAI_VISION_MODEL = String(process.env.OPENAI_VISION_MODEL || "gpt-4.1-mini").trim();
+const multimodalAgent = createMultimodalAgent(MULTIMODAL_CONFIG);
 const ADAPTIVE_TOKEN_LIMITS = {
   standard: {
     maxTokens: boundedEnvInt("AI_STANDARD_MAX_TOKENS", 1000, 400, 2400),
@@ -621,6 +630,8 @@ if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FIXED_FEE) || WOMPI
 if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_TAX_RATE) || WOMPI_ESTIMATED_FEE_TAX_RATE < 0 || WOMPI_ESTIMATED_FEE_TAX_RATE > 1)) {
   productionConfigErrors.push("WOMPI_ESTIMATED_FEE_TAX_RATE must be a decimal between 0 and 1");
 }
+if (MULTIMODAL_CONFIG.enabled && (MULTIMODAL_CONFIG.voice_input_enabled || MULTIMODAL_CONFIG.image_input_enabled) && !OPENAI_API_KEY) productionConfigErrors.push("OPENAI_API_KEY is required when multimodal voice or image input is enabled");
+if (MULTIMODAL_CONFIG.enabled && MULTIMODAL_CONFIG.voice_replies_enabled && !ELEVENLABS_API_KEY) productionConfigErrors.push("ELEVENLABS_API_KEY is required when multimodal voice replies are enabled");
 if (productionConfigErrors.length) {
   console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
   process.exit(1);
@@ -2751,6 +2762,8 @@ Ejemplos del tono que queremos:
 NO uses frases frías como "No entiendo tu mensaje", "Procesa de nuevo", "Solicitud no válida", "No es posible". El cliente debe sentir que le estás dando lo mejor de ti.
 
 IMÁGENES Y MULTIMEDIA:
+Si el mensaje del cliente empieza con "[AGENTE MULTIMODAL: NOTA DE VOZ TRANSCRITA]" o "[AGENTE MULTIMODAL: IMAGEN ANALIZADA]", significa que Nextfor ya proceso ese audio o imagen de forma controlada. Usa SOLO esa transcripcion o analisis como contexto, responde natural y no digas que no puedes escuchar/ver ese archivo.
+
 Si el cliente menciona que va a mandar o mandó una imagen/foto/video/audio (ej: "te mando foto", "mira esta imagen", "ahí te paso una pic", "te grabo un audio"), o si por el contexto entiendes que está intentando compartir algo que no es texto, responde con calidez y honestidad sobre tu limitación. NO inventes que viste algo, sé honesto.
 
 Frases tipo (varía, no las copies idénticas):
@@ -3816,6 +3829,109 @@ async function sendImage(to, imageUrl, caption, options) {
   }
 }
 
+function mediaFilename(media) {
+  const mime = String(media && media.mime_type || "").toLowerCase();
+  if (media && media.kind === "image") return "whatsapp-image." + (mime.includes("png") ? "png" : "jpg");
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "whatsapp-audio.mp3";
+  if (mime.includes("m4a")) return "whatsapp-audio.m4a";
+  if (mime.includes("mp4")) return "whatsapp-audio.mp4";
+  if (mime.includes("wav")) return "whatsapp-audio.wav";
+  if (mime.includes("webm")) return "whatsapp-audio.webm";
+  if (mime.includes("aac")) return "whatsapp-audio.aac";
+  return "whatsapp-audio.ogg";
+}
+
+function extractOpenAIText(data) {
+  if (data && typeof data.text === "string") return data.text.trim();
+  if (data && typeof data.output_text === "string") return data.output_text.trim();
+  const chunks = [];
+  for (const item of data && data.output || []) {
+    for (const content of item && item.content || []) {
+      const text = content && typeof content.text === "string"
+        ? content.text
+        : (content && content.text && typeof content.text.value === "string" ? content.text.value : "");
+      if (text && ["output_text", "text"].includes(content.type)) chunks.push(text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+async function downloadWhatsAppMediaForMultimodal(media, context) {
+  const accessToken = String(context && context.access_token || WA_TOKEN || "").trim();
+  if (!accessToken) throw new Error("wa_token_missing");
+  const metadata = await axios.get(
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(media.media_id)}`,
+    {
+      params: context && context.phone_number_id ? { phone_number_id: context.phone_number_id } : undefined,
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000
+    }
+  );
+  const mediaUrl = metadata.data && metadata.data.url;
+  if (!mediaUrl) throw new Error("media_url_missing");
+  const response = await axios.get(mediaUrl, {
+    responseType: "arraybuffer",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    timeout: 20000,
+    maxContentLength: Math.max(MULTIMODAL_CONFIG.max_audio_bytes, MULTIMODAL_CONFIG.max_image_bytes)
+  });
+  return {
+    buffer: Buffer.from(response.data),
+    mime_type: response.headers && response.headers["content-type"] || metadata.data.mime_type || media.mime_type,
+    file_size: Number(metadata.data.file_size || response.data.byteLength || 0),
+    sha256: metadata.data.sha256 || media.sha256 || ""
+  };
+}
+
+async function transcribeMultimodalAudio(downloaded, media) {
+  if (!OPENAI_API_KEY) throw new Error("openai_api_key_missing");
+  const form = new FormData();
+  form.append("model", OPENAI_TRANSCRIPTION_MODEL);
+  form.append("file", new Blob([downloaded.buffer], { type: downloaded.mime_type || media.mime_type || "audio/ogg" }), mediaFilename(media));
+  form.append("response_format", "json");
+  const response = await axios.post("https://api.openai.com/v1/audio/transcriptions", form, {
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    timeout: 45000,
+    maxBodyLength: MULTIMODAL_CONFIG.max_audio_bytes + 1024 * 1024
+  });
+  const text = extractOpenAIText(response.data);
+  if (!text) throw new Error("transcription_empty");
+  return { text, provider: "openai", model: OPENAI_TRANSCRIPTION_MODEL };
+}
+
+async function analyzeMultimodalImage(downloaded, media) {
+  if (!OPENAI_API_KEY) throw new Error("openai_api_key_missing");
+  const mime = downloaded.mime_type || media.mime_type || "image/jpeg";
+  const dataUrl = "data:" + mime + ";base64," + downloaded.buffer.toString("base64");
+  const response = await axios.post("https://api.openai.com/v1/responses", {
+    model: OPENAI_VISION_MODEL,
+    max_output_tokens: 450,
+    input: [{
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: [
+            "Analiza esta imagen de WhatsApp para un bot comercial de atencion al cliente.",
+            "Responde en espanol, breve y util.",
+            "Clasifica el caso como una de estas opciones: producto, garantia/dano, pedido/pago, documento, unclear.",
+            "Describe solo lo visible con cautela. No inventes datos personales, precios, guias, estados de pedido ni diagnosticos.",
+            "Si hay texto visible, resume lo relevante. Si el caso parece sensible o incierto, recomienda escalar a humano."
+          ].join(" ")
+        },
+        { type: "input_image", image_url: dataUrl }
+      ]
+    }]
+  }, {
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+    timeout: 45000,
+    maxBodyLength: MULTIMODAL_CONFIG.max_image_bytes + 1024 * 1024
+  });
+  const text = extractOpenAIText(response.data);
+  if (!text) throw new Error("vision_empty");
+  return { text, provider: "openai", model: OPENAI_VISION_MODEL };
+}
+
 async function sendLocation(to, lat, lng, name, address, options) {
   if (["instagram", "messenger"].includes(parseChannelRecipient(to).channel)) {
     await sendText(to, `${name}\n${address}\nhttps://www.google.com/maps?q=${lat},${lng}`);
@@ -4762,12 +4878,51 @@ app.post("/webhook", async (req, res) => {
       if (await humanControlActiveFor(from)) {
         recordHumanPausedInbound(from, message);
       } else {
-        await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
+        const multimodalResult = await multimodalAgent.handleIncomingMedia({
+          user_id: from,
+          tenant_id: destination.tenantId,
+          message,
+          conversation_meta: {
+            tenant_id: destination.tenantId,
+            phone_number_id: destination.phoneNumberId,
+            access_token: destination.accessToken,
+            source: destination.source || "webhook",
+            source_event_id: message.id || "wa:" + Date.now(),
+            source_at: new Date().toISOString()
+          },
+          downloadMedia: function (media) { return downloadWhatsAppMediaForMultimodal(media, { phone_number_id: destination.phoneNumberId, access_token: destination.accessToken }); },
+          transcribeAudio: transcribeMultimodalAudio,
+          sendText: function (userId, text) { return sendText(userId, text, destination); },
+          handleConversation,
+          recordTurn: function (userId, inbound, outbound, status) { return recordTurn(userId, inbound, outbound, status, destination); },
+          log
+        });
+        if (!multimodalResult.handled) await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
       }
     } else if (type === "image" || type === "document") {
       console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
       if (await humanControlActiveFor(from)) {
         recordHumanPausedInbound(from, message);
+      } else if (type === "image") {
+        await multimodalAgent.handleIncomingMedia({
+          user_id: from,
+          tenant_id: destination.tenantId,
+          message,
+          conversation_meta: {
+            tenant_id: destination.tenantId,
+            phone_number_id: destination.phoneNumberId,
+            access_token: destination.accessToken,
+            source: destination.source || "webhook",
+            source_event_id: message.id || "wa:" + Date.now(),
+            source_at: new Date().toISOString()
+          },
+          downloadMedia: function (media) { return downloadWhatsAppMediaForMultimodal(media, { phone_number_id: destination.phoneNumberId, access_token: destination.accessToken }); },
+          analyzeImage: analyzeMultimodalImage,
+          sendText: function (userId, text) { return sendText(userId, text, destination); },
+          handleConversation,
+          recordTurn: function (userId, inbound, outbound, status) { return recordTurn(userId, inbound, outbound, status, destination); },
+          log
+        });
       }
     } else {
       console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
@@ -14509,6 +14664,18 @@ async function buildAdminHealthResult() {
       shopify_pairing_secret_configured: String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32,
       notification_phones_count: NOTIFICATION_PHONES.length,
       dashboard_users_count: DASHBOARD_USERS.length
+    },
+    multimodal_agent: {
+      enabled: MULTIMODAL_CONFIG.enabled,
+      tenant_ids: MULTIMODAL_CONFIG.tenant_ids,
+      voice_input_enabled: MULTIMODAL_CONFIG.voice_input_enabled,
+      image_input_enabled: MULTIMODAL_CONFIG.image_input_enabled,
+      voice_replies_enabled: MULTIMODAL_CONFIG.voice_replies_enabled,
+      transcription_provider: MULTIMODAL_CONFIG.transcription_provider,
+      vision_provider: MULTIMODAL_CONFIG.vision_provider,
+      voice_provider: MULTIMODAL_CONFIG.voice_provider,
+      openai_key_present: !!OPENAI_API_KEY,
+      elevenlabs_key_present: !!ELEVENLABS_API_KEY
     },
     state: {
       active_handoffs: humanHandoff.size,

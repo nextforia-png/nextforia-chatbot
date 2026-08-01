@@ -18,7 +18,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 - **Memoria comercial persistente** — recuerda nombre preferido, productos de interés, etapa de compra y pedidos verificados sin guardar datos sensibles del checkout
 - ⭐ **Calificaciones** — pide rating 1-5 al cierre o post-handoff; rating bajo escala a humano
 - 🤝 **Handoff a humano** — Eliana (asesora comercial) recibe alertas en su WhatsApp
-- 🙈 **Manejo cálido de multimedia** — explica que aún no ve imágenes y guía al cliente a mandar links
+- **Entradas multimodales** — entiende notas de voz e imágenes en WhatsApp y las integra a la conversación normal del bot
 
 ---
 
@@ -65,6 +65,14 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
 | `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
+| `OPENAI_API_KEY` | API key usada por el agente multimodal cuando se activan voz o imagen |
+| `OPENAI_TRANSCRIPTION_MODEL` | Modelo de transcripción multimodal (default: `gpt-4o-mini-transcribe`) |
+| `OPENAI_VISION_MODEL` | Modelo de análisis de imágenes (default: `gpt-4.1-mini`) |
+| `MULTIMODAL_AGENT_ENABLED` | Gate maestro del agente de audio/imagen |
+| `MULTIMODAL_AGENT_TENANT_IDS` | Tenants permitidos, CSV; el piloto de producción usa únicamente `rav-toys` |
+| `MULTIMODAL_VOICE_INPUT_ENABLED` | Permite transcribir notas de voz de WhatsApp y pasarlas al bot como texto controlado |
+| `MULTIMODAL_IMAGE_INPUT_ENABLED` | Permite analizar imágenes de WhatsApp y pasar hallazgos al bot |
+| `MULTIMODAL_VOICE_REPLIES_ENABLED` | Reservado para respuestas de voz con ElevenLabs; mantener `0` hasta validar envío de audio |
 | `AI_STANDARD_MAX_TOKENS` | Máximo de salida para conversaciones normales (default: `1000`) |
 | `AI_STANDARD_HISTORY_MESSAGES` | Historial usado en conversaciones normales (default: `8`) |
 | `AI_ENGAGED_MAX_TOKENS` | Máximo de salida para consultas comerciales (default: `1400`) |

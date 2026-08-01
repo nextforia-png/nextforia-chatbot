@@ -62,6 +62,59 @@ function expectCode(promise, code) {
   assert(!waUrl.toString().includes("meta-app-secret"));
   const instagramUrl = new URL(meta.authorizationUrl("instagram", state));
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));
+  assert(instagramUrl.searchParams.get("scope").includes("business_management"));
+
+  const portfolioRequests = [];
+  const portfolioMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      portfolioRequests.push(request.url);
+      if (request.url.endsWith("/me/accounts")) {
+        return { data: { data: [{
+          id: "page-rav",
+          name: "RAV Toys",
+          access_token: "page-token-rav",
+          instagram_business_account: { id: "ig-rav", username: "ravtoys" }
+        }] } };
+      }
+      if (request.url.endsWith("/me/businesses")) {
+        return { data: { data: [
+          { id: "business-rav", name: "RAV Toys Portfolio" },
+          { id: "business-nextfor", name: "NextforIA Portfolio" }
+        ] } };
+      }
+      if (request.url.endsWith("/business-rav/owned_pages")) {
+        return { data: { data: [{
+          id: "page-rav",
+          name: "RAV Toys",
+          instagram_business_account: { id: "ig-rav", username: "ravtoys" }
+        }] } };
+      }
+      if (request.url.endsWith("/business-nextfor/owned_pages")) {
+        return { data: { data: [{
+          id: "page-nextfor",
+          name: "Nextfor IA",
+          access_token: "page-token-nextfor",
+          instagram_business_account: { id: "ig-nextfor", username: "nextforia" }
+        }] } };
+      }
+      if (request.url.endsWith("/client_pages")) return { data: { data: [] } };
+      throw new Error("Unexpected Meta request: " + request.url);
+    }
+  });
+  const portfolioCandidates = await portfolioMeta.discoverAssets("instagram", "user-access-token");
+  assert.strictEqual(portfolioCandidates.length, 2);
+  const ravPortfolioCandidate = portfolioCandidates.find(function (candidate) { return candidate.id === "ig:ig-rav"; });
+  const nextforPortfolioCandidate = portfolioCandidates.find(function (candidate) { return candidate.id === "ig:ig-nextfor"; });
+  assert(ravPortfolioCandidate.detail.includes("RAV Toys Portfolio"));
+  assert.strictEqual(ravPortfolioCandidate.access_token, "page-token-rav");
+  assert.strictEqual(ravPortfolioCandidate.meta_business_id, "business-rav");
+  assert(nextforPortfolioCandidate.detail.includes("NextforIA Portfolio"));
+  assert.strictEqual(nextforPortfolioCandidate.account_label, "@nextforia");
+  assert(portfolioRequests.some(function (url) { return url.endsWith("/business-nextfor/owned_pages"); }));
 
   const activationRequests = [];
   const activationMeta = new MetaChannelProvider({

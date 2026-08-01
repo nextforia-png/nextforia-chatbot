@@ -430,8 +430,8 @@ class MetaChannelProvider {
     if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
     const scopes = {
       whatsapp: ["business_management", "whatsapp_business_management", "whatsapp_business_messaging"],
-      instagram: ["pages_show_list", "pages_read_engagement", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"],
-      messenger: ["pages_show_list", "pages_manage_metadata", "pages_messaging"]
+      instagram: ["business_management", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"],
+      messenger: ["business_management", "pages_show_list", "pages_manage_metadata", "pages_messaging"]
     }[channel];
     const url = new URL(this.dialogOrigin + "/" + this.graphVersion + "/dialog/oauth");
     url.searchParams.set("client_id", this.appId);
@@ -535,6 +535,94 @@ class MetaChannelProvider {
     return candidates;
   }
 
+  pageCandidate(channel, page, business) {
+    const pageToken = cleanText(page && page.access_token, 4096);
+    if (!page || !page.id || !pageToken) return null;
+    const businessName = cleanText(business && business.name, 120);
+    const pageName = cleanText(page.name || "Facebook Page", 120);
+    const detail = businessName
+      ? businessName + " · Página " + pageName
+      : "Vinculada a " + pageName;
+    if (channel === "instagram") {
+      const instagram = page.instagram_business_account;
+      if (!instagram || !instagram.id) return null;
+      return {
+        id: "ig:" + instagram.id,
+        label: cleanText(instagram.username ? "@" + instagram.username : instagram.name || instagram.id, 240),
+        detail: cleanText(detail, 240),
+        account_id: String(instagram.id),
+        account_label: cleanText(instagram.username ? "@" + instagram.username : instagram.name || instagram.id, 240),
+        meta_business_id: business && business.id ? String(business.id) : null,
+        page_id: String(page.id),
+        instagram_user_id: String(instagram.id),
+        access_token: pageToken
+      };
+    }
+    return {
+      id: "ms:" + page.id,
+      label: cleanText(page.name || page.id, 240),
+      detail: cleanText(businessName ? businessName + " · Facebook Page" : "Facebook Page", 240),
+      account_id: String(page.id),
+      account_label: cleanText(page.name || page.id, 240),
+      meta_business_id: business && business.id ? String(business.id) : null,
+      page_id: String(page.id),
+      access_token: pageToken
+    };
+  }
+
+  addPageCandidates(candidatesById, channel, pages, business) {
+    for (const page of pages || []) {
+      const candidateId = channel === "instagram"
+        ? page && page.instagram_business_account && page.instagram_business_account.id
+          ? "ig:" + page.instagram_business_account.id
+          : ""
+        : page && page.id ? "ms:" + page.id : "";
+      const existing = candidateId ? candidatesById.get(candidateId) : null;
+      const candidate = this.pageCandidate(channel, Object.assign({}, page || {}, {
+        access_token: page && page.access_token || existing && existing.access_token
+      }), business);
+      if (!candidate) continue;
+      // Prefer the portfolio-aware label while retaining any token returned by
+      // the direct /me/accounts edge.
+      candidatesById.set(candidate.id, Object.assign({}, existing || {}, candidate, {
+        access_token: candidate.access_token || existing && existing.access_token
+      }));
+    }
+  }
+
+  async discoverBusinessPages(channel, accessToken, candidatesById) {
+    let response;
+    try {
+      response = await this.graph("me/businesses", accessToken, {
+        params: { fields: "id,name", limit: 100 }
+      });
+    } catch (_) {
+      // Keep /me/accounts as a backwards-compatible fallback when the Meta app
+      // or user has not granted business_management yet.
+      return;
+    }
+    const fields = "id,name,access_token,tasks,instagram_business_account{id,username,name}";
+    for (const business of response.data && response.data.data || []) {
+      for (const edge of ["owned_pages", "client_pages"]) {
+        try {
+          const pagesResponse = await this.graph(
+            encodeURIComponent(business.id) + "/" + edge,
+            accessToken,
+            { params: { fields, limit: 100 } }
+          );
+          this.addPageCandidates(
+            candidatesById,
+            channel,
+            pagesResponse.data && pagesResponse.data.data || [],
+            business
+          );
+        } catch (_) {
+          // One inaccessible portfolio must not hide the remaining businesses.
+        }
+      }
+    }
+  }
+
   async discoverPages(channel, accessToken) {
     const response = await this.graph("me/accounts", accessToken, {
       params: {
@@ -542,35 +630,16 @@ class MetaChannelProvider {
         limit: 100
       }
     });
+    const candidatesById = new Map();
+    this.addPageCandidates(
+      candidatesById,
+      channel,
+      response.data && response.data.data || [],
+      null
+    );
+    await this.discoverBusinessPages(channel, accessToken, candidatesById);
     const candidates = [];
-    for (const page of response.data && response.data.data || []) {
-      const pageToken = cleanText(page.access_token, 4096);
-      if (!page.id || !pageToken) continue;
-      if (channel === "instagram") {
-        const instagram = page.instagram_business_account;
-        if (!instagram || !instagram.id) continue;
-        candidates.push({
-          id: "ig:" + instagram.id,
-          label: cleanText(instagram.username ? "@" + instagram.username : instagram.name || instagram.id, 240),
-          detail: cleanText("Vinculada a " + (page.name || "Facebook Page"), 240),
-          account_id: String(instagram.id),
-          account_label: cleanText(instagram.username ? "@" + instagram.username : instagram.name || instagram.id, 240),
-          page_id: String(page.id),
-          instagram_user_id: String(instagram.id),
-          access_token: pageToken
-        });
-      } else {
-        candidates.push({
-          id: "ms:" + page.id,
-          label: cleanText(page.name || page.id, 240),
-          detail: "Facebook Page",
-          account_id: String(page.id),
-          account_label: cleanText(page.name || page.id, 240),
-          page_id: String(page.id),
-          access_token: pageToken
-        });
-      }
-    }
+    candidatesById.forEach(function (candidate) { candidates.push(candidate); });
     return candidates;
   }
 

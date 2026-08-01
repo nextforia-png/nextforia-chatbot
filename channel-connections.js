@@ -415,10 +415,19 @@ class MetaChannelProvider {
     this.graphOrigin = String(options.graphOrigin || "https://graph.facebook.com").replace(/\/$/, "");
     this.dialogOrigin = String(options.dialogOrigin || "https://www.facebook.com").replace(/\/$/, "");
     this.redirectUri = cleanText(options.redirectUri, 500);
+    this.instagramAppId = cleanText(options.instagramAppId, 160);
+    this.instagramAppSecret = cleanText(options.instagramAppSecret, 400);
+    this.instagramLoginEnabled = options.instagramLoginEnabled === true;
+    this.instagramDialogOrigin = String(options.instagramDialogOrigin || "https://www.instagram.com").replace(/\/$/, "");
+    this.instagramApiOrigin = String(options.instagramApiOrigin || "https://api.instagram.com").replace(/\/$/, "");
+    this.instagramGraphOrigin = String(options.instagramGraphOrigin || "https://graph.instagram.com").replace(/\/$/, "");
     this.axios = options.axiosClient;
   }
 
   configured(channel) {
+    if (channel === "instagram" && this.instagramLoginEnabled) {
+      return !!(this.instagramAppId && this.instagramAppSecret && this.redirectUri && this.axios);
+    }
     if (!this.appId || !this.appSecret || !this.redirectUri || !this.axios) return false;
     return channel !== "whatsapp" || !!this.whatsappConfigId;
   }
@@ -428,6 +437,18 @@ class MetaChannelProvider {
     if (!this.configured(channel)) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
     const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
     if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
+    if (channel === "instagram" && this.instagramLoginEnabled) {
+      const url = new URL(this.instagramDialogOrigin + "/oauth/authorize");
+      url.searchParams.set("enable_fb_login", "0");
+      url.searchParams.set("force_authentication", "1");
+      url.searchParams.set("force_reauth", "true");
+      url.searchParams.set("client_id", this.instagramAppId);
+      url.searchParams.set("redirect_uri", redirectUri);
+      url.searchParams.set("state", state);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("scope", "instagram_business_basic,instagram_business_manage_messages");
+      return url.toString();
+    }
     const scopes = {
       whatsapp: ["business_management", "whatsapp_business_management", "whatsapp_business_messaging"],
       instagram: ["business_management", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"],
@@ -467,6 +488,25 @@ class MetaChannelProvider {
   async exchangeCode(code, options) {
     const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
     if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
+    if (cleanChannel(options && options.channel) === "instagram" && this.instagramLoginEnabled) {
+      try {
+        const form = new URLSearchParams();
+        form.set("client_id", this.instagramAppId);
+        form.set("client_secret", this.instagramAppSecret);
+        form.set("grant_type", "authorization_code");
+        form.set("redirect_uri", redirectUri);
+        form.set("code", cleanText(code, 2000));
+        const response = await this.axios.post(this.instagramApiOrigin + "/oauth/access_token", form.toString(), {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          timeout: 10000
+        });
+        const token = cleanText(response.data && response.data.access_token, 4096);
+        if (!token) throw new Error("Instagram did not return an access token");
+        return { access_token: token, login_type: "instagram" };
+      } catch (error) {
+        throw new ChannelConnectionError("invalid_authorization", 422, internalError(error));
+      }
+    }
     try {
       const response = await this.axios.get(this.graphOrigin + "/" + this.graphVersion + "/oauth/access_token", {
         params: {
@@ -486,6 +526,24 @@ class MetaChannelProvider {
   }
 
   async extendUserAccessToken(accessToken) {
+    if (accessToken && accessToken.login_type === "instagram") {
+      try {
+        const response = await this.axios.get(this.instagramGraphOrigin + "/access_token", {
+          params: {
+            grant_type: "ig_exchange_token",
+            client_secret: this.instagramAppSecret,
+            access_token: accessToken.access_token
+          },
+          timeout: 10000
+        });
+        return {
+          access_token: cleanText(response.data && response.data.access_token, 4096) || accessToken.access_token,
+          login_type: "instagram"
+        };
+      } catch (_) {
+        return accessToken;
+      }
+    }
     try {
       const response = await this.axios.get(this.graphOrigin + "/" + this.graphVersion + "/oauth/access_token", {
         params: {
@@ -502,6 +560,29 @@ class MetaChannelProvider {
       // be exchanged with fb_exchange_token. Keep it and verify the asset below.
       return accessToken;
     }
+  }
+
+  async discoverInstagramLogin(access) {
+    const accessToken = cleanText(access && access.access_token, 4096);
+    if (!accessToken) throw new ChannelConnectionError("invalid_authorization", 422);
+    const response = await this.axios.get(this.instagramGraphOrigin + "/" + this.graphVersion + "/me", {
+      params: { fields: "user_id,username,name" },
+      headers: { Authorization: "Bearer " + accessToken },
+      timeout: 10000
+    });
+    const userId = cleanText(response.data && (response.data.user_id || response.data.id), 240);
+    if (!userId) return [];
+    const username = cleanText(response.data && response.data.username, 240);
+    return [{
+      id: "ig:" + userId,
+      label: username ? "@" + username : userId,
+      detail: "Instagram profesional · acceso directo",
+      account_id: userId,
+      account_label: username ? "@" + username : userId,
+      instagram_user_id: userId,
+      access_token: accessToken,
+      login_type: "instagram"
+    }];
   }
 
   async discoverWhatsApp(accessToken) {
@@ -645,8 +726,12 @@ class MetaChannelProvider {
 
   async discoverAssets(channel, accessToken) {
     try {
+      if (channel === "instagram" && accessToken && accessToken.login_type === "instagram") {
+        return await this.discoverInstagramLogin(accessToken);
+      }
+      const rawToken = cleanText(accessToken && accessToken.access_token || accessToken, 4096);
       if (channel === "whatsapp") return await this.discoverWhatsApp(accessToken);
-      return await this.discoverPages(channel, accessToken);
+      return await this.discoverPages(channel, rawToken);
     } catch (error) {
       throw new ChannelConnectionError("asset_discovery_failed", 422, internalError(error));
     }
@@ -691,7 +776,9 @@ class MetaChannelProvider {
         await this.subscribe(channel, candidate);
         const targetId = channel === "instagram" ? candidate.instagram_user_id : candidate.page_id;
         const fields = channel === "instagram" ? "id,username,name" : "id,name";
-        const verified = await this.graph(encodeURIComponent(targetId), candidate.access_token, { params: { fields } });
+        const verified = channel === "instagram" && candidate.login_type === "instagram"
+          ? await this.instagramGraph(encodeURIComponent(targetId), candidate.access_token, { params: { fields } })
+          : await this.graph(encodeURIComponent(targetId), candidate.access_token, { params: { fields } });
         candidate.account_label = cleanText(
           channel === "instagram" && verified.data && verified.data.username
             ? "@" + verified.data.username
@@ -708,7 +795,9 @@ class MetaChannelProvider {
   async subscribe(channel, credential) {
     const subscriptionId = channel === "whatsapp"
       ? credential.whatsapp_business_account_id
-      : credential.page_id;
+      : channel === "instagram" && credential.login_type === "instagram"
+        ? credential.instagram_user_id
+        : credential.page_id;
     if (!subscriptionId || !credential.access_token) {
       throw new ChannelConnectionError("asset_activation_failed", 422, "Missing Meta subscription credentials");
     }
@@ -723,8 +812,22 @@ class MetaChannelProvider {
           : "messages,messaging_postbacks,messaging_optins,message_deliveries,messaging_reads"
       };
     }
-    await this.graph(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, request);
+    if (channel === "instagram" && credential.login_type === "instagram") {
+      await this.instagramGraph(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, request);
+    } else {
+      await this.graph(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, request);
+    }
     return { ok: true };
+  }
+
+  instagramGraph(path, token, config) {
+    const settings = Object.assign({}, config || {});
+    settings.headers = Object.assign({}, settings.headers || {}, { Authorization: "Bearer " + token });
+    settings.timeout = settings.timeout || 10000;
+    return this.axios(Object.assign({
+      method: "GET",
+      url: this.instagramGraphOrigin + "/" + this.graphVersion + "/" + String(path || "").replace(/^\/+/, "")
+    }, settings));
   }
 
   async prepareEmbeddedWhatsApp(code, session, options) {
@@ -771,13 +874,13 @@ class MetaChannelProvider {
       const fields = channel === "whatsapp"
         ? "id,display_phone_number,verified_name,code_verification_status,platform_type"
         : channel === "instagram" ? "id,username,name" : "id,name";
-      const verified = await this.graph(encodeURIComponent(targetId), credential.access_token, { params: { fields } });
-      const subscriptionId = channel === "whatsapp" ? credential.whatsapp_business_account_id : credential.page_id;
-      const subscription = await this.graph(
-        encodeURIComponent(subscriptionId) + "/subscribed_apps",
-        credential.access_token,
-        {}
-      );
+      const directInstagram = channel === "instagram" && credential.login_type === "instagram";
+      const graphRequest = directInstagram ? this.instagramGraph.bind(this) : this.graph.bind(this);
+      const verified = await graphRequest(encodeURIComponent(targetId), credential.access_token, { params: { fields } });
+      const subscriptionId = channel === "whatsapp"
+        ? credential.whatsapp_business_account_id
+        : directInstagram ? credential.instagram_user_id : credential.page_id;
+      const subscription = await graphRequest(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, {});
       const subscribedApps = subscription.data && Array.isArray(subscription.data.data)
         ? subscription.data.data
         : [];
@@ -811,10 +914,12 @@ class MetaChannelProvider {
 
   async disconnect(channel, credential) {
     try {
-      const subscriptionId = channel === "whatsapp" ? credential.whatsapp_business_account_id : credential.page_id;
-      await this.graph(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, {
-        method: "DELETE"
-      });
+      const directInstagram = channel === "instagram" && credential.login_type === "instagram";
+      const subscriptionId = channel === "whatsapp"
+        ? credential.whatsapp_business_account_id
+        : directInstagram ? credential.instagram_user_id : credential.page_id;
+      const graphRequest = directInstagram ? this.instagramGraph.bind(this) : this.graph.bind(this);
+      await graphRequest(encodeURIComponent(subscriptionId) + "/subscribed_apps", credential.access_token, { method: "DELETE" });
       return { ok: true };
     } catch (error) {
       return { ok: false, error: internalError(error) };
@@ -877,8 +982,29 @@ function createChannelConnectionService(options) {
     ? options.allowProtectedLegacyReconnect
     : function () { return false; };
   const now = typeof options.now === "function" ? options.now : function () { return new Date(); };
+  const tenantAliases = options.tenantAliases && typeof options.tenantAliases === "object"
+    ? options.tenantAliases
+    : {};
 
   if (!store) throw new Error("channel_connection_store_required");
+
+  function canonicalTenantId(tenantId) {
+    let current = cleanTenantId(tenantId);
+    const seen = new Set();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const next = cleanTenantId(tenantAliases[current]);
+      if (!next || next === current) break;
+      current = next;
+    }
+    return current;
+  }
+
+  function sameTenant(left, right) {
+    const cleanLeft = canonicalTenantId(left);
+    const cleanRight = canonicalTenantId(right);
+    return !!cleanLeft && cleanLeft === cleanRight;
+  }
 
   function assertTenantChannel(tenantId, channel) {
     const cleanTenant = cleanTenantId(tenantId);
@@ -959,7 +1085,7 @@ function createChannelConnectionService(options) {
     if (!candidateKeys.length) throw new ChannelConnectionError("invalid_asset_selection", 400);
     const rows = (await ownershipRows()).concat(legacyConnections);
     const conflict = rows.find(function (row) {
-      if (!row || cleanTenantId(row.tenant_id) === tenantId || cleanChannel(row.channel) !== channel) return false;
+      if (!row || sameTenant(row.tenant_id, tenantId) || cleanChannel(row.channel) !== channel) return false;
       if (!["connecting", "connected", "needs_attention"].includes(row.status)) return false;
       const existingKeys = assetIdentityKeys(channel, row);
       return existingKeys.some(function (key) { return candidateKeys.includes(key); });
@@ -979,7 +1105,7 @@ function createChannelConnectionService(options) {
     if (!keys.length) return record;
     const ownershipClaims = rows.concat(legacyConnections);
     const conflicts = ownershipClaims.filter(function (other) {
-      if (!other || cleanTenantId(other.tenant_id) === cleanTenantId(record.tenant_id) ||
+      if (!other || sameTenant(other.tenant_id, record.tenant_id) ||
           cleanChannel(other.channel) !== cleanChannel(record.channel) ||
           !["connecting", "connected", "needs_attention"].includes(other.status)) return false;
       return assetIdentityKeys(record.channel, other).some(function (key) { return keys.includes(key); });
@@ -989,7 +1115,7 @@ function createChannelConnectionService(options) {
       return other && cleanChannel(other.channel) === cleanChannel(record.channel) &&
         assetIdentityKeys(record.channel, other).some(function (key) { return keys.includes(key); });
     })).find(function (row) { return row.protected_legacy; });
-    if (protectedOwner && cleanTenantId(protectedOwner.tenant_id) === cleanTenantId(record.tenant_id)) return record;
+    if (protectedOwner && sameTenant(protectedOwner.tenant_id, record.tenant_id)) return record;
     // Never present a duplicated asset as connected to the losing tenant. If
     // there is no protected owner, every conflicting tenant fails closed.
     return null;
@@ -1042,6 +1168,7 @@ function createChannelConnectionService(options) {
       pending_assets: [],
       credentials_ciphertext: encryptedCredential({
         access_token: activated.access_token,
+        login_type: activated.login_type || null,
         meta_business_id: activated.meta_business_id || null,
         whatsapp_business_account_id: activated.whatsapp_business_account_id || null,
         phone_number_id: activated.phone_number_id || null,
@@ -1175,7 +1302,10 @@ function createChannelConnectionService(options) {
     async completeAuthorization(input) {
       const clean = assertTenantChannel(input && input.tenant_id, input && input.channel);
       try {
-        let accessToken = await provider.exchangeCode(input.code, { redirectUri: input && input.redirect_uri });
+        let accessToken = await provider.exchangeCode(input.code, {
+          redirectUri: input && input.redirect_uri,
+          channel: clean.channel
+        });
         if (clean.channel !== "whatsapp" && typeof provider.extendUserAccessToken === "function") {
           accessToken = await provider.extendUserAccessToken(accessToken);
         }

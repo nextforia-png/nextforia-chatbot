@@ -64,6 +64,65 @@ function expectCode(promise, code) {
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));
   assert(instagramUrl.searchParams.get("scope").includes("business_management"));
 
+  const directInstagramRequests = [];
+  const directInstagramAxios = async function (request) {
+    directInstagramRequests.push(request);
+    if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps") && request.method === "POST") {
+      return { data: { success: true } };
+    }
+    if (request.url.endsWith("/v25.0/ig-direct")) {
+      return { data: { id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
+    }
+    throw new Error("Unexpected direct Instagram request: " + request.url);
+  };
+  directInstagramAxios.post = async function (url, body, options) {
+    directInstagramRequests.push({ method: "POST", url, body, options });
+    assert(url.endsWith("/oauth/access_token"));
+    assert(String(body).includes("client_id=2073069230231933"));
+    assert(!String(body).includes("state-secret-value"));
+    return { data: { access_token: "short-instagram-token", user_id: "ig-direct" } };
+  };
+  directInstagramAxios.get = async function (url, options) {
+    directInstagramRequests.push({ method: "GET", url, options });
+    if (url.endsWith("/access_token")) return { data: { access_token: "long-instagram-token" } };
+    if (url.endsWith("/v25.0/me")) {
+      return { data: { user_id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
+    }
+    throw new Error("Unexpected direct Instagram GET: " + url);
+  };
+  const directInstagramMeta = new MetaChannelProvider({
+    appId: "facebook-app-id",
+    appSecret: "facebook-app-secret",
+    instagramAppId: "2073069230231933",
+    instagramAppSecret: "instagram-app-secret",
+    instagramLoginEnabled: true,
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: directInstagramAxios
+  });
+  const directInstagramUrl = new URL(directInstagramMeta.authorizationUrl("instagram", state));
+  assert.strictEqual(directInstagramUrl.hostname, "www.instagram.com");
+  assert.strictEqual(directInstagramUrl.searchParams.get("client_id"), "2073069230231933");
+  assert.strictEqual(directInstagramUrl.searchParams.get("force_reauth"), "true");
+  assert(directInstagramUrl.searchParams.get("scope").includes("instagram_business_manage_messages"));
+  assert(!directInstagramUrl.searchParams.get("scope").includes("pages_show_list"));
+  let directCredential = await directInstagramMeta.exchangeCode("instagram-code", {
+    channel: "instagram",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback"
+  });
+  directCredential = await directInstagramMeta.extendUserAccessToken(directCredential);
+  assert.strictEqual(directCredential.login_type, "instagram");
+  assert.strictEqual(directCredential.access_token, "long-instagram-token");
+  const directCandidates = await directInstagramMeta.discoverAssets("instagram", directCredential);
+  assert.strictEqual(directCandidates.length, 1);
+  assert.strictEqual(directCandidates[0].account_label, "@nextfor.ia");
+  assert.strictEqual(directCandidates[0].page_id, undefined);
+  const activatedDirectInstagram = await directInstagramMeta.activate("instagram", directCandidates[0]);
+  assert.strictEqual(activatedDirectInstagram.login_type, "instagram");
+  assert(directInstagramRequests.some(function (request) {
+    return request.url && request.url.includes("graph.instagram.com/v25.0/ig-direct/subscribed_apps");
+  }));
+
   const portfolioRequests = [];
   const portfolioMeta = new MetaChannelProvider({
     appId: "123456789",
@@ -339,6 +398,36 @@ function expectCode(promise, code) {
   assert.strictEqual(duplicateActivations, 1, "a conflicting asset must be rejected before Meta subscription");
   assert.strictEqual((await isolatedAssetStore.get("tenant-rav", "instagram")).status, "connected");
   assert.strictEqual((await isolatedAssetStore.get("tenant-nextfor", "instagram")).status, "needs_attention");
+
+  const aliasedAssetStore = new InMemoryChannelConnectionStore();
+  const aliasedAssetService = createChannelConnectionService({
+    store: aliasedAssetStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) { return candidate; }
+    },
+    encryptionKey,
+    tenantAliases: { "rav-toys-adac1e": "rav-toys" }
+  });
+  await aliasedAssetService.adoptExisting("rav-toys", "instagram", "legacy@rav.example", {
+    account_id: "ig-rav-alias",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav-alias",
+    access_token: "legacy-rav-token"
+  });
+  const aliasedAdoption = await aliasedAssetService.adoptExisting("rav-toys-adac1e", "instagram", "admin@rav.example", {
+    account_id: "ig-rav-alias",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav-alias",
+    access_token: "current-rav-token"
+  });
+  assert.strictEqual(aliasedAdoption.status, "connected");
+  await expectCode(aliasedAssetService.adoptExisting("tenant-other", "instagram", "admin@other.example", {
+    account_id: "ig-rav-alias",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav-alias",
+    access_token: "wrong-owner-token"
+  }), "channel_asset_already_assigned");
 
   let repairedSubscriptions = 0;
   const repairStore = new InMemoryChannelConnectionStore();

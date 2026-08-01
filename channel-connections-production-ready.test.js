@@ -51,7 +51,10 @@ function waitForServer(child, port) {
   assert.match(source, /META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606"/);
   assert.match(source, /PHONE_NUMBER_ID === "334999901166332"/);
   assert.match(source, /channelConnectionProvider\.whatsappRegistrationPin\(PHONE_NUMBER_ID\)/);
-  assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.source === "channel_connection"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
+  assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.instagramLoginType === "instagram"[\s\S]*?"https:\/\/graph\.instagram\.com"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
+  assert.match(source, /const INSTAGRAM_LOGIN_APP_ID =[\s\S]*?2073069230231933/);
+  assert.match(source, /instagramLoginEnabled: INSTAGRAM_LOGIN_ENABLED/);
+  assert.match(source, /tenantAliases: CHANNEL_CONNECTION_TENANT_ALIASES/);
   assert.match(source, /const graphOrigin = instagramGraphOriginForRuntime\(runtime\);[\s\S]*?`\$\{graphOrigin\}\/\$\{META_GRAPH_VERSION\}\/\$\{sendId\}\/messages`/);
   assert.match(source, /instagramRuntimeState\.last_error_code = metaError\.code \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_subcode = metaError\.error_subcode \|\| null/);
@@ -96,7 +99,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v312-platform-multimodal-inputs"));
+    assert((await response.text()).includes("v313-instagram-direct-login"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

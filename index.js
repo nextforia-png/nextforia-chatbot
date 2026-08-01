@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v312-platform-multimodal-inputs";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v313-instagram-direct-login";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -500,6 +500,14 @@ const MESSENGER_PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN || p
 const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_ID || "";
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.MESSENGER_APP_SECRET || "";
+const INSTAGRAM_LOGIN_APP_ID = String(
+  process.env.INSTAGRAM_LOGIN_APP_ID || process.env.IG_APP_ID || "2073069230231933"
+).trim();
+const INSTAGRAM_LOGIN_APP_SECRET = String(
+  process.env.INSTAGRAM_LOGIN_APP_SECRET || process.env.IG_APP_SECRET || META_APP_SECRET || ""
+).trim();
+const INSTAGRAM_LOGIN_ENABLED = process.env.INSTAGRAM_LOGIN_ENABLED !== "0" &&
+  !!(INSTAGRAM_LOGIN_APP_ID && INSTAGRAM_LOGIN_APP_SECRET);
 const MESSENGER_APP_SECRET = META_APP_SECRET;
 const CHANNEL_CONNECTION_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
   ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/channel-connections/meta/callback"
@@ -933,12 +941,30 @@ const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? new MetaChannelProvider({
       appId: META_APP_ID,
       appSecret: META_APP_SECRET,
+      instagramAppId: INSTAGRAM_LOGIN_APP_ID,
+      instagramAppSecret: INSTAGRAM_LOGIN_APP_SECRET,
+      instagramLoginEnabled: INSTAGRAM_LOGIN_ENABLED,
       whatsappConfigId: META_WHATSAPP_CONFIG_ID,
       graphVersion: META_GRAPH_VERSION,
       redirectUri: CHANNEL_CONNECTION_CALLBACK_URL,
       axiosClient: axios
     })
   : null;
+function channelConnectionTenantAliases() {
+  let aliases = {};
+  try {
+    const parsed = JSON.parse(process.env.CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) aliases = Object.assign({}, parsed);
+  } catch (error) {
+    log("warn", "channel_connection_tenant_aliases_invalid", { error: error.message });
+  }
+  if (DEFAULT_TENANT_ID && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID &&
+      DEFAULT_TENANT_ID !== CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID) {
+    aliases[CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID] = DEFAULT_TENANT_ID;
+  }
+  return aliases;
+}
+const CHANNEL_CONNECTION_TENANT_ALIASES = channelConnectionTenantAliases();
 const protectedLegacyChannelConnections = [].concat(createLegacyConnections({
   tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
   whatsapp: {
@@ -969,6 +995,7 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
       store: channelConnectionStore,
       provider: channelConnectionProvider,
       encryptionKey: DATA_ENCRYPTION_KEY,
+      tenantAliases: CHANNEL_CONNECTION_TENANT_ALIASES,
       legacyConnections: protectedLegacyChannelConnections,
       allowProtectedLegacyReconnect: function (tenantId, channel) {
         return ["whatsapp", "instagram", "messenger"].includes(channel) && [
@@ -1287,6 +1314,7 @@ function connectionRuntimeFromRecord(record) {
   if (channel === "instagram") {
     const instagramUserId = cleanRuntimeText(record.instagram_user_id || credential && credential.instagram_user_id, 240);
     const pageId = cleanRuntimeText(record.page_id || credential && credential.page_id, 240);
+    const instagramLoginType = cleanRuntimeText(credential && credential.login_type, 40) || "facebook";
     if (!instagramUserId || !accessToken) return null;
     return {
       tenantId,
@@ -1296,6 +1324,8 @@ function connectionRuntimeFromRecord(record) {
       instagram_user_id: instagramUserId,
       pageId,
       page_id: pageId,
+      instagramLoginType,
+      instagram_login_type: instagramLoginType,
       accessToken,
       access_token: accessToken,
       source: "channel_connection"
@@ -1601,12 +1631,11 @@ async function outboundRuntimeForConversation(userId, options) {
 }
 
 function instagramGraphOriginForRuntime(runtime) {
-  // Connections created through Facebook Login use a Page access token and the
-  // Instagram Messaging API hosted on graph.facebook.com. The legacy
-  // Instagram Login integration keeps its explicitly configured origin.
-  return runtime && runtime.source === "channel_connection"
-    ? "https://graph.facebook.com"
-    : IG_GRAPH_BASE_URL;
+  // Instagram Login does not require a Facebook Page and uses the Instagram
+  // Graph host. Facebook Login connections keep using their Page token and the
+  // Facebook Graph host.
+  if (runtime && runtime.instagramLoginType === "instagram") return "https://graph.instagram.com";
+  return runtime && runtime.source === "channel_connection" ? "https://graph.facebook.com" : IG_GRAPH_BASE_URL;
 }
 // Catálogo editable de planes y bots. Comparte el gate de customer access v2.
 const catalogStore = CUSTOMER_ACCESS_V2_ENABLED

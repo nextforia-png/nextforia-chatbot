@@ -422,6 +422,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v80 | Super Admin Panel rediseñado desde el handoff NexforIA: navegación de plataforma, clientes registrados, salud, readiness y estados futuros sin datos ficticios |
 | v81 | Entrada Super Admin separada del acceso de clientes, con cambio seguro de sesión y validación estricta del rol de plataforma |
 | v74 | Ventas asistidas y cierres por confirmar en el resumen del cliente |
+| v308 | Aislamiento de activos Meta: Instagram no puede pertenecer a dos empresas y RAV conserva su conexión heredada |
 
 ---
 

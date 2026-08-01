@@ -60,7 +60,9 @@ function waitForServer(child, port) {
   assert.match(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
   assert.match(source, /const RAV_INSTAGRAM_LOGIN_OVERRIDE = process\.env\.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1"/);
   assert.match(source, /const CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID =[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
-  assert.match(source, /const ravInstagramLoginWins =[\s\S]*?runtime\.channel === "instagram"[\s\S]*?if \(runtime && !ravInstagramLoginWins\) rows\.push\(runtime\)/);
+  assert.match(source, /const ravInstagramLoginWins =[\s\S]*?runtime\.channel === "instagram"[\s\S]*?\.includes\(String\(IG_SEND_ID \|\| IG_USER_ID\)\)[\s\S]*?if \(runtime && !ravInstagramLoginWins\) rows\.push\(runtime\)/);
+  assert.match(source, /ambiguous_instagram_destination_ids/);
+  assert.match(source, /instagram_asset_tenant_conflict/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -94,7 +96,7 @@ function waitForServer(child, port) {
 
     let response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v285-registered-appointment-tenant"));
+    assert((await response.text()).includes("v308-instagram-tenant-isolation"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

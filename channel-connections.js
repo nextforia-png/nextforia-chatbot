@@ -15,7 +15,7 @@ const CHANNEL_CATALOG = Object.freeze([
   {
     id: "instagram",
     name: "Instagram",
-    description: "Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",
+    description: "Instagram profesional se autoriza desde Meta, donde se administran sus mensajes.",
     available: true
   },
   {
@@ -113,6 +113,17 @@ function emptyConnection(tenantId, channel) {
 
 function publicConnection(record, options) {
   const safe = Object.assign(emptyConnection(record && record.tenant_id, record && record.channel), record || {});
+  // A disconnected row is kept for audit history, but its previous asset must
+  // never look assigned in the Customer Panel or participate in routing.
+  if (["not_connected", "disconnected"].includes(safe.status)) {
+    safe.account_id = null;
+    safe.account_label = null;
+    safe.meta_business_id = null;
+    safe.whatsapp_business_account_id = null;
+    safe.phone_number_id = null;
+    safe.page_id = null;
+    safe.instagram_user_id = null;
+  }
   const allowProtectedReconnect = !!(options && options.allowProtectedReconnect);
   const reconnectAllowed = !safe.protected_legacy || allowProtectedReconnect;
   delete safe.credentials_ciphertext;
@@ -828,9 +839,91 @@ function createChannelConnectionService(options) {
     }) || null;
   }
 
+  function preferStoredConnection(stored, legacy) {
+    if (!stored) return legacy || null;
+    if (!legacy) return stored;
+    // A real encrypted OAuth record supersedes the environment fallback.
+    // A stale disconnected/failed row without credentials does not.
+    return stored.credentials_ciphertext && !stored.protected_legacy ? stored : legacy;
+  }
+
+  async function ownershipRows() {
+    let rows;
+    try { rows = await store.listAll(); }
+    catch (error) { throw mapStoreError(error); }
+    rows = Array.isArray(rows) ? rows.slice() : [];
+    legacyConnections.forEach(function (legacy) {
+      const storedIndex = rows.findIndex(function (row) {
+        return row.tenant_id === legacy.tenant_id && row.channel === legacy.channel;
+      });
+      if (storedIndex < 0) rows.push(legacy);
+      else rows[storedIndex] = preferStoredConnection(rows[storedIndex], legacy);
+    });
+    return rows;
+  }
+
   async function storedOrLegacy(tenantId, channel) {
     const stored = await store.get(tenantId, channel);
-    return stored || legacyFor(tenantId, channel);
+    return preferStoredConnection(stored, legacyFor(tenantId, channel));
+  }
+
+  function assetIdentityKeys(channel, record) {
+    const clean = cleanChannel(channel);
+    const keys = [];
+    function add(kind, value) {
+      const id = cleanText(value, 240);
+      if (id) keys.push(kind + ":" + id);
+    }
+    if (clean === "whatsapp") {
+      add("phone", record && (record.phone_number_id || record.account_id));
+    } else if (clean === "instagram") {
+      add("instagram", record && (record.instagram_user_id || record.account_id));
+      add("page", record && record.page_id);
+    } else if (clean === "messenger") {
+      add("page", record && (record.page_id || record.account_id));
+    }
+    return Array.from(new Set(keys));
+  }
+
+  async function assertAssetAvailable(tenantId, channel, candidate) {
+    const candidateKeys = assetIdentityKeys(channel, candidate);
+    if (!candidateKeys.length) throw new ChannelConnectionError("invalid_asset_selection", 400);
+    const rows = (await ownershipRows()).concat(legacyConnections);
+    const conflict = rows.find(function (row) {
+      if (!row || cleanTenantId(row.tenant_id) === tenantId || cleanChannel(row.channel) !== channel) return false;
+      if (!["connecting", "connected", "needs_attention"].includes(row.status)) return false;
+      const existingKeys = assetIdentityKeys(channel, row);
+      return existingKeys.some(function (key) { return candidateKeys.includes(key); });
+    });
+    if (conflict) {
+      throw new ChannelConnectionError(
+        "channel_asset_already_assigned",
+        409,
+        "Channel asset is already assigned to another tenant"
+      );
+    }
+  }
+
+  function effectiveAssetOwner(record, rows) {
+    if (!record || !["connecting", "connected", "needs_attention"].includes(record.status)) return record;
+    const keys = assetIdentityKeys(record.channel, record);
+    if (!keys.length) return record;
+    const ownershipClaims = rows.concat(legacyConnections);
+    const conflicts = ownershipClaims.filter(function (other) {
+      if (!other || cleanTenantId(other.tenant_id) === cleanTenantId(record.tenant_id) ||
+          cleanChannel(other.channel) !== cleanChannel(record.channel) ||
+          !["connecting", "connected", "needs_attention"].includes(other.status)) return false;
+      return assetIdentityKeys(record.channel, other).some(function (key) { return keys.includes(key); });
+    });
+    if (!conflicts.length) return record;
+    const protectedOwner = [record].concat(conflicts, ownershipClaims.filter(function (other) {
+      return other && cleanChannel(other.channel) === cleanChannel(record.channel) &&
+        assetIdentityKeys(record.channel, other).some(function (key) { return keys.includes(key); });
+    })).find(function (row) { return row.protected_legacy; });
+    if (protectedOwner && cleanTenantId(protectedOwner.tenant_id) === cleanTenantId(record.tenant_id)) return record;
+    // Never present a duplicated asset as connected to the losing tenant. If
+    // there is no protected owner, every conflicting tenant fails closed.
+    return null;
   }
 
   async function markFailure(tenantId, channel, actor, error) {
@@ -851,6 +944,9 @@ function createChannelConnectionService(options) {
   }
 
   async function connectCandidate(tenantId, channel, actor, candidate) {
+    // Check before subscribing so an OAuth callback cannot attach the same
+    // Instagram/Page/phone asset to two tenants.
+    await assertAssetAvailable(tenantId, channel, candidate);
     const activated = await provider.activate(channel, candidate);
     const connectedAt = iso(now());
     return store.upsert({
@@ -927,12 +1023,11 @@ function createChannelConnectionService(options) {
     async listTenant(tenantId, options) {
       const cleanTenant = cleanTenantId(tenantId);
       if (!cleanTenant) throw new ChannelConnectionError("invalid_channel_request", 400);
-      let rows;
-      try { rows = await store.listTenant(cleanTenant); }
-      catch (error) { throw mapStoreError(error); }
+      const ownership = await ownershipRows();
+      const rows = ownership.filter(function (row) { return row.tenant_id === cleanTenant; });
       const byChannel = new Map(rows.map(function (row) { return [row.channel, row]; }));
       legacyConnections.filter(function (row) { return row.tenant_id === cleanTenant; }).forEach(function (row) {
-        if (!byChannel.has(row.channel)) byChannel.set(row.channel, row);
+        byChannel.set(row.channel, preferStoredConnection(byChannel.get(row.channel), row));
       });
       return CHANNEL_CATALOG.map(function (definition) {
         if (!definition.available) {
@@ -942,8 +1037,9 @@ function createChannelConnectionService(options) {
             status: "not_connected"
           });
         }
+        const effective = effectiveAssetOwner(byChannel.get(definition.id), ownership);
         return Object.assign({}, definition, publicConnection(
-          byChannel.get(definition.id) || emptyConnection(cleanTenant, definition.id),
+          effective || emptyConnection(cleanTenant, definition.id),
           Object.assign({}, options || {}, {
             allowProtectedReconnect: allowProtectedLegacyReconnect(cleanTenant, definition.id)
           })
@@ -952,23 +1048,20 @@ function createChannelConnectionService(options) {
     },
 
     async listAll(tenants) {
-      let rows;
-      try { rows = await store.listAll(); }
-      catch (error) { throw mapStoreError(error); }
+      const rows = await ownershipRows();
       const tenantRows = Array.isArray(tenants) ? tenants : [];
       const tenantMap = new Map(tenantRows.map(function (tenant) {
         return [cleanTenantId(tenant.id || tenant.tenant_id), tenant];
       }));
-      legacyConnections.forEach(function (legacy) {
-        if (!rows.some(function (row) { return row.tenant_id === legacy.tenant_id && row.channel === legacy.channel; })) rows.push(legacy);
-      });
       const tenantIds = new Set(rows.map(function (row) { return row.tenant_id; }));
       tenantMap.forEach(function (_, id) { if (id) tenantIds.add(id); });
       const result = [];
       tenantIds.forEach(function (tenantId) {
         const tenant = tenantMap.get(tenantId) || {};
         SUPPORTED_CHANNELS.forEach(function (channel) {
-          const row = rows.find(function (item) { return item.tenant_id === tenantId && item.channel === channel; });
+          const row = effectiveAssetOwner(rows.find(function (item) {
+            return item.tenant_id === tenantId && item.channel === channel;
+          }), rows);
           result.push(Object.assign({
             company_name: tenant.company_name || tenant.name || tenantId
           }, publicConnection(row || emptyConnection(tenantId, channel), { superAdmin: true })));
@@ -1196,6 +1289,13 @@ function createChannelConnectionService(options) {
         last_error_at: disconnectCompleted ? null : disconnectedAt,
         disconnected_at: disconnectCompleted ? disconnectedAt : null,
         disconnected_by: disconnectCompleted ? actorLabel(actor) : null,
+        account_id: disconnectCompleted ? null : record.account_id,
+        account_label: disconnectCompleted ? null : record.account_label,
+        meta_business_id: disconnectCompleted ? null : record.meta_business_id,
+        whatsapp_business_account_id: disconnectCompleted ? null : record.whatsapp_business_account_id,
+        phone_number_id: disconnectCompleted ? null : record.phone_number_id,
+        page_id: disconnectCompleted ? null : record.page_id,
+        instagram_user_id: disconnectCompleted ? null : record.instagram_user_id,
         updated_at: disconnectedAt,
         pending_assets: [],
         credentials_ciphertext: disconnectCompleted ? null : record.credentials_ciphertext,

@@ -255,6 +255,38 @@ function expectCode(promise, code) {
   assert(adoptedStored.credentials_ciphertext.startsWith("enc:v1:"));
   assert(!adoptedStored.credentials_ciphertext.includes("system-user-token"));
 
+  let duplicateActivations = 0;
+  const isolatedAssetStore = new InMemoryChannelConnectionStore();
+  const isolatedAssetService = createChannelConnectionService({
+    store: isolatedAssetStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) {
+        duplicateActivations++;
+        return candidate;
+      }
+    },
+    encryptionKey
+  });
+  await isolatedAssetService.adoptExisting("tenant-rav", "instagram", "owner@rav.example", {
+    account_id: "ig-rav",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav",
+    page_id: "page-rav",
+    access_token: "rav-instagram-token"
+  });
+  assert.strictEqual(duplicateActivations, 1);
+  await expectCode(isolatedAssetService.adoptExisting("tenant-nextfor", "instagram", "owner@nextfor.example", {
+    account_id: "ig-rav",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav",
+    page_id: "page-rav",
+    access_token: "wrong-tenant-token"
+  }), "channel_asset_already_assigned");
+  assert.strictEqual(duplicateActivations, 1, "a conflicting asset must be rejected before Meta subscription");
+  assert.strictEqual((await isolatedAssetStore.get("tenant-rav", "instagram")).status, "connected");
+  assert.strictEqual((await isolatedAssetStore.get("tenant-nextfor", "instagram")).status, "needs_attention");
+
   let repairedSubscriptions = 0;
   const repairStore = new InMemoryChannelConnectionStore();
   const repairService = createChannelConnectionService({
@@ -373,7 +405,12 @@ function expectCode(promise, code) {
   const credentialBeforeDisconnect = store.rows[0].credentials_ciphertext;
   const disconnected = await service.disconnect("tenant-a", "instagram", "admin@a.example");
   assert.strictEqual(disconnected.status, "disconnected");
+  assert.strictEqual(disconnected.account_label, null);
   assert.strictEqual(store.rows[0].credentials_ciphertext, null);
+  assert.strictEqual(store.rows[0].account_id, null);
+  assert.strictEqual(store.rows[0].account_label, null);
+  assert.strictEqual(store.rows[0].instagram_user_id, null);
+  assert.strictEqual(store.rows[0].page_id, null);
   assert(store.audit.some(function (event) {
     return event.action === "disconnected" && event.actor === "admin@a.example";
   }));
@@ -474,6 +511,29 @@ function expectCode(promise, code) {
   assert.strictEqual(rav.find(function (row) { return row.channel === "whatsapp"; }).protected_legacy, true);
   await expectCode(legacyService.disconnect("rav-toys", "whatsapp", "super-admin"), "legacy_connection_protected");
   await expectCode(legacyService.begin("rav-toys", "whatsapp", "super-admin", state), "legacy_connection_protected");
+  await legacyStore.upsert({
+    tenant_id: "rav-toys",
+    channel: "whatsapp",
+    status: "disconnected",
+    account_id: "stale-phone",
+    account_label: "Stale account",
+    credentials_ciphertext: null
+  });
+  const ravWithStaleRow = await legacyService.listTenant("rav-toys", { superAdmin: true });
+  assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).status, "connected");
+  assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).account_id, "rav-phone");
+  await legacyStore.upsert({
+    tenant_id: "tenant-wrong-owner",
+    channel: "whatsapp",
+    status: "connected",
+    account_id: "rav-phone",
+    phone_number_id: "rav-phone",
+    account_label: "Duplicated RAV phone",
+    credentials_ciphertext: "enc:v1:duplicate"
+  });
+  const wrongOwnerRows = await legacyService.listTenant("tenant-wrong-owner", { superAdmin: true });
+  assert.strictEqual(wrongOwnerRows.find(function (row) { return row.channel === "whatsapp"; }).status, "not_connected");
+  assert.strictEqual(wrongOwnerRows.find(function (row) { return row.channel === "whatsapp"; }).account_id, null);
   await legacyStore.upsert({
     tenant_id: "rav-toys",
     channel: "whatsapp",

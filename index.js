@@ -297,7 +297,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v307-customer-name-memory";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v308-instagram-tenant-isolation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -927,27 +927,31 @@ const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
       axiosClient: axios
     })
   : null;
-const protectedLegacyChannelConnections = createLegacyConnections({
-  tenantId: DEFAULT_TENANT_ID,
+const protectedLegacyChannelConnections = [].concat(createLegacyConnections({
+  tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
   whatsapp: {
     configured: !!(WA_TOKEN && PHONE_NUMBER_ID),
     phoneNumberId: PHONE_NUMBER_ID,
     displayPhone: process.env.TENANT_DISPLAY_PHONE || "",
     webhookStatus: VERIFY_TOKEN ? "configured" : "needs_attention"
-  },
+  }
+}), createLegacyConnections({
+  tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
   instagram: {
     configured: !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID),
     userId: IG_USER_ID,
     label: process.env.IG_USERNAME || "",
     webhookStatus: IG_VERIFY_TOKEN ? "configured" : "needs_attention"
-  },
+  }
+}), createLegacyConnections({
+  tenantId: DEFAULT_TENANT_ID,
   messenger: {
     configured: !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID),
     pageId: MESSENGER_PAGE_ID,
     label: process.env.MESSENGER_PAGE_NAME || "",
     webhookStatus: MESSENGER_VERIFY_TOKEN ? "configured" : "needs_attention"
   }
-});
+}));
 const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? createChannelConnectionService({
       store: channelConnectionStore,
@@ -1033,6 +1037,7 @@ const channelRuntimeCache = {
   rows: [],
   by_whatsapp_phone_id: new Map(),
   by_instagram_destination_id: new Map(),
+  ambiguous_instagram_destination_ids: new Set(),
   by_messenger_page_id: new Map(),
   by_tenant_channel: new Map()
 };
@@ -1355,7 +1360,10 @@ async function loadChannelRuntimeRows(force) {
           (IG_SEND_ID || IG_USER_ID) &&
           runtime &&
           runtime.channel === "instagram" &&
-          cleanTenantId(runtime.tenantId || runtime.tenant_id) === CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID;
+          [runtime.instagramUserId, runtime.instagram_user_id]
+            .filter(Boolean)
+            .map(String)
+            .includes(String(IG_SEND_ID || IG_USER_ID));
         if (runtime && !ravInstagramLoginWins) rows.push(runtime);
       });
     } catch (error) {
@@ -1364,6 +1372,7 @@ async function loadChannelRuntimeRows(force) {
   }
   const byPhone = new Map();
   const byInstagramDestination = new Map();
+  const ambiguousInstagramDestinations = new Set();
   const byMessengerPage = new Map();
   const byTenantChannel = new Map();
   rows.forEach(function (runtime) {
@@ -1371,7 +1380,27 @@ async function loadChannelRuntimeRows(force) {
     if (runtime.channel === "instagram") {
       [runtime.instagramUserId, runtime.instagram_user_id, runtime.pageId, runtime.page_id]
         .filter(Boolean)
-        .forEach(function (id) { byInstagramDestination.set(String(id), runtime); });
+        .forEach(function (id) {
+          const key = String(id);
+          if (ambiguousInstagramDestinations.has(key)) return;
+          const existing = byInstagramDestination.get(key);
+          const existingTenant = cleanTenantId(existing && (existing.tenantId || existing.tenant_id));
+          const runtimeTenant = cleanTenantId(runtime.tenantId || runtime.tenant_id);
+          if (existing && existingTenant && runtimeTenant && existingTenant !== runtimeTenant) {
+            byInstagramDestination.delete(key);
+            ambiguousInstagramDestinations.add(key);
+            log("error", "instagram_asset_tenant_conflict", {
+              destination_suffix: key.slice(-8),
+              tenant_count: 2
+            });
+            return;
+          }
+          // Within one tenant, the encrypted OAuth connection is newer and
+          // safer than an environment fallback.
+          if (!existing || existing.source !== "channel_connection" || runtime.source === "channel_connection") {
+            byInstagramDestination.set(key, runtime);
+          }
+        });
     }
     if (runtime.channel === "messenger" && (runtime.pageId || runtime.page_id)) {
       byMessengerPage.set(String(runtime.pageId || runtime.page_id), runtime);
@@ -1382,6 +1411,7 @@ async function loadChannelRuntimeRows(force) {
   channelRuntimeCache.rows = rows;
   channelRuntimeCache.by_whatsapp_phone_id = byPhone;
   channelRuntimeCache.by_instagram_destination_id = byInstagramDestination;
+  channelRuntimeCache.ambiguous_instagram_destination_ids = ambiguousInstagramDestinations;
   channelRuntimeCache.by_messenger_page_id = byMessengerPage;
   channelRuntimeCache.by_tenant_channel = byTenantChannel;
   return channelRuntimeCache;
@@ -8403,6 +8433,9 @@ function externalIntegrationCallbackPage(res, options) {
     ? options.status
     : "error";
   const provider = String(options && options.provider || "integration").replace(/[^a-z0-9_-]/gi, "").slice(0, 30) || "integration";
+  const errorCode = options && options.error === "channel_asset_already_assigned"
+    ? "channel_asset_already_assigned"
+    : "";
   const returnPath = String(options && options.returnPath || "/admin/panel?tab=channels");
   const success = status === "success";
   const selection = status === "select";
@@ -8411,13 +8444,16 @@ function externalIntegrationCallbackPage(res, options) {
     ? "La autorización quedó guardada. Volverás al Customer Panel para ver el canal actualizado."
     : selection
       ? "La autorización quedó guardada. Vuelve al Customer Panel para elegir la cuenta que usará tu Nextfor."
-      : "Vuelve al Customer Panel e intenta nuevamente. Si el error continúa, habla con el equipo de NextforIA.";
+      : errorCode === "channel_asset_already_assigned"
+        ? "Esta cuenta ya pertenece a otra empresa en Nextfor. Debe desconectarse allí antes de poder asignarla de nuevo."
+        : "Vuelve al Customer Panel e intenta nuevamente. Si el error continúa, habla con el equipo de NextforIA.";
   const badge = success ? "✓ Todo listo" : selection ? "→ Un paso más" : "Revisar conexión";
   const nonce = crypto.randomBytes(18).toString("base64url");
   const payload = JSON.stringify({
     type: "nextfor-integration-result",
     provider,
     status,
+    error: errorCode,
     return_path: returnPath
   }).replace(/</g, "\\u003c");
   res.setHeader("Cache-Control", "no-store");
@@ -12221,7 +12257,8 @@ function channelConnectionErrorResponse(res, error) {
     "connection_selection_expired",
     "invalid_asset_selection",
     "connection_not_found",
-    "legacy_connection_protected"
+    "legacy_connection_protected",
+    "channel_asset_already_assigned"
   ];
   res.status(problem.status || 503).json({
     ok: false,
@@ -12230,6 +12267,8 @@ function channelConnectionErrorResponse(res, error) {
       ? "Aún estamos preparando este paso. Habla con NextforIA."
       : problem.code === "legacy_connection_protected"
         ? "No se puede cambiar esta conexión desde aquí."
+        : problem.code === "channel_asset_already_assigned"
+          ? "Esta cuenta ya está conectada a otra empresa. Desconéctala allí antes de asignarla de nuevo."
         : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."
   });
 }
@@ -12395,12 +12434,15 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
 });
 
 app.get("/admin/channel-connections/meta/callback", async (req, res) => {
-  function channelConnectionReturnUrl(state, status) {
+  function channelConnectionReturnUrl(state, status, errorCode) {
     const fallback = "/admin/panel?tab=channels";
     const raw = state && state.return_path || fallback;
     const safePath = String(raw || fallback).startsWith("/admin/") ? String(raw || fallback) : fallback;
     const separator = safePath.includes("?") ? "&" : "?";
-    return safePath + separator + "connection=" + encodeURIComponent(status);
+    const base = safePath + separator + "connection=" + encodeURIComponent(status);
+    return errorCode === "channel_asset_already_assigned"
+      ? base + "&connection_error=channel_asset_already_assigned"
+      : base;
   }
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.redirect("/admin/panel?tab=channels&connection=error");
@@ -12439,9 +12481,15 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
     res.redirect(returnUrl);
   } catch (error) {
     console.error("Meta channel authorization failed:", state.channel, error.internalMessage || error.message);
-    const returnUrl = channelConnectionReturnUrl(state, "error");
+    const errorCode = error instanceof ChannelConnectionError ? error.code : "";
+    const returnUrl = channelConnectionReturnUrl(state, "error", errorCode);
     if (state.return_mode === "popup") {
-      externalIntegrationCallbackPage(res, { provider: "meta", status: "error", returnPath: returnUrl });
+      externalIntegrationCallbackPage(res, {
+        provider: "meta",
+        status: "error",
+        error: errorCode,
+        returnPath: returnUrl
+      });
       return;
     }
     res.redirect(returnUrl);

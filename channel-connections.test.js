@@ -295,6 +295,8 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(currentShapeVerification.ok, true);
 
+  let verificationResponses = [{ ok: false, error: "Meta token expired" }];
+  let subscriptionRepairs = 0;
   const provider = {
     configured: function () { return true; },
     authorizationUrl: function (channel, signedState) {
@@ -334,7 +336,13 @@ function expectCode(promise, code) {
       return candidate;
     },
     verify: async function () {
-      return { ok: false, error: "Meta token expired" };
+      return verificationResponses.length > 1
+        ? verificationResponses.shift()
+        : verificationResponses[0];
+    },
+    subscribe: async function () {
+      subscriptionRepairs++;
+      return { ok: true };
     },
     disconnect: async function (_, credential) {
       assert.strictEqual(credential.access_token, "secret-page-token-two");
@@ -562,6 +570,15 @@ function expectCode(promise, code) {
   const publicAttention = tenantA.find(function (row) { return row.channel === "instagram"; });
   assert.strictEqual(publicAttention.status, "needs_attention");
   assert.strictEqual("last_error" in publicAttention, false);
+
+  verificationResponses = [
+    { ok: false, error: "Meta webhook subscription is missing" },
+    { ok: true, account_label: "Cuenta Dos" }
+  ];
+  const repairedVerification = await service.verify("tenant-a", "instagram", "support@nextforia.com");
+  assert.strictEqual(repairedVerification.status, "connected");
+  assert.strictEqual(repairedVerification.webhook_status, "subscribed");
+  assert.strictEqual(subscriptionRepairs, 1);
 
   const credentialBeforeDisconnect = store.rows[0].credentials_ciphertext;
   const disconnected = await service.disconnect("tenant-a", "instagram", "admin@a.example");

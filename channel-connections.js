@@ -1397,7 +1397,16 @@ function createChannelConnectionService(options) {
       if (!record) throw new ChannelConnectionError("connection_not_found", 404);
       if (record.protected_legacy) return publicConnection(record, { superAdmin: true });
       const credential = credentialPayload(record);
-      const result = await provider.verify(clean.channel, credential);
+      let result = await provider.verify(clean.channel, credential);
+      if (!result.ok && result.error === "Meta webhook subscription is missing" &&
+          provider && typeof provider.subscribe === "function") {
+        try {
+          await provider.subscribe(clean.channel, credential);
+          result = await provider.verify(clean.channel, credential);
+        } catch (error) {
+          result = { ok: false, error: internalError(error) };
+        }
+      }
       const checkedAt = iso(now());
       const row = await store.upsert({
         tenant_id: clean.tenantId,

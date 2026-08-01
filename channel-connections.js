@@ -440,8 +440,6 @@ class MetaChannelProvider {
     if (channel === "instagram" && this.instagramLoginEnabled) {
       const url = new URL(this.instagramDialogOrigin + "/oauth/authorize");
       url.searchParams.set("enable_fb_login", "0");
-      url.searchParams.set("force_authentication", "1");
-      url.searchParams.set("force_reauth", "true");
       url.searchParams.set("client_id", this.instagramAppId);
       url.searchParams.set("redirect_uri", redirectUri);
       url.searchParams.set("state", state);

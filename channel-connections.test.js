@@ -108,7 +108,8 @@ function expectCode(promise, code) {
   const directInstagramUrl = new URL(directInstagramMeta.authorizationUrl("instagram", state));
   assert.strictEqual(directInstagramUrl.hostname, "www.instagram.com");
   assert.strictEqual(directInstagramUrl.searchParams.get("client_id"), "2073069230231933");
-  assert.strictEqual(directInstagramUrl.searchParams.get("force_reauth"), "true");
+  assert.strictEqual(directInstagramUrl.searchParams.get("force_authentication"), null);
+  assert.strictEqual(directInstagramUrl.searchParams.get("force_reauth"), null);
   assert(directInstagramUrl.searchParams.get("scope").includes("instagram_business_manage_messages"));
   assert(!directInstagramUrl.searchParams.get("scope").includes("pages_show_list"));
   let directCredential = await directInstagramMeta.exchangeCode("instagram-code", {

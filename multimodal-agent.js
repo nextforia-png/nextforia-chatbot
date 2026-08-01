@@ -88,6 +88,37 @@ function buildImageConversationInput(analysis, caption) {
   ].filter(Boolean).join("\n");
 }
 
+function imageAnalysisPrompt(botMode) {
+  const mode = cleanText(botMode, 40).toLowerCase();
+  const shared = [
+    "Analiza esta imagen recibida por WhatsApp para un bot profesional de Nextfor IA.",
+    "Responde en espanol, breve y util.",
+    "Describe solo lo visible con cautela y no inventes datos, identidades, consentimientos ni resultados.",
+    "Si hay texto visible, resume solo lo necesario y evita repetir numeros de identificacion, datos medicos o financieros completos.",
+    "Si el caso parece sensible o incierto, indica que debe preguntarse al cliente o escalarse a una persona."
+  ];
+  if (mode === "appointments") {
+    shared.push(
+      "El bot se dedica a agendamiento de citas.",
+      "Clasifica el caso como solicitud_de_cita, horario_o_disponibilidad, confirmacion_o_comprobante, documento, o unclear.",
+      "No diagnostiques, no confirmes una cita solo por la imagen y no asumas autorizacion para tratar datos personales."
+    );
+  } else if (mode === "both") {
+    shared.push(
+      "El tenant usa atencion al cliente y agendamiento de citas.",
+      "Identifica cual de los dos flujos corresponde antes de resumir la imagen.",
+      "No confirmes pedidos, pagos ni citas solo por la imagen."
+    );
+  } else {
+    shared.push(
+      "El bot se dedica a atencion comercial al cliente.",
+      "Clasifica el caso como producto, garantia_o_dano, pedido_o_pago, documento, o unclear.",
+      "No inventes precios, guias, estados de pedido ni diagnosticos."
+    );
+  }
+  return shared.join(" ");
+}
+
 function createMultimodalAgent(config) {
   config = Object.assign(multimodalConfigFromEnv({}), config || {});
 
@@ -120,10 +151,16 @@ function createMultimodalAgent(config) {
 
       let conversationInput = "";
       if (media.kind === "audio") {
-        const transcript = await input.transcribeAudio(downloaded, media);
+        const transcript = await input.transcribeAudio(downloaded, media, {
+          tenant_id: input.tenant_id,
+          conversation_meta: input.conversation_meta || {}
+        });
         conversationInput = buildVoiceConversationInput(transcript && transcript.text || transcript, transcript || {});
       } else if (media.kind === "image") {
-        const analysis = await input.analyzeImage(downloaded, media);
+        const analysis = await input.analyzeImage(downloaded, media, {
+          tenant_id: input.tenant_id,
+          conversation_meta: input.conversation_meta || {}
+        });
         conversationInput = buildImageConversationInput(analysis && analysis.text || analysis, media.caption);
       }
 
@@ -163,6 +200,7 @@ module.exports = {
   buildImageConversationInput,
   buildVoiceConversationInput,
   createMultimodalAgent,
+  imageAnalysisPrompt,
   mediaFromWhatsAppMessage,
   multimodalConfigFromEnv,
   tenantAllowed

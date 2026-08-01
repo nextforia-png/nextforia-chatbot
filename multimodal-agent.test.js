@@ -5,6 +5,7 @@ const {
   buildImageConversationInput,
   buildVoiceConversationInput,
   createMultimodalAgent,
+  imageAnalysisPrompt,
   mediaFromWhatsAppMessage,
   multimodalConfigFromEnv,
   tenantAllowed
@@ -12,7 +13,7 @@ const {
 
 const config = multimodalConfigFromEnv({
   MULTIMODAL_AGENT_ENABLED: "1",
-  MULTIMODAL_AGENT_TENANT_IDS: "rav-toys, demo",
+  MULTIMODAL_AGENT_TENANT_IDS: "rav-toys, rav-toys-adac1e, grupo-derco",
   MULTIMODAL_VOICE_INPUT_ENABLED: "1",
   MULTIMODAL_IMAGE_INPUT_ENABLED: "1",
   MULTIMODAL_VOICE_REPLIES_ENABLED: "0"
@@ -22,6 +23,8 @@ assert.strictEqual(config.voice_input_enabled, true);
 assert.strictEqual(config.image_input_enabled, true);
 assert.strictEqual(config.voice_replies_enabled, false);
 assert.strictEqual(tenantAllowed(config, "rav-toys"), true);
+assert.strictEqual(tenantAllowed(config, "rav-toys-adac1e"), true);
+assert.strictEqual(tenantAllowed(config, "grupo-derco"), true);
 assert.strictEqual(tenantAllowed(config, "other"), false);
 assert.strictEqual(tenantAllowed({ tenant_ids: [] }, "rav-toys"), false);
 
@@ -43,11 +46,15 @@ assert.strictEqual(mediaFromWhatsAppMessage({ type: "document", document: { id: 
 
 assert(buildVoiceConversationInput("Hola, quiero saber si tienen carros Hot Wheels").includes("NOTA DE VOZ TRANSCRITA"));
 assert(buildImageConversationInput("Se observa una caja de juguete con una pieza rota.", "Garantia").includes("IMAGEN ANALIZADA"));
+assert(imageAnalysisPrompt("customer_service").includes("producto"));
+assert(imageAnalysisPrompt("appointments").includes("solicitud_de_cita"));
+assert(!imageAnalysisPrompt("appointments").includes("estados de pedido"));
+assert(imageAnalysisPrompt("both").includes("atencion al cliente y agendamiento"));
 
 (async function () {
   const agent = createMultimodalAgent(config);
   assert.strictEqual(agent.canHandle("audio", "rav-toys"), true);
-  assert.strictEqual(agent.canHandle("image", "demo"), true);
+  assert.strictEqual(agent.canHandle("image", "grupo-derco"), true);
   assert.strictEqual(agent.canHandle("image", "other"), false);
 
   let routedMessage = "";
@@ -65,6 +72,30 @@ assert(buildImageConversationInput("Se observa una caja de juguete con una pieza
   });
   assert.strictEqual(handledAudio.handled, true);
   assert(routedMessage.includes("nina de 5 anos"));
+
+  let appointmentImageContext = null;
+  let appointmentImageMessage = "";
+  const handledAppointmentImage = await agent.handleIncomingMedia({
+    user_id: "573009998877",
+    tenant_id: "grupo-derco",
+    conversation_meta: { tenant_id: "grupo-derco", source: "whatsapp_webhook" },
+    message: { type: "image", image: { id: "appointment-image-1", mime_type: "image/jpeg", caption: "Esta es la orden" } },
+    downloadMedia: async function () { return { buffer: Buffer.from("fake-appointment-image"), mime_type: "image/jpeg" }; },
+    analyzeImage: async function (downloaded, media, context) {
+      appointmentImageContext = context;
+      return { text: "Se observa un documento relacionado con una solicitud de cita." };
+    },
+    sendText: async function () { throw new Error("fallback should not be used"); },
+    handleConversation: async function (userId, message, meta) {
+      assert.strictEqual(userId, "573009998877");
+      assert.strictEqual(meta.tenant_id, "grupo-derco");
+      appointmentImageMessage = message;
+    }
+  });
+  assert.strictEqual(handledAppointmentImage.handled, true);
+  assert.strictEqual(appointmentImageContext.tenant_id, "grupo-derco");
+  assert(appointmentImageMessage.includes("IMAGEN ANALIZADA"));
+  assert(appointmentImageMessage.includes("solicitud de cita"));
 
   let fallbackSent = "";
   const handledFallback = await agent.handleIncomingMedia({

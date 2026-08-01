@@ -178,6 +178,7 @@ const {
 } = require("./service-area");
 const {
   createMultimodalAgent,
+  imageAnalysisPrompt,
   multimodalConfigFromEnv
 } = require("./multimodal-agent");
 
@@ -301,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v310-meta-portfolios-rav-multimodal";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v311-customer-and-appointments-multimodal";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3899,10 +3900,30 @@ async function transcribeMultimodalAudio(downloaded, media) {
   return { text, provider: "openai", model: OPENAI_TRANSCRIPTION_MODEL };
 }
 
-async function analyzeMultimodalImage(downloaded, media) {
+async function multimodalBotModeForTenant(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  try {
+    const onboarding = cleanTenant ? await loadClientOnboarding(false, cleanTenant) : null;
+    const goal = String(onboarding && onboarding.answers && onboarding.answers.setup_goal || "").trim().toLowerCase();
+    if (goal === "appointments") return "appointments";
+    if (goal === "both") return "both";
+    if (goal === "customer_service") return "customer_service";
+  } catch (error) {
+    log("warn", "multimodal_bot_mode_lookup_failed", {
+      tenant_id: cleanTenant,
+      error: String(error && error.message || "lookup_failed").slice(0, 160)
+    });
+  }
+  const registered = getRegisteredClient(cleanTenant);
+  if (registered && registered.modules && registered.modules.appointments) return "appointments";
+  return "customer_service";
+}
+
+async function analyzeMultimodalImage(downloaded, media, context) {
   if (!OPENAI_API_KEY) throw new Error("openai_api_key_missing");
   const mime = downloaded.mime_type || media.mime_type || "image/jpeg";
   const dataUrl = "data:" + mime + ";base64," + downloaded.buffer.toString("base64");
+  const botMode = await multimodalBotModeForTenant(context && context.tenant_id);
   const response = await axios.post("https://api.openai.com/v1/responses", {
     model: OPENAI_VISION_MODEL,
     max_output_tokens: 450,
@@ -3911,13 +3932,7 @@ async function analyzeMultimodalImage(downloaded, media) {
       content: [
         {
           type: "input_text",
-          text: [
-            "Analiza esta imagen de WhatsApp para un bot comercial de atencion al cliente.",
-            "Responde en espanol, breve y util.",
-            "Clasifica el caso como una de estas opciones: producto, garantia/dano, pedido/pago, documento, unclear.",
-            "Describe solo lo visible con cautela. No inventes datos personales, precios, guias, estados de pedido ni diagnosticos.",
-            "Si hay texto visible, resume lo relevante. Si el caso parece sensible o incierto, recomienda escalar a humano."
-          ].join(" ")
+          text: imageAnalysisPrompt(botMode)
         },
         { type: "input_image", image_url: dataUrl }
       ]

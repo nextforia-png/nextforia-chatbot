@@ -1,6 +1,6 @@
 # Multimodal Input Agent
 
-Estado: piloto controlado de produccion para `rav-toys`. Cerrado por defecto para cualquier otro tenant.
+Estado: piloto controlado de produccion para los bots actuales de Atencion al cliente y Agendamiento. Cerrado por defecto para cualquier otro tenant.
 
 ## Objetivo
 
@@ -29,7 +29,7 @@ solo cuando el tenant esta autorizado por feature flags.
 
 ## Siguiente etapa
 
-1. Probar con `rav-toys` y mensajes reales de WhatsApp.
+1. Probar con RAV y DERCO usando mensajes reales de WhatsApp.
 2. Registrar metricas de costo: audios, imagenes, errores y handoffs.
 3. Agregar toggles visibles en Customer Panel.
 4. Implementar respuestas de voz con ElevenLabs y envio de audio por WhatsApp.
@@ -40,7 +40,7 @@ solo cuando el tenant esta autorizado por feature flags.
 No activar publicamente para todos los clientes. Primero:
 
 - `MULTIMODAL_AGENT_ENABLED=1`
-- `MULTIMODAL_AGENT_TENANT_IDS=rav-toys`
-- activar audio e imagen solo para `rav-toys` durante el piloto;
+- `MULTIMODAL_AGENT_TENANT_IDS=rav-toys,rav-toys-adac1e,grupo-derco`
+- activar audio e imagen solo para RAV (Atencion al cliente) y DERCO (Agendamiento) durante el piloto;
 - confirmar panel, logs, latencia y fallback;
 - aprobar en Super Admin antes de abrir a otros tenants.

@@ -131,6 +131,30 @@ function expectCode(promise, code) {
   const directInstagramVerification = await directInstagramMeta.verify("instagram", activatedDirectInstagram);
   assert.strictEqual(directInstagramVerification.ok, true);
 
+  const failedDirectInstagramAxios = async function () {
+    throw new Error("Unexpected failed direct Instagram request");
+  };
+  failedDirectInstagramAxios.post = async function () {
+    const error = new Error("Request failed with status code 400");
+    error.response = { data: { error_type: "OAuthException", code: 400, error_message: "Invalid platform app" } };
+    throw error;
+  };
+  const failedDirectInstagramMeta = new MetaChannelProvider({
+    instagramAppId: "2073069230231933",
+    instagramAppSecret: "instagram-app-secret",
+    instagramLoginEnabled: true,
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: failedDirectInstagramAxios
+  });
+  let failedDirectInstagramError = null;
+  try {
+    await failedDirectInstagramMeta.exchangeCode("instagram-code", { channel: "instagram" });
+  } catch (error) {
+    failedDirectInstagramError = error;
+  }
+  assert.strictEqual(failedDirectInstagramError && failedDirectInstagramError.code, "invalid_authorization");
+  assert.strictEqual(failedDirectInstagramError && failedDirectInstagramError.internalMessage, "Invalid platform app");
+
   const portfolioRequests = [];
   const portfolioMeta = new MetaChannelProvider({
     appId: "123456789",

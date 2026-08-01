@@ -67,7 +67,8 @@ function actorLabel(actor) {
 
 function internalError(error) {
   const data = error && error.response && error.response.data;
-  const message = data && data.error && (data.error.message || data.error.type) ||
+  const message = data && (data.error_message || data.error_description) ||
+    data && data.error && (data.error.message || data.error.type) ||
     data && data.message ||
     error && error.internalMessage ||
     error && error.message ||

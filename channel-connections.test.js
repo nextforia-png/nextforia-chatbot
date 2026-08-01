@@ -71,7 +71,9 @@ function expectCode(promise, code) {
       return { data: { success: true } };
     }
     if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps")) {
-      return { data: { data: [{ id: "2073069230231933" }] } };
+      // Meta may return the parent app id for a direct Instagram Login
+      // subscription even though OAuth used the Instagram product app id.
+      return { data: { data: [{ id: "facebook-app-id" }] } };
     }
     if (request.url.endsWith("/v25.0/ig-direct")) {
       return { data: { id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };

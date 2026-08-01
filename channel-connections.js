@@ -888,10 +888,18 @@ class MetaChannelProvider {
       // whatsapp_business_api_data, while Page subscriptions still expose id
       // at the top level. Accept both shapes so a valid WABA subscription is
       // not incorrectly marked as missing.
-      const expectedAppId = directInstagram ? this.instagramAppId : this.appId;
-      const appSubscribed = subscribedApps.some((app) => String(
-        app && (app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id)
-      ) === String(expectedAppId));
+      // Instagram Login can report either the Instagram product app id or the
+      // parent Meta app id in /subscribed_apps. Both are first-party ids from
+      // this configured provider; no unrelated subscription is accepted.
+      const expectedAppIds = directInstagram
+        ? [this.instagramAppId, this.appId].filter(Boolean).map(String)
+        : [String(this.appId)];
+      const appSubscribed = subscribedApps.some((app) => {
+        const subscribedAppId = app && (
+          app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id
+        );
+        return expectedAppIds.includes(String(subscribedAppId || ""));
+      });
       const registrationReady = channel !== "whatsapp" || (
         String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
         String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API"

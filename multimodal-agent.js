@@ -34,7 +34,9 @@ function multimodalConfigFromEnv(env) {
 function tenantAllowed(config, tenantId) {
   const ids = Array.isArray(config.tenant_ids) ? config.tenant_ids : [];
   if (!ids.length) return false;
-  return ids.includes(cleanText(tenantId, 120).toLowerCase());
+  const cleanTenantId = cleanText(tenantId, 120).toLowerCase();
+  if (!cleanTenantId) return false;
+  return ids.includes("*") || ids.includes(cleanTenantId);
 }
 
 function mediaFromWhatsAppMessage(message) {
@@ -109,11 +111,17 @@ function imageAnalysisPrompt(botMode) {
       "Identifica cual de los dos flujos corresponde antes de resumir la imagen.",
       "No confirmes pedidos, pagos ni citas solo por la imagen."
     );
-  } else {
+  } else if (mode === "customer_service") {
     shared.push(
       "El bot se dedica a atencion comercial al cliente.",
       "Clasifica el caso como producto, garantia_o_dano, pedido_o_pago, documento, o unclear.",
       "No inventes precios, guias, estados de pedido ni diagnosticos."
+    );
+  } else {
+    shared.push(
+      "Identifica la intencion segun la configuracion del bot y resume la imagen sin asumir un flujo comercial o de citas.",
+      "Clasifica el caso con una descripcion funcional breve o como unclear.",
+      "No ejecutes ni confirmes acciones solo por lo que aparezca en la imagen."
     );
   }
   return shared.join(" ");

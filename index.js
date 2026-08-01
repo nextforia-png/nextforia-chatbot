@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v311-customer-and-appointments-multimodal";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v312-platform-multimodal-inputs";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -3904,10 +3904,16 @@ async function multimodalBotModeForTenant(tenantId) {
   const cleanTenant = cleanTenantId(tenantId);
   try {
     const onboarding = cleanTenant ? await loadClientOnboarding(false, cleanTenant) : null;
-    const goal = String(onboarding && onboarding.answers && onboarding.answers.setup_goal || "").trim().toLowerCase();
+    const answers = onboarding && onboarding.answers || {};
+    const goal = String(answers.setup_goal || "").trim().toLowerCase();
     if (goal === "appointments") return "appointments";
     if (goal === "both") return "both";
     if (goal === "customer_service") return "customer_service";
+    const assignedBot = String(onboarding && onboarding.assigned_bot_id || answers.selected_bot_id || "").trim().toLowerCase();
+    if (["agendamiento", "appointments", "appointment"].includes(assignedBot)) return "appointments";
+    if (["both", "duo"].includes(assignedBot)) return "both";
+    if (["atencion-cliente", "customer_service", "customer-service"].includes(assignedBot)) return "customer_service";
+    if (assignedBot) return "generic";
   } catch (error) {
     log("warn", "multimodal_bot_mode_lookup_failed", {
       tenant_id: cleanTenant,
@@ -3916,7 +3922,8 @@ async function multimodalBotModeForTenant(tenantId) {
   }
   const registered = getRegisteredClient(cleanTenant);
   if (registered && registered.modules && registered.modules.appointments) return "appointments";
-  return "customer_service";
+  if ([DEFAULT_TENANT_ID, CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID].filter(Boolean).includes(cleanTenant)) return "customer_service";
+  return "generic";
 }
 
 async function analyzeMultimodalImage(downloaded, media, context) {

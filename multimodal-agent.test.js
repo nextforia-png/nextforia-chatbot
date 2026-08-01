@@ -13,7 +13,7 @@ const {
 
 const config = multimodalConfigFromEnv({
   MULTIMODAL_AGENT_ENABLED: "1",
-  MULTIMODAL_AGENT_TENANT_IDS: "rav-toys, rav-toys-adac1e, grupo-derco",
+  MULTIMODAL_AGENT_TENANT_IDS: "*",
   MULTIMODAL_VOICE_INPUT_ENABLED: "1",
   MULTIMODAL_IMAGE_INPUT_ENABLED: "1",
   MULTIMODAL_VOICE_REPLIES_ENABLED: "0"
@@ -25,7 +25,9 @@ assert.strictEqual(config.voice_replies_enabled, false);
 assert.strictEqual(tenantAllowed(config, "rav-toys"), true);
 assert.strictEqual(tenantAllowed(config, "rav-toys-adac1e"), true);
 assert.strictEqual(tenantAllowed(config, "grupo-derco"), true);
-assert.strictEqual(tenantAllowed(config, "other"), false);
+assert.strictEqual(tenantAllowed(config, "future-nextfor-tenant"), true);
+assert.strictEqual(tenantAllowed(config, ""), false);
+assert.strictEqual(tenantAllowed({ tenant_ids: ["rav-toys"] }, "other"), false);
 assert.strictEqual(tenantAllowed({ tenant_ids: [] }, "rav-toys"), false);
 
 assert.deepStrictEqual(mediaFromWhatsAppMessage({
@@ -50,12 +52,14 @@ assert(imageAnalysisPrompt("customer_service").includes("producto"));
 assert(imageAnalysisPrompt("appointments").includes("solicitud_de_cita"));
 assert(!imageAnalysisPrompt("appointments").includes("estados de pedido"));
 assert(imageAnalysisPrompt("both").includes("atencion al cliente y agendamiento"));
+assert(imageAnalysisPrompt("generic").includes("sin asumir un flujo comercial o de citas"));
+assert(!imageAnalysisPrompt("generic").includes("garantia_o_dano"));
 
 (async function () {
   const agent = createMultimodalAgent(config);
   assert.strictEqual(agent.canHandle("audio", "rav-toys"), true);
   assert.strictEqual(agent.canHandle("image", "grupo-derco"), true);
-  assert.strictEqual(agent.canHandle("image", "other"), false);
+  assert.strictEqual(agent.canHandle("image", "future-nextfor-tenant"), true);
 
   let routedMessage = "";
   const handledAudio = await agent.handleIncomingMedia({

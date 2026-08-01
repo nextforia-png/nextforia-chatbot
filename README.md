@@ -69,7 +69,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `OPENAI_TRANSCRIPTION_MODEL` | Modelo de transcripción multimodal (default: `gpt-4o-mini-transcribe`) |
 | `OPENAI_VISION_MODEL` | Modelo de análisis de imágenes (default: `gpt-4.1-mini`) |
 | `MULTIMODAL_AGENT_ENABLED` | Gate maestro del agente de audio/imagen |
-| `MULTIMODAL_AGENT_TENANT_IDS` | Tenants permitidos, CSV; los pilotos actuales usan RAV para Atención al cliente y `grupo-derco` para Agendamiento |
+| `MULTIMODAL_AGENT_TENANT_IDS` | Alcance de la función multimodal; usa `*` para todos los bots Nextfor o una lista CSV para una activación limitada |
 | `MULTIMODAL_VOICE_INPUT_ENABLED` | Permite transcribir notas de voz de WhatsApp y pasarlas al bot como texto controlado |
 | `MULTIMODAL_IMAGE_INPUT_ENABLED` | Permite analizar imágenes de WhatsApp y pasar hallazgos al bot |
 | `MULTIMODAL_VOICE_REPLIES_ENABLED` | Reservado para respuestas de voz con ElevenLabs; mantener `0` hasta validar envío de audio |

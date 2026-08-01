@@ -1,6 +1,6 @@
 # Multimodal Input Agent
 
-Estado: piloto controlado de produccion para los bots actuales de Atencion al cliente y Agendamiento. Cerrado por defecto para cualquier otro tenant.
+Estado: funcion de plataforma para todos los bots Nextfor. Audio e imagen usan la configuracion aislada de cada tenant.
 
 ## Objetivo
 
@@ -29,7 +29,7 @@ solo cuando el tenant esta autorizado por feature flags.
 
 ## Siguiente etapa
 
-1. Probar con RAV y DERCO usando mensajes reales de WhatsApp.
+1. Probar cada nuevo tipo de bot con mensajes reales antes de publicar su plantilla especializada.
 2. Registrar metricas de costo: audios, imagenes, errores y handoffs.
 3. Agregar toggles visibles en Customer Panel.
 4. Implementar respuestas de voz con ElevenLabs y envio de audio por WhatsApp.
@@ -37,10 +37,11 @@ solo cuando el tenant esta autorizado por feature flags.
 
 ## Politica de activacion
 
-No activar publicamente para todos los clientes. Primero:
+Activacion de plataforma:
 
 - `MULTIMODAL_AGENT_ENABLED=1`
-- `MULTIMODAL_AGENT_TENANT_IDS=rav-toys,rav-toys-adac1e,grupo-derco`
-- activar audio e imagen solo para RAV (Atencion al cliente) y DERCO (Agendamiento) durante el piloto;
+- `MULTIMODAL_AGENT_TENANT_IDS=*`
+- audio e imagen se procesan dentro del tenant y el bot asignado a la conversacion;
+- tipos de bot conocidos usan instrucciones especializadas y los nuevos usan un analisis neutral hasta tener su plantilla;
 - confirmar panel, logs, latencia y fallback;
-- aprobar en Super Admin antes de abrir a otros tenants.
+- mantener respuestas de voz desactivadas hasta aprobarlas como una capacidad separada.

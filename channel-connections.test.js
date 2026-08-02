@@ -141,33 +141,6 @@ function expectCode(promise, code) {
   const directInstagramVerification = await directInstagramMeta.verify("instagram", activatedDirectInstagram);
   assert.strictEqual(directInstagramVerification.ok, true);
 
-  const normalizedRedirects = [];
-  const normalizedRedirectAxios = async function () {
-    throw new Error("Unexpected normalized redirect request");
-  };
-  normalizedRedirectAxios.postForm = async function (_url, body) {
-    normalizedRedirects.push(body.redirect_uri);
-    if (normalizedRedirects.length === 1) {
-      const error = new Error("Request failed with status code 400");
-      error.response = { data: { error_message: "Error validating verification code. Please make sure your redirect_uri is identical to the one you used in the OAuth dialog request" } };
-      throw error;
-    }
-    return { data: { data: [{ access_token: "normalized-instagram-token" }] } };
-  };
-  const normalizedRedirectMeta = new MetaChannelProvider({
-    instagramAppId: "2073069230231933",
-    instagramAppSecret: "instagram-app-secret",
-    instagramLoginEnabled: true,
-    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
-    axiosClient: normalizedRedirectAxios
-  });
-  const normalizedCredential = await normalizedRedirectMeta.exchangeCode("normalized-code", { channel: "instagram" });
-  assert.strictEqual(normalizedCredential.access_token, "normalized-instagram-token");
-  assert.deepStrictEqual(normalizedRedirects, [
-    "https://nextforia.com/admin/channel-connections/meta/callback",
-    "https://nextforia.com/admin/channel-connections/meta/callback/"
-  ]);
-
   const failedDirectInstagramAxios = async function () {
     throw new Error("Unexpected failed direct Instagram request");
   };

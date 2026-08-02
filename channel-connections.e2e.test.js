@@ -216,7 +216,7 @@ async function login(base, body) {
     body = await response.json();
     const authorization = new URL(body.authorization_url);
     assert.strictEqual(authorization.hostname, "www.instagram.com");
-    assert.strictEqual(authorization.searchParams.get("redirect_uri"), "https://nextforia.com/admin/channel-connections/meta/callback");
+    assert.strictEqual(authorization.searchParams.get("redirect_uri"), "https://nextforia.com/admin/channel-connections/meta/callback/");
     assert(authorization.searchParams.get("scope").includes("instagram_business_manage_messages"));
     assert(!authorization.searchParams.get("scope").includes("pages_show_list"));
     assert(!body.authorization_url.includes("channel-e2e-meta-app-secret-value"));

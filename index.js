@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v318-instagram-redirect-normalization";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v319-instagram-canonical-callback";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -8640,6 +8640,12 @@ function channelConnectionCallbackUrlForRequest(req) {
   return origin ? origin + "/admin/channel-connections/meta/callback" : CHANNEL_CONNECTION_CALLBACK_URL;
 }
 
+function channelConnectionOAuthRedirectUrlForRequest(req, channel) {
+  const callbackUrl = channelConnectionCallbackUrlForRequest(req);
+  if (cleanChannel(channel) !== "instagram" || !INSTAGRAM_LOGIN_ENABLED || !callbackUrl) return callbackUrl;
+  return callbackUrl.endsWith("/") ? callbackUrl : callbackUrl + "/";
+}
+
 function appointmentCalendarCallbackUrlForRequest(req) {
   const base = channelConnectionCallbackUrlForRequest(req);
   if (base) return base.replace("/admin/channel-connections/meta/callback", "/admin/appointment-calendar/google/callback");
@@ -12578,7 +12584,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   const channel = cleanChannel(req.params.channel);
   const tenantId = customerChannelTenantForAuth(auth);
   try {
-    const redirectUri = channelConnectionCallbackUrlForRequest(req);
+    const redirectUri = channelConnectionOAuthRedirectUrlForRequest(req, channel);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenantId,
       channel,
@@ -12805,7 +12811,7 @@ app.post("/admin/channel-connections/:tenantId/:channel/connect", async (req, re
   }
   const channel = cleanChannel(req.params.channel);
   try {
-    const redirectUri = channelConnectionCallbackUrlForRequest(req);
+    const redirectUri = channelConnectionOAuthRedirectUrlForRequest(req, channel);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenant.id,
       channel,

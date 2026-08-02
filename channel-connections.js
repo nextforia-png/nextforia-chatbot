@@ -489,40 +489,20 @@ class MetaChannelProvider {
     if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
     if (cleanChannel(options && options.channel) === "instagram" && this.instagramLoginEnabled) {
       try {
+        const payload = {
+          client_id: this.instagramAppId,
+          client_secret: this.instagramAppSecret,
+          grant_type: "authorization_code",
+          redirect_uri: redirectUri,
+          code: cleanText(code, 2000)
+        };
         const endpoint = this.instagramApiOrigin + "/oauth/access_token";
-        const redirectCandidates = [redirectUri];
-        try {
-          const slashCandidate = new URL(redirectUri);
-          if (!slashCandidate.pathname.endsWith("/")) {
-            slashCandidate.pathname += "/";
-            redirectCandidates.push(slashCandidate.toString());
-          }
-        } catch (_) {}
-        let response = null;
-        let lastExchangeError = null;
-        for (let index = 0; index < redirectCandidates.length; index += 1) {
-          const payload = {
-            client_id: this.instagramAppId,
-            client_secret: this.instagramAppSecret,
-            grant_type: "authorization_code",
-            redirect_uri: redirectCandidates[index],
-            code: cleanText(code, 2000)
-          };
-          try {
-            response = typeof this.axios.postForm === "function"
-              ? await this.axios.postForm(endpoint, payload, { timeout: 10000 })
-              : await this.axios.post(endpoint, new URLSearchParams(payload).toString(), {
-                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                  timeout: 10000
-                });
-            break;
-          } catch (error) {
-            lastExchangeError = error;
-            const redirectMismatch = /redirect_uri[\s\S]*identical/i.test(internalError(error));
-            if (!redirectMismatch || index === redirectCandidates.length - 1) throw error;
-          }
-        }
-        if (!response) throw lastExchangeError || new Error("Instagram token exchange failed");
+        const response = typeof this.axios.postForm === "function"
+          ? await this.axios.postForm(endpoint, payload, { timeout: 10000 })
+          : await this.axios.post(endpoint, new URLSearchParams(payload).toString(), {
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              timeout: 10000
+            });
         const responseData = response.data || {};
         const firstResult = Array.isArray(responseData.data) ? responseData.data[0] || {} : {};
         const token = cleanText(responseData.access_token || firstResult.access_token, 4096);

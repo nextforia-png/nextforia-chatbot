@@ -250,9 +250,9 @@ function expectCode(promise, code) {
   assert.strictEqual(activatedInstagram.account_label, "@ravtoys");
   assert.strictEqual(
     activationRequests[0].params.subscribed_fields,
-    "messages,messaging_postbacks,message_reactions,message_reads"
+    "messages,messaging_postbacks,message_reactions,messaging_seen"
   );
-  assert(!activationRequests[0].params.subscribed_fields.includes("messaging_seen"));
+  assert(!activationRequests[0].params.subscribed_fields.includes("message_reads"));
 
   activationRequests.length = 0;
   await activationMeta.activate("messenger", {

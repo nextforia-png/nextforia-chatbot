@@ -813,7 +813,7 @@ class MetaChannelProvider {
     if (channel !== "whatsapp") {
       request.params = {
         subscribed_fields: channel === "instagram"
-          ? "messages,messaging_postbacks,message_reactions,message_reads"
+          ? "messages,messaging_postbacks,message_reactions,messaging_seen"
           : "messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads"
       };
     }

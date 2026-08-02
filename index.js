@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v325-rav-instagram-owner-repair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v326-instagram-conversation-delivery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1398,6 +1398,14 @@ function canonicalRuntimeTenantId(tenantId) {
     current = next;
   }
   return current;
+}
+
+function isRavTenantId(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  return !!cleanTenant && [
+    DEFAULT_TENANT_ID,
+    CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
+  ].map(cleanTenantId).filter(Boolean).includes(cleanTenant);
 }
 
 function runtimeTenantChannelKey(tenantId, channel) {
@@ -4605,9 +4613,10 @@ async function executeHumanHandoff(userId, input, runtime) {
   }
   notif += `Toma el control en ${channelLabel(userId)}.`;
   await notifyTeam(notif, userId);
-  await sendText(userId, "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏", runtime);
+  const customerMessage = "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏";
+  const delivered = await sendText(userId, customerMessage, runtime);
   console.log(`Handoff activated for ${maskedIdentifier(userId)}, reason: ${String(reason || "").slice(0, 80)}`);
-  return { handoff: true, bot_paused: true };
+  return { handoff: true, bot_paused: true, delivered: !!delivered, customer_message: customerMessage };
 }
 
 async function executeCheckAppointmentAvailability(tenantId, input, actor) {
@@ -4797,10 +4806,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const configuredTenantBot = tenantConfigurationPrompts.length > 0;
   const conversationSystemPrompt = configuredTenantBot
     ? "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad."
-    : tenantId === DEFAULT_TENANT_ID
+    : isRavTenantId(tenantId)
       ? SYSTEM_PROMPT
       : "Eres un asistente temporal de Nextfor IA para este negocio. No uses nombres, catálogo, políticas, productos ni datos de ningún otro cliente. La configuración comercial de este tenant todavía no está aprobada: limita tu ayuda a respuestas generales, explica que el equipo está terminando la configuración y deriva a una persona cuando la solicitud dependa de información del negocio.";
-  let conversationTools = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot
+  let conversationTools = isRavTenantId(tenantId) && !configuredTenantBot
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
   if (usesAppointmentBot) {
@@ -4865,7 +4874,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   });
   let memoryContext = buildCustomerMemoryContext(customerMemory, { newSession });
   let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
-  let publishedSetupPrompt = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot && activeBotSetup.published && activeBotSetup.published.derived
+  let publishedSetupPrompt = isRavTenantId(tenantId) && !configuredTenantBot && activeBotSetup.published && activeBotSetup.published.derived
     ? activeBotSetup.published.derived.system_prompt
     : "";
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
@@ -4915,6 +4924,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         workingHistory.push({ role: "assistant", content });
 
         const toolResults = [];
+        let handoffCustomerReply = null;
         for (const toolUse of toolUses) {
           turnTools.push(toolUse.name);  // (Tarea 1)
           let result;
@@ -4992,6 +5002,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
               case "request_human_handoff":
               turnHandoff = true;  // (Tarea 1)
                 result = await executeHumanHandoff(userId, toolUse.input, conversationRuntime);
+                handoffCustomerReply = result && result.customer_message ? {
+                  text: result.customer_message,
+                  delivered: result.delivered === true
+                } : null;
                 break;
               case "check_appointment_availability":
                 result = await executeCheckAppointmentAvailability(tenantId, toolUse.input, "appointment_bot:" + conversationChannel(userId));
@@ -5030,6 +5044,16 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         });
 
         if (hasHumanHandoff(userId, tenantId)) {
+          if (handoffCustomerReply && handoffCustomerReply.text) {
+            history.push({ role: "assistant", content: handoffCustomerReply.text });
+            recordTurn(
+              userId,
+              userMessage,
+              handoffCustomerReply.text,
+              handoffCustomerReply.delivered ? "ok" : "error",
+              conversationRuntime
+            );
+          }
           conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
           return;
         }

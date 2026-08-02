@@ -1114,7 +1114,7 @@ function createChannelConnectionService(options) {
       throw new ChannelConnectionError(
         "channel_asset_already_assigned",
         409,
-        "Channel asset is already assigned to another tenant"
+        "Channel asset is already assigned to tenant " + cleanTenantId(blockingConflict.tenant_id)
       );
     }
     // App-review tenants are temporary sandboxes. Once a real customer claims

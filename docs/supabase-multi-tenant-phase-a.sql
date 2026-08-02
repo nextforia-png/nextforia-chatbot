@@ -9,16 +9,32 @@ alter table public.conversation_logs
   add column if not exists phone_number_id text,
   add column if not exists channel text;
 
+-- Preserve an explicit tenant embedded in append-only internal records. Older
+-- encrypted/normal turns did not carry a database tenant column and cannot be
+-- assigned safely, so quarantine them instead of exposing them to RAV or to a
+-- newly registered customer.
 update public.conversation_logs
-set tenant_id = 'rav-toys'
+set tenant_id = coalesce(
+  nullif(substring(bot_reply from '"tenant_id"[[:space:]]*:[[:space:]]*"([a-z0-9_-]+)"'), ''),
+  'legacy-unassigned'
+)
 where tenant_id is null;
 
+-- The original RAV dashboard id is an alias; production webhooks and channel
+-- credentials use the registered tenant id.
 update public.conversation_logs
-set channel = case
-  when user_id like 'ig:%' then 'instagram'
-  when user_id like 'ms:%' then 'messenger'
-  else 'whatsapp'
-end
+set tenant_id = 'rav-toys-adac1e'
+where tenant_id = 'rav-toys';
+
+update public.conversation_logs
+set channel = coalesce(
+  nullif(substring(bot_reply from '"channel"[[:space:]]*:[[:space:]]*"(whatsapp|instagram|messenger)"'), ''),
+  case
+    when user_id like 'ig:%' then 'instagram'
+    when user_id like 'ms:%' then 'messenger'
+    else 'internal'
+  end
+)
 where channel is null;
 
 alter table public.conversation_logs

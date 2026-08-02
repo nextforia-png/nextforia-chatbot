@@ -63,7 +63,7 @@ async function fakeSupabase() {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
-  return { server, url: "http://127.0.0.1:" + port };
+  return { server, url: "http://127.0.0.1:" + port, rows };
 }
 
 (async function run() {
@@ -110,6 +110,23 @@ async function fakeSupabase() {
     });
     assert.strictEqual(response.status, 200);
 
+    supabase.rows.push(
+      {
+        id: "calendar-state",
+        user_id: "appointment-calendar-connection",
+        user_message: "internal",
+        bot_reply: "[AppointmentCalendarConnectionState] encrypted-state",
+        tools: ["appointment_calendar_connection_state"]
+      },
+      {
+        id: "nextfor-signature",
+        user_id: "nextfor-signature",
+        user_message: "internal",
+        bot_reply: "[NextforSignature] internal-signature",
+        tools: ["nextfor_signature"]
+      }
+    );
+
     const conversations = await fetch(base + "/admin/conversations?limit=20", {
       headers: { "x-dashboard-key": dashboardKey }
     });
@@ -117,6 +134,8 @@ async function fakeSupabase() {
     const body = await conversations.json();
     assert.strictEqual(body.turns.length, 0);
     assert(!JSON.stringify(body).includes("ShopifySessionState"));
+    assert(!JSON.stringify(body).includes("AppointmentCalendarConnectionState"));
+    assert(!JSON.stringify(body).includes("NextforSignature"));
     console.log("conversation-internal-filter.e2e.test.js OK");
   } finally {
     child.kill();

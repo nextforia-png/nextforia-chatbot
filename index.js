@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v321-instagram-tenant-isolation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v322-production-tenant-filters";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -359,7 +359,11 @@ const SUPABASE_URL = normalizedSupabaseUrl && (
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const SUPABASE_TABLE = "conversation_logs";
 const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de conversaciones
-const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
+// Production is multi-tenant and must fail closed. The tenant columns already
+// exist in the live schema; treating an omitted/legacy flag as disabled makes
+// customer panels read and write the shared table without tenant filters.
+const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.NODE_ENV === "production" ||
+  process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
 const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
@@ -2314,9 +2318,11 @@ function isShopifySessionStateTurn(turn) {
 
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
-  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
+    isSuperAdminAccessTurn(turn) ||
     isBotSetupTurn(turn) ||
     isClientOnboardingTurn(turn) ||
     isCustomerSetupQuestionnaireTurn(turn) ||
@@ -2325,7 +2331,9 @@ function isInternalAdminTurn(turn) {
     isInstagramProfileTurn(turn) ||
     isCustomerMemoryTurn(turn) ||
     isChannelConnectionStateTurn(turn) ||
-    isShopifySessionStateTurn(turn);
+    isShopifySessionStateTurn(turn) ||
+    tools.includes(SIGNATURE_TOOL) ||
+    tools.includes(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
 }
 
 function normalizeCustomerTags(tags) {

@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v322-production-tenant-filters";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v323-rav-tenant-canonicalization";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -8541,8 +8541,15 @@ function adminAuthOk(req, minRole = "viewer") {
 
 function customerTenantForAuth(auth) {
   if (!auth || !auth.ok) return "";
-  if (auth.version === 2) return cleanTenantId(auth.tenant_id);
-  return DEFAULT_TENANT_ID;
+  const tenantId = auth.version === 2 ? cleanTenantId(auth.tenant_id) : DEFAULT_TENANT_ID;
+  // RAV predates the registered multi-tenant accounts. Production credentials,
+  // webhooks and conversation rows live under the registered bootstrap tenant,
+  // while legacy dashboard sessions still carry DEFAULT_TENANT_ID. Resolve the
+  // alias at the panel boundary so OAuth, messages and UI all use one owner.
+  if (tenantId === DEFAULT_TENANT_ID && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID) {
+    return CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID;
+  }
+  return tenantId;
 }
 
 function customerChannelTenantForAuth(auth) {

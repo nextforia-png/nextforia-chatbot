@@ -462,6 +462,51 @@ function expectCode(promise, code) {
   assert.strictEqual((await isolatedAssetStore.get("tenant-rav", "instagram")).status, "connected");
   assert.strictEqual((await isolatedAssetStore.get("tenant-nextfor", "instagram")).status, "needs_attention");
 
+  const reviewOwnershipStore = new InMemoryChannelConnectionStore();
+  let reviewOwnershipActivations = 0;
+  const reviewOwnershipService = createChannelConnectionService({
+    store: reviewOwnershipStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) {
+        reviewOwnershipActivations++;
+        return candidate;
+      }
+    },
+    encryptionKey,
+    replaceableOwnershipTenant: function (ownerTenantId, requestedTenantId) {
+      return /^meta-app-review-/.test(ownerTenantId) && !/^meta-app-review-/.test(requestedTenantId);
+    }
+  });
+  await reviewOwnershipService.adoptExisting("meta-app-review-nextforia-demo", "instagram", "reviewer@meta.example", {
+    account_id: "ig-nextfor",
+    account_label: "@nextfor.ia",
+    instagram_user_id: "ig-nextfor",
+    access_token: "review-instagram-token"
+  });
+  const liveOwnership = await reviewOwnershipService.adoptExisting("nextforia-live", "instagram", "admin@nextforia.example", {
+    account_id: "ig-nextfor",
+    account_label: "@nextfor.ia",
+    instagram_user_id: "ig-nextfor",
+    access_token: "live-instagram-token"
+  });
+  assert.strictEqual(liveOwnership.status, "connected");
+  assert.strictEqual(reviewOwnershipActivations, 2);
+  const retiredReviewOwnership = await reviewOwnershipStore.get("meta-app-review-nextforia-demo", "instagram");
+  assert.strictEqual(retiredReviewOwnership.status, "disconnected");
+  assert.strictEqual(retiredReviewOwnership.instagram_user_id, null);
+  assert.strictEqual(retiredReviewOwnership.credentials_ciphertext, null);
+  assert(reviewOwnershipStore.audit.some(function (event) {
+    return event.action === "temporary_ownership_released" &&
+      event.details.replacement_tenant_id === "nextforia-live";
+  }));
+  await expectCode(reviewOwnershipService.adoptExisting("meta-app-review-second-demo", "instagram", "reviewer@meta.example", {
+    account_id: "ig-nextfor",
+    account_label: "@nextfor.ia",
+    instagram_user_id: "ig-nextfor",
+    access_token: "second-review-token"
+  }), "channel_asset_already_assigned");
+
   const aliasedAssetStore = new InMemoryChannelConnectionStore();
   const aliasedAssetService = createChannelConnectionService({
     store: aliasedAssetStore,

@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v320-instagram-webhook-fields";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v321-instagram-tenant-isolation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -779,6 +779,40 @@ const instagramRuntimeState = {
   last_event_shape: null,
   last_skip_reason: null
 };
+
+function tenantConversationStateKey(userId, tenantId) {
+  const cleanUser = normalizeConversationUserId(userId);
+  const cleanTenant = canonicalRuntimeTenantId(tenantId) || canonicalRuntimeTenantId(DEFAULT_TENANT_ID);
+  return cleanUser ? cleanTenant + "\u001f" + cleanUser : "";
+}
+
+function tenantConversationStateUserId(key) {
+  const parts = String(key || "").split("\u001f");
+  return parts.length > 1 ? normalizeConversationUserId(parts.slice(1).join("\u001f")) : normalizeConversationUserId(key);
+}
+
+function addHumanHandoff(userId, tenantId) {
+  const key = tenantConversationStateKey(userId, tenantId);
+  if (key) humanHandoff.add(key);
+  return !!key;
+}
+
+function hasHumanHandoff(userId, tenantId) {
+  const key = tenantConversationStateKey(userId, tenantId);
+  return !!key && humanHandoff.has(key);
+}
+
+function deleteHumanHandoff(userId, tenantId) {
+  const key = tenantConversationStateKey(userId, tenantId);
+  return !!key && humanHandoff.delete(key);
+}
+
+function activeHumanHandoffUsers(tenantId) {
+  const cleanTenant = canonicalRuntimeTenantId(tenantId);
+  return Array.from(humanHandoff).filter(function (key) {
+    return !cleanTenant || String(key).startsWith(cleanTenant + "\u001f");
+  }).map(tenantConversationStateUserId).filter(Boolean);
+}
 const whatsappRuntimeState = {
   webhook_requests: 0,
   inbound_messages: 0,
@@ -1002,6 +1036,10 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
           DEFAULT_TENANT_ID,
           CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
         ].filter(Boolean).includes(cleanTenantId(tenantId));
+      },
+      replaceableOwnershipTenant: function (ownerTenantId, requestedTenantId) {
+        return /^meta-app-review-[a-z0-9-]+$/.test(cleanTenantId(ownerTenantId)) &&
+          !/^meta-app-review-[a-z0-9-]+$/.test(cleanTenantId(requestedTenantId));
       }
     })
   : null;
@@ -1230,15 +1268,103 @@ async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult) {
   }
 }
 
-channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection()
-  .then(registerRavWhatsAppCloudNumberIfNeeded);
-
-function runtimeTenantChannelKey(tenantId, channel) {
-  return cleanTenantId(tenantId) + ":" + cleanChannel(channel);
+async function retireTemporaryInstagramReviewOwners() {
+  if (process.env.NODE_ENV !== "production" || !channelConnectionStore ||
+      typeof channelConnectionStore.listAll !== "function" || typeof channelConnectionStore.upsert !== "function") {
+    return { skipped: true };
+  }
+  try {
+    const rows = await channelConnectionStore.listAll();
+    const active = (Array.isArray(rows) ? rows : []).filter(function (row) {
+      return row && row.channel === "instagram" &&
+        /^meta-app-review-[a-z0-9-]+$/.test(cleanTenantId(row.tenant_id)) &&
+        ["connecting", "connected", "needs_attention"].includes(row.status);
+    });
+    for (const row of active) {
+      const releasedAt = new Date().toISOString();
+      await channelConnectionStore.upsert({
+        tenant_id: row.tenant_id,
+        channel: "instagram",
+        status: "disconnected",
+        webhook_status: "ownership_released",
+        last_error: null,
+        last_error_at: null,
+        disconnected_at: releasedAt,
+        disconnected_by: "system:app-review-retired",
+        account_id: null,
+        account_label: null,
+        meta_business_id: null,
+        page_id: null,
+        instagram_user_id: null,
+        updated_at: releasedAt,
+        pending_assets: [],
+        credentials_ciphertext: null,
+        credential_source: null,
+        protected_legacy: false
+      }, {
+        action: "temporary_ownership_released",
+        actor: "system:app-review-retired",
+        details: { reason: "app_review_tenant_retired", channel: "instagram" }
+      });
+    }
+    if (active.length) {
+      log("info", "temporary_instagram_review_owners_retired", { released_count: active.length });
+    }
+    return { skipped: false, released_count: active.length };
+  } catch (error) {
+    log("error", "temporary_instagram_review_owner_retirement_failed", {
+      error: String(error.message || "review_owner_retirement_failed").slice(0, 200)
+    });
+    return { skipped: false, ok: false, error: error.message };
+  }
 }
 
-function conversationRuntimeKey(userId) {
-  return normalizeConversationUserId(userId);
+channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection()
+  .then(registerRavWhatsAppCloudNumberIfNeeded)
+  .then(async function (result) {
+    await retireTemporaryInstagramReviewOwners();
+    return result;
+  });
+
+function canonicalRuntimeTenantId(tenantId) {
+  let current = cleanTenantId(tenantId);
+  const seen = new Set();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const next = cleanTenantId(CHANNEL_CONNECTION_TENANT_ALIASES[current]);
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+function runtimeTenantChannelKey(tenantId, channel) {
+  return canonicalRuntimeTenantId(tenantId) + ":" + cleanChannel(channel);
+}
+
+function conversationRuntimeKey(userId, tenantId) {
+  const cleanUser = normalizeConversationUserId(userId);
+  const cleanTenant = canonicalRuntimeTenantId(tenantId);
+  return cleanUser && cleanTenant ? cleanTenant + ":" + cleanUser : "";
+}
+
+function cachedConversationRuntime(userId, tenantId) {
+  const cleanUser = normalizeConversationUserId(userId);
+  const cleanTenant = canonicalRuntimeTenantId(tenantId);
+  if (!cleanUser) return null;
+  if (cleanTenant) return conversationOutboundRuntime.get(conversationRuntimeKey(cleanUser, cleanTenant)) || null;
+  const suffix = ":" + cleanUser;
+  const matches = [];
+  conversationOutboundRuntime.forEach(function (runtime, key) {
+    if (String(key).endsWith(suffix)) matches.push(runtime);
+  });
+  const tenantIds = new Set(matches.map(function (runtime) {
+    return cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
+  }).filter(Boolean));
+  // A caller without tenant context may reuse a cached route only when it is
+  // unambiguous. Never guess between two businesses that share the same Meta
+  // sender id.
+  return tenantIds.size === 1 ? matches[0] || null : null;
 }
 
 function credentialPayloadFromConnection(record) {
@@ -1430,8 +1556,8 @@ async function loadChannelRuntimeRows(force) {
           const key = String(id);
           if (ambiguousInstagramDestinations.has(key)) return;
           const existing = byInstagramDestination.get(key);
-          const existingTenant = cleanTenantId(existing && (existing.tenantId || existing.tenant_id));
-          const runtimeTenant = cleanTenantId(runtime.tenantId || runtime.tenant_id);
+          const existingTenant = canonicalRuntimeTenantId(existing && (existing.tenantId || existing.tenant_id));
+          const runtimeTenant = canonicalRuntimeTenantId(runtime.tenantId || runtime.tenant_id);
           if (existing && existingTenant && runtimeTenant && existingTenant !== runtimeTenant) {
             byInstagramDestination.delete(key);
             ambiguousInstagramDestinations.add(key);
@@ -1464,9 +1590,8 @@ async function loadChannelRuntimeRows(force) {
 }
 
 function rememberConversationRuntime(userId, runtime) {
-  const key = conversationRuntimeKey(userId);
   const channel = cleanChannel(runtime && runtime.channel) || conversationChannel(userId);
-  if (!key || !runtime || !channel) return null;
+  if (!runtime || !channel) return null;
   const normalized = {
     tenantId: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
     tenant_id: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
@@ -1483,12 +1608,18 @@ function rememberConversationRuntime(userId, runtime) {
     access_token: cleanRuntimeText(runtime.accessToken || runtime.access_token, 4096),
     source: runtime.source || "conversation"
   };
+  const key = conversationRuntimeKey(userId, normalized.tenantId);
+  if (!key) return null;
   if (!normalized.accessToken) {
     if (channel === "whatsapp") normalized.accessToken = normalized.access_token = WA_TOKEN;
     if (channel === "instagram") normalized.accessToken = normalized.access_token = IG_ACCESS_TOKEN;
     if (channel === "messenger") normalized.accessToken = normalized.access_token = MESSENGER_PAGE_ACCESS_TOKEN;
   }
   conversationOutboundRuntime.set(key, normalized);
+  if (conversationOutboundRuntime.size > 20000) {
+    const oldest = conversationOutboundRuntime.keys().next().value;
+    if (oldest) conversationOutboundRuntime.delete(oldest);
+  }
   return normalized;
 }
 
@@ -1571,7 +1702,6 @@ async function resolveMessengerDestinationRuntime(entry) {
 async function outboundRuntimeForConversation(userId, options) {
   const recipient = parseChannelRecipient(userId);
   const channel = recipient.channel;
-  const key = conversationRuntimeKey(userId);
   const suppliedTenant = cleanTenantId(options && (options.tenantId || options.tenant_id));
   const supplied = {
     tenantId: suppliedTenant,
@@ -1597,7 +1727,8 @@ async function outboundRuntimeForConversation(userId, options) {
     if (byTenant) return rememberConversationRuntime(userId, Object.assign({}, supplied, byTenant));
   }
   if (suppliedDestination && supplied.accessToken) return rememberConversationRuntime(userId, supplied);
-  if (key && conversationOutboundRuntime.has(key)) return conversationOutboundRuntime.get(key);
+  const remembered = cachedConversationRuntime(userId, suppliedTenant);
+  if (remembered) return remembered;
   if (supplied.tenantId) {
     const byTenant = await resolveChannelRuntimeForTenant(supplied.tenantId, channel);
     if (byTenant) return rememberConversationRuntime(userId, byTenant);
@@ -2183,7 +2314,7 @@ function isShopifySessionStateTurn(turn) {
 
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
-  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta)\]\s*/.test(botReply)) return true;
+  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isBotSetupTurn(turn) ||
@@ -2270,13 +2401,19 @@ function maskedIdentifier(value) {
   return external ? prefix + "***" + external.slice(-4) : prefix + "unknown";
 }
 
-function validMetaWebhookSignature(req) {
-  return validMetaSignature(
-    req.rawBody,
-    req.get("x-hub-signature-256"),
-    META_APP_SECRET,
-    ALLOW_UNSIGNED_WEBHOOKS || !META_APP_SECRET
-  );
+function validMetaWebhookSignature(req, secrets) {
+  const candidates = Array.from(new Set((Array.isArray(secrets) ? secrets : [META_APP_SECRET])
+    .map(function (secret) { return String(secret || ""); })
+    .filter(Boolean)));
+  if (!candidates.length) return ALLOW_UNSIGNED_WEBHOOKS === true;
+  return candidates.some(function (secret) {
+    return validMetaSignature(
+      req.rawBody,
+      req.get("x-hub-signature-256"),
+      secret,
+      false
+    );
+  });
 }
 
 function acceptMessengerEvent(event) {
@@ -2348,14 +2485,16 @@ function customerMemoriesFromTurns(turns) {
   return memories;
 }
 
-function recordCustomerMemory(userId, memory) {
+function recordCustomerMemory(userId, memory, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   const normalized = normalizeMemory(memory);
   if (!cleanUserId || !isMeaningfulMemory(normalized)) return null;
-  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+  const explicitTenantId = cleanTenantId(tenantId);
+  const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+  const memoryTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
   const rec = {
     ts: new Date().toISOString(),
-    tenantId: cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID,
+    tenantId: memoryTenantId,
     phoneNumberId: cleanRuntimeText(remembered && remembered.phoneNumberId, 240) || PHONE_NUMBER_ID || null,
     channel: conversationChannel(cleanUserId),
     userId: cleanUserId,
@@ -2369,40 +2508,42 @@ function recordCustomerMemory(userId, memory) {
     status: "ok",
     eval: { skip: true, reason: CUSTOMER_MEMORY_TOOL }
   };
-  customerMemoryCache.set(cleanUserId, { memory: normalized, loaded_at: Date.now() });
+  customerMemoryCache.set(tenantConversationStateKey(cleanUserId, memoryTenantId), { memory: normalized, loaded_at: Date.now() });
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
   supabaseInsert(rec);
   return normalized;
 }
 
-async function loadCustomerMemory(userId) {
+async function loadCustomerMemory(userId, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   if (!cleanUserId) return null;
-  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-  const tenantId = cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
-  const cached = customerMemoryCache.get(cleanUserId);
+  const explicitTenantId = cleanTenantId(tenantId);
+  const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+  const memoryTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
+  const memoryKey = tenantConversationStateKey(cleanUserId, memoryTenantId);
+  const cached = customerMemoryCache.get(memoryKey);
   if (cached && Date.now() - cached.loaded_at < CUSTOMER_MEMORY_CACHE_TTL_MS) return cached.memory;
 
   let turns = conversationLogs.filter(function (turn) { return normalizeConversationUserId(turn.userId) === cleanUserId; });
   if (SUPABASE_ENABLED) {
-    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1, { tenantId });
+    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1, { tenantId: memoryTenantId });
     if (memoryRows && memoryRows.length) turns = memoryRows.map(normalizeTurnRow);
     else {
-      const rows = await supabaseFetchUserRecent(cleanUserId, 60, tenantId);
+      const rows = await supabaseFetchUserRecent(cleanUserId, 60, memoryTenantId);
       if (rows) turns = rows.map(normalizeTurnRow);
     }
   }
   const memory = customerMemoriesFromTurns(turns)[cleanUserId] || null;
-  customerMemoryCache.set(cleanUserId, { memory, loaded_at: Date.now() });
+  customerMemoryCache.set(memoryKey, { memory, loaded_at: Date.now() });
   return memory;
 }
 
-function evolveAndPersistCustomerMemory(userId, currentMemory, event) {
+function evolveAndPersistCustomerMemory(userId, currentMemory, event, tenantId) {
   const evolved = evolveCustomerMemory(currentMemory, event);
   if (!evolved.changed || !isMeaningfulMemory(evolved.memory)) return currentMemory || null;
   if (memoryFingerprint(evolved.memory) === memoryFingerprint(currentMemory)) return currentMemory || null;
-  return recordCustomerMemory(userId, evolved.memory) || evolved.memory;
+  return recordCustomerMemory(userId, evolved.memory, tenantId) || evolved.memory;
 }
 
 function normalizeInstagramUsername(username) {
@@ -2435,14 +2576,16 @@ function instagramProfilesFromTurns(turns) {
   return profiles;
 }
 
-function recordInstagramProfile(userId, username) {
+function recordInstagramProfile(userId, username, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   const cleanUsername = normalizeInstagramUsername(username);
   if (conversationChannel(cleanUserId) !== "instagram" || !cleanUsername) return null;
-  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+  const explicitTenantId = cleanTenantId(tenantId);
+  const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+  const profileTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
   const rec = {
     ts: new Date().toISOString(),
-    tenantId: cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID,
+    tenantId: profileTenantId,
     channel: "instagram",
     userId: cleanUserId,
     userMessage: "",
@@ -2455,23 +2598,26 @@ function recordInstagramProfile(userId, username) {
     status: "ok",
     eval: { skip: true, reason: INSTAGRAM_PROFILE_TOOL }
   };
-  instagramProfileCache.set(cleanUserId, { username: cleanUsername, fetched_at: Date.now() });
+  instagramProfileCache.set(tenantConversationStateKey(cleanUserId, profileTenantId), { username: cleanUsername, fetched_at: Date.now() });
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
   supabaseInsert(rec);
   return parseInstagramProfileTurn(rec);
 }
 
-async function refreshInstagramProfile(userId) {
+async function refreshInstagramProfile(userId, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   if (conversationChannel(cleanUserId) !== "instagram") return null;
-  const runtime = await outboundRuntimeForConversation(cleanUserId);
+  const explicitTenantId = cleanTenantId(tenantId);
+  const runtime = await outboundRuntimeForConversation(cleanUserId, explicitTenantId ? { tenant_id: explicitTenantId } : undefined);
   const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
   if (!accessToken) return null;
-  const cached = instagramProfileCache.get(cleanUserId);
+  const profileTenantId = explicitTenantId || cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
+  const profileKey = tenantConversationStateKey(cleanUserId, profileTenantId);
+  const cached = instagramProfileCache.get(profileKey);
   const cacheTtl = cached && cached.username ? INSTAGRAM_PROFILE_TTL_MS : INSTAGRAM_PROFILE_RETRY_MS;
   if (cached && Date.now() - cached.fetched_at < cacheTtl) return cached.username ? cached : null;
-  instagramProfileCache.set(cleanUserId, { username: "", fetched_at: Date.now() });
+  instagramProfileCache.set(profileKey, { username: "", fetched_at: Date.now() });
   try {
     const instagramScopedId = conversationExternalId(cleanUserId);
     const graphOrigin = instagramGraphOriginForRuntime(runtime);
@@ -2482,7 +2628,7 @@ async function refreshInstagramProfile(userId) {
     });
     const username = normalizeInstagramUsername(response.data && response.data.username);
     if (!username) return null;
-    return recordInstagramProfile(cleanUserId, username);
+    return recordInstagramProfile(cleanUserId, username, profileTenantId);
   } catch (error) {
     log("warn", "instagram_profile_lookup_failed", {
       user_suffix: conversationExternalId(cleanUserId).slice(-6),
@@ -2492,7 +2638,7 @@ async function refreshInstagramProfile(userId) {
   }
 }
 
-function queueInstagramProfileRefreshes(turns) {
+function queueInstagramProfileRefreshes(turns, tenantId) {
   const storedProfiles = instagramProfilesFromTurns(turns);
   const userIds = [];
   (turns || []).forEach(function (turn) {
@@ -2500,10 +2646,11 @@ function queueInstagramProfileRefreshes(turns) {
     if (conversationChannel(userId) !== "instagram" || storedProfiles[userId] || userIds.includes(userId)) return;
     userIds.push(userId);
   });
-  userIds.slice(0, 10).forEach(function (userId) { refreshInstagramProfile(userId); });
+  userIds.slice(0, 10).forEach(function (userId) { refreshInstagramProfile(userId, tenantId); });
 }
 
-function recordCustomerMeta(userId, meta) {
+function recordCustomerMeta(userId, meta, tenantId) {
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const payload = {
     tags: normalizeCustomerTags(meta && meta.tags),
     note: normalizeCustomerNote(meta && meta.note),
@@ -2511,6 +2658,7 @@ function recordCustomerMeta(userId, meta) {
   };
   const rec = {
     ts: new Date().toISOString(),
+    tenantId: cleanTenant,
     userId,
     userMessage: "",
     botReply: "[Meta] " + JSON.stringify(payload),
@@ -2564,7 +2712,7 @@ function inferHandoffStates(turns, activeUsers) {
 }
 
 async function inferRecentHandoffs(limit) {
-  const activeMemory = Array.from(humanHandoff.values());
+  const activeMemory = activeHumanHandoffUsers(DEFAULT_TENANT_ID);
   let turns = conversationLogs.slice();
   if (SUPABASE_ENABLED) {
     const rows = await supabaseFetchRecent(limit || 100);
@@ -2580,8 +2728,9 @@ async function inferRecentHandoffs(limit) {
 function recordTurn(userId, userMessage, botReply, status, meta) {
   try {
     const cleanUserId = normalizeConversationUserId(userId) || userId;
-    const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+    const explicitTenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id));
+    const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+    const tenantId = explicitTenantId ||
       cleanTenantId(remembered && remembered.tenantId) ||
       DEFAULT_TENANT_ID;
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
@@ -2613,8 +2762,9 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
   try {
     const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : !["admin_release", "admin_resolve"].includes(tool);
     const cleanUserId = normalizeConversationUserId(userId) || userId;
-    const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+    const explicitTenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id));
+    const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+    const tenantId = explicitTenantId ||
       cleanTenantId(remembered && remembered.tenantId) ||
       DEFAULT_TENANT_ID;
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
@@ -2653,21 +2803,22 @@ function describeInboundMessage(message) {
   return "[" + (type || "mensaje") + " recibido]";
 }
 
-function recordHumanPausedInbound(userId, message) {
+function recordHumanPausedInbound(userId, message, runtime) {
   trackIncomingMessage(userId);
   turnZeroSearchActive = false;
   turnTools = ["human_handoff_active"];
   turnZeroQueries = [];
   turnHandoff = true;
   turnRating = null;
-  recordTurn(userId, describeInboundMessage(message), "", "ok");
+  recordTurn(userId, describeInboundMessage(message), "", "ok", runtime);
 }
 
-async function humanControlActiveFor(userId) {
+async function humanControlActiveFor(userId, tenantId) {
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const instagramConversation = conversationChannel(userId) === "instagram";
-  if (humanHandoff.has(userId) && !instagramConversation) return true;
-  if (instagramConversation) humanHandoff.delete(userId);
-  const rows = await supabaseFetchUserRecent(userId, 20);
+  if (hasHumanHandoff(userId, cleanTenant) && !instagramConversation) return true;
+  if (instagramConversation) deleteHumanHandoff(userId, cleanTenant);
+  const rows = await supabaseFetchUserRecent(userId, 20, cleanTenant);
   if (!rows || !rows.length) return false;
   for (const row of rows) {
     const tools = row.tools || [];
@@ -2678,11 +2829,11 @@ async function humanControlActiveFor(userId) {
       const activatedAt = Date.parse(row.ts || row.created_at || "");
       const ttl = adminHandoff ? ADMIN_HANDOFF_TTL_MS : BOT_HANDOFF_TTL_MS;
       if (activatedAt && Date.now() - activatedAt > ttl) {
-        recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false);
+        recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false, { tenant_id: cleanTenant });
         if (conversationChannel(userId) === "instagram") instagramRuntimeState.last_handoff_auto_release_at = new Date().toISOString();
         return false;
       }
-      humanHandoff.add(userId);
+      addHumanHandoff(userId, cleanTenant);
       return true;
     }
   }
@@ -4370,8 +4521,9 @@ async function executeNotifyTeam(userId) {
   return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length };
 }
 
-async function executeHumanHandoff(userId, input) {
-  humanHandoff.add(userId);
+async function executeHumanHandoff(userId, input, runtime) {
+  const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
+  addHumanHandoff(userId, tenantId);
   const reason = input.reason || "solicitud_cliente";
   await recordRetargetingSignal(userId, "handoff", "handoff:" + Date.now(), "system");
   const state = checkouts.get(userId);
@@ -4387,7 +4539,7 @@ async function executeHumanHandoff(userId, input) {
   }
   notif += `Toma el control en ${channelLabel(userId)}.`;
   await notifyTeam(notif, userId);
-  await sendText(userId, "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏");
+  await sendText(userId, "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏", runtime);
   console.log(`Handoff activated for ${maskedIdentifier(userId)}, reason: ${String(reason || "").slice(0, 80)}`);
   return { handoff: true, bot_paused: true };
 }
@@ -4518,6 +4670,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     source: conversationMeta.source || "inbound_webhook"
   };
   const tenantId = cleanTenantId(conversationRuntime.tenantId) || DEFAULT_TENANT_ID;
+  const stateKey = tenantConversationStateKey(userId, tenantId);
   async function sendBotReply(message) {
     return sendText(userId, message, conversationRuntime);
   }
@@ -4526,17 +4679,17 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     await sendBotReply("Tu mensaje es demasiado largo para procesarlo con seguridad. Envíalo en partes más cortas, por favor.");
     return;
   }
-  if (!acceptInboundMessageRate(userId)) {
+  if (!acceptInboundMessageRate(stateKey)) {
     log("warn", "inbound_message_rejected", { user: maskedIdentifier(userId), reason: "rate_limit" });
     return;
   }
   trackIncomingMessage(userId);
-  const previousActivityAt = conversationLastActiveAt.get(userId) || 0;
+  const previousActivityAt = conversationLastActiveAt.get(stateKey) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
-  conversationLastActiveAt.set(userId, Date.now());
+  conversationLastActiveAt.set(stateKey, Date.now());
   turnZeroSearchActive = false;  // (v33.4) reset por turno
   turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
-  if (await humanControlActiveFor(userId)) {
+  if (await humanControlActiveFor(userId, tenantId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${maskedIdentifier(userId)}`);
     turnHandoff = true;
     turnTools.push("human_handoff_active");
@@ -4544,8 +4697,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     return;
   }
 
-  if (!conversations.has(userId) || newSession) conversations.set(userId, []);
-  const history = conversations.get(userId);
+  if (!conversations.has(stateKey) || newSession) conversations.set(stateKey, []);
+  const history = conversations.get(stateKey);
   const activeBotSetup = await loadBotSetup(false);
   const activeClientOnboarding = await loadClientOnboarding(false, tenantId);
   const onboardingGoal = String(activeClientOnboarding && activeClientOnboarding.answers && activeClientOnboarding.answers.setup_goal || "").trim().toLowerCase();
@@ -4578,7 +4731,9 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const configuredTenantBot = tenantConfigurationPrompts.length > 0;
   const conversationSystemPrompt = configuredTenantBot
     ? "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad."
-    : SYSTEM_PROMPT;
+    : tenantId === DEFAULT_TENANT_ID
+      ? SYSTEM_PROMPT
+      : "Eres un asistente temporal de Nextfor IA para este negocio. No uses nombres, catálogo, políticas, productos ni datos de ningún otro cliente. La configuración comercial de este tenant todavía no está aprobada: limita tu ayuda a respuestas generales, explica que el equipo está terminando la configuración y deriva a una persona cuando la solicitud dependa de información del negocio.";
   let conversationTools = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
@@ -4591,11 +4746,11 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const phoneCheck = conversationChannel(userId) === "whatsapp"
     ? serviceAreaCheckForPhone(conversationExternalId(userId), serviceAreaConfig)
     : null;
-  let serviceAreaState = serviceAreaChecks.get(userId) || null;
+  let serviceAreaState = serviceAreaChecks.get(stateKey) || null;
   let serviceAreaContext = "";
 
   if (serviceAreaState && (!phoneCheck || !phoneCheck.shouldAsk || serviceAreaState.serviceCountryCode !== phoneCheck.serviceCountryCode)) {
-    serviceAreaChecks.delete(userId);
+    serviceAreaChecks.delete(stateKey);
     serviceAreaState = null;
   }
   if (phoneCheck && phoneCheck.shouldAsk && !serviceAreaState) {
@@ -4603,11 +4758,11 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     const askedAt = new Date().toISOString();
     history.push({ role: "user", content: userMessage });
     history.push({ role: "assistant", content: question });
-    conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+    conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
     turnTools.push("service_area_confirmation");
     const sent = await sendBotReply(question);
     if (sent) {
-      rememberServiceAreaCheck(userId, {
+      rememberServiceAreaCheck(stateKey, {
         status: "pending",
         serviceCountryCode: phoneCheck.serviceCountryCode,
         phoneCountryCode: phoneCheck.phoneCountryCode,
@@ -4622,17 +4777,17 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     if (["pending", "unclear"].includes(serviceAreaState.status)) {
       serviceAreaState.status = classifyServiceAreaReply(userMessage, serviceAreaConfig.countryName);
       serviceAreaState.updatedAt = new Date().toISOString();
-      rememberServiceAreaCheck(userId, serviceAreaState);
+      rememberServiceAreaCheck(stateKey, serviceAreaState);
     }
     serviceAreaContext = buildServiceAreaContext(serviceAreaState, serviceAreaConfig);
   }
 
-  let customerMemory = await loadCustomerMemory(userId);
+  let customerMemory = await loadCustomerMemory(userId, tenantId);
   customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
     userMessage,
     checkout: checkouts.get(userId),
     now: new Date().toISOString()
-  });
+  }, tenantId);
   history.push({ role: "user", content: userMessage });
 
   let adaptiveBudget = adaptiveConversationBudget({
@@ -4770,7 +4925,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 break;
               case "request_human_handoff":
               turnHandoff = true;  // (Tarea 1)
-                result = await executeHumanHandoff(userId, toolUse.input);
+                result = await executeHumanHandoff(userId, toolUse.input, conversationRuntime);
                 break;
               case "check_appointment_availability":
                 result = await executeCheckAppointmentAvailability(tenantId, toolUse.input, "appointment_bot:" + conversationChannel(userId));
@@ -4791,7 +4946,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
             toolResult: result,
             checkout: checkouts.get(userId),
             now: new Date().toISOString()
-          });
+          }, tenantId);
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
@@ -4808,8 +4963,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
           limits: ADAPTIVE_TOKEN_LIMITS
         });
 
-        if (humanHandoff.has(userId)) {
-          conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+        if (hasHumanHandoff(userId, tenantId)) {
+          conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
           return;
         }
         continue;
@@ -4818,7 +4973,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       const textBlock = content.find(c => c.type === "text");
       const reply = textBlock ? textBlock.text.trim() : "";
       history.push({ role: "assistant", content: reply || "(sin texto)" });
-      conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+      conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
       const replySent = await sendBotReply(reply);
       if (reply) recordTurn(userId, userMessage, reply, replySent ? "ok" : "error", conversationRuntime);
       if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
@@ -4881,7 +5036,7 @@ app.post("/webhook", async (req, res) => {
   whatsappRuntimeState.last_signature_present = !!suppliedSignature;
   whatsappRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
   whatsappRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
-  if (!validMetaWebhookSignature(req)) {
+  if (!validMetaWebhookSignature(req, [META_APP_SECRET])) {
     whatsappRuntimeState.last_error_at = new Date().toISOString();
     whatsappRuntimeState.last_error_stage = "webhook_signature";
     return res.sendStatus(401);
@@ -4937,8 +5092,8 @@ app.post("/webhook", async (req, res) => {
       });
     } else if (type === "audio" || type === "voice") {
       console.log(`Inbound ${maskedIdentifier(from)}: voice note`);
-      if (await humanControlActiveFor(from)) {
-        recordHumanPausedInbound(from, message);
+      if (await humanControlActiveFor(from, destination.tenantId)) {
+        recordHumanPausedInbound(from, message, destination);
       } else {
         const multimodalResult = await multimodalAgent.handleIncomingMedia({
           user_id: from,
@@ -4963,8 +5118,8 @@ app.post("/webhook", async (req, res) => {
       }
     } else if (type === "image" || type === "document") {
       console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
-      if (await humanControlActiveFor(from)) {
-        recordHumanPausedInbound(from, message);
+      if (await humanControlActiveFor(from, destination.tenantId)) {
+        recordHumanPausedInbound(from, message, destination);
       } else if (type === "image") {
         await multimodalAgent.handleIncomingMedia({
           user_id: from,
@@ -4988,8 +5143,8 @@ app.post("/webhook", async (req, res) => {
       }
     } else {
       console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
-      if (await humanControlActiveFor(from)) {
-        recordHumanPausedInbound(from, message);
+      if (await humanControlActiveFor(from, destination.tenantId)) {
+        recordHumanPausedInbound(from, message, destination);
       } else {
         await sendText(from, "Solo puedo leer texto por ahora 😊 ¿En qué te ayudo?");
       }
@@ -5249,7 +5404,7 @@ app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.last_signature_present = !!suppliedSignature;
   instagramRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
   instagramRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
-  if (!validMetaWebhookSignature(req)) {
+  if (!validMetaWebhookSignature(req, [INSTAGRAM_LOGIN_APP_SECRET, META_APP_SECRET])) {
     instagramRuntimeState.last_error_at = new Date().toISOString();
     instagramRuntimeState.last_error_stage = "webhook_signature";
     return res.sendStatus(401);
@@ -5265,8 +5420,8 @@ app.post("/instagram/webhook", async (req, res) => {
       let destination = await resolveInstagramDestinationRuntime(entry, events);
       if (!destination && instagramEntryMatchesLegacyRuntime(entry, events)) {
         destination = {
-          tenantId: DEFAULT_TENANT_ID,
-          tenant_id: DEFAULT_TENANT_ID,
+          tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
+          tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
           channel: "instagram",
           instagramUserId: IG_SEND_ID || IG_USER_ID,
           instagram_user_id: IG_SEND_ID || IG_USER_ID,
@@ -5306,7 +5461,7 @@ app.post("/instagram/webhook", async (req, res) => {
         instagramRuntimeState.inbound_messages++;
         instagramRuntimeState.last_inbound_at = new Date().toISOString();
         instagramRuntimeState.last_skip_reason = null;
-        refreshInstagramProfile(userId);
+        refreshInstagramProfile(userId, destination.tenantId);
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
@@ -5322,8 +5477,8 @@ app.post("/instagram/webhook", async (req, res) => {
           });
         } else if (event.message?.attachments?.length) {
           console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
-          if (await humanControlActiveFor(userId)) {
-            recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments });
+          if (await humanControlActiveFor(userId, destination.tenantId)) {
+            recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments }, destination);
           } else {
             await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
           }
@@ -5348,7 +5503,7 @@ app.get("/messenger/webhook", (req, res) => {
 });
 
 app.post("/messenger/webhook", async (req, res) => {
-  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
+  if (!validMetaWebhookSignature(req, [META_APP_SECRET])) return res.sendStatus(401);
   res.sendStatus(200);
   try {
     if (req.body?.object !== "page") return;
@@ -5400,8 +5555,8 @@ app.post("/messenger/webhook", async (req, res) => {
           }
         } else if (event.message?.attachments?.length) {
           console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
-          if (await humanControlActiveFor(userId)) {
-            recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments });
+          if (await humanControlActiveFor(userId, destination.tenantId)) {
+            recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments }, destination);
           } else {
             await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
           }
@@ -9209,16 +9364,22 @@ function summarizeCustomerPanelChannel(conversations, stats) {
 }
 
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
+  const panelTenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
+  const panelStateTenantId = canonicalRuntimeTenantId(panelTenantId);
   const instagramProfiles = instagramProfilesFromTurns(rawTurns);
   const memoriesByCustomer = customerMemoriesFromTurns(rawTurns);
-  customerMemoryCache.forEach(function (entry, userId) {
-    if (entry && isMeaningfulMemory(entry.memory)) memoriesByCustomer[userId] = normalizeMemory(entry.memory);
+  customerMemoryCache.forEach(function (entry, stateKey) {
+    if (!String(stateKey).startsWith(panelStateTenantId + "\u001f")) return;
+    const userId = tenantConversationStateUserId(stateKey);
+    if (userId && entry && isMeaningfulMemory(entry.memory)) memoriesByCustomer[userId] = normalizeMemory(entry.memory);
   });
-  instagramProfileCache.forEach(function (profile, userId) {
-    if (profile && profile.username) instagramProfiles[userId] = { user_id: userId, username: profile.username, updated_at: profile.fetched_at || null };
+  instagramProfileCache.forEach(function (profile, stateKey) {
+    if (!String(stateKey).startsWith(panelStateTenantId + "\u001f")) return;
+    const userId = tenantConversationStateUserId(stateKey);
+    if (userId && profile && profile.username) instagramProfiles[userId] = { user_id: userId, username: profile.username, updated_at: profile.fetched_at || null };
   });
   const operationalTurns = (rawTurns || []).filter(function (turn) { return !isInternalAdminTurn(turn); });
-  const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
+  const states = inferHandoffStates(operationalTurns, activeHumanHandoffUsers(panelTenantId));
   const allTurns = operationalTurns.slice(0, turnLimit);
   const groups = {};
   const channelStats = {
@@ -10526,7 +10687,7 @@ function releaseAdminConversation(req, res) {
   }
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
-  const wasActive = humanHandoff.delete(userId);
+  const wasActive = deleteHumanHandoff(userId, tenantMeta.tenant_id);
   pendingRatings.add(userId);
   recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.", "ok", undefined, tenantMeta);
   console.log(`[ADMIN] Released ${maskedIdentifier(userId)} (was handoff: ${wasActive})`);
@@ -10560,7 +10721,7 @@ async function runRavInstagramHandoffRepairOnce() {
     return states[userId].active && conversationChannel(userId) === "instagram";
   });
   for (const userId of userIds) {
-    humanHandoff.delete(userId);
+    deleteHumanHandoff(userId, RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT);
     await recordAdminEvent(
       userId,
       "admin_release",
@@ -10597,7 +10758,7 @@ async function runRavInstagramDeliveryVerificationOnce() {
   });
   const userId = normalizeConversationUserId(targetTurn && targetTurn.userId);
   if (!userId) return { ok: false, skipped: true, reason: "verified_test_conversation_not_found" };
-  humanHandoff.delete(userId);
+  deleteHumanHandoff(userId, RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT);
   await recordAdminEvent(
     userId,
     "admin_release",
@@ -10649,7 +10810,7 @@ app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) =
     return states[userId].active && conversationChannel(userId) === channel;
   });
   for (const userId of userIds) {
-    humanHandoff.delete(userId);
+    deleteHumanHandoff(userId, tenantId);
     await recordAdminEvent(
       userId,
       "admin_release",
@@ -10685,7 +10846,7 @@ app.post("/admin/resolve/:userId", (req, res) => {
   }
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
-  const wasActive = humanHandoff.delete(userId);
+  const wasActive = deleteHumanHandoff(userId, tenantMeta.tenant_id);
   pendingRatings.add(userId);
   recordAdminEvent(userId, "admin_resolve", "[Humano] Conversación marcada como resuelta por el equipo.", "ok", false, tenantMeta);
   res.json({ ok: true, userId, wasInHandoff: wasActive, conversation_status: "resolved", resolution_source: "human" });
@@ -10701,9 +10862,9 @@ app.post("/admin/takeover/:userId", async (req, res) => {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
   }
-  humanHandoff.add(userId);
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+  addHumanHandoff(userId, tenantMeta.tenant_id);
   await recordRetargetingSignal(userId, "handoff", "admin-takeover:" + Date.now(), auth.name || "admin");
   recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.", "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true });
@@ -10724,23 +10885,31 @@ app.post("/admin/send-message", async (req, res) => {
     res.status(400).json({ ok: false, error: "message_too_long" });
     return;
   }
-  humanHandoff.add(userId);
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
-  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
   const sent = await sendText(userId, text, tenantMeta);
-  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error", undefined, tenantMeta);
   if (!sent) {
+    await recordAdminEvent(
+      userId,
+      "admin_delivery_failed",
+      "[DeliveryFailure] Meta rechazó un intento de envío; el mensaje no fue entregado ni registrado como respuesta.",
+      "error",
+      false,
+      tenantMeta
+    );
     res.status(502).json({
       ok: false,
       error: "channel_delivery_failed",
       message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
       userId,
-      handoff: true,
+      handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
       meta_sent: false
     });
     return;
   }
+  addHumanHandoff(userId, tenantMeta.tenant_id);
+  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
+  await recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true, meta_sent: true });
 });
 
@@ -10773,18 +10942,20 @@ app.post("/admin/customer-meta/:userId", async (req, res) => {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
   }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
   const meta = recordCustomerMeta(userId, {
     tags: req.body && req.body.tags,
     note: req.body && req.body.note,
     name: req.body && req.body.name
-  });
+  }, tenantId);
   if (meta.name) {
-    const currentMemory = normalizeMemory(await loadCustomerMemory(userId));
+    const currentMemory = normalizeMemory(await loadCustomerMemory(userId, tenantId));
     if (currentMemory.preferred_name !== meta.name) {
       recordCustomerMemory(userId, Object.assign({}, currentMemory, {
         preferred_name: meta.name,
         updated_at: new Date().toISOString()
-      }));
+      }), tenantId);
     }
   }
   res.json({ ok: true, userId, meta });
@@ -13156,7 +13327,7 @@ app.get("/admin/panel/data", async (req, res) => {
     return new Date(b.ts || 0) - new Date(a.ts || 0);
   });
   const metaByCustomer = customerMetaFromTurns(turns);
-  queueInstagramProfileRefreshes(turns);
+  queueInstagramProfileRefreshes(turns, tenantId);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
   if (auth.version === 2) {
     let onboardingForPanel = null;
@@ -13441,7 +13612,7 @@ app.get("/admin/status", (req, res) => {
     return;
   }
   res.json({
-    activeHandoffs: [...humanHandoff],
+    activeHandoffs: activeHumanHandoffUsers(),
     activeCheckouts: [...checkouts.entries()].map(([k, v]) => ({
       userId: k,
       products: v.products?.map(p => ({title: p.title, price: p.price})) || [],

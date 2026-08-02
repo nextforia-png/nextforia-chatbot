@@ -995,6 +995,9 @@ function createChannelConnectionService(options) {
   const allowProtectedLegacyReconnect = typeof options.allowProtectedLegacyReconnect === "function"
     ? options.allowProtectedLegacyReconnect
     : function () { return false; };
+  const replaceableOwnershipTenant = typeof options.replaceableOwnershipTenant === "function"
+    ? options.replaceableOwnershipTenant
+    : function () { return false; };
   const now = typeof options.now === "function" ? options.now : function () { return new Date(); };
   const tenantAliases = options.tenantAliases && typeof options.tenantAliases === "object"
     ? options.tenantAliases
@@ -1098,18 +1101,55 @@ function createChannelConnectionService(options) {
     const candidateKeys = assetIdentityKeys(channel, candidate);
     if (!candidateKeys.length) throw new ChannelConnectionError("invalid_asset_selection", 400);
     const rows = (await ownershipRows()).concat(legacyConnections);
-    const conflict = rows.find(function (row) {
+    const conflicts = rows.filter(function (row) {
       if (!row || sameTenant(row.tenant_id, tenantId) || cleanChannel(row.channel) !== channel) return false;
       if (!["connecting", "connected", "needs_attention"].includes(row.status)) return false;
       const existingKeys = assetIdentityKeys(channel, row);
       return existingKeys.some(function (key) { return candidateKeys.includes(key); });
     });
-    if (conflict) {
+    const blockingConflict = conflicts.find(function (row) {
+      return !replaceableOwnershipTenant(row.tenant_id, tenantId, channel, row);
+    });
+    if (blockingConflict) {
       throw new ChannelConnectionError(
         "channel_asset_already_assigned",
         409,
         "Channel asset is already assigned to another tenant"
       );
+    }
+    // App-review tenants are temporary sandboxes. Once a real customer claims
+    // the reviewed asset, retire the sandbox row before subscribing the live
+    // tenant. This is a logical ownership transfer only: the app-level Meta
+    // subscription stays intact and the new OAuth credential becomes the sole
+    // runtime source.
+    for (const conflict of conflicts) {
+      const releasedAt = iso(now());
+      await store.upsert({
+        tenant_id: conflict.tenant_id,
+        channel,
+        status: "disconnected",
+        webhook_status: "ownership_released",
+        last_error: null,
+        last_error_at: null,
+        disconnected_at: releasedAt,
+        disconnected_by: "system:temporary-owner-release",
+        account_id: null,
+        account_label: null,
+        meta_business_id: null,
+        whatsapp_business_account_id: null,
+        phone_number_id: null,
+        page_id: null,
+        instagram_user_id: null,
+        updated_at: releasedAt,
+        pending_assets: [],
+        credentials_ciphertext: null,
+        credential_source: null,
+        protected_legacy: false
+      }, {
+        action: "temporary_ownership_released",
+        actor: "system:temporary-owner-release",
+        details: { replacement_tenant_id: tenantId, channel }
+      });
     }
   }
 

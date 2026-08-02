@@ -168,6 +168,49 @@ async function login(base, body) {
     body = await response.json();
     assert.strictEqual(body.error, "channel_delivery_failed");
     assert.strictEqual(body.meta_sent, false);
+    response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert(!JSON.stringify(body).includes("Prueba de entrega"), "a rejected reply must not appear as a sent message");
+    assert(!JSON.stringify(body).includes("DeliveryFailure"), "delivery audit rows must stay internal");
+
+    response = await fetch(base + "/admin/takeover/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/release/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userB.cookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.wasInHandoff, false, "tenant B must not release tenant A's handoff state");
+    response = await fetch(base + "/admin/release/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.wasInHandoff, true, "tenant A must retain its own handoff state");
+
+    response = await fetch(base + "/admin/customer-meta/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: JSON.stringify({ tags: ["vip"], note: "Solo Empresa A", name: "Cliente A" })
+    });
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert(JSON.stringify(body).includes("Solo Empresa A"));
+    response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userB.cookie } });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert(!JSON.stringify(body).includes("Solo Empresa A"), "tenant metadata must not leak across companies");
 
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
       method: "POST",

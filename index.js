@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v324-instagram-ownership-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v325-rav-instagram-owner-repair";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1323,10 +1323,68 @@ async function retireTemporaryInstagramReviewOwners() {
   }
 }
 
+async function retireMisassignedRavInstagramOwners() {
+  if (process.env.NODE_ENV !== "production" || !channelConnectionStore || !IG_USER_ID) {
+    return { skipped: true, reason: "not_production_or_rav_instagram_unavailable" };
+  }
+  try {
+    const rows = await channelConnectionStore.listAll();
+    const ravTenantIds = new Set([
+      DEFAULT_TENANT_ID,
+      CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
+    ].map(cleanTenantId).filter(Boolean));
+    const ravInstagramIds = new Set([IG_USER_ID, IG_SEND_ID].map(String).filter(Boolean));
+    const active = (rows || []).filter(function (row) {
+      const owner = cleanTenantId(row && row.tenant_id);
+      const assetId = String(row && (row.instagram_user_id || row.account_id) || "");
+      return row && row.channel === "instagram" &&
+        ["connecting", "connected", "needs_attention"].includes(row.status) &&
+        owner && !ravTenantIds.has(owner) && ravInstagramIds.has(assetId);
+    });
+    for (const row of active) {
+      const releasedAt = new Date().toISOString();
+      await channelConnectionStore.upsert({
+        tenant_id: row.tenant_id,
+        channel: "instagram",
+        status: "disconnected",
+        webhook_status: "ownership_released",
+        last_error: null,
+        last_error_at: null,
+        disconnected_at: releasedAt,
+        disconnected_by: "system:rav-owner-repair",
+        account_id: null,
+        account_label: null,
+        meta_business_id: null,
+        page_id: null,
+        instagram_user_id: null,
+        pending_assets: [],
+        credentials_ciphertext: null,
+        credential_source: null,
+        protected_legacy: false,
+        updated_at: releasedAt
+      }, {
+        action: "misassigned_rav_instagram_owner_released",
+        actor: "system:rav-owner-repair",
+        details: { replacement_tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID }
+      });
+    }
+    if (active.length) {
+      log("info", "misassigned_rav_instagram_owners_retired", { released_count: active.length });
+    }
+    return { skipped: false, released_count: active.length };
+  } catch (error) {
+    log("error", "misassigned_rav_instagram_owner_retirement_failed", {
+      error: String(error.message || "rav_owner_repair_failed").slice(0, 200)
+    });
+    return { skipped: false, ok: false, error: error.message };
+  }
+}
+
 channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection()
   .then(registerRavWhatsAppCloudNumberIfNeeded)
   .then(async function (result) {
     await retireTemporaryInstagramReviewOwners();
+    await retireMisassignedRavInstagramOwners();
     return result;
   });
 

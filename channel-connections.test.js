@@ -299,6 +299,36 @@ function expectCode(promise, code) {
   assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
   assert(activationRequests[1].url.endsWith("/phone-rav"));
 
+  const pendingActivationMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    whatsappConfigId: "wa-config-123",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      if (request.url.endsWith("/phone-pending")) {
+        return {
+          data: {
+            id: "phone-pending",
+            display_phone_number: "+57 310 6534553",
+            code_verification_status: "VERIFIED",
+            platform_type: "WHATSAPP_BUSINESS_APP"
+          }
+        };
+      }
+      return { data: { success: true } };
+    }
+  });
+  const pendingActivationCandidate = await pendingActivationMeta.activate("whatsapp", {
+    whatsapp_business_account_id: "waba-pending",
+    phone_number_id: "phone-pending",
+    account_label: "+57 310 6534553",
+    access_token: "pending-business-token",
+    coexistence: true
+  });
+  assert.strictEqual(pendingActivationCandidate.activation_pending, true);
+  assert.strictEqual(pendingActivationCandidate.account_label, "+57 310 6534553");
+
   const currentWhatsAppSubscriptionShape = new MetaChannelProvider({
     appId: "123456789",
     appSecret: "meta-app-secret",
@@ -619,6 +649,59 @@ function expectCode(promise, code) {
   assert(!JSON.stringify(embedded).includes("embedded-business-token"));
   const embeddedStored = await embeddedStore.get("tenant-smb", "whatsapp");
   assert(embeddedStored.credentials_ciphertext.startsWith("enc:v1:"));
+
+  const pendingEmbeddedStore = new InMemoryChannelConnectionStore();
+  const pendingVerificationResults = [
+    { ok: false, account_label: "+57 310 6534553", error: "WhatsApp number has not completed Cloud API registration" },
+    { ok: true, account_label: "+57 310 6534553" }
+  ];
+  const pendingEmbeddedService = createChannelConnectionService({
+    store: pendingEmbeddedStore,
+    provider: {
+      configured: function () { return true; },
+      prepareEmbeddedWhatsApp: async function () {
+        return {
+          id: "wa:phone-pending",
+          account_id: "phone-pending",
+          account_label: "+57 310 6534553",
+          whatsapp_business_account_id: "waba-pending",
+          phone_number_id: "phone-pending",
+          access_token: "pending-business-token",
+          coexistence: true
+        };
+      },
+      activate: async function (_, candidate) {
+        return Object.assign({}, candidate, {
+          activation_pending: true,
+          activation_error: "WhatsApp number is awaiting Cloud API activation"
+        });
+      },
+      verify: async function () {
+        return pendingVerificationResults.shift();
+      }
+    },
+    encryptionKey,
+    now: function () { return new Date("2026-08-03T20:55:00.000Z"); }
+  });
+  const pendingEmbedded = await pendingEmbeddedService.completeEmbeddedWhatsApp({
+    tenant_id: "nextforia-d4cd6d",
+    actor: "santiago@nextforia.com",
+    code: "pending-code",
+    session: { waba_id: "waba-pending", phone_number_id: "phone-pending" }
+  });
+  assert.strictEqual(pendingEmbedded.status, "connecting");
+  assert.strictEqual(pendingEmbedded.connection.webhook_status, "pending_activation");
+  assert.strictEqual(pendingEmbedded.connection.account_label, "+57 310 6534553");
+  const pendingEmbeddedStored = await pendingEmbeddedStore.get("nextforia-d4cd6d", "whatsapp");
+  assert(pendingEmbeddedStored.credentials_ciphertext.startsWith("enc:v1:"));
+  assert.strictEqual(pendingEmbeddedStored.phone_number_id, "phone-pending");
+  const stillPending = await pendingEmbeddedService.verify("nextforia-d4cd6d", "whatsapp", "system:auto-verify");
+  assert.strictEqual(stillPending.status, "connecting");
+  assert.strictEqual(stillPending.webhook_status, "pending_activation");
+  assert.strictEqual(stillPending.last_error, null);
+  const activatedAfterReview = await pendingEmbeddedService.verify("nextforia-d4cd6d", "whatsapp", "system:auto-verify");
+  assert.strictEqual(activatedAfterReview.status, "connected");
+  assert.strictEqual(activatedAfterReview.webhook_status, "subscribed");
 
   const beginUrl = await service.begin("tenant-a", "instagram", "admin@a.example", state);
   assert(beginUrl.startsWith("https://www.facebook.com/"));

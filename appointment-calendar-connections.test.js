@@ -96,6 +96,7 @@ assert.match(authUrl, /access_type=offline/);
   assert.match(beginUrl, /signed-state/);
   let status = await service.get("grupo-derco");
   assert.strictEqual(status.status, "connecting");
+  assert.strictEqual(status.connect_available, true, "An interrupted OAuth attempt must be immediately retryable");
   const connected = await service.completeAuthorization({
     tenant_id: "grupo-derco",
     actor: "admin@derco.example",

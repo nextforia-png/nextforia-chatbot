@@ -90,7 +90,7 @@ function publicCalendarConnection(record, options) {
     : [];
   delete safe.credentials_ciphertext;
   delete safe.credential_source;
-  safe.connect_available = ["not_connected", "disconnected", "needs_attention"].includes(safe.status);
+  safe.connect_available = ["not_connected", "connecting", "disconnected", "needs_attention"].includes(safe.status);
   safe.disconnect_available = ["connected", "needs_attention", "connecting"].includes(safe.status);
   safe.reconnect_available = ["needs_attention", "disconnected"].includes(safe.status);
   if (!(options && options.superAdmin)) {

@@ -307,7 +307,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v328-google-calendar-easy-connect";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v329-google-calendar-retry-safe";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -12432,7 +12432,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
         id: "google-calendar",
         provider: "google",
         name: "Google Calendar",
-        description: "Conecta el calendario donde Nextfor debe revisar disponibilidad y registrar citas.",
+        description: "Conecta tu cuenta en un clic. Nextfor revisa disponibilidad y crea un calendario separado llamado Citas NextforIA.",
         authorization_available: appointmentCalendarService.providerConfigured()
       }, calendarConnection || {});
     }

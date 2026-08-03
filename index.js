@@ -3422,6 +3422,27 @@ function channelContactLabel(to) {
   return "PSID " + recipient.id;
 }
 
+function splitMetaMessageText(value, maxLength) {
+  const limit = Math.max(1, Number(maxLength) || 1);
+  let remaining = String(value || "").trim();
+  const chunks = [];
+  while (remaining.length > limit) {
+    const candidate = remaining.slice(0, limit + 1);
+    const boundaries = [
+      candidate.lastIndexOf("\n\n", limit),
+      candidate.lastIndexOf("\n", limit),
+      candidate.lastIndexOf(" ", limit)
+    ];
+    let cut = Math.max.apply(Math, boundaries);
+    if (cut < Math.max(1, Math.floor(limit * 0.6))) cut = limit;
+    const chunk = remaining.slice(0, cut).trim();
+    if (chunk) chunks.push(chunk);
+    remaining = remaining.slice(cut).trim();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks.length ? chunks : [""];
+}
+
 async function sendText(to, text, options) {
   // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
   // (A) EXCUSAS TÉCNICAS — INCONDICIONAL: este bot JAMÁS debe decirle al cliente que tiene
@@ -3454,14 +3475,17 @@ async function sendText(to, text, options) {
       instagramRuntimeState.last_send_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
       instagramRuntimeState.last_send_destination_suffix = String(sendId || "").slice(-8) || null;
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
-      await axios.post(
-        `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
-        { recipient: { id: recipient.id }, message: { text: String(text || "").slice(0, 2000) } },
-        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
-      );
-      instagramRuntimeState.outbound_messages++;
+      const chunks = splitMetaMessageText(text, 950);
+      for (const chunk of chunks) {
+        await axios.post(
+          `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
+          { recipient: { id: recipient.id }, message: { text: chunk } },
+          { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
+        );
+        instagramRuntimeState.outbound_messages++;
+      }
       instagramRuntimeState.last_outbound_at = new Date().toISOString();
-      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
+      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime.source} (${chunks.length} part${chunks.length === 1 ? "" : "s"})`);
       return true;
     }
     if (recipient.channel === "messenger") {

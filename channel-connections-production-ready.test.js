@@ -78,6 +78,9 @@ function postSignedWebhook(base, route, secret, body) {
   assert.doesNotMatch(source, /instagramEntryMatchesLegacyRuntime/);
   assert.doesNotMatch(source, /runtime && runtime\.accessToken \|\| (?:WA_TOKEN|IG_ACCESS_TOKEN|MESSENGER_PAGE_ACCESS_TOKEN)/);
   assert.match(source, /async function outboundRuntimeForConversation\(userId, options\)[\s\S]*?return null;\n}/);
+  assert.match(source, /function splitMetaMessageText\(value, maxLength\)/);
+  assert.match(source, /const chunks = splitMetaMessageText\(text, 950\)[\s\S]*?for \(const chunk of chunks\)[\s\S]*?message: \{ text: chunk \}/);
+  assert.doesNotMatch(source, /recipient\.channel === "instagram"[\s\S]{0,1400}slice\(0, 2000\)/);
   assert.match(source, /ambiguous_instagram_destination_ids/);
   assert.match(source, /instagram_asset_tenant_conflict/);
 

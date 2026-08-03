@@ -81,6 +81,8 @@ function postSignedWebhook(base, route, secret, body) {
   assert.match(source, /function splitMetaMessageText\(value, maxLength\)/);
   assert.match(source, /const chunks = splitMetaMessageText\(text, 950\)[\s\S]*?for \(const chunk of chunks\)[\s\S]*?message: \{ text: chunk \}/);
   assert.doesNotMatch(source, /recipient\.channel === "instagram"[\s\S]{0,1400}slice\(0, 2000\)/);
+  assert.match(source, /rememberManagedInstagramOutbound\(chunk\)/);
+  assert.match(source, /isRecentManagedInstagramOutbound\(event\.message\.text\)[\s\S]*?managed_outbound_echo/);
   assert.match(source, /ambiguous_instagram_destination_ids/);
   assert.match(source, /instagram_asset_tenant_conflict/);
 

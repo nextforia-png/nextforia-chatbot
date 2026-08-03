@@ -85,6 +85,7 @@ function postSignedWebhook(base, route, secret, body) {
   assert.match(source, /isRecentManagedInstagramOutbound\(event\.message\.text\)[\s\S]*?managed_outbound_echo/);
   assert.match(source, /ambiguous_instagram_destination_ids/);
   assert.match(source, /instagram_asset_tenant_conflict/);
+  assert.match(source, /pending_activation/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -152,7 +153,7 @@ function postSignedWebhook(base, route, secret, body) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v327-tenant-safe-meta-webhooks"));
+    assert((await response.text()).includes("v328-whatsapp-coexistence-pending"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

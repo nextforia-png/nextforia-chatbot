@@ -767,6 +767,21 @@ class MetaChannelProvider {
           String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
           String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
         if (!registrationReady) {
+          // Meta can finish Embedded Signup for an existing WhatsApp Business
+          // App number before the coexistence bridge reports CLOUD_API. Keep
+          // the exact tenant-scoped asset and encrypted token so verification
+          // can finish automatically after Meta's review instead of forcing
+          // the customer through OAuth again.
+          if (candidate.coexistence &&
+              String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED") {
+            candidate.activation_pending = true;
+            candidate.activation_error = "WhatsApp number is awaiting Cloud API activation";
+            candidate.account_label = cleanText(
+              verified.data && (verified.data.display_phone_number || verified.data.verified_name) || candidate.account_label,
+              240
+            );
+            return candidate;
+          }
           throw new ChannelConnectionError(
             "asset_activation_failed",
             422,
@@ -1219,10 +1234,11 @@ function createChannelConnectionService(options) {
     await assertAssetAvailable(tenantId, channel, candidate);
     const activated = await provider.activate(channel, candidate);
     const connectedAt = iso(now());
+    const activationPending = channel === "whatsapp" && activated.activation_pending === true;
     return store.upsert({
       tenant_id: tenantId,
       channel,
-      status: "connected",
+      status: activationPending ? "connecting" : "connected",
       account_id: activated.account_id,
       account_label: activated.account_label,
       meta_business_id: activated.meta_business_id || null,
@@ -1230,11 +1246,11 @@ function createChannelConnectionService(options) {
       phone_number_id: activated.phone_number_id || null,
       page_id: activated.page_id || null,
       instagram_user_id: activated.instagram_user_id || null,
-      webhook_status: "subscribed",
+      webhook_status: activationPending ? "pending_activation" : "subscribed",
       last_verified_at: connectedAt,
       last_error: null,
       last_error_at: null,
-      connected_at: connectedAt,
+      connected_at: activationPending ? null : connectedAt,
       disconnected_at: null,
       connected_by: actorLabel(actor),
       disconnected_by: null,
@@ -1253,9 +1269,13 @@ function createChannelConnectionService(options) {
       credential_source: "oauth",
       protected_legacy: false
     }, {
-      action: "connected",
+      action: activationPending ? "activation_pending" : "connected",
       actor: actorLabel(actor),
-      details: { account_id: activated.account_id, account_label: activated.account_label }
+      details: {
+        account_id: activated.account_id,
+        account_label: activated.account_label,
+        reason: activationPending ? cleanText(activated.activation_error, 240) : null
+      }
     });
   }
 
@@ -1429,7 +1449,8 @@ function createChannelConnectionService(options) {
           { redirectUri: input && input.redirect_uri }
         );
         const row = await connectCandidate(clean.tenantId, clean.channel, input.actor, candidate);
-        return { status: "connected", connection: publicConnection(row) };
+        const connection = publicConnection(row);
+        return { status: connection.status, connection };
       } catch (error) {
         await markFailure(clean.tenantId, clean.channel, input.actor, error);
         throw error instanceof ChannelConnectionError
@@ -1474,20 +1495,26 @@ function createChannelConnectionService(options) {
         }
       }
       const checkedAt = iso(now());
+      const activationStillPending = clean.channel === "whatsapp" &&
+        record.status === "connecting" &&
+        record.webhook_status === "pending_activation" &&
+        !result.ok &&
+        result.error === "WhatsApp number has not completed Cloud API registration";
       const row = await store.upsert({
         tenant_id: clean.tenantId,
         channel: clean.channel,
-        status: result.ok ? "connected" : "needs_attention",
+        status: result.ok ? "connected" : activationStillPending ? "connecting" : "needs_attention",
         account_label: result.account_label || record.account_label,
-        webhook_status: result.ok ? "subscribed" : "needs_attention",
+        webhook_status: result.ok ? "subscribed" : activationStillPending ? "pending_activation" : "needs_attention",
         last_verified_at: checkedAt,
-        last_error: result.ok ? null : result.error,
-        last_error_at: result.ok ? null : checkedAt,
+        last_error: result.ok || activationStillPending ? null : result.error,
+        last_error_at: result.ok || activationStillPending ? null : checkedAt,
+        connected_at: result.ok ? (record.connected_at || checkedAt) : record.connected_at,
         updated_at: checkedAt
       }, {
-        action: result.ok ? "verified" : "verification_failed",
+        action: result.ok ? "verified" : activationStillPending ? "activation_pending" : "verification_failed",
         actor: actorLabel(actor),
-        details: result.ok ? {} : { error: result.error }
+        details: result.ok || activationStillPending ? {} : { error: result.error }
       });
       return publicConnection(row, { superAdmin: true });
     },

@@ -751,6 +751,7 @@ const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
 const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
+const recentManagedInstagramOutbound = new Map();
 const inboundMessageWindows = new Map();
 const instagramRuntimeState = {
   webhook_requests: 0,
@@ -2042,6 +2043,34 @@ function acceptMetaEventId(messageId) {
   processedMetaEventIds.add(messageId);
   if (processedMetaEventIds.size > 1000) {
     processedMetaEventIds.delete(processedMetaEventIds.values().next().value);
+  }
+  return true;
+}
+
+function managedInstagramTextFingerprint(text) {
+  const value = String(text || "").trim();
+  return value ? crypto.createHash("sha256").update(value).digest("hex") : "";
+}
+
+function rememberManagedInstagramOutbound(text) {
+  const fingerprint = managedInstagramTextFingerprint(text);
+  if (!fingerprint) return;
+  const now = Date.now();
+  recentManagedInstagramOutbound.set(fingerprint, now + 10 * 60 * 1000);
+  for (const [key, expiresAt] of recentManagedInstagramOutbound) {
+    if (expiresAt <= now || recentManagedInstagramOutbound.size > 2000) {
+      recentManagedInstagramOutbound.delete(key);
+    }
+  }
+}
+
+function isRecentManagedInstagramOutbound(text) {
+  const fingerprint = managedInstagramTextFingerprint(text);
+  if (!fingerprint) return false;
+  const expiresAt = recentManagedInstagramOutbound.get(fingerprint) || 0;
+  if (expiresAt <= Date.now()) {
+    if (expiresAt) recentManagedInstagramOutbound.delete(fingerprint);
+    return false;
   }
   return true;
 }
@@ -3482,6 +3511,7 @@ async function sendText(to, text, options) {
           { recipient: { id: recipient.id }, message: { text: chunk } },
           { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
         );
+        rememberManagedInstagramOutbound(chunk);
         instagramRuntimeState.outbound_messages++;
       }
       instagramRuntimeState.last_outbound_at = new Date().toISOString();
@@ -5173,6 +5203,13 @@ app.post("/instagram/webhook", async (req, res) => {
         const eventId = event.message?.mid || ["ig", event.sender.id, event.timestamp || entry?.time || "", event.message?.text || ""].join(":");
         if (!acceptMetaEventId(eventId)) {
           instagramRuntimeState.last_skip_reason = "duplicate_event";
+          continue;
+        }
+        if (event.message?.text && isRecentManagedInstagramOutbound(event.message.text)) {
+          instagramRuntimeState.last_skip_reason = "managed_outbound_echo";
+          log("info", "instagram_managed_outbound_echo_skipped", {
+            destination_tenant_id: destination.tenantId
+          });
           continue;
         }
         const userId = `ig:${event.sender.id}`;

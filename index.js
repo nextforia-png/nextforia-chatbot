@@ -12375,7 +12375,7 @@ app.get("/admin/appointment-calendar/google/callback", async (req, res) => {
     res.redirect(returnUrl);
   } catch (error) {
     console.error("Google calendar authorization failed:", state.tenant_id, error.internalMessage || error.message);
-    const returnUrl = calendarReturnUrl(state, "error");
+    const returnUrl = calendarReturnUrl(state, req.query.error === "access_denied" ? "cancelled" : "error");
     if (state.return_mode === "popup") {
       externalIntegrationCallbackPage(res, { provider: "google-calendar", status: "error", returnPath: returnUrl });
       return;

@@ -4,10 +4,11 @@ const crypto = require("crypto");
 const { decryptStoredText, encryptStoredText, safeEqualText } = require("./security");
 
 const CALENDAR_SCOPES = [
-  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.app.created",
   "https://www.googleapis.com/auth/calendar.freebusy",
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
 ];
+const APPOINTMENT_CALENDAR_SUMMARY = "Citas NextforIA";
 const CALENDAR_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
 
 class AppointmentCalendarError extends Error {
@@ -66,6 +67,8 @@ function emptyCalendarConnection(tenantId) {
     account_label: null,
     calendar_id: null,
     calendar_summary: null,
+    calendar_mode: null,
+    availability_calendar_ids: [],
     scopes: [],
     connected_at: null,
     connected_by: null,
@@ -82,6 +85,9 @@ function emptyCalendarConnection(tenantId) {
 
 function publicCalendarConnection(record, options) {
   const safe = Object.assign(emptyCalendarConnection(record && record.tenant_id), record || {});
+  safe.availability_calendar_ids = Array.isArray(safe.availability_calendar_ids)
+    ? safe.availability_calendar_ids.slice()
+    : [];
   delete safe.credentials_ciphertext;
   delete safe.credential_source;
   safe.connect_available = ["not_connected", "disconnected", "needs_attention"].includes(safe.status);
@@ -143,11 +149,19 @@ class InMemoryAppointmentCalendarStore {
   async get(tenantId) {
     const cleanTenant = cleanTenantId(tenantId);
     const row = this.rows.find(function (item) { return item.tenant_id === cleanTenant; });
-    return row ? Object.assign({}, row, { scopes: (row.scopes || []).slice() }) : null;
+    return row ? Object.assign({}, row, {
+      scopes: (row.scopes || []).slice(),
+      availability_calendar_ids: (row.availability_calendar_ids || []).slice()
+    }) : null;
   }
 
   async listAll() {
-    return this.rows.map(function (row) { return Object.assign({}, row, { scopes: (row.scopes || []).slice() }); });
+    return this.rows.map(function (row) {
+      return Object.assign({}, row, {
+        scopes: (row.scopes || []).slice(),
+        availability_calendar_ids: (row.availability_calendar_ids || []).slice()
+      });
+    });
   }
 
   async upsert(input, event) {
@@ -255,6 +269,7 @@ class GoogleCalendarProvider {
     url.searchParams.set("state", state);
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
+    url.searchParams.set("include_granted_scopes", "true");
     return url.toString();
   }
 
@@ -301,20 +316,67 @@ class GoogleCalendarProvider {
     };
   }
 
-  async describeCalendar(token) {
+  async listCalendars(token) {
     const response = await this.axios.get(this.calendarOrigin + "/calendar/v3/users/me/calendarList", {
       headers: { Authorization: "Bearer " + token.access_token },
-      params: { minAccessRole: "writer" },
+      params: { showHidden: false },
       timeout: 10000
     });
-    const items = Array.isArray(response.data && response.data.items) ? response.data.items : [];
+    return Array.isArray(response.data && response.data.items) ? response.data.items : [];
+  }
+
+  calendarDetails(items, target, availabilityCalendarIds, calendarMode) {
     const primary = items.find(function (item) { return item.primary; }) || items[0] || {};
     return {
-      calendar_id: cleanText(primary.id || "primary", 500) || "primary",
-      calendar_summary: cleanText(primary.summary || primary.id || "Google Calendar", 240),
+      calendar_id: cleanText(target && target.id || primary.id || "primary", 500) || "primary",
+      calendar_summary: cleanText(target && target.summary || target && target.id || APPOINTMENT_CALENDAR_SUMMARY, 240),
+      calendar_mode: cleanText(calendarMode, 80) || null,
+      availability_calendar_ids: Array.from(new Set((availabilityCalendarIds || [primary.id, target && target.id])
+        .map(function (value) { return cleanText(value, 500); })
+        .filter(Boolean))),
       account_email: cleanText(primary.id && String(primary.id).indexOf("@") >= 0 ? primary.id : "", 240).toLowerCase(),
-      account_label: cleanText(primary.summary || primary.id || "Google Calendar", 240)
+      account_label: cleanText(primary.summary || primary.id || "Google Calendar", 240),
+      primary_calendar_id: cleanText(primary.id || "primary", 500) || "primary",
+      primary_time_zone: cleanText(primary.timeZone || "", 120)
     };
+  }
+
+  async createAppointmentCalendar(token, timeZone) {
+    const response = await this.axios.post(this.calendarOrigin + "/calendar/v3/calendars", {
+      summary: APPOINTMENT_CALENDAR_SUMMARY,
+      description: "Calendario creado por NextforIA para registrar las citas del bot.",
+      timeZone: cleanText(timeZone, 120) || "America/Bogota"
+    }, {
+      headers: { Authorization: "Bearer " + token.access_token },
+      timeout: 10000
+    });
+    const created = response.data || {};
+    if (!cleanText(created.id, 500)) {
+      throw new AppointmentCalendarError("calendar_creation_failed", 422, "Google did not return a calendar id");
+    }
+    return created;
+  }
+
+  async prepareAppointmentCalendar(token, current) {
+    const items = await this.listCalendars(token);
+    const primary = items.find(function (item) { return item.primary; }) || items[0] || {};
+    const currentId = cleanText(current && current.calendar_id, 500);
+    let target = current && current.calendar_mode === "app_created"
+      ? items.find(function (item) { return cleanText(item.id, 500) === currentId; })
+      : null;
+    if (!target) target = await this.createAppointmentCalendar(token, primary.timeZone);
+    return this.calendarDetails(items.concat([target]), target, [primary.id || "primary", target.id], "app_created");
+  }
+
+  async describeCalendar(token, options) {
+    const items = await this.listCalendars(token);
+    const calendarId = cleanText(options && options.calendarId, 500);
+    const target = items.find(function (item) { return cleanText(item.id, 500) === calendarId; });
+    if (options && options.requireCalendar && !target) {
+      throw new AppointmentCalendarError("calendar_target_missing", 422, "Nextfor appointment calendar is missing");
+    }
+    return this.calendarDetails(items, target || items.find(function (item) { return item.primary; }) || items[0] || {},
+      options && options.availabilityCalendarIds, options && options.calendarMode);
   }
 
   appointmentEventBody(appointment) {
@@ -365,24 +427,32 @@ class GoogleCalendarProvider {
     };
   }
 
-  async checkAvailability(token, calendarId, startsAt, durationMinutes) {
+  async checkAvailability(token, calendarIds, startsAt, durationMinutes) {
     const start = new Date(startsAt);
     if (!Number.isFinite(start.getTime())) {
       throw new AppointmentCalendarError("appointment_start_required", 422);
     }
     const minutes = Math.max(5, Math.min(Number(durationMinutes) || 60, 24 * 60));
     const end = new Date(start.getTime() + minutes * 60 * 1000);
+    const ids = Array.from(new Set((Array.isArray(calendarIds) ? calendarIds : [calendarIds])
+      .map(function (value) { return cleanText(value, 500); })
+      .filter(Boolean)));
     const response = await this.axios.post(this.calendarOrigin + "/calendar/v3/freeBusy", {
       timeMin: start.toISOString(),
       timeMax: end.toISOString(),
-      items: [{ id: calendarId || "primary" }]
+      items: (ids.length ? ids : ["primary"]).map(function (id) { return { id }; })
     }, {
       headers: { Authorization: "Bearer " + token.access_token },
       timeout: 10000
     });
     const calendars = response.data && response.data.calendars || {};
-    const row = calendars[calendarId || "primary"] || {};
-    const busy = Array.isArray(row.busy) ? row.busy : [];
+    const busy = Object.keys(calendars).reduce(function (all, calendarId) {
+      const row = calendars[calendarId] || {};
+      (Array.isArray(row.busy) ? row.busy : []).forEach(function (slot) {
+        all.push(Object.assign({ calendar_id: calendarId }, slot));
+      });
+      return all;
+    }, []);
     return {
       available: busy.length === 0,
       starts_at: start.toISOString(),
@@ -443,12 +513,22 @@ function createAppointmentCalendarConnectionService(options) {
     let credential = credentialPayload(record);
     if (!credential || !credential.access_token) throw new AppointmentCalendarError("calendar_connection_not_found", 404);
     try {
-      const details = await provider.describeCalendar(credential);
+      const details = await provider.describeCalendar(credential, {
+        calendarId: record.calendar_id,
+        calendarMode: record.calendar_mode,
+        requireCalendar: record.calendar_mode === "app_created",
+        availabilityCalendarIds: record.availability_calendar_ids
+      });
       return { credential, details };
     } catch (error) {
       if (!(error && error.response && error.response.status === 401) || !credential.refresh_token) throw error;
       credential = Object.assign({}, credential, await provider.refreshToken(credential.refresh_token));
-      const details = await provider.describeCalendar(credential);
+      const details = await provider.describeCalendar(credential, {
+        calendarId: record.calendar_id,
+        calendarMode: record.calendar_mode,
+        requireCalendar: record.calendar_mode === "app_created",
+        availabilityCalendarIds: record.availability_calendar_ids
+      });
       await store.upsert({
         tenant_id: record.tenant_id,
         credentials_ciphertext: encryptedCredential(credential),
@@ -533,8 +613,9 @@ function createAppointmentCalendarConnectionService(options) {
       const tenantId = cleanTenantId(input && input.tenant_id);
       if (!tenantId) throw new AppointmentCalendarError("invalid_calendar_request", 400);
       try {
+        const current = await store.get(tenantId);
         const token = await provider.exchangeCode(input.code, { redirectUri: input && input.redirect_uri });
-        const details = await provider.describeCalendar(token);
+        const details = await provider.prepareAppointmentCalendar(token, current);
         const connectedAt = iso(now());
         const row = await store.upsert({
           tenant_id: tenantId,
@@ -544,6 +625,8 @@ function createAppointmentCalendarConnectionService(options) {
           account_label: details.account_label,
           calendar_id: details.calendar_id,
           calendar_summary: details.calendar_summary,
+          calendar_mode: details.calendar_mode,
+          availability_calendar_ids: details.availability_calendar_ids,
           scopes: String(token.scope || "").split(/\s+/).filter(Boolean),
           connected_at: connectedAt,
           connected_by: actorLabel(input.actor),
@@ -586,6 +669,10 @@ function createAppointmentCalendarConnectionService(options) {
           account_label: verified.details.account_label || record.account_label,
           calendar_id: verified.details.calendar_id || record.calendar_id,
           calendar_summary: verified.details.calendar_summary || record.calendar_summary,
+          calendar_mode: verified.details.calendar_mode || record.calendar_mode,
+          availability_calendar_ids: verified.details.availability_calendar_ids && verified.details.availability_calendar_ids.length
+            ? verified.details.availability_calendar_ids
+            : record.availability_calendar_ids,
           last_verified_at: checkedAt,
           last_error: null,
           last_error_at: null,
@@ -637,7 +724,14 @@ function createAppointmentCalendarConnectionService(options) {
       }
       try {
         return await withFreshCredential(record, actor, function (credential) {
-          return provider.checkAvailability(credential, record.calendar_id, startsAt, durationMinutes);
+          return provider.checkAvailability(
+            credential,
+            record.availability_calendar_ids && record.availability_calendar_ids.length
+              ? record.availability_calendar_ids
+              : [record.calendar_id],
+            startsAt,
+            durationMinutes
+          );
         });
       } catch (error) {
         if (error instanceof AppointmentCalendarError) throw error;
@@ -693,6 +787,7 @@ function createAppointmentCalendarConnectionService(options) {
 }
 
 module.exports = {
+  APPOINTMENT_CALENDAR_SUMMARY,
   CALENDAR_SCOPES,
   CALENDAR_STATUSES,
   AppointmentCalendarError,

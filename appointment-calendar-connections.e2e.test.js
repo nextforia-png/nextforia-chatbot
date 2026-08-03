@@ -136,7 +136,8 @@ async function login(base, email, password) {
     assert.strictEqual(response.status, 200);
     body = await response.json();
     assert.match(body.authorization_url, /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/);
-    assert.match(body.authorization_url, /calendar\.events/);
+    assert.match(body.authorization_url, /calendar\.app\.created/);
+    assert.doesNotMatch(body.authorization_url, /calendar\.events/);
     assert.match(body.authorization_url, /redirect_uri=/);
 
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentCookie } });

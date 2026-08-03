@@ -8,8 +8,10 @@ const CALENDAR_SCOPES = [
   "https://www.googleapis.com/auth/calendar.freebusy",
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
 ];
+const MICROSOFT_CALENDAR_SCOPES = ["offline_access", "User.Read", "Calendars.ReadWrite"];
 const APPOINTMENT_CALENDAR_SUMMARY = "Citas NextforIA";
 const CALENDAR_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
+const CALENDAR_PROVIDERS = ["google", "microsoft"];
 
 class AppointmentCalendarError extends Error {
   constructor(code, status, internalMessage) {
@@ -58,10 +60,15 @@ function internalError(error) {
   );
 }
 
-function emptyCalendarConnection(tenantId) {
+function cleanCalendarProvider(value) {
+  const provider = cleanText(value, 40).toLowerCase();
+  return CALENDAR_PROVIDERS.includes(provider) ? provider : "google";
+}
+
+function emptyCalendarConnection(tenantId, providerId) {
   return {
     tenant_id: cleanTenantId(tenantId),
-    provider: "google",
+    provider: cleanCalendarProvider(providerId),
     status: "not_connected",
     account_email: null,
     account_label: null,
@@ -84,7 +91,8 @@ function emptyCalendarConnection(tenantId) {
 }
 
 function publicCalendarConnection(record, options) {
-  const safe = Object.assign(emptyCalendarConnection(record && record.tenant_id), record || {});
+  const safe = Object.assign(emptyCalendarConnection(record && record.tenant_id, record && record.provider), record || {});
+  safe.provider = cleanCalendarProvider(safe.provider);
   safe.availability_calendar_ids = Array.isArray(safe.availability_calendar_ids)
     ? safe.availability_calendar_ids.slice()
     : [];
@@ -108,7 +116,7 @@ function createCalendarOAuthState(secret, input, now) {
   const payload = Buffer.from(JSON.stringify({
     v: 1,
     tenant_id: cleanTenantId(input && input.tenant_id),
-    provider: "google",
+    provider: cleanCalendarProvider(input && input.provider),
     actor_id: cleanText(input && input.actor_id, 200),
     actor: cleanText(input && input.actor, 200),
     redirect_uri: cleanText(input && input.redirect_uri, 500),
@@ -130,7 +138,7 @@ function readCalendarOAuthState(secret, token, now) {
     const payload = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
     if (payload.v !== 1 || !payload.exp || payload.exp < Number(now || Date.now())) return null;
     payload.tenant_id = cleanTenantId(payload.tenant_id);
-    payload.provider = "google";
+    payload.provider = cleanCalendarProvider(payload.provider);
     payload.redirect_uri = cleanText(payload.redirect_uri, 500);
     payload.return_mode = payload.return_mode === "popup" ? "popup" : "";
     if (!payload.tenant_id || !payload.nonce || !payload.actor_id) return null;
@@ -174,7 +182,7 @@ class InMemoryAppointmentCalendarStore {
     }
     Object.assign(row, input, {
       tenant_id: tenantId,
-      provider: "google",
+      provider: cleanCalendarProvider(input && input.provider || row.provider),
       updated_at: input.updated_at || new Date().toISOString()
     });
     if (event) {
@@ -209,7 +217,10 @@ class AppendOnlyAppointmentCalendarStore {
     const cleanTenant = cleanTenantId(tenantId);
     if (!cleanTenant) return null;
     const row = await this.loadLatest(this.recordId(cleanTenant), cleanTenant);
-    return row ? Object.assign(emptyCalendarConnection(cleanTenant), row, { tenant_id: cleanTenant, provider: "google" }) : null;
+    return row ? Object.assign(emptyCalendarConnection(cleanTenant, row.provider), row, {
+      tenant_id: cleanTenant,
+      provider: cleanCalendarProvider(row.provider)
+    }) : null;
   }
 
   async listAll() {
@@ -221,9 +232,9 @@ class AppendOnlyAppointmentCalendarStore {
       seen.add(tenantId);
       return true;
     }).map(function (row) {
-      return Object.assign(emptyCalendarConnection(row.tenant_id), row, {
+      return Object.assign(emptyCalendarConnection(row.tenant_id, row.provider), row, {
         tenant_id: cleanTenantId(row.tenant_id),
-        provider: "google"
+        provider: cleanCalendarProvider(row.provider)
       });
     });
   }
@@ -232,9 +243,9 @@ class AppendOnlyAppointmentCalendarStore {
     const tenantId = cleanTenantId(input && input.tenant_id);
     if (!tenantId) throw new AppointmentCalendarError("invalid_calendar_request", 400);
     const current = await this.get(tenantId);
-    const row = Object.assign(emptyCalendarConnection(tenantId), current || {}, input || {}, {
+    const row = Object.assign(emptyCalendarConnection(tenantId, input && input.provider || current && current.provider), current || {}, input || {}, {
       tenant_id: tenantId,
-      provider: "google",
+      provider: cleanCalendarProvider(input && input.provider || current && current.provider),
       updated_at: input && input.updated_at || new Date().toISOString()
     });
     await this.append(this.recordId(tenantId), row, event || null);
@@ -473,13 +484,278 @@ class GoogleCalendarProvider {
   }
 }
 
+class MicrosoftCalendarProvider {
+  constructor(options) {
+    options = options || {};
+    this.clientId = cleanText(options.clientId, 300);
+    this.clientSecret = cleanText(options.clientSecret, 800);
+    this.redirectUri = cleanText(options.redirectUri, 500);
+    this.tenant = cleanText(options.tenant || "common", 120) || "common";
+    this.identityOrigin = String(options.identityOrigin || "https://login.microsoftonline.com").replace(/\/$/, "");
+    this.graphOrigin = String(options.graphOrigin || "https://graph.microsoft.com/v1.0").replace(/\/$/, "");
+    this.axios = options.axiosClient;
+  }
+
+  configured() {
+    return !!(this.clientId && this.clientSecret && this.redirectUri && this.axios);
+  }
+
+  authorizationUrl(state, options) {
+    const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
+    if (!this.clientId || !this.clientSecret || !redirectUri) {
+      throw new AppointmentCalendarError("calendar_oauth_not_configured", 503);
+    }
+    const url = new URL(this.identityOrigin + "/" + encodeURIComponent(this.tenant) + "/oauth2/v2.0/authorize");
+    url.searchParams.set("client_id", this.clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("response_mode", "query");
+    url.searchParams.set("scope", MICROSOFT_CALENDAR_SCOPES.join(" "));
+    url.searchParams.set("state", state);
+    url.searchParams.set("prompt", "select_account");
+    return url.toString();
+  }
+
+  tokenUrl() {
+    return this.identityOrigin + "/" + encodeURIComponent(this.tenant) + "/oauth2/v2.0/token";
+  }
+
+  async exchangeCode(code, options) {
+    const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
+    if (!code) throw new AppointmentCalendarError("calendar_authorization_denied", 400);
+    const body = new URLSearchParams({
+      code: String(code),
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      redirect_uri: redirectUri,
+      scope: MICROSOFT_CALENDAR_SCOPES.join(" "),
+      grant_type: "authorization_code"
+    });
+    const response = await this.axios.post(this.tokenUrl(), body.toString(), {
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      timeout: 10000
+    });
+    return this.normalizeToken(response.data);
+  }
+
+  async refreshToken(refreshToken) {
+    const body = new URLSearchParams({
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      refresh_token: String(refreshToken || ""),
+      scope: MICROSOFT_CALENDAR_SCOPES.join(" "),
+      grant_type: "refresh_token"
+    });
+    const response = await this.axios.post(this.tokenUrl(), body.toString(), {
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      timeout: 10000
+    });
+    return this.normalizeToken(Object.assign({ refresh_token: refreshToken }, response.data || {}));
+  }
+
+  normalizeToken(data) {
+    const accessToken = cleanText(data && data.access_token, 4096);
+    if (!accessToken) throw new AppointmentCalendarError("calendar_token_missing", 422);
+    return {
+      access_token: accessToken,
+      refresh_token: cleanText(data && data.refresh_token, 4096),
+      token_type: cleanText(data && data.token_type || "Bearer", 80),
+      scope: cleanText(data && data.scope || MICROSOFT_CALENDAR_SCOPES.join(" "), 2000),
+      expires_at: new Date(Date.now() + Math.max(60, Number(data && data.expires_in) || 3600) * 1000).toISOString()
+    };
+  }
+
+  requestOptions(token, extra) {
+    return Object.assign({
+      headers: { Authorization: "Bearer " + token.access_token },
+      timeout: 10000
+    }, extra || {});
+  }
+
+  async profile(token) {
+    const response = await this.axios.get(this.graphOrigin + "/me", this.requestOptions(token, {
+      params: { "$select": "displayName,mail,userPrincipalName" }
+    }));
+    return response.data || {};
+  }
+
+  async listCalendars(token) {
+    const response = await this.axios.get(this.graphOrigin + "/me/calendars", this.requestOptions(token, {
+      params: { "$select": "id,name,isDefaultCalendar,canEdit" }
+    }));
+    return Array.isArray(response.data && response.data.value) ? response.data.value : [];
+  }
+
+  calendarDetails(items, profile, target, availabilityCalendarIds, calendarMode) {
+    const primary = items.find(function (item) { return item.isDefaultCalendar; }) || items[0] || {};
+    const email = cleanText(profile && (profile.mail || profile.userPrincipalName), 240).toLowerCase();
+    return {
+      calendar_id: cleanText(target && target.id || primary.id, 500),
+      calendar_summary: cleanText(target && target.name || APPOINTMENT_CALENDAR_SUMMARY, 240),
+      calendar_mode: cleanText(calendarMode, 80) || null,
+      availability_calendar_ids: Array.from(new Set((availabilityCalendarIds || [primary.id, target && target.id])
+        .map(function (value) { return cleanText(value, 500); })
+        .filter(Boolean))),
+      account_email: email,
+      account_label: cleanText(profile && profile.displayName || email || "Microsoft Outlook", 240),
+      primary_calendar_id: cleanText(primary.id, 500)
+    };
+  }
+
+  async createAppointmentCalendar(token) {
+    const response = await this.axios.post(this.graphOrigin + "/me/calendars", {
+      name: APPOINTMENT_CALENDAR_SUMMARY
+    }, this.requestOptions(token));
+    const created = response.data || {};
+    if (!cleanText(created.id, 500)) {
+      throw new AppointmentCalendarError("calendar_creation_failed", 422, "Microsoft did not return a calendar id");
+    }
+    return created;
+  }
+
+  async calendarContext(token) {
+    const result = await Promise.all([this.listCalendars(token), this.profile(token)]);
+    return { items: result[0], profile: result[1] };
+  }
+
+  async prepareAppointmentCalendar(token, current) {
+    const context = await this.calendarContext(token);
+    const primary = context.items.find(function (item) { return item.isDefaultCalendar; }) || context.items[0] || {};
+    const currentId = cleanText(current && current.provider === "microsoft" && current.calendar_id, 500);
+    let target = currentId && current && current.calendar_mode === "app_created"
+      ? context.items.find(function (item) { return cleanText(item.id, 500) === currentId; })
+      : null;
+    if (!target) target = await this.createAppointmentCalendar(token);
+    return this.calendarDetails(context.items.concat([target]), context.profile, target, [primary.id, target.id], "app_created");
+  }
+
+  async describeCalendar(token, options) {
+    const context = await this.calendarContext(token);
+    const calendarId = cleanText(options && options.calendarId, 500);
+    const target = context.items.find(function (item) { return cleanText(item.id, 500) === calendarId; });
+    if (options && options.requireCalendar && !target) {
+      throw new AppointmentCalendarError("calendar_target_missing", 422, "Nextfor appointment calendar is missing");
+    }
+    return this.calendarDetails(
+      context.items,
+      context.profile,
+      target || context.items.find(function (item) { return item.isDefaultCalendar; }) || context.items[0] || {},
+      options && options.availabilityCalendarIds,
+      options && options.calendarMode
+    );
+  }
+
+  appointmentEventBody(appointment) {
+    const start = new Date(appointment && appointment.starts_at);
+    if (!Number.isFinite(start.getTime())) throw new AppointmentCalendarError("appointment_start_required", 422);
+    const durationMinutes = Math.max(5, Math.min(Number(appointment && appointment.duration_minutes) || 60, 24 * 60));
+    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    const customerName = cleanText(appointment && appointment.customer_name, 160) || "Cliente";
+    const reason = cleanText(appointment && appointment.consultation_reason, 1000) || "Cita";
+    const description = [
+      "Cita gestionada por Nextfor IA.",
+      appointment && appointment.customer_phone ? "Teléfono: " + cleanText(appointment.customer_phone, 80) : "",
+      appointment && appointment.customer_email ? "Correo: " + cleanText(appointment.customer_email, 200) : "",
+      appointment && appointment.transcript_summary ? "Contexto: " + cleanText(appointment.transcript_summary, 2000) : ""
+    ].filter(Boolean).join("\n");
+    function graphDateTime(date) { return date.toISOString().replace(/Z$/, ""); }
+    return {
+      subject: reason + " · " + customerName,
+      body: { contentType: "Text", content: description },
+      start: { dateTime: graphDateTime(start), timeZone: "UTC" },
+      end: { dateTime: graphDateTime(end), timeZone: "UTC" },
+      showAs: "busy"
+    };
+  }
+
+  async upsertAppointment(token, calendarId, appointment) {
+    const base = this.graphOrigin + "/me/calendars/" + encodeURIComponent(calendarId) + "/events";
+    const eventId = cleanText(appointment && appointment.calendar_event_id, 500);
+    const body = this.appointmentEventBody(appointment);
+    let response;
+    if (eventId) {
+      try {
+        response = await this.axios.patch(base + "/" + encodeURIComponent(eventId), body, this.requestOptions(token));
+      } catch (error) {
+        if (!(error && error.response && error.response.status === 404)) throw error;
+      }
+    }
+    if (!response) {
+      body.transactionId = crypto.createHash("sha256").update([
+        cleanTenantId(appointment && appointment.tenant_id),
+        cleanText(appointment && appointment.conversation_id, 160),
+        cleanText(appointment && appointment.starts_at, 80)
+      ].join(":"), "utf8").digest("hex").slice(0, 64);
+      response = await this.axios.post(base, body, this.requestOptions(token));
+    }
+    return {
+      event_id: cleanText(response.data && response.data.id, 500) || eventId,
+      event_link: cleanText(response.data && response.data.webLink, 1000),
+      status: cleanText(response.data && response.data.showAs, 80) || "confirmed"
+    };
+  }
+
+  async checkAvailability(token, calendarIds, startsAt, durationMinutes) {
+    const start = new Date(startsAt);
+    if (!Number.isFinite(start.getTime())) throw new AppointmentCalendarError("appointment_start_required", 422);
+    const minutes = Math.max(5, Math.min(Number(durationMinutes) || 60, 24 * 60));
+    const end = new Date(start.getTime() + minutes * 60 * 1000);
+    const ids = Array.from(new Set((Array.isArray(calendarIds) ? calendarIds : [calendarIds])
+      .map(function (value) { return cleanText(value, 500); })
+      .filter(Boolean)));
+    const rows = await Promise.all((ids.length ? ids : [""]).map(async (calendarId) => {
+      const path = calendarId
+        ? "/me/calendars/" + encodeURIComponent(calendarId) + "/calendarView"
+        : "/me/calendarView";
+      const response = await this.axios.get(this.graphOrigin + path, this.requestOptions(token, {
+        headers: {
+          Authorization: "Bearer " + token.access_token,
+          Prefer: 'outlook.timezone="UTC"'
+        },
+        params: {
+          startDateTime: start.toISOString(),
+          endDateTime: end.toISOString(),
+          "$select": "id,subject,start,end,showAs,isCancelled"
+        }
+      }));
+      return (Array.isArray(response.data && response.data.value) ? response.data.value : []).map(function (event) {
+        return Object.assign({ calendar_id: calendarId }, event);
+      });
+    }));
+    const busy = rows.reduce(function (all, events) {
+      return all.concat(events.filter(function (event) { return !event.isCancelled && event.showAs !== "free"; }));
+    }, []);
+    return {
+      available: busy.length === 0,
+      starts_at: start.toISOString(),
+      ends_at: end.toISOString(),
+      busy
+    };
+  }
+
+  async cancelAppointment(token, calendarId, eventId) {
+    const cleanEventId = cleanText(eventId, 500);
+    if (!cleanEventId) return { cancelled: false, not_required: true };
+    await this.axios.delete(
+      this.graphOrigin + "/me/calendars/" + encodeURIComponent(calendarId) + "/events/" + encodeURIComponent(cleanEventId),
+      this.requestOptions(token)
+    );
+    return { cancelled: true, event_id: cleanEventId };
+  }
+}
+
 function createAppointmentCalendarConnectionService(options) {
   options = options || {};
   const store = options.store;
-  const provider = options.provider;
+  const providers = Object.assign({}, options.providers || {}, options.provider ? { google: options.provider } : {});
+  const defaultProvider = cleanCalendarProvider(options.defaultProvider || "google");
   const encryptionKey = options.encryptionKey;
   const now = options.now || function () { return new Date(); };
   if (!store) throw new Error("appointment_calendar_store_required");
+
+  function providerFor(providerId) {
+    return providers[cleanCalendarProvider(providerId)];
+  }
 
   function encryptedCredential(payload) {
     if (!encryptionKey) throw new AppointmentCalendarError("calendar_encryption_not_configured", 503);
@@ -492,11 +768,16 @@ function createAppointmentCalendarConnectionService(options) {
     catch (error) { throw new AppointmentCalendarError("calendar_credentials_unreadable", 503, error.message); }
   }
 
-  async function markFailure(tenantId, actor, error) {
+  async function markFailure(tenantId, providerId, actor, error) {
     const at = iso(now());
+    const current = await store.get(tenantId);
+    const cleanProvider = cleanCalendarProvider(providerId || current && current.provider);
+    // A cancelled or failed attempt to switch providers must not disable the
+    // calendar that is already connected and serving this tenant.
+    if (current && current.status === "connected" && current.provider !== cleanProvider) return;
     await store.upsert({
       tenant_id: tenantId,
-      provider: "google",
+      provider: cleanProvider,
       status: "needs_attention",
       last_error: internalError(error),
       last_error_at: at,
@@ -509,6 +790,8 @@ function createAppointmentCalendarConnectionService(options) {
   }
 
   async function verifyWithRefresh(record, actor) {
+    const provider = providerFor(record && record.provider);
+    if (!provider || !provider.configured()) throw new AppointmentCalendarError("calendar_oauth_not_configured", 503);
     let credential = credentialPayload(record);
     if (!credential || !credential.access_token) throw new AppointmentCalendarError("calendar_connection_not_found", 404);
     try {
@@ -543,6 +826,8 @@ function createAppointmentCalendarConnectionService(options) {
   }
 
   async function withFreshCredential(record, actor, operation) {
+    const provider = providerFor(record && record.provider);
+    if (!provider || !provider.configured()) throw new AppointmentCalendarError("calendar_oauth_not_configured", 503);
     let credential = credentialPayload(record);
     if (!credential || !credential.access_token) {
       throw new AppointmentCalendarError("calendar_connection_not_found", 404);
@@ -567,8 +852,17 @@ function createAppointmentCalendarConnectionService(options) {
   }
 
   return {
-    providerConfigured() {
+    providerConfigured(providerId) {
+      const provider = providerFor(providerId || defaultProvider);
       return !!(provider && provider.configured());
+    },
+
+    providerAvailability() {
+      return CALENDAR_PROVIDERS.reduce(function (result, providerId) {
+        const provider = providerFor(providerId);
+        result[providerId] = !!(provider && provider.configured());
+        return result;
+      }, {});
     },
 
     async get(tenantId, options) {
@@ -589,28 +883,42 @@ function createAppointmentCalendarConnectionService(options) {
       }).sort(function (left, right) { return String(left.company_name).localeCompare(String(right.company_name)); });
     },
 
-    async begin(tenantId, actor, state, options) {
+    async begin(tenantId, providerId, actor, state, beginOptions) {
+      if (!CALENDAR_PROVIDERS.includes(String(providerId || "").toLowerCase())) {
+        beginOptions = state;
+        state = actor;
+        actor = providerId;
+        providerId = defaultProvider;
+      }
       const cleanTenant = cleanTenantId(tenantId);
+      const cleanProvider = cleanCalendarProvider(providerId);
+      const provider = providerFor(cleanProvider);
       if (!cleanTenant) throw new AppointmentCalendarError("invalid_calendar_request", 400);
       if (!provider || !provider.configured()) throw new AppointmentCalendarError("calendar_oauth_not_configured", 503);
-      await store.upsert({
-        tenant_id: cleanTenant,
-        provider: "google",
-        status: "connecting",
-        last_error: null,
-        last_error_at: null,
-        updated_at: iso(now())
-      }, {
-        action: "connection_started",
-        actor: actorLabel(actor),
-        details: {}
-      });
-      return provider.authorizationUrl(state, options);
+      const current = await store.get(cleanTenant);
+      if (!(current && current.status === "connected" && current.provider !== cleanProvider)) {
+        await store.upsert({
+          tenant_id: cleanTenant,
+          provider: cleanProvider,
+          status: "connecting",
+          last_error: null,
+          last_error_at: null,
+          updated_at: iso(now())
+        }, {
+          action: "connection_started",
+          actor: actorLabel(actor),
+          details: { provider: cleanProvider }
+        });
+      }
+      return provider.authorizationUrl(state, beginOptions);
     },
 
     async completeAuthorization(input) {
       const tenantId = cleanTenantId(input && input.tenant_id);
+      const providerId = cleanCalendarProvider(input && input.provider || defaultProvider);
+      const provider = providerFor(providerId);
       if (!tenantId) throw new AppointmentCalendarError("invalid_calendar_request", 400);
+      if (!provider || !provider.configured()) throw new AppointmentCalendarError("calendar_oauth_not_configured", 503);
       try {
         const current = await store.get(tenantId);
         const token = await provider.exchangeCode(input.code, { redirectUri: input && input.redirect_uri });
@@ -618,7 +926,7 @@ function createAppointmentCalendarConnectionService(options) {
         const connectedAt = iso(now());
         const row = await store.upsert({
           tenant_id: tenantId,
-          provider: "google",
+          provider: providerId,
           status: "connected",
           account_email: details.account_email,
           account_label: details.account_label,
@@ -640,11 +948,11 @@ function createAppointmentCalendarConnectionService(options) {
         }, {
           action: "connected",
           actor: actorLabel(input.actor),
-          details: { calendar_id_present: !!details.calendar_id }
+          details: { provider: providerId, calendar_id_present: !!details.calendar_id }
         });
         return publicCalendarConnection(row);
       } catch (error) {
-        await markFailure(tenantId, input && input.actor, error);
+        await markFailure(tenantId, providerId, input && input.actor, error);
         throw error instanceof AppointmentCalendarError
           ? error
           : new AppointmentCalendarError("calendar_connection_failed", 422, internalError(error));
@@ -662,7 +970,7 @@ function createAppointmentCalendarConnectionService(options) {
         const checkedAt = iso(now());
         const row = await store.upsert({
           tenant_id: cleanTenant,
-          provider: "google",
+          provider: record.provider,
           status: "connected",
           account_email: verified.details.account_email || record.account_email,
           account_label: verified.details.account_label || record.account_label,
@@ -683,7 +991,7 @@ function createAppointmentCalendarConnectionService(options) {
         });
         return publicCalendarConnection(row, { superAdmin: true });
       } catch (error) {
-        await markFailure(cleanTenant, actor, error);
+        await markFailure(cleanTenant, record.provider, actor, error);
         throw error instanceof AppointmentCalendarError
           ? error
           : new AppointmentCalendarError("calendar_verification_failed", 422, internalError(error));
@@ -697,6 +1005,7 @@ function createAppointmentCalendarConnectionService(options) {
         throw new AppointmentCalendarError("calendar_connection_not_found", 404);
       }
       try {
+        const provider = providerFor(record.provider);
         const event = await withFreshCredential(record, actor, function (credential) {
           return provider.upsertAppointment(credential, record.calendar_id, appointment);
         });
@@ -708,7 +1017,7 @@ function createAppointmentCalendarConnectionService(options) {
           calendar_last_error: ""
         };
       } catch (error) {
-        await markFailure(cleanTenant, actor, error);
+        await markFailure(cleanTenant, record.provider, actor, error);
         throw error instanceof AppointmentCalendarError
           ? error
           : new AppointmentCalendarError("calendar_sync_failed", 422, internalError(error));
@@ -722,6 +1031,7 @@ function createAppointmentCalendarConnectionService(options) {
         throw new AppointmentCalendarError("calendar_connection_not_found", 404);
       }
       try {
+        const provider = providerFor(record.provider);
         return await withFreshCredential(record, actor, function (credential) {
           return provider.checkAvailability(
             credential,
@@ -745,6 +1055,7 @@ function createAppointmentCalendarConnectionService(options) {
         throw new AppointmentCalendarError("calendar_connection_not_found", 404);
       }
       try {
+        const provider = providerFor(record.provider);
         const result = await withFreshCredential(record, actor, function (credential) {
           return provider.cancelAppointment(credential, record.calendar_id, appointment && appointment.calendar_event_id);
         });
@@ -756,7 +1067,7 @@ function createAppointmentCalendarConnectionService(options) {
           calendar_last_error: ""
         };
       } catch (error) {
-        await markFailure(cleanTenant, actor, error);
+        await markFailure(cleanTenant, record.provider, actor, error);
         throw error instanceof AppointmentCalendarError
           ? error
           : new AppointmentCalendarError("calendar_sync_failed", 422, internalError(error));
@@ -765,10 +1076,11 @@ function createAppointmentCalendarConnectionService(options) {
 
     async disconnect(tenantId, actor) {
       const cleanTenant = cleanTenantId(tenantId);
+      const current = await store.get(cleanTenant);
       const at = iso(now());
       const row = await store.upsert({
         tenant_id: cleanTenant,
-        provider: "google",
+        provider: current && current.provider || defaultProvider,
         status: "disconnected",
         disconnected_at: at,
         disconnected_by: actorLabel(actor),
@@ -788,11 +1100,15 @@ function createAppointmentCalendarConnectionService(options) {
 module.exports = {
   APPOINTMENT_CALENDAR_SUMMARY,
   CALENDAR_SCOPES,
+  MICROSOFT_CALENDAR_SCOPES,
+  CALENDAR_PROVIDERS,
   CALENDAR_STATUSES,
   AppointmentCalendarError,
   AppendOnlyAppointmentCalendarStore,
   GoogleCalendarProvider,
+  MicrosoftCalendarProvider,
   InMemoryAppointmentCalendarStore,
+  cleanCalendarProvider,
   cleanTenantId,
   createAppointmentCalendarConnectionService,
   createCalendarOAuthState,

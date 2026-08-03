@@ -102,6 +102,8 @@ async function login(base, email, password) {
       CUSTOMER_PANEL_BASE_URL: "https://customer-panel.staging.example",
       GOOGLE_CALENDAR_CLIENT_ID: "google-calendar-client",
       GOOGLE_CALENDAR_CLIENT_SECRET: "google-calendar-secret",
+      MICROSOFT_CALENDAR_CLIENT_ID: "microsoft-calendar-client",
+      MICROSOFT_CALENDAR_CLIENT_SECRET: "microsoft-calendar-secret",
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
       CHANNEL_CONNECTIONS_TEST_MODE: "1",
       META_APP_ID: "meta-app",
@@ -124,8 +126,10 @@ async function login(base, email, password) {
     assert.strictEqual(response.status, 200);
     let body = await response.json();
     assert.strictEqual(body.ok, true);
-    assert.strictEqual(body.authorization_available, true);
+    assert.strictEqual(body.authorization_available.google, true);
+    assert.strictEqual(body.authorization_available.microsoft, true);
     assert.strictEqual(body.connection.status, "not_connected");
+    assert.strictEqual(body.providers.length, 2);
     assert(!JSON.stringify(body).includes("google-calendar-secret"));
 
     response = await fetch(base + "/admin/panel/appointment-calendar/google/connect", {
@@ -140,13 +144,24 @@ async function login(base, email, password) {
     assert.doesNotMatch(body.authorization_url, /calendar\.events/);
     assert.match(body.authorization_url, /redirect_uri=/);
 
+    response = await fetch(base + "/admin/panel/appointment-calendar/microsoft/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: appointmentCookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.match(body.authorization_url, /^https:\/\/login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/authorize/);
+    assert.match(body.authorization_url, /Calendars\.ReadWrite/);
+
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: appointmentCookie } });
     assert.strictEqual(response.status, 200, "Appointment customers must also be able to connect WhatsApp via Meta");
 
     response = await fetch(base + "/admin/appointment-calendar-connections", { headers: { cookie: superCookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
-    assert.strictEqual(body.authorization_available, true);
+    assert.strictEqual(body.authorization_available.google, true);
+    assert.strictEqual(body.authorization_available.microsoft, true);
     assert(body.calendars.some(function (row) { return row.tenant_id === "tenant-appointments"; }));
 
     response = await fetch(base + "/admin/appointment-calendar-connections/tenant-appointments/connect", {
@@ -157,6 +172,15 @@ async function login(base, email, password) {
     assert.strictEqual(response.status, 200);
     body = await response.json();
     assert.match(body.authorization_url, /accounts\.google\.com/);
+
+    response = await fetch(base + "/admin/appointment-calendar-connections/tenant-appointments/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: superCookie },
+      body: JSON.stringify({ provider: "microsoft" })
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.match(body.authorization_url, /login\.microsoftonline\.com/);
     console.log("appointment calendar e2e tests: ok");
   } finally {
     child.kill();

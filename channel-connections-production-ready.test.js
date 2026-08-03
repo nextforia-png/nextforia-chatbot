@@ -110,8 +110,8 @@ function postSignedWebhook(base, route, secret, body) {
       IG_SEND_ID: "instagram-env-business-id",
       MESSENGER_PAGE_ACCESS_TOKEN: "channel-production-messenger-env-token",
       MESSENGER_PAGE_ID: "messenger-env-page-id",
-      PUBLIC_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
-      CUSTOMER_PANEL_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
+      PUBLIC_BASE_URL: "https://api.nextforia.com",
+      CUSTOMER_PANEL_BASE_URL: "https://api.nextforia.com",
       ANTHROPIC_API_KEY: "channel-production-anthropic",
       DATA_ENCRYPTION_KEY: encryptionKey,
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
@@ -153,7 +153,7 @@ function postSignedWebhook(base, route, secret, body) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v333-whatsapp-embedded-token-exchange"));
+    assert((await response.text()).includes("NextforIA Chatbot v334-nextforia-chatbot-brand"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

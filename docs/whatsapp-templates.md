@@ -328,14 +328,14 @@ Notas: usar despues de una compra, garantia o handoff finalizado.
 Ya existe un registro local en `whatsapp-templates.js` y endpoints admin para probar payloads:
 
 ```bash
-curl "https://rav-whatsapp-bot.onrender.com/admin/templates" \
+curl "https://api.nextforia.com/admin/templates" \
   -H "X-Dashboard-Key: TU_DASHBOARD_KEY"
 ```
 
 Dry run, no envia WhatsApp:
 
 ```bash
-curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test" \
+curl -X POST "https://api.nextforia.com/admin/template-test" \
   -H "X-Dashboard-Key: TU_DASHBOARD_KEY" \
   -H "content-type: application/json" \
   -d '{
@@ -352,7 +352,7 @@ curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test" \
 Envio real solo despues de que Meta apruebe la plantilla:
 
 ```bash
-curl -X POST "https://rav-whatsapp-bot.onrender.com/admin/template-test" \
+curl -X POST "https://api.nextforia.com/admin/template-test" \
   -H "X-Dashboard-Key: TU_DASHBOARD_KEY" \
   -H "content-type: application/json" \
   -d '{

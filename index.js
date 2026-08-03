@@ -308,7 +308,8 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v333-whatsapp-embedded-token-exchange";  // bump cada release; usado por endpoints /admin/*
+const PRODUCT_NAME = "NextforIA Chatbot";
+const BOT_VERSION = "v334-nextforia-chatbot-brand";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -13403,7 +13404,7 @@ app.get("/admin/status", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("RAV-Bot " + BOT_VERSION + " (ops dashboard)");
+  res.send(PRODUCT_NAME + " " + BOT_VERSION + " (ops dashboard)");
 });
 
 app.get("/ready", async (req, res) => {
@@ -15385,7 +15386,7 @@ app.get("/admin/test-search", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`RAV-Bot ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
+  console.log(`${PRODUCT_NAME} ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
   console.log("Meta channel delivery: encrypted tenant connections only");
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);

@@ -1,8 +1,8 @@
-# RAV Toys WhatsApp + Instagram + Messenger Bot
+# NextforIA Chatbot
 
 Security requirements, key rotation, automated checks, and incident response are documented in [`SECURITY.md`](SECURITY.md).
 
-Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para WhatsApp, Instagram y Facebook Messenger. Atiende clientes 24/7 con búsqueda de productos en Shopify, manejo de garantías, envíos, cierre de ventas con derivación a humanos cuando se necesita, y captura de calificaciones.
+Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento por WhatsApp, Instagram y Facebook Messenger. RAV Toys es el primer tenant productivo y conserva su personalidad, catálogo y reglas comerciales dentro de su configuración aislada.
 
 ---
 
@@ -246,14 +246,14 @@ Activación y rollback de Staging: [`docs/staging-customer-access-v2.md`](docs/s
 
 ## 🛡️ Red de seguridad y monitoreo
 
-Los scripts usan por defecto producción (`https://rav-whatsapp-bot.onrender.com`) y leen secretos desde variables de entorno. No pegues llaves en el código.
+Los scripts usan por defecto producción (`https://api.nextforia.com`) y leen secretos desde variables de entorno. No pegues llaves en el código.
 
 ### Conversaciones guiadas
 
 Antes de migrar un número real a WhatsApp Cloud API, valida la bandeja de Conversaciones dentro del dashboard:
 
 ```text
-https://rav-whatsapp-bot.onrender.com/admin
+https://api.nextforia.com/admin
 ```
 
 La intervención humana vive dentro de la conversación, sin una sección separada. El estado
@@ -273,7 +273,7 @@ Variables útiles:
 
 | Variable | Default | Para qué sirve |
 |---|---:|---|
-| `BOT_BASE_URL` | `https://rav-whatsapp-bot.onrender.com` | URL del bot a verificar |
+| `BOT_BASE_URL` | `https://api.nextforia.com` | URL del bot a verificar |
 | `DASHBOARD_KEY` | *(requerida para smoke/alertas)* | Autoriza `/admin/smoke-check` y `/admin/alert` |
 | `EXPECTED_BOT_VERSION` | lee `BOT_VERSION` local en `verify-deploy.js` | Versión esperada post-deploy |
 | `SMOKE_QUERY` | `juguete` | Término real para la prueba de búsqueda |
@@ -294,7 +294,7 @@ DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v60 npm run smoke
 También puedes apuntar a staging:
 
 ```bash
-BOT_BASE_URL=https://rav-whatsapp-bot-staging.onrender.com DASHBOARD_KEY=... npm run smoke
+BOT_BASE_URL=https://nextforia-chatbot-staging.onrender.com DASHBOARD_KEY=... npm run smoke
 ```
 
 ### Verificación de deploy
@@ -334,7 +334,7 @@ DASHBOARD_KEY=... MONITOR_INTERVAL_MS=300000 node monitor.js --loop
 ### Cron sugerido
 
 ```cron
-*/5 * * * * cd /ruta/rav-whatsapp-bot && DASHBOARD_KEY=... npm run monitor >> monitor.log 2>&1
+*/5 * * * * cd /ruta/nextforia-chatbot && DASHBOARD_KEY=... npm run monitor >> monitor.log 2>&1
 ```
 
 ### GitHub Action
@@ -394,7 +394,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 - Si ratio >30:1, prompt caching no está funcionando — revisar que `cache_control` esté en system+tools
 
 ### Logs en Render
-- Dashboard → `rav-whatsapp-bot` → `Logs` (free tier solo guarda 1h)
+- Dashboard → `nextforia-chatbot` → `Logs` (free tier solo guarda 1h)
 - Logs estructurados (v32+) en formato JSON: `{ts, level, event, ...data}`
 
 ---

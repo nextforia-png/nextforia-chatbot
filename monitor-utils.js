@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-const DEFAULT_BASE_URL = "https://rav-whatsapp-bot.onrender.com";
+const DEFAULT_BASE_URL = "https://api.nextforia.com";
 
 function parseArgs(argv) {
   const args = {};

@@ -2,7 +2,7 @@
 
 Fecha: 22 de julio de 2026
 
-Repositorio: `ravtoys/rav-whatsapp-bot`
+Repositorio: `ravtoys/nextforia-chatbot`
 
 Worktree: `/Users/santiagovelasquez/Documents/NexforIA Bots-staging-customer-panel`
 

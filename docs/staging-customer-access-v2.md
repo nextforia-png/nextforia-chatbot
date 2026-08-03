@@ -2,7 +2,7 @@
 
 Fecha: 22 de julio de 2026
 
-Alcance: `ravtoys/rav-whatsapp-bot`, únicamente Staging
+Alcance: `ravtoys/nextforia-chatbot`, únicamente Staging
 
 Contrato: [`customer-access-contract.md`](customer-access-contract.md)
 

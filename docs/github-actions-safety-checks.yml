@@ -11,7 +11,7 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     env:
-      BOT_BASE_URL: https://rav-whatsapp-bot.onrender.com
+      BOT_BASE_URL: https://api.nextforia.com
       DASHBOARD_KEY: ${{ secrets.DASHBOARD_KEY }}
       MONITOR_PENDING_HANDOFF_MINUTES: "10"
       ALERT_ON_FAILURE: "1"

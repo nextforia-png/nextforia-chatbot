@@ -1,8 +1,8 @@
 {
-      "name": "rav-whatsapp-bot",
+      "name": "nextforia-chatbot",
       "version": "1.0.0",
       "packageManager": "pnpm@11.9.0",
-      "description": "RAV Toys WhatsApp Bot",
+      "description": "NextforIA multi-tenant chatbot platform",
       "main": "index.js",
       "scripts": {
             "start": "node index.js",

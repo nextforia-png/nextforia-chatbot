@@ -81,6 +81,7 @@ const authUrl = provider.authorizationUrl("signed-state");
 assert.match(authUrl, /accounts\.google\.com/);
 assert.match(authUrl, /calendar\.app\.created/);
 assert.doesNotMatch(authUrl, /calendar\.events/);
+assert.doesNotMatch(authUrl, /include_granted_scopes/);
 assert.match(authUrl, /access_type=offline/);
 
 (async function run() {

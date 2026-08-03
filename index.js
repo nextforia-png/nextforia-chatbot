@@ -308,7 +308,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v331-microsoft-calendar";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v332-whatsapp-coexistence-pending";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -12426,7 +12426,9 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
     // subscription, not only a previously saved OAuth result. Refresh stale
     // connections when the customer opens the channel hub.
     for (const connection of channels) {
-      if (!connection || connection.status !== "connected") continue;
+      const activationPending = connection && connection.channel === "whatsapp" &&
+        connection.status === "connecting" && connection.webhook_status === "pending_activation";
+      if (!connection || (connection.status !== "connected" && !activationPending)) continue;
       const verifiedAt = Date.parse(connection.last_verified_at || "");
       if (Number.isFinite(verifiedAt) && Date.now() - verifiedAt < 2 * 60 * 1000) continue;
       try {

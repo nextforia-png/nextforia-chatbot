@@ -1847,8 +1847,8 @@ function completeWhatsAppEmbeddedSignup(){
   if(!pending||pending.completing||!pending.code||!pending.session)return;
   pending.completing=true;
   setChannelConnectionMessage("Verificando tu WhatsApp con Meta…");
-  api("/admin/panel/channel-connections/whatsapp/complete",{method:"POST",body:JSON.stringify({state:pending.config.oauth_state,code:pending.code,session:pending.session})}).then(function(){
-    state.whatsappEmbedded=null;state.channelConnections=null;setChannelConnectionMessage("Listo. WhatsApp quedó conectado a tu Nextfor.","success");loadChannelConnections(true);
+  api("/admin/panel/channel-connections/whatsapp/complete",{method:"POST",body:JSON.stringify({state:pending.config.oauth_state,code:pending.code,session:pending.session})}).then(function(body){
+    state.whatsappEmbedded=null;state.channelConnections=null;if(body.connection&&body.connection.status==="connecting")setChannelConnectionMessage("Meta aceptó el número. Estamos esperando que termine la activación de Cloud API; puede tardar hasta 24 horas.","success");else setChannelConnectionMessage("Listo. WhatsApp quedó conectado a tu Nextfor.","success");loadChannelConnections(true);
   }).catch(function(error){
     state.whatsappEmbedded=null;setChannelConnectionMessage(error.body&&error.body.message||"Meta no pudo terminar la conexión. Intenta de nuevo.","error");loadChannelConnections(true);
   });

@@ -80,7 +80,7 @@ function expectCode(promise, code) {
       }] } };
     }
     if (request.url.endsWith("/v25.0/ig-direct")) {
-      return { data: { id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
+      return { data: { user_id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
     }
     throw new Error("Unexpected direct Instagram request: " + request.url);
   };

@@ -919,8 +919,19 @@ class MetaChannelProvider {
         String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
         String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API"
       );
+      const verifiedTargetId = verified.data && (
+        verified.data.id || directInstagram && verified.data.user_id
+      );
+      // Instagram Login responses use user_id on some identity endpoints.
+      // A successful request to the exact requested user is also sufficient
+      // when Meta omits that identifier but returns the professional profile.
+      const targetVerified = directInstagram
+        ? !!(verified.data && (
+          String(verifiedTargetId || "") === String(targetId) || verified.data.username
+        ))
+        : !!(verified.data && String(verifiedTargetId || "") === String(targetId));
       return {
-        ok: !!(verified.data && String(verified.data.id) === String(targetId) && appSubscribed && registrationReady),
+        ok: !!(targetVerified && appSubscribed && registrationReady),
         account_label: cleanText(
           verified.data && (verified.data.display_phone_number || verified.data.username && "@" + verified.data.username || verified.data.name),
           240

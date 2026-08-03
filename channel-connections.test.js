@@ -64,6 +64,46 @@ function expectCode(promise, code) {
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));
   assert(instagramUrl.searchParams.get("scope").includes("business_management"));
 
+  const embeddedExchangeRequests = [];
+  const embeddedExchangeAxios = async function (request) {
+    embeddedExchangeRequests.push(request);
+    if (request.url.endsWith("/v25.0/waba-embedded/phone_numbers")) {
+      return { data: { data: [{
+        id: "phone-embedded",
+        display_phone_number: "+57 310 6534553",
+        verified_name: "NextforIA"
+      }] } };
+    }
+    throw new Error("Unexpected WhatsApp Embedded Signup request: " + request.url);
+  };
+  embeddedExchangeAxios.get = async function (url, options) {
+    embeddedExchangeRequests.push({ method: "GET", url, options });
+    assert(url.endsWith("/v25.0/oauth/access_token"));
+    assert.strictEqual(options.params.client_id, "123456789");
+    assert.strictEqual(options.params.code, "embedded-code");
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(options.params, "redirect_uri"), false);
+    return { data: { access_token: "embedded-access-token" } };
+  };
+  const embeddedExchangeMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: embeddedExchangeAxios
+  });
+  const embeddedCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-embedded",
+    phone_number_id: "phone-embedded",
+    business_id: "business-embedded"
+  }, {
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback"
+  });
+  assert.strictEqual(embeddedCandidate.phone_number_id, "phone-embedded");
+  assert.strictEqual(embeddedCandidate.access_token, "embedded-access-token");
+  assert(embeddedExchangeRequests.some(function (request) {
+    return request.method === "GET" && request.url.endsWith("/oauth/access_token");
+  }));
+
   const directInstagramRequests = [];
   const directInstagramAxios = async function (request) {
     directInstagramRequests.push(request);

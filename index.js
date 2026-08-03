@@ -166,10 +166,10 @@ const {
   SupabaseChannelConnectionStore,
   cleanChannel,
   createChannelConnectionService,
-  createLegacyConnections,
   createOAuthState,
   readOAuthState
 } = require("./channel-connections");
+const { runStartupProtectionDiagnostics } = require("./startup-protection");
 const {
   buildServiceAreaContext,
   buildServiceAreaQuestion,
@@ -350,7 +350,6 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL, process.env.RENDER_EXTERNAL_URL);
-const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT !== "0";
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
 const SUPABASE_URL = normalizedSupabaseUrl && (
@@ -988,46 +987,11 @@ const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
       axiosClient: axios
     })
   : null;
-function channelConnectionTenantAliases() {
-  let aliases = {};
-  try {
-    const parsed = JSON.parse(process.env.CHANNEL_CONNECTION_INTERNAL_TENANT_ALIASES || "{}");
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) aliases = Object.assign({}, parsed);
-  } catch (error) {
-    log("warn", "channel_connection_tenant_aliases_invalid", { error: error.message });
-  }
-  if (DEFAULT_TENANT_ID && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID &&
-      DEFAULT_TENANT_ID !== CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID) {
-    aliases[CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID] = DEFAULT_TENANT_ID;
-  }
-  return aliases;
-}
-const CHANNEL_CONNECTION_TENANT_ALIASES = channelConnectionTenantAliases();
-const protectedLegacyChannelConnections = [].concat(createLegacyConnections({
-  tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-  whatsapp: {
-    configured: !!(WA_TOKEN && PHONE_NUMBER_ID),
-    phoneNumberId: PHONE_NUMBER_ID,
-    displayPhone: process.env.TENANT_DISPLAY_PHONE || "",
-    webhookStatus: VERIFY_TOKEN ? "configured" : "needs_attention"
-  }
-}), createLegacyConnections({
-  tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-  instagram: {
-    configured: !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID),
-    userId: IG_USER_ID,
-    label: process.env.IG_USERNAME || "",
-    webhookStatus: IG_VERIFY_TOKEN ? "configured" : "needs_attention"
-  }
-}), createLegacyConnections({
-  tenantId: DEFAULT_TENANT_ID,
-  messenger: {
-    configured: !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID),
-    pageId: MESSENGER_PAGE_ID,
-    label: process.env.MESSENGER_PAGE_NAME || "",
-    webhookStatus: MESSENGER_VERIFY_TOKEN ? "configured" : "needs_attention"
-  }
-}));
+// Startup must never infer channel ownership from environment credentials or
+// alias tenants. Persisted tenant-scoped connections are the only source of
+// ownership; environment hints are inspected by the read-only diagnostic below.
+const CHANNEL_CONNECTION_TENANT_ALIASES = Object.freeze({});
+const protectedLegacyChannelConnections = Object.freeze([]);
 const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? createChannelConnectionService({
       store: channelConnectionStore,
@@ -1035,16 +999,8 @@ const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
       encryptionKey: DATA_ENCRYPTION_KEY,
       tenantAliases: CHANNEL_CONNECTION_TENANT_ALIASES,
       legacyConnections: protectedLegacyChannelConnections,
-      allowProtectedLegacyReconnect: function (tenantId, channel) {
-        return ["whatsapp", "instagram", "messenger"].includes(channel) && [
-          DEFAULT_TENANT_ID,
-          CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-        ].filter(Boolean).includes(cleanTenantId(tenantId));
-      },
-      replaceableOwnershipTenant: function (ownerTenantId, requestedTenantId) {
-        return /^meta-app-review-[a-z0-9-]+$/.test(cleanTenantId(ownerTenantId)) &&
-          !/^meta-app-review-[a-z0-9-]+$/.test(cleanTenantId(requestedTenantId));
-      }
+      allowProtectedLegacyReconnect: function () { return false; },
+      replaceableOwnershipTenant: function () { return false; }
     })
   : null;
 let channelConnectionBootstrapPromise = Promise.resolve({ skipped: true });
@@ -1127,266 +1083,11 @@ function cleanRuntimeText(value, max) {
   return String(value || "").trim().slice(0, max || 4096);
 }
 
-async function bootstrapExistingWhatsAppConnection() {
-  if (!channelConnectionService ||
-      !CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID ||
-      !META_WHATSAPP_BUSINESS_ACCOUNT_ID ||
-      !PHONE_NUMBER_ID ||
-      !WA_TOKEN) {
-    return { skipped: true };
-  }
-  try {
-    // Once a customer has completed Embedded Signup, its business token must
-    // remain the source of truth. Never overwrite that live OAuth credential
-    // with the environment bootstrap on a later deploy/restart.
-    if (channelConnectionStore && typeof channelConnectionStore.get === "function") {
-      const existing = await channelConnectionStore.get(
-        CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-        "whatsapp"
-      );
-      if (existing && existing.credentials_ciphertext && !existing.protected_legacy) {
-        try {
-          const repaired = await channelConnectionService.repairSubscription(
-            CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-            "whatsapp",
-            "system:webhook-repair"
-          );
-          channelRuntimeCache.loaded_at = 0;
-          return { skipped: true, reason: "existing_connection_preserved", repaired };
-        } catch (error) {
-          channelRuntimeCache.loaded_at = 0;
-          return {
-            skipped: true,
-            ok: false,
-            reason: "existing_connection_repair_failed",
-            error: String(error.internalMessage || error.message || "repair_failed").slice(0, 300)
-          };
-        }
-      }
-    }
-    const connection = await channelConnectionService.adoptExisting(
-      CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      "whatsapp",
-      "system:environment-bootstrap",
-      {
-        id: "wa:" + PHONE_NUMBER_ID,
-        account_id: PHONE_NUMBER_ID,
-        account_label: process.env.TENANT_DISPLAY_PHONE || "WhatsApp Business",
-        meta_business_id: String(process.env.META_BUSINESS_ID || "").trim() || null,
-        whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-        phone_number_id: PHONE_NUMBER_ID,
-        access_token: WA_TOKEN,
-        // The environment bootstrap adopts a number that Meta already owns and
-        // has verified. Re-registering that number is both unnecessary and
-        // rejected for WhatsApp Business App coexistence accounts.
-        coexistence: true
-      }
-    );
-    channelRuntimeCache.loaded_at = 0;
-    log("info", "whatsapp_existing_asset_adopted", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      status: connection.status
-    });
-    return { skipped: false, ok: true, connection };
-  } catch (error) {
-    channelRuntimeCache.loaded_at = 0;
-    log("error", "whatsapp_existing_asset_adoption_failed", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      error: error.internalMessage || error.message
-    });
-    return { skipped: false, ok: false, error: error.internalMessage || error.message };
-  }
-}
-
-async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult) {
-  const isRavSpecialCase =
-    process.env.RAV_WHATSAPP_REGISTER_NOW === "1" &&
-    CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e" &&
-    META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606" &&
-    PHONE_NUMBER_ID === "334999901166332" &&
-    !!WA_TOKEN &&
-    !!channelConnectionProvider;
-  if (!isRavSpecialCase) return bootstrapResult;
-  try {
-    const phone = await channelConnectionProvider.graph(encodeURIComponent(PHONE_NUMBER_ID), WA_TOKEN, {
-      params: { fields: "id,code_verification_status,platform_type" }
-    });
-    const verification = String(phone.data && phone.data.code_verification_status || "").toUpperCase();
-    const platform = String(phone.data && phone.data.platform_type || "").toUpperCase();
-    if (verification === "VERIFIED" && platform === "CLOUD_API") {
-      return Object.assign({}, bootstrapResult, {
-        ok: true,
-        registration: { skipped: true, reason: "already_cloud_registered" }
-      });
-    }
-    if (verification !== "NOT_VERIFIED" || platform !== "ON_PREMISE") {
-      return Object.assign({}, bootstrapResult, {
-        ok: false,
-        registration: {
-          skipped: true,
-          reason: "unexpected_registration_state",
-          code_verification_status: verification || null,
-          platform_type: platform || null
-        }
-      });
-    }
-    await channelConnectionProvider.graph(encodeURIComponent(PHONE_NUMBER_ID) + "/register", WA_TOKEN, {
-      method: "POST",
-      data: {
-        messaging_product: "whatsapp",
-        pin: channelConnectionProvider.whatsappRegistrationPin(PHONE_NUMBER_ID)
-      },
-      timeout: 20000
-    });
-    channelRuntimeCache.loaded_at = 0;
-    log("info", "rav_whatsapp_cloud_registration_completed", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID
-    });
-    return Object.assign({}, bootstrapResult, {
-      ok: true,
-      registration: { skipped: false, registered: true }
-    });
-  } catch (error) {
-    const metaError = error.response && error.response.data && error.response.data.error || {};
-    const message = cleanRuntimeText(metaError.message || error.message, 300) || "registration_failed";
-    log("error", "rav_whatsapp_cloud_registration_failed", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      error_code: metaError.code || null,
-      error_subcode: metaError.error_subcode || null,
-      error: message
-    });
-    return Object.assign({}, bootstrapResult, {
-      ok: false,
-      registration: {
-        skipped: false,
-        registered: false,
-        error_code: metaError.code || null,
-        error_subcode: metaError.error_subcode || null,
-        error: message
-      }
-    });
-  }
-}
-
-async function retireTemporaryInstagramReviewOwners() {
-  if (process.env.NODE_ENV !== "production" || !channelConnectionStore ||
-      typeof channelConnectionStore.listAll !== "function" || typeof channelConnectionStore.upsert !== "function") {
-    return { skipped: true };
-  }
-  try {
-    const rows = await channelConnectionStore.listAll();
-    const active = (Array.isArray(rows) ? rows : []).filter(function (row) {
-      return row && row.channel === "instagram" &&
-        /^meta-app-review-[a-z0-9-]+$/.test(cleanTenantId(row.tenant_id)) &&
-        ["connecting", "connected", "needs_attention"].includes(row.status);
-    });
-    for (const row of active) {
-      const releasedAt = new Date().toISOString();
-      await channelConnectionStore.upsert({
-        tenant_id: row.tenant_id,
-        channel: "instagram",
-        status: "disconnected",
-        webhook_status: "ownership_released",
-        last_error: null,
-        last_error_at: null,
-        disconnected_at: releasedAt,
-        disconnected_by: "system:app-review-retired",
-        account_id: null,
-        account_label: null,
-        meta_business_id: null,
-        page_id: null,
-        instagram_user_id: null,
-        updated_at: releasedAt,
-        pending_assets: [],
-        credentials_ciphertext: null,
-        credential_source: null,
-        protected_legacy: false
-      }, {
-        action: "temporary_ownership_released",
-        actor: "system:app-review-retired",
-        details: { reason: "app_review_tenant_retired", channel: "instagram" }
-      });
-    }
-    if (active.length) {
-      log("info", "temporary_instagram_review_owners_retired", { released_count: active.length });
-    }
-    return { skipped: false, released_count: active.length };
-  } catch (error) {
-    log("error", "temporary_instagram_review_owner_retirement_failed", {
-      error: String(error.message || "review_owner_retirement_failed").slice(0, 200)
-    });
-    return { skipped: false, ok: false, error: error.message };
-  }
-}
-
-async function retireMisassignedRavInstagramOwners() {
-  if (process.env.NODE_ENV !== "production" || !channelConnectionStore || !IG_USER_ID) {
-    return { skipped: true, reason: "not_production_or_rav_instagram_unavailable" };
-  }
-  try {
-    const rows = await channelConnectionStore.listAll();
-    const ravTenantIds = new Set([
-      DEFAULT_TENANT_ID,
-      CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-    ].map(cleanTenantId).filter(Boolean));
-    const ravInstagramIds = new Set([IG_USER_ID, IG_SEND_ID].map(String).filter(Boolean));
-    const active = (rows || []).filter(function (row) {
-      const owner = cleanTenantId(row && row.tenant_id);
-      const assetId = String(row && (row.instagram_user_id || row.account_id) || "");
-      return row && row.channel === "instagram" &&
-        ["connecting", "connected", "needs_attention"].includes(row.status) &&
-        owner && !ravTenantIds.has(owner) && ravInstagramIds.has(assetId);
-    });
-    for (const row of active) {
-      const releasedAt = new Date().toISOString();
-      await channelConnectionStore.upsert({
-        tenant_id: row.tenant_id,
-        channel: "instagram",
-        status: "disconnected",
-        webhook_status: "ownership_released",
-        last_error: null,
-        last_error_at: null,
-        disconnected_at: releasedAt,
-        disconnected_by: "system:rav-owner-repair",
-        account_id: null,
-        account_label: null,
-        meta_business_id: null,
-        page_id: null,
-        instagram_user_id: null,
-        pending_assets: [],
-        credentials_ciphertext: null,
-        credential_source: null,
-        protected_legacy: false,
-        updated_at: releasedAt
-      }, {
-        action: "misassigned_rav_instagram_owner_released",
-        actor: "system:rav-owner-repair",
-        details: { replacement_tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID }
-      });
-    }
-    if (active.length) {
-      log("info", "misassigned_rav_instagram_owners_retired", { released_count: active.length });
-    }
-    return { skipped: false, released_count: active.length };
-  } catch (error) {
-    log("error", "misassigned_rav_instagram_owner_retirement_failed", {
-      error: String(error.message || "rav_owner_repair_failed").slice(0, 200)
-    });
-    return { skipped: false, ok: false, error: error.message };
-  }
-}
-
-channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection()
-  .then(registerRavWhatsAppCloudNumberIfNeeded)
-  .then(async function (result) {
-    await retireTemporaryInstagramReviewOwners();
-    await retireMisassignedRavInstagramOwners();
-    return result;
-  });
+channelConnectionBootstrapPromise = runStartupProtectionDiagnostics({
+  store: channelConnectionStore,
+  env: process.env,
+  log
+});
 
 function canonicalRuntimeTenantId(tenantId) {
   let current = cleanTenantId(tenantId);
@@ -1899,48 +1600,6 @@ const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
   publicBaseUrl: PUBLIC_BASE_URL
 }) : null;
 
-async function syncNextforPricingJuly2026() {
-  if (!NEXTFOR_PRICING_SYNC_ON_BOOT || CUSTOMER_ACCESS_TEST_MODE || !CUSTOMER_ACCESS_V2_ENABLED || !SUPABASE_ENABLED) return;
-  const rest = SUPABASE_URL + "/rest/v1/";
-  const upsertHeaders = Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS);
-  const patchHeaders = Object.assign({ Prefer: "return=minimal" }, SB_HEADERS);
-  const bots = [
-    { id: "atencion-cliente", name: "Atención al cliente", descripcion: "Atiende, orienta, responde preguntas y escala casos a humanos.", orden: 1, active: true, updated_at: new Date().toISOString() },
-    { id: "agendamiento", name: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", orden: 2, active: true, updated_at: new Date().toISOString() },
-    { id: "commerce", name: "Commerce", descripcion: "Consulta productos, precios, disponibilidad y pedidos cuando aplique.", orden: 3, active: true, updated_at: new Date().toISOString() }
-  ];
-  const plans = NEXTFOR_PRICING_JULY_2026.map(function (plan) {
-    return {
-      id: plan.id,
-      name: plan.nombre,
-      descripcion: plan.descripcion,
-      bot_id: plan.bot_id,
-      precio_setup: 0,
-      precio_mensual: plan.precio_mensual,
-      chats_incluidos: plan.chats_incluidos,
-      beneficios: plan.beneficios,
-      etiqueta: plan.etiqueta,
-      orden: plan.orden,
-      active: true,
-      updated_at: new Date().toISOString()
-    };
-  });
-  try {
-    await axios.post(rest + "platform_bots?on_conflict=id", bots, { headers: upsertHeaders, timeout: 10000 });
-    await axios.post(rest + "platform_plans?on_conflict=id", plans, { headers: upsertHeaders, timeout: 10000 });
-    await axios.patch(rest + "platform_plans?id=in.(starter,growth,scale)", { active: false, precio_setup: 0, updated_at: new Date().toISOString() }, { headers: patchHeaders, timeout: 10000 });
-    await axios.patch(rest + "tenants", { precio_setup_contratado: 0 }, { params: { precio_setup_contratado: "not.is.null" }, headers: patchHeaders, timeout: 10000 });
-    try {
-      await axios.patch(rest + "billing_contracts", { contracted_setup_price: 0, updated_at: new Date().toISOString() }, { params: { contracted_setup_price: "gt.0" }, headers: patchHeaders, timeout: 10000 });
-    } catch (billingError) {
-      const status = billingError && billingError.response && billingError.response.status;
-      if (status && status !== 404) throw billingError;
-    }
-    console.log("Nextfor pricing July 2026 synced");
-  } catch (error) {
-    console.error("Nextfor pricing sync failed:", error.response && error.response.data || error.message);
-  }
-}
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -10793,95 +10452,6 @@ function releaseAdminConversation(req, res) {
 
 app.post("/admin/release/:userId", releaseAdminConversation);
 
-const RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT = "rav-toys-adac1e";
-const RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER = "repair:rav-instagram-handoff-v274";
-const RAV_INSTAGRAM_DELIVERY_TEST_INBOUND = "Prueba real Nextfor IG 29-07 14:40";
-const RAV_INSTAGRAM_DELIVERY_TEST_MARKER = "verification:rav-instagram-delivery-v275";
-
-async function runRavInstagramHandoffRepairOnce() {
-  if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
-    return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
-  }
-  const rows = await supabaseFetchRecent(500, { tenantId: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
-  if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
-  const turns = rows.map(normalizeTurnRow).filter(function (turn) {
-    return cleanTenantId(turn.tenantId || turn.tenant_id) === RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT;
-  });
-  const alreadyApplied = turns.some(function (turn) {
-    return Array.isArray(turn.tools) &&
-      turn.tools.includes("admin_release") &&
-      String(turn.botReply || "").includes(RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER);
-  });
-  if (alreadyApplied) return { ok: true, skipped: true, reason: "already_applied" };
-  const states = inferHandoffStates(turns, []);
-  const userIds = Object.keys(states).filter(function (userId) {
-    return states[userId].active && conversationChannel(userId) === "instagram";
-  });
-  for (const userId of userIds) {
-    deleteHumanHandoff(userId, RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT);
-    await recordAdminEvent(
-      userId,
-      "admin_release",
-      "[Soporte NexforIA] Conversación devuelta a la IA (" + RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER + ").",
-      "ok",
-      false,
-      { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
-    );
-  }
-  log("info", "rav_instagram_handoff_repair", {
-    tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
-    released_count: userIds.length
-  });
-  return { ok: true, skipped: false, released_count: userIds.length };
-}
-
-async function runRavInstagramDeliveryVerificationOnce() {
-  if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
-    return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
-  }
-  const rows = await supabaseFetchRecent(1000, { allTenants: true });
-  if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
-  const turns = rows.map(normalizeTurnRow);
-  const alreadyDelivered = turns.some(function (turn) {
-    return turn.status === "ok" &&
-      Array.isArray(turn.tools) &&
-      turn.tools.includes("support_delivery_verification") &&
-      String(turn.botReply || "").includes(RAV_INSTAGRAM_DELIVERY_TEST_MARKER);
-  });
-  if (alreadyDelivered) return { ok: true, skipped: true, reason: "already_delivered" };
-  const targetTurn = turns.find(function (turn) {
-    return conversationChannel(turn.userId) === "instagram" &&
-      String(turn.userMessage || "").trim() === RAV_INSTAGRAM_DELIVERY_TEST_INBOUND;
-  });
-  const userId = normalizeConversationUserId(targetTurn && targetTurn.userId);
-  if (!userId) return { ok: false, skipped: true, reason: "verified_test_conversation_not_found" };
-  deleteHumanHandoff(userId, RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT);
-  await recordAdminEvent(
-    userId,
-    "admin_release",
-    "[Soporte NexforIA] Conversación devuelta a la IA (repair:rav-instagram-cross-scope-v276).",
-    "ok",
-    false,
-    { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
-  );
-  const reply = "¡Hola! 👋 Ya estoy de nuevo en línea y listo para ayudarte desde Instagram. ¿Qué juguete estás buscando hoy?";
-  const sent = await sendText(userId, reply, { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
-  await recordAdminEvent(
-    userId,
-    "support_delivery_verification",
-    reply + " (" + RAV_INSTAGRAM_DELIVERY_TEST_MARKER + ")",
-    sent ? "ok" : "error",
-    false,
-    { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
-  );
-  log(sent ? "info" : "error", "rav_instagram_delivery_verification", {
-    tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
-    source_tenant_id: cleanTenantId(targetTurn && targetTurn.tenantId) || null,
-    sent
-  });
-  return { ok: sent, skipped: false, sent };
-}
-
 app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok || auth.role !== "super_admin") {
@@ -15690,40 +15260,6 @@ app.listen(PORT, () => {
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
-  syncNextforPricingJuly2026();
-  if (customerAccessResetEnabled() && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED) {
-    resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
-      .then(function (result) {
-        if ((result.disabled_users || 0) || (result.revoked_invitations || 0) || (result.archived_tenants || 0)) {
-          console.log("Customer access clean slate:", JSON.stringify({
-            before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO,
-            disabled_users: result.disabled_users,
-            revoked_invitations: result.revoked_invitations,
-            archived_tenants: result.archived_tenants,
-            public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
-          }));
-        } else {
-          console.log("Customer access clean slate: no pre-cutoff access to reset");
-        }
-      })
-      .catch(function (error) {
-        console.error("Customer access clean slate failed:", error.message);
-      });
-  }
-  const ravInstagramHandoffRepairTimer = setTimeout(function () {
-    runRavInstagramHandoffRepairOnce()
-      .then(function (result) {
-        console.log("RAV Instagram handoff repair:", JSON.stringify(result));
-        return runRavInstagramDeliveryVerificationOnce();
-      })
-      .then(function (result) {
-        console.log("RAV Instagram delivery verification:", JSON.stringify(result));
-      })
-      .catch(function (error) {
-        console.error("RAV Instagram handoff repair failed:", error.message);
-      });
-  }, 5000);
-  ravInstagramHandoffRepairTimer.unref();
   if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;
     const runSelfCheck = async function () {

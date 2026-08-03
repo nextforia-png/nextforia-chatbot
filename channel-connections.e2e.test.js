@@ -297,9 +297,9 @@ async function login(base, body) {
     response = await fetch(base + "/admin/channel-connections", { headers: { cookie: superAdmin.cookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
-    assert(body.channels.some(function (row) {
-      return row.tenant_id === "rav-toys" && row.channel === "whatsapp" && row.protected_legacy;
-    }));
+    assert(!body.channels.some(function (row) {
+      return row.protected_legacy || row.credential_source === "environment";
+    }), "environment credentials must not create tenant-owned channel records on startup");
     assert(!JSON.stringify(body).toLowerCase().includes("access_token"));
     assert(!JSON.stringify(body).includes("channel-e2e-wa-legacy"));
     assert(!JSON.stringify(body).includes(encryptionKey));
@@ -342,8 +342,8 @@ async function login(base, body) {
       headers: { "content-type": "application/json", origin: base, cookie: superAdmin.cookie },
       body: "{}"
     });
-    assert.strictEqual(response.status, 409);
-    assert.strictEqual((await response.json()).error, "legacy_connection_protected");
+    assert.strictEqual(response.status, 404);
+    assert.strictEqual((await response.json()).error, "connection_not_found");
 
     console.log("channel-connections.e2e.test.js: ok");
   } finally {

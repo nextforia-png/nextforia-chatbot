@@ -40,17 +40,12 @@ function waitForServer(child, port) {
 
 (async function run() {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
-  const bootstrapStart = source.indexOf("async function bootstrapExistingWhatsAppConnection()");
-  const bootstrapEnd = source.indexOf("async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult)");
-  assert(bootstrapStart >= 0 && bootstrapEnd > bootstrapStart);
-  const bootstrapSource = source.slice(bootstrapStart, bootstrapEnd);
-  assert.match(bootstrapSource, /access_token:\s*WA_TOKEN,[\s\S]*?coexistence:\s*true/);
-  assert.match(source, /async function registerRavWhatsAppCloudNumberIfNeeded\(bootstrapResult\)/);
-  assert.match(source, /process\.env\.RAV_WHATSAPP_REGISTER_NOW === "1"/);
-  assert.match(source, /CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e"/);
-  assert.match(source, /META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606"/);
-  assert.match(source, /PHONE_NUMBER_ID === "334999901166332"/);
-  assert.match(source, /channelConnectionProvider\.whatsappRegistrationPin\(PHONE_NUMBER_ID\)/);
+  assert.match(source, /runStartupProtectionDiagnostics\(\{[\s\S]*?store: channelConnectionStore,[\s\S]*?env: process\.env,[\s\S]*?log/);
+  assert.match(source, /const CHANNEL_CONNECTION_TENANT_ALIASES = Object\.freeze\(\{\}\)/);
+  assert.match(source, /const protectedLegacyChannelConnections = Object\.freeze\(\[\]\)/);
+  assert.doesNotMatch(source, /bootstrapExistingWhatsAppConnection|registerRavWhatsAppCloudNumberIfNeeded/);
+  assert.doesNotMatch(source, /retireTemporaryInstagramReviewOwners|retireMisassignedRavInstagramOwners/);
+  assert.doesNotMatch(source, /syncNextforPricingJuly2026|runRavInstagramHandoffRepairOnce|runRavInstagramDeliveryVerificationOnce/);
   assert.match(source, /function instagramGraphOriginForRuntime\(runtime\)[\s\S]*?runtime\.instagramLoginType \|\| runtime\.instagram_login_type[\s\S]*?=== "instagram"[\s\S]*?"https:\/\/graph\.instagram\.com"[\s\S]*?"https:\/\/graph\.facebook\.com"/);
   assert.match(source, /function rememberConversationRuntime\(userId, runtime\)[\s\S]*?instagramLoginType: cleanRuntimeText\(runtime\.instagramLoginType \|\| runtime\.instagram_login_type/);
   assert.match(source, /async function outboundRuntimeForConversation\(userId, options\)[\s\S]*?instagramLoginType: cleanRuntimeText\(options && \(options\.instagramLoginType \|\| options\.instagram_login_type\)/);
@@ -65,7 +60,6 @@ function waitForServer(child, port) {
   assert.match(source, /record\.protected_legacy && record\.status === "needs_attention"/);
   assert.match(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
   assert.match(source, /function customerTenantForAuth\(auth\)[\s\S]*?tenantId === DEFAULT_TENANT_ID[\s\S]*?return CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
-  assert.match(source, /async function retireMisassignedRavInstagramOwners\(\)[\s\S]*?misassigned_rav_instagram_owner_released/);
   assert.match(source, /function isRavTenantId\(tenantId\)[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
   assert.match(source, /handoffCustomerReply[\s\S]*?recordTurn\(/);
   assert.match(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);

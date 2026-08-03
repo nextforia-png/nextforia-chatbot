@@ -21,17 +21,17 @@ function customerPanelContext(options) {
   if (!tenant) {
     return {
       v2: false,
-      businessName: "RAV Toys",
-      initials: "RAV",
-      avatarInitials: "RA",
-      planId: "growth",
-      planName: "Growth",
-      assignedBotId: "duo",
-      assignedBotName: "Atención al cliente + Agendamiento",
+      businessName: "Tu empresa",
+      initials: "NX",
+      avatarInitials: "NX",
+      planId: "",
+      planName: "Asignado",
+      assignedBotId: "",
+      assignedBotName: "Bot asignado",
       customerSetupCompleted: false,
-      support: true,
-      appointments: true,
-      referralCode: "RAVTOYS"
+      support: false,
+      appointments: false,
+      referralCode: "NEXTFORIA"
     };
   }
   const businessName = String(tenant.company_name || tenant.name || tenant.id || "Tu empresa").trim();
@@ -145,7 +145,7 @@ module.exports = function renderCustomerPanel(res, options) {
     ? '<section class="' + viewClass("panel-appointments") + '" id="panel-appointments">' + customerAppointments.markup + '</section>'
     : "";
   const appointmentClientScript = panelContext.appointments && !paymentGateRequired ? customerAppointments.clientScript : "";
-  const activeBotCount = panelContext.v2 ? ((panelContext.support ? 1 : 0) + (panelContext.appointments ? 1 : 0) || 1) : 2;
+  const activeBotCount = (panelContext.support ? 1 : 0) + (panelContext.appointments ? 1 : 0);
   const assignedModuleDescription = panelContext.appointments
     ? "Gestiona citas, confirmaciones y recordatorios desde un único módulo."
     : "Centraliza resultados y conversaciones de los canales conectados en una sola bandeja.";
@@ -170,7 +170,7 @@ module.exports = function renderCustomerPanel(res, options) {
     chatsIncluidos: 500,
     chatsConsumidos: 410,
     rescatesFrecuentes: true,
-    referidos: { codigo: "RAVTOYS", count: 0, mesesGanados: 0 }
+    referidos: { codigo: panelContext.referralCode, count: 0, mesesGanados: 0 }
   };
 
   res.status(200).setHeader("content-type", "text/html; charset=utf-8");
@@ -1200,7 +1200,7 @@ ${customerBotConfiguration.styles}
       <div class="whatsappCard">
         <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>
         <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">${panelContext.v2 ? "Bot conectado" : "Bot de atención conectado"}</span></strong>
-        <p id="channelStatusDetail">${panelContext.v2 ? escapeHtml(panelContext.assignedBotName) + " · Plan " + escapeHtml(panelContext.planName) : "Atención al cliente · Plan Growth"}</p>
+        <p id="channelStatusDetail">${escapeHtml(panelContext.assignedBotName) + " · Plan " + escapeHtml(panelContext.planName)}</p>
       </div>
       <div class="panelVersion">Versión ${escapeHtml(botVersion)}</div>
     </div>
@@ -1418,7 +1418,7 @@ ${customerBotConfiguration.styles}
                 </label>
                 <label class="personalityField wide">
                   <span>Saludo</span>
-                  <textarea id="personalityGreeting" maxlength="500" placeholder="Ej. ¡Hola! Soy RAV-Bot 😊 ¿Qué juguete buscas hoy?" oninput="markPersonalityDirty();previewPersonalityGreeting()"></textarea>
+                  <textarea id="personalityGreeting" maxlength="500" placeholder="Ej. ¡Hola! Soy tu asistente 😊 ¿En qué puedo ayudarte hoy?" oninput="markPersonalityDirty();previewPersonalityGreeting()"></textarea>
                   <small>Úsalo solo al iniciar una conversación. Recomendamos una frase y una pregunta.</small>
                 </label>
                 <label class="personalityField">
@@ -1478,7 +1478,7 @@ ${customerBotConfiguration.styles}
               <div class="setupProgressCopy">
                 <span class="setupStatus" id="setupPublishedStatus">No activa</span>
                 <div class="setupEyebrow" id="setupEyebrow">Paso 1 de 7 · Tu negocio</div>
-                <p class="setupStory" id="setupStory">${panelContext.v2 ? "Nadie conoce tu negocio como tú. Empieza por lo esencial y tu bot aprenderá a presentarlo igual de bien." : "Nadie conoce tu negocio como tú. Empieza por lo esencial y RAV-Bot aprenderá a presentarlo igual de bien."}</p>
+                <p class="setupStory" id="setupStory">Nadie conoce tu negocio como tú. Empieza por lo esencial y tu bot aprenderá a presentarlo igual de bien.</p>
                 <div class="setupStepper" id="setupStepper" aria-label="Progreso de configuración"></div>
               </div>
               <div class="setupProgressRing" id="setupCompletion"><div><span><strong id="setupCompletionValue">14%</strong>completado</span></div></div>
@@ -1491,8 +1491,8 @@ ${customerBotConfiguration.styles}
             <section class="setupStep active" data-setup-step="0">
               <div class="setupStepHead"><span class="setupStepNumber">1</span><div><h4>Empecemos por tu negocio</h4><p>Esto permite que el bot se presente bien y recomiende con contexto.</p></div></div>
               <div class="setupGrid">
-                <label class="setupField"><span>¿Cómo se llama tu negocio?</span><input data-setup="business.name" maxlength="120" placeholder="Ej. ${escapeHtml(panelContext.v2 ? panelContext.businessName : "RAV Toys")}"></label>
-                <label class="setupField"><span>¿Cómo quieres llamar a tu bot?</span><input data-setup="business.bot_name" maxlength="80" placeholder="Ej. ${escapeHtml(panelContext.v2 ? "Asistente " + panelContext.initials : "RAV-Bot")}"></label>
+                <label class="setupField"><span>¿Cómo se llama tu negocio?</span><input data-setup="business.name" maxlength="120" placeholder="Ej. ${escapeHtml(panelContext.businessName)}"></label>
+                <label class="setupField"><span>¿Cómo quieres llamar a tu bot?</span><input data-setup="business.bot_name" maxlength="80" placeholder="Ej. ${escapeHtml(panelContext.v2 ? "Asistente " + panelContext.initials : "Tu bot")}"></label>
                 <label class="setupField"><span>¿A qué industria pertenece?</span><select data-setup="business.industry" id="setupIndustry" onchange="renderIndustryQuestions()"></select></label>
                 <label class="setupField"><span>Sitio web o catálogo</span><input data-setup="business.website" maxlength="500" placeholder="https://..."></label>
                 <label class="setupField"><span>¿Con qué plataforma está hecha tu web?</span><select data-setup="business.web_platform"><option value="">Selecciona una opción</option><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce (WordPress)</option><option value="wix">Wix</option><option value="squarespace">Squarespace</option><option value="social_shop">Tienda en Instagram/Facebook</option><option value="other">Otra</option><option value="none">Aún no tengo</option></select></label>
@@ -1547,9 +1547,9 @@ ${customerBotConfiguration.styles}
                   <p>Estos datos ayudan a ubicar los canales del negocio. No compartas contraseñas ni accesos privados.</p>
                   <div class="setupAccountsGrid">
                     <label class="setupField"><span>Número de WhatsApp</span><input data-setup="channels.whatsapp_number" maxlength="80" placeholder="Ej. +57 300 123 4567"></label>
-                    <label class="setupField"><span>Usuario de Instagram</span><input data-setup="channels.instagram_handle" maxlength="120" placeholder="Ej. @ravtoys"></label>
+                    <label class="setupField"><span>Usuario de Instagram</span><input data-setup="channels.instagram_handle" maxlength="120" placeholder="Ej. @tuempresa"></label>
                     <label class="setupField"><span>Página de Facebook / Messenger</span><input data-setup="channels.messenger_page" maxlength="160" placeholder="Nombre o enlace de la página"></label>
-                    <label class="setupField"><span>Usuario de TikTok</span><input data-setup="channels.tiktok_handle" maxlength="120" placeholder="Ej. @ravtoys"></label>
+                    <label class="setupField"><span>Usuario de TikTok</span><input data-setup="channels.tiktok_handle" maxlength="120" placeholder="Ej. @tuempresa"></label>
                   </div>
                 </section>
                 <label class="setupField wide"><span>¿Hay alguna diferencia importante entre canales?</span><textarea data-setup="channels.notes" placeholder="Ej. en Instagram priorizar consultas de producto y pasar ventas al equipo."></textarea></label>
@@ -2119,7 +2119,7 @@ function loadClientOnboardingSummary(){if(state.onboardingLoading)return;state.o
 function toggleSetupDetails(){state.setupDetailsOpen=!state.setupDetailsOpen;var panel=document.getElementById("setupDetailsPanel"),details=document.getElementById("onboardingDetails"),button=document.getElementById("setupDetailsToggle");if(panel)panel.hidden=!state.setupDetailsOpen;if(details)details.classList.toggle("open",state.setupDetailsOpen);if(button)button.textContent=state.setupDetailsOpen?"Ocultar detalles":"Ver cuestionario completo";}
 ${customerBotConfiguration.clientScript}
 var SETUP_STEP_TITLES=["Tu negocio","Sedes y horarios","Oferta y condiciones","Tu industria","Personalidad y canales","Autonomía del bot","Resultados"];
-var SETUP_DEFAULT_BOT_NAME=PANEL_CONTEXT.v2?"tu bot":"RAV-Bot";
+var SETUP_DEFAULT_BOT_NAME="tu bot";
 var SETUP_STEP_MESSAGES=[
   "Nadie conoce tu negocio como tú. Empieza por lo esencial y "+SETUP_DEFAULT_BOT_NAME+" aprenderá a presentarlo igual de bien.",
   "Tú sabes dónde y cuándo te buscan. Enséñaselo para que oriente a cada cliente tan bien como lo harías tú.",

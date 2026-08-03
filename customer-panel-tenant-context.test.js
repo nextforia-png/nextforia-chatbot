@@ -19,13 +19,12 @@ function render(options) {
 }
 
 const legacy = render();
-assert(legacy.includes("<title>Nextfor IA · RAV Toys</title>"));
-assert(legacy.includes('<h1><span id="brandBusinessName">RAV Toys</span></h1><p>con <span>Nextfor IA</span></p>'));
-assert(legacy.includes('<h1><span id="mobileBrandBusinessName">RAV Toys</span></h1><p>con <span>Nextfor IA</span></p>'));
-assert(legacy.includes('id="bot-support"'));
-assert(legacy.includes('id="bot-appointments"'));
-assert(legacy.includes("2 bots activos"));
-assert(legacy.includes("Atención al cliente · Plan Growth"));
+assert(legacy.includes("<title>Nextfor IA · Tu empresa</title>"));
+assert(legacy.includes('<h1><span id="brandBusinessName">Tu empresa</span></h1><p>con <span>Nextfor IA</span></p>'));
+assert(legacy.includes('<h1><span id="mobileBrandBusinessName">Tu empresa</span></h1><p>con <span>Nextfor IA</span></p>'));
+assert(!legacy.includes('id="bot-support"'));
+assert(!legacy.includes('id="bot-appointments"'));
+assert(!legacy.includes(">RAV Toys<"));
 
 const tenantA = render({
   tenantContext: { id: "tenant-a", company_name: "Empresa A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente", status: "live" }

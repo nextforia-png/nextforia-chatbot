@@ -903,7 +903,17 @@ class MetaChannelProvider {
         const subscribedAppId = app && (
           app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id
         );
-        return expectedAppIds.includes(String(subscribedAppId || ""));
+        if (expectedAppIds.includes(String(subscribedAppId || ""))) return true;
+        if (!directInstagram) return false;
+        // Instagram Login can return an internal platform-app id that is not
+        // either public app id. The access token is app-scoped, so the exact
+        // messaging field set returned after our successful subscription is
+        // also authoritative proof that this app is installed for the user.
+        const subscribedFields = new Set(Array.isArray(app && app.subscribed_fields)
+          ? app.subscribed_fields.map(String)
+          : []);
+        return ["messages", "messaging_postbacks", "message_reactions", "messaging_seen"]
+          .every(function (field) { return subscribedFields.has(field); });
       });
       const registrationReady = channel !== "whatsapp" || (
         String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&

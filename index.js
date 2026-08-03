@@ -4827,7 +4827,15 @@ async function instagramConnectionHealth() {
     );
     const expectedAppIds = new Set([META_APP_ID, INSTAGRAM_LOGIN_APP_ID].filter(Boolean).map(String));
     const appSubscribed = (subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : [])
-      .some(function (item) { return expectedAppIds.has(String(item && item.id || "")); });
+      .some(function (item) {
+        if (expectedAppIds.has(String(item && item.id || ""))) return true;
+        if (!(runtime && runtime.instagramLoginType === "instagram")) return false;
+        const subscribedFields = new Set(Array.isArray(item && item.subscribed_fields)
+          ? item.subscribed_fields.map(String)
+          : []);
+        return ["messages", "messaging_postbacks", "message_reactions", "messaging_seen"]
+          .every(function (field) { return subscribedFields.has(field); });
+      });
     if (!appSubscribed) {
       return {
         ok: false,

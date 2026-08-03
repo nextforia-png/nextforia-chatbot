@@ -71,9 +71,13 @@ function expectCode(promise, code) {
       return { data: { success: true } };
     }
     if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps")) {
-      // Meta may return the parent app id for a direct Instagram Login
-      // subscription even though OAuth used the Instagram product app id.
-      return { data: { data: [{ id: "facebook-app-id" }] } };
+      // Meta may return an internal platform-app id for a direct Instagram
+      // Login subscription. Its app-scoped token and exact field set are the
+      // authoritative installation proof in that response shape.
+      return { data: { data: [{
+        id: "internal-instagram-platform-app-id",
+        subscribed_fields: ["messages", "messaging_postbacks", "message_reactions", "messaging_seen"]
+      }] } };
     }
     if (request.url.endsWith("/v25.0/ig-direct")) {
       return { data: { id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };

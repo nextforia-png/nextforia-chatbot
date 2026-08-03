@@ -302,7 +302,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v326-instagram-conversation-delivery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v327-tenant-safe-meta-webhooks";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -471,9 +471,8 @@ const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
 const IG_USER_ID = process.env.IG_USER_ID || "";
 const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
-const RAV_INSTAGRAM_LOGIN_OVERRIDE = process.env.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1";
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
-const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v26.0";
 const META_APP_ID = String(process.env.META_APP_ID || "").trim();
 const META_WHATSAPP_CONFIG_ID = String(process.env.META_WHATSAPP_CONFIG_ID || "").trim();
 const META_WHATSAPP_BUSINESS_ACCOUNT_ID = String(
@@ -484,10 +483,6 @@ const CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID = cleanTenantId(
 );
 const CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID =
   CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
-const CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID =
-  RAV_INSTAGRAM_LOGIN_OVERRIDE && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-    ? CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-    : DEFAULT_TENANT_ID;
 const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
   ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
   : "";
@@ -613,7 +608,6 @@ const productionConfigErrors = validateProductionConfig({
   publicBaseUrl: PUBLIC_BASE_URL,
   allowUnsignedWebhooks: ALLOW_UNSIGNED_WEBHOOKS
 });
-if (process.env.NODE_ENV === "production" && !PHONE_NUMBER_ID) productionConfigErrors.push("PHONE_NUMBER_ID must be set in production");
 if (process.env.NODE_ENV === "production" && SHOPIFY_ADMIN_TOKEN && !SHOPIFY_STORE_DOMAIN) productionConfigErrors.push("SHOPIFY_STORE_DOMAIN must be set when SHOPIFY_ADMIN_TOKEN is configured");
 if (process.env.NODE_ENV === "production" && SHOPIFY_STORE_DOMAIN && !SHOPIFY_STORE_DOMAIN.endsWith(".myshopify.com")) productionConfigErrors.push("SHOPIFY_STORE_DOMAIN must be the shop's .myshopify.com hostname");
 if (process.env.NODE_ENV === "production" && RAW_SUPABASE_URL && !SUPABASE_URL) productionConfigErrors.push("SUPABASE_URL must be a valid supabase.co HTTPS origin (or explicitly allow a self-hosted origin)");
@@ -651,7 +645,6 @@ if (productionConfigErrors.length) {
 if (process.env.NODE_ENV === "production" && !META_APP_SECRET) {
   console.warn("META_APP_SECRET is not configured; webhook signature enforcement remains in legacy compatibility mode");
 }
-if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
 if (!ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY missing"); process.exit(1); }
 
 const adminRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 600 });
@@ -830,6 +823,28 @@ const whatsappRuntimeState = {
   last_signature_present: null,
   last_signature_format_valid: null,
   last_raw_body_present: null,
+  last_skip_reason: null
+};
+const messengerRuntimeState = {
+  webhook_requests: 0,
+  inbound_messages: 0,
+  outbound_messages: 0,
+  last_webhook_at: null,
+  last_inbound_at: null,
+  last_outbound_at: null,
+  last_error_at: null,
+  last_error_stage: null,
+  last_error_code: null,
+  last_webhook_object: null,
+  last_signature_present: null,
+  last_signature_format_valid: null,
+  last_raw_body_present: null,
+  last_send_runtime_source: null,
+  last_send_tenant_id: null,
+  last_send_destination_suffix: null,
+  last_health_runtime_source: null,
+  last_health_tenant_id: null,
+  last_health_destination_suffix: null,
   last_skip_reason: null
 };
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
@@ -1155,41 +1170,8 @@ function credentialPayloadFromConnection(record) {
 function connectionRuntimeFromRecord(record) {
   const channel = cleanChannel(record && record.channel);
   const tenantId = cleanTenantId(record && record.tenant_id);
-  const runtimeEligible = record && (
-    record.status === "connected" ||
-    (record.protected_legacy && record.status === "needs_attention")
-  );
+  const runtimeEligible = record && record.status === "connected" && !record.protected_legacy;
   if (!tenantId || !channel || !runtimeEligible) return null;
-  if (record.protected_legacy) {
-    const legacyRuntime = {
-      tenantId,
-      tenant_id: tenantId,
-      channel,
-      source: "legacy"
-    };
-    if (channel === "whatsapp") {
-      legacyRuntime.phoneNumberId = cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240);
-      legacyRuntime.phone_number_id = legacyRuntime.phoneNumberId;
-      legacyRuntime.whatsappBusinessAccountId = cleanRuntimeText(
-        record.whatsapp_business_account_id || META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-        240
-      );
-      legacyRuntime.whatsapp_business_account_id = legacyRuntime.whatsappBusinessAccountId;
-      legacyRuntime.accessToken = WA_TOKEN;
-    } else if (channel === "instagram") {
-      legacyRuntime.instagramUserId = cleanRuntimeText(record.instagram_user_id || IG_SEND_ID || IG_USER_ID, 240);
-      legacyRuntime.instagram_user_id = legacyRuntime.instagramUserId;
-      legacyRuntime.pageId = cleanRuntimeText(record.page_id, 240);
-      legacyRuntime.page_id = legacyRuntime.pageId;
-      legacyRuntime.accessToken = IG_ACCESS_TOKEN;
-    } else if (channel === "messenger") {
-      legacyRuntime.pageId = cleanRuntimeText(record.page_id || MESSENGER_PAGE_ID, 240);
-      legacyRuntime.page_id = legacyRuntime.pageId;
-      legacyRuntime.accessToken = MESSENGER_PAGE_ACCESS_TOKEN;
-    }
-    legacyRuntime.access_token = legacyRuntime.accessToken;
-    return legacyRuntime.accessToken ? legacyRuntime : null;
-  }
   const credential = credentialPayloadFromConnection(record);
   const accessToken = cleanRuntimeText(credential && credential.access_token, 4096);
     if (channel === "whatsapp") {
@@ -1254,60 +1236,12 @@ async function loadChannelRuntimeRows(force) {
   const now = Date.now();
   if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < 15000) return channelRuntimeCache;
   const rows = [];
-  if (PHONE_NUMBER_ID && WA_TOKEN) {
-    rows.push({
-      tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-      tenant_id: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-      channel: "whatsapp",
-      phoneNumberId: PHONE_NUMBER_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      whatsappBusinessAccountId: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-      whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-      accessToken: WA_TOKEN,
-      access_token: WA_TOKEN,
-      source: "environment"
-    });
-  }
-  if (IG_ACCESS_TOKEN && (IG_SEND_ID || IG_USER_ID)) {
-    rows.push({
-      tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-      tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-      channel: "instagram",
-      instagramUserId: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
-      instagram_user_id: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
-      accessToken: IG_ACCESS_TOKEN,
-      access_token: IG_ACCESS_TOKEN,
-      source: "environment"
-    });
-  }
-  if (MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID) {
-    rows.push({
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
-      channel: "messenger",
-      pageId: cleanRuntimeText(MESSENGER_PAGE_ID, 240),
-      page_id: cleanRuntimeText(MESSENGER_PAGE_ID, 240),
-      accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
-      access_token: MESSENGER_PAGE_ACCESS_TOKEN,
-      source: "environment"
-    });
-  }
   if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionStore && typeof channelConnectionStore.listAll === "function") {
     try {
       const stored = await channelConnectionStore.listAll();
       (Array.isArray(stored) ? stored : []).forEach(function (record) {
         const runtime = connectionRuntimeFromRecord(record);
-        const ravInstagramLoginWins =
-          RAV_INSTAGRAM_LOGIN_OVERRIDE &&
-          IG_ACCESS_TOKEN &&
-          (IG_SEND_ID || IG_USER_ID) &&
-          runtime &&
-          runtime.channel === "instagram" &&
-          [runtime.instagramUserId, runtime.instagram_user_id]
-            .filter(Boolean)
-            .map(String)
-            .includes(String(IG_SEND_ID || IG_USER_ID));
-        if (runtime && !ravInstagramLoginWins) rows.push(runtime);
+        if (runtime) rows.push(runtime);
       });
     } catch (error) {
       log("warn", "channel_runtime_load_failed", { error: error.message });
@@ -1338,11 +1272,7 @@ async function loadChannelRuntimeRows(force) {
             });
             return;
           }
-          // Within one tenant, the encrypted OAuth connection is newer and
-          // safer than an environment fallback.
-          if (!existing || existing.source !== "channel_connection" || runtime.source === "channel_connection") {
-            byInstagramDestination.set(key, runtime);
-          }
+          if (!existing) byInstagramDestination.set(key, runtime);
         });
     }
     if (runtime.channel === "messenger" && (runtime.pageId || runtime.page_id)) {
@@ -1362,13 +1292,14 @@ async function loadChannelRuntimeRows(force) {
 
 function rememberConversationRuntime(userId, runtime) {
   const channel = cleanChannel(runtime && runtime.channel) || conversationChannel(userId);
-  if (!runtime || !channel) return null;
+  const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
+  if (!runtime || !channel || !tenantId) return null;
   const normalized = {
-    tenantId: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
-    tenant_id: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
+    tenantId,
+    tenant_id: tenantId,
     channel,
-    phoneNumberId: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
-    phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
+    phoneNumberId: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id, 240),
+    phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id, 240),
     instagramUserId: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
     instagram_user_id: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
     instagramLoginType: cleanRuntimeText(runtime.instagramLoginType || runtime.instagram_login_type, 40),
@@ -1381,11 +1312,7 @@ function rememberConversationRuntime(userId, runtime) {
   };
   const key = conversationRuntimeKey(userId, normalized.tenantId);
   if (!key) return null;
-  if (!normalized.accessToken) {
-    if (channel === "whatsapp") normalized.accessToken = normalized.access_token = WA_TOKEN;
-    if (channel === "instagram") normalized.accessToken = normalized.access_token = IG_ACCESS_TOKEN;
-    if (channel === "messenger") normalized.accessToken = normalized.access_token = MESSENGER_PAGE_ACCESS_TOKEN;
-  }
+  if (!normalized.accessToken) return null;
   conversationOutboundRuntime.set(key, normalized);
   if (conversationOutboundRuntime.size > 20000) {
     const oldest = conversationOutboundRuntime.keys().next().value;
@@ -1399,23 +1326,7 @@ async function resolveChannelRuntimeForTenant(tenantId, channel) {
   const clean = cleanChannel(channel);
   if (!cleanTenant || !clean) return null;
   const cache = await loadChannelRuntimeRows(false);
-  const exact = cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
-  // RAV existed before customer-access v2, so historic conversations use the
-  // default tenant while the real OAuth connections belong to the first v2
-  // customer tenant. Prefer that encrypted connection over a stale environment
-  // credential, but only for the explicitly configured RAV bootstrap pair.
-  const ravAliasTenant = cleanTenantId(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID);
-  const aliasTenant = ravAliasTenant && ravAliasTenant !== DEFAULT_TENANT_ID
-    ? (cleanTenant === DEFAULT_TENANT_ID
-        ? ravAliasTenant
-        : cleanTenant === ravAliasTenant ? DEFAULT_TENANT_ID : "")
-    : "";
-  const alias = aliasTenant
-    ? cache.by_tenant_channel.get(runtimeTenantChannelKey(aliasTenant, clean)) || null
-    : null;
-  if (exact && exact.source === "channel_connection") return exact;
-  if (alias && alias.source === "channel_connection") return alias;
-  return exact || alias || null;
+  return cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
 }
 
 async function resolveWhatsAppRuntimeForTenant(tenantId) {
@@ -1441,13 +1352,10 @@ async function resolveWhatsAppDestinationRuntime(webhookValue) {
       };
     }
   }
-  const legacy = validateWhatsAppDestination(TENANT_CONFIG, webhookValue, { requireMetadata: process.env.NODE_ENV === "production" });
-  if (!legacy.ok) return legacy;
-  return Object.assign({}, legacy, {
-    accessToken: WA_TOKEN,
-    access_token: WA_TOKEN,
-    source: "legacy_destination"
-  });
+  return {
+    ok: false,
+    reason: incomingPhoneNumberId ? "tenant_runtime_not_configured" : "missing_destination_metadata"
+  };
 }
 
 async function resolveInstagramDestinationRuntime(entry, events) {
@@ -1504,40 +1412,7 @@ async function outboundRuntimeForConversation(userId, options) {
     const byTenant = await resolveChannelRuntimeForTenant(supplied.tenantId, channel);
     if (byTenant) return rememberConversationRuntime(userId, byTenant);
   }
-  if (channel === "instagram") {
-    return {
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
-      channel,
-      instagramUserId: IG_SEND_ID || IG_USER_ID,
-      instagram_user_id: IG_SEND_ID || IG_USER_ID,
-      accessToken: IG_ACCESS_TOKEN,
-      access_token: IG_ACCESS_TOKEN,
-      source: "environment"
-    };
-  }
-  if (channel === "messenger") {
-    return {
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
-      channel,
-      pageId: MESSENGER_PAGE_ID,
-      page_id: MESSENGER_PAGE_ID,
-      accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
-      access_token: MESSENGER_PAGE_ACCESS_TOKEN,
-      source: "environment"
-    };
-  }
-  return {
-    tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-    tenant_id: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-    channel: "whatsapp",
-    phoneNumberId: PHONE_NUMBER_ID,
-    phone_number_id: PHONE_NUMBER_ID,
-    accessToken: WA_TOKEN,
-    access_token: WA_TOKEN,
-    source: "environment"
-  };
+  return null;
 }
 
 function instagramGraphOriginForRuntime(runtime) {
@@ -1683,7 +1558,7 @@ async function supabaseInsert(rec) {
     };
     if (SUPABASE_TENANT_COLUMNS_ENABLED) {
       payload.tenant_id = rec.tenantId || DEFAULT_TENANT_ID;
-      payload.phone_number_id = rec.phoneNumberId || PHONE_NUMBER_ID || null;
+      payload.phone_number_id = rec.phoneNumberId || null;
       payload.channel = rec.channel || conversationChannel(rec.userId);
     }
     if (rec.eval !== undefined) payload.eval = rec.eval;
@@ -1699,7 +1574,7 @@ async function supabaseInsertStrict(rec) {
   };
   if (SUPABASE_TENANT_COLUMNS_ENABLED) {
     payload.tenant_id = rec.tenantId || DEFAULT_TENANT_ID;
-    payload.phone_number_id = rec.phoneNumberId || PHONE_NUMBER_ID || null;
+    payload.phone_number_id = rec.phoneNumberId || null;
     payload.channel = rec.channel || conversationChannel(rec.userId);
   }
   if (rec.eval !== undefined) payload.eval = rec.eval;
@@ -2228,7 +2103,7 @@ function recordCustomerMemory(userId, memory, tenantId) {
   const rec = {
     ts: new Date().toISOString(),
     tenantId: memoryTenantId,
-    phoneNumberId: cleanRuntimeText(remembered && remembered.phoneNumberId, 240) || PHONE_NUMBER_ID || null,
+    phoneNumberId: cleanRuntimeText(remembered && remembered.phoneNumberId, 240) || null,
     channel: conversationChannel(cleanUserId),
     userId: cleanUserId,
     userMessage: "",
@@ -2343,7 +2218,7 @@ async function refreshInstagramProfile(userId, tenantId) {
   if (conversationChannel(cleanUserId) !== "instagram") return null;
   const explicitTenantId = cleanTenantId(tenantId);
   const runtime = await outboundRuntimeForConversation(cleanUserId, explicitTenantId ? { tenant_id: explicitTenantId } : undefined);
-  const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
+  const accessToken = runtime && runtime.accessToken;
   if (!accessToken) return null;
   const profileTenantId = explicitTenantId || cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
   const profileKey = tenantConversationStateKey(cleanUserId, profileTenantId);
@@ -2468,7 +2343,6 @@ function recordTurn(userId, userMessage, botReply, status, meta) {
       DEFAULT_TENANT_ID;
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
-      PHONE_NUMBER_ID ||
       null;
     const rec = {
       ts: new Date().toISOString(),
@@ -2502,7 +2376,6 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
       DEFAULT_TENANT_ID;
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
-      PHONE_NUMBER_ID ||
       null;
     const rec = {
       ts: new Date().toISOString(),
@@ -3568,10 +3441,10 @@ async function sendText(to, text, options) {
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
-      const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const sendId = runtime && runtime.instagramUserId;
       const graphOrigin = instagramGraphOriginForRuntime(runtime);
-      instagramRuntimeState.last_send_runtime_source = runtime && runtime.source || "environment";
+      instagramRuntimeState.last_send_runtime_source = runtime && runtime.source || null;
       instagramRuntimeState.last_send_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
       instagramRuntimeState.last_send_destination_suffix = String(sendId || "").slice(-8) || null;
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
@@ -3582,34 +3455,39 @@ async function sendText(to, text, options) {
       );
       instagramRuntimeState.outbound_messages++;
       instagramRuntimeState.last_outbound_at = new Date().toISOString();
-      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
+      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
       return true;
     }
     if (recipient.channel === "messenger") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || MESSENGER_PAGE_ACCESS_TOKEN;
-      const pageId = runtime && runtime.pageId || MESSENGER_PAGE_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const pageId = runtime && runtime.pageId;
+      messengerRuntimeState.last_send_runtime_source = runtime && runtime.source || null;
+      messengerRuntimeState.last_send_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
+      messengerRuntimeState.last_send_destination_suffix = String(pageId || "").slice(-8) || null;
       if (!accessToken || !pageId) throw new Error("Messenger messaging is not configured");
       await axios.post(
         `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${pageId}/messages`,
         { recipient: { id: recipient.id }, messaging_type: "RESPONSE", message: { text: String(text || "").slice(0, 2000) } },
         { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      console.log(`Messenger text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
+      messengerRuntimeState.outbound_messages++;
+      messengerRuntimeState.last_outbound_at = new Date().toISOString();
+      console.log(`Messenger text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
-    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
-    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
     whatsappRuntimeState.outbound_messages++;
     whatsappRuntimeState.last_outbound_at = new Date().toISOString();
-    console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
+    console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
     return true;
   } catch (err) {
     if (recipient.channel === "instagram") {
@@ -3622,6 +3500,12 @@ async function sendText(to, text, options) {
       instagramRuntimeState.last_error_message = String(metaError.message || err.message || "instagram_send_failed")
         .replace(/(?:EA[A-Za-z0-9]{20,}|IG[A-Za-z0-9]{20,})/g, "[redacted]")
         .slice(0, 300);
+    }
+    if (recipient.channel === "messenger") {
+      const metaError = err.response?.data?.error || {};
+      messengerRuntimeState.last_error_at = new Date().toISOString();
+      messengerRuntimeState.last_error_stage = "send_text";
+      messengerRuntimeState.last_error_code = metaError.code || err.code || null;
     }
     if (recipient.channel === "whatsapp") {
       const metaError = err.response?.data?.error || {};
@@ -3684,13 +3568,17 @@ function buildTemplatePayload(to, templateName, params) {
   };
 }
 
-async function sendTemplate(to, templateName, params) {
+async function sendTemplate(to, templateName, params, options) {
   const payload = buildTemplatePayload(to, templateName, params);
   try {
+    const runtime = await outboundRuntimeForConversation(to, options);
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
+    if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       payload,
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
     console.log(`Template ${templateName} sent to ${maskedIdentifier(to)}`);
     return { ok: true, meta: response.data };
@@ -3706,8 +3594,8 @@ async function sendImage(to, imageUrl, caption, options) {
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
-      const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const sendId = runtime && runtime.instagramUserId;
       const graphOrigin = instagramGraphOriginForRuntime(runtime);
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
@@ -3720,8 +3608,8 @@ async function sendImage(to, imageUrl, caption, options) {
     }
     if (recipient.channel === "messenger") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || MESSENGER_PAGE_ACCESS_TOKEN;
-      const pageId = runtime && runtime.pageId || MESSENGER_PAGE_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const pageId = runtime && runtime.pageId;
       if (!accessToken || !pageId) throw new Error("Messenger messaging is not configured");
       await axios.post(
         `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${pageId}/messages`,
@@ -3736,11 +3624,11 @@ async function sendImage(to, imageUrl, caption, options) {
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
-    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
-    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "image", image: { link: imageUrl, caption } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
@@ -3779,7 +3667,7 @@ function extractOpenAIText(data) {
 }
 
 async function downloadWhatsAppMediaForMultimodal(media, context) {
-  const accessToken = String(context && context.access_token || WA_TOKEN || "").trim();
+  const accessToken = String(context && context.access_token || "").trim();
   if (!accessToken) throw new Error("wa_token_missing");
   const metadata = await axios.get(
     `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(media.media_id)}`,
@@ -3882,11 +3770,11 @@ async function sendLocation(to, lat, lng, name, address, options) {
   }
   try {
     const runtime = await outboundRuntimeForConversation(to, options);
-    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
-    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to, type: "location", location: { latitude: lat, longitude: lng, name, address } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
@@ -4391,8 +4279,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     tenantId: cleanTenantId(conversationMeta.tenant_id) || DEFAULT_TENANT_ID,
     tenant_id: cleanTenantId(conversationMeta.tenant_id) || DEFAULT_TENANT_ID,
     channel: conversationChannel(userId),
-    phoneNumberId: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
-    phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
+    phoneNumberId: cleanRuntimeText(conversationMeta.phone_number_id, 240),
+    phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240),
     instagramUserId: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
     instagram_user_id: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
     instagramLoginType: cleanRuntimeText(conversationMeta.instagram_login_type, 40),
@@ -4808,9 +4696,8 @@ app.post("/webhook", async (req, res) => {
     if (!destination.ok) {
       whatsappRuntimeState.last_skip_reason = destination.reason || "destination_rejected";
       log("warn", "whatsapp_destination_rejected", {
-        tenant_id: DEFAULT_TENANT_ID,
         reason: destination.reason,
-        configured_phone_number_id: PHONE_NUMBER_ID ? "configured" : "missing"
+        incoming_phone_number_suffix: String(value && value.metadata && value.metadata.phone_number_id || "").slice(-8) || null
       });
       return;
     }
@@ -4909,10 +4796,10 @@ async function instagramConnectionHealth() {
   const checkedAt = new Date().toISOString();
   const tenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
   const runtime = await resolveChannelRuntimeForTenant(tenantId, "instagram");
-  const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
-  const instagramUserId = runtime && runtime.instagramUserId || IG_USER_ID;
+  const accessToken = runtime && runtime.accessToken;
+  const instagramUserId = runtime && runtime.instagramUserId;
   const graphOrigin = instagramGraphOriginForRuntime(runtime);
-  instagramRuntimeState.last_health_runtime_source = runtime && runtime.source || "environment";
+  instagramRuntimeState.last_health_runtime_source = runtime && runtime.source || null;
   instagramRuntimeState.last_health_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
   instagramRuntimeState.last_health_destination_suffix = String(instagramUserId || "").slice(-8) || null;
   if (!accessToken || !instagramUserId) {
@@ -4925,6 +4812,25 @@ async function instagramConnectionHealth() {
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000
     });
+    const subscription = await axios.get(
+      `${graphOrigin}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramUserId)}/subscribed_apps`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 10000
+      }
+    );
+    const expectedAppIds = new Set([META_APP_ID, INSTAGRAM_LOGIN_APP_ID].filter(Boolean).map(String));
+    const appSubscribed = (subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : [])
+      .some(function (item) { return expectedAppIds.has(String(item && item.id || "")); });
+    if (!appSubscribed) {
+      return {
+        ok: false,
+        configured: true,
+        status: "webhook_not_subscribed",
+        checked_at: checkedAt,
+        runtime: { ...instagramRuntimeState }
+      };
+    }
     const lastErrorAt = Date.parse(instagramRuntimeState.last_error_at || "") || 0;
     const lastOutboundAt = Date.parse(instagramRuntimeState.last_outbound_at || "") || 0;
     const outboundBlocked = !!instagramRuntimeState.last_error_code && lastErrorAt > lastOutboundAt;
@@ -4959,17 +4865,65 @@ app.get("/instagram/health", async (req, res) => {
   res.status(health.ok ? 200 : 503).json(health);
 });
 
+async function messengerConnectionHealth() {
+  const checkedAt = new Date().toISOString();
+  const tenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
+  const runtime = await resolveChannelRuntimeForTenant(tenantId, "messenger");
+  const accessToken = runtime && runtime.accessToken;
+  const pageId = runtime && runtime.pageId;
+  messengerRuntimeState.last_health_runtime_source = runtime && runtime.source || null;
+  messengerRuntimeState.last_health_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
+  messengerRuntimeState.last_health_destination_suffix = String(pageId || "").slice(-8) || null;
+  if (!accessToken || !pageId) {
+    return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt, runtime: { ...messengerRuntimeState } };
+  }
+  try {
+    await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}`, {
+      params: { fields: "id,name" },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+    const subscription = await axios.get(
+      `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 10000 }
+    );
+    const appSubscribed = !!META_APP_ID && (
+      subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : []
+    ).some(function (item) { return String(item && item.id || "") === String(META_APP_ID); });
+    if (!appSubscribed) {
+      return { ok: false, configured: true, status: "webhook_not_subscribed", checked_at: checkedAt, runtime: { ...messengerRuntimeState } };
+    }
+    return { ok: true, configured: true, status: "connected", checked_at: checkedAt, runtime: { ...messengerRuntimeState } };
+  } catch (err) {
+    const metaError = err.response?.data?.error || {};
+    return {
+      ok: false,
+      configured: true,
+      status: "api_error",
+      error_code: metaError.code || null,
+      error_type: metaError.type || "request_failed",
+      checked_at: checkedAt,
+      runtime: { ...messengerRuntimeState }
+    };
+  }
+}
+
+app.get("/messenger/health", async (req, res) => {
+  const health = await messengerConnectionHealth();
+  res.status(health.ok ? 200 : 503).json(health);
+});
+
 app.get("/whatsapp/health", async (req, res) => {
   const checkedAt = new Date().toISOString();
   const bootstrap = await channelConnectionBootstrapPromise;
   const runtime = await resolveWhatsAppRuntimeForTenant(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
-  const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+  const phoneNumberId = runtime && runtime.phoneNumberId;
   const whatsappBusinessAccountId = runtime && (
     runtime.whatsappBusinessAccountId || runtime.whatsapp_business_account_id
-  ) || META_WHATSAPP_BUSINESS_ACCOUNT_ID;
-  const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+  );
+  const accessToken = runtime && runtime.accessToken;
   const safeRuntime = Object.assign({}, whatsappRuntimeState, {
-    runtime_source: runtime && runtime.source || "environment",
+    runtime_source: runtime && runtime.source || null,
     tenant_id: cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null,
     phone_number_suffix: String(phoneNumberId || "").slice(-8) || null,
     waba_suffix: String(whatsappBusinessAccountId || "").slice(-8) || null,
@@ -5135,16 +5089,6 @@ function instagramEventsFromEntry(entry) {
   return events;
 }
 
-function instagramEntryMatchesLegacyRuntime(entry, events) {
-  const expected = [IG_USER_ID, IG_SEND_ID].filter(Boolean).map(String);
-  if (!expected.length) return false;
-  const destinations = [entry && entry.id];
-  (events || []).forEach(function (event) {
-    destinations.push(event && event.recipient && event.recipient.id);
-  });
-  return destinations.filter(Boolean).map(String).some(function (id) { return expected.includes(id); });
-}
-
 app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.webhook_requests++;
   instagramRuntimeState.last_webhook_at = new Date().toISOString();
@@ -5166,19 +5110,7 @@ app.post("/instagram/webhook", async (req, res) => {
     }
     for (const entry of req.body?.entry || []) {
       const events = instagramEventsFromEntry(entry);
-      let destination = await resolveInstagramDestinationRuntime(entry, events);
-      if (!destination && instagramEntryMatchesLegacyRuntime(entry, events)) {
-        destination = {
-          tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-          tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-          channel: "instagram",
-          instagramUserId: IG_SEND_ID || IG_USER_ID,
-          instagram_user_id: IG_SEND_ID || IG_USER_ID,
-          accessToken: IG_ACCESS_TOKEN,
-          access_token: IG_ACCESS_TOKEN,
-          source: "legacy_destination"
-        };
-      }
+      const destination = await resolveInstagramDestinationRuntime(entry, events);
       if (!destination) {
         instagramRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
         log("info", "instagram_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
@@ -5196,7 +5128,7 @@ app.post("/instagram/webhook", async (req, res) => {
           instagramRuntimeState.last_skip_reason = "missing_sender";
           continue;
         }
-        if (event.message?.is_echo || String(event.sender.id) === String(IG_USER_ID)) {
+        if (event.message?.is_echo || String(event.sender.id) === String(destination.instagramUserId)) {
           instagramRuntimeState.last_skip_reason = "echo_or_business_sender";
           continue;
         }
@@ -5252,25 +5184,28 @@ app.get("/messenger/webhook", (req, res) => {
 });
 
 app.post("/messenger/webhook", async (req, res) => {
-  if (!validMetaWebhookSignature(req, [META_APP_SECRET])) return res.sendStatus(401);
+  messengerRuntimeState.webhook_requests++;
+  messengerRuntimeState.last_webhook_at = new Date().toISOString();
+  messengerRuntimeState.last_webhook_object = String(req.body?.object || "missing").slice(0, 40);
+  const suppliedSignature = String(req.get("x-hub-signature-256") || "");
+  messengerRuntimeState.last_signature_present = !!suppliedSignature;
+  messengerRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
+  messengerRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
+  if (!validMetaWebhookSignature(req, [META_APP_SECRET])) {
+    messengerRuntimeState.last_error_at = new Date().toISOString();
+    messengerRuntimeState.last_error_stage = "webhook_signature";
+    return res.sendStatus(401);
+  }
   res.sendStatus(200);
   try {
-    if (req.body?.object !== "page") return;
+    if (req.body?.object !== "page") {
+      messengerRuntimeState.last_skip_reason = "unsupported_object";
+      return;
+    }
     for (const entry of req.body?.entry || []) {
-      let destination = await resolveMessengerDestinationRuntime(entry);
-      if (!destination && MESSENGER_PAGE_ID && String(entry && entry.id || "") === String(MESSENGER_PAGE_ID)) {
-        destination = {
-          tenantId: DEFAULT_TENANT_ID,
-          tenant_id: DEFAULT_TENANT_ID,
-          channel: "messenger",
-          pageId: MESSENGER_PAGE_ID,
-          page_id: MESSENGER_PAGE_ID,
-          accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
-          access_token: MESSENGER_PAGE_ACCESS_TOKEN,
-          source: "legacy_destination"
-        };
-      }
+      const destination = await resolveMessengerDestinationRuntime(entry);
       if (!destination) {
+        messengerRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
         log("info", "messenger_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
         continue;
       }
@@ -5278,6 +5213,9 @@ app.post("/messenger/webhook", async (req, res) => {
         if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
         const userId = `ms:${event.sender.id}`;
         rememberConversationRuntime(userId, destination);
+        messengerRuntimeState.inbound_messages++;
+        messengerRuntimeState.last_inbound_at = new Date().toISOString();
+        messengerRuntimeState.last_skip_reason = null;
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ms:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
@@ -5313,6 +5251,8 @@ app.post("/messenger/webhook", async (req, res) => {
       }
     }
   } catch (err) {
+    messengerRuntimeState.last_error_at = new Date().toISOString();
+    messengerRuntimeState.last_error_stage = "webhook_processing";
     console.error("Error processing Messenger message:", err.response?.data || err.message);
   }
 });
@@ -6541,6 +6481,7 @@ function setupReviewFailure(code, status) {
 
 function setupWantsWhatsApp(answers) {
   const meta = answers && answers.meta || {};
+  if (meta.whatsapp_integration_intent === "no") return false;
   return !!(meta.whatsapp_number || meta.whatsapp_integration_intent === "yes" || meta.whatsapp_integration_status === "requested");
 }
 
@@ -8994,31 +8935,27 @@ function customerPanelCapabilities(role) {
 }
 
 function customerPanelWhatsappSetup() {
-  const integration = currentRavIntegration();
-  const ready = integration.connection.real_number_active;
   return {
-    status: ready ? "ready" : "pending",
-    label: ready ? "WhatsApp en funcionamiento" : "Meta aprobada; falta activar el numero real",
-    app_review_approved: integration.app_review.approved,
-    real_number_active: integration.connection.real_number_active,
-    target_display_phone: integration.target_display_phone,
-    integration_status: integration.status
+    status: "pending",
+    label: "Configuracion de WhatsApp pendiente",
+    app_review_approved: false,
+    real_number_active: false,
+    target_display_phone: null,
+    integration_status: "pending"
   };
 }
 
 function customerPanelInstagramSetup() {
-  const ready = !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID);
   return {
-    status: ready ? "ready" : "pending",
-    label: ready ? "Instagram conectado" : "Configuracion de Instagram pendiente"
+    status: "pending",
+    label: "Configuracion de Instagram pendiente"
   };
 }
 
 function customerPanelMessengerSetup() {
-  const ready = !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID);
   return {
-    status: ready ? "ready" : "pending",
-    label: ready ? "Messenger conectado" : "Configuracion de Messenger pendiente"
+    status: "pending",
+    label: "Configuracion de Messenger pendiente"
   };
 }
 
@@ -13254,8 +13191,9 @@ app.post("/admin/template-test", async (req, res) => {
       res.json({ ok: true, dry_run: true, templateName, payload });
       return;
     }
-    const result = await sendTemplate(userId, templateName, params);
-    recordAdminEvent(userId, "admin_send_template", "[Plantilla] " + templateName, result.ok ? "ok" : "error", false);
+    const tenantMeta = { tenant_id: customerTenantForAuth(dashboardAuth(req)) || DEFAULT_TENANT_ID };
+    const result = await sendTemplate(userId, templateName, params, tenantMeta);
+    recordAdminEvent(userId, "admin_send_template", "[Plantilla] " + templateName, result.ok ? "ok" : "error", false, tenantMeta);
     res.status(result.ok ? 200 : 502).json({ ok: result.ok, templateName, userId, result });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
@@ -14550,6 +14488,10 @@ async function buildAdminHealthResult() {
   const dercoAppointmentRecord = await loadClientOnboarding(false, DERCO_TENANT_ID).catch(function () { return null; });
   const dercoAppointmentChannels = await setupReviewChannels(DERCO_TENANT_ID).catch(function () { return []; });
   const dercoAppointmentIntegrations = await appointmentIntegrationsForRecord(dercoAppointmentRecord, DERCO_TENANT_ID, dercoAppointmentChannels);
+  const channelHealthTenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
+  const whatsappHealthRuntime = await resolveChannelRuntimeForTenant(channelHealthTenantId, "whatsapp");
+  const instagramHealthRuntime = await resolveChannelRuntimeForTenant(channelHealthTenantId, "instagram");
+  const messengerHealthRuntime = await resolveChannelRuntimeForTenant(channelHealthTenantId, "messenger");
   const result = {
     bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
     env: {
@@ -14639,21 +14581,26 @@ async function buildAdminHealthResult() {
         ? (NEXFORIA_COMMERCE_SERVICE_SECRET.length >= 32 ? "ok" : "missing_commerce_service_secret")
         : "missing_pairing_secret")
     : "missing_install_url";
-  // Probar Meta WhatsApp API (verifica que el token siga válido)
-  try {
-    const r = await axios.get(`https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}`, {
-      headers: { Authorization: `Bearer ${WA_TOKEN}` },
-      timeout: 5000
-    });
-    result.checks.meta_whatsapp = r.status === 200 ? "ok" : `status_${r.status}`;
-  } catch (e) {
-    result.checks.meta_whatsapp = `error: ${e.response?.data?.error?.message || e.message}`;
-  }
-  if (IG_ACCESS_TOKEN && IG_USER_ID) {
+  // Meta readiness is based only on each tenant's encrypted connection record.
+  if (whatsappHealthRuntime && whatsappHealthRuntime.phoneNumberId && whatsappHealthRuntime.accessToken) {
     try {
-      const r = await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_USER_ID}`, {
+      const r = await axios.get(`https://graph.facebook.com/${META_GRAPH_VERSION}/${whatsappHealthRuntime.phoneNumberId}`, {
+        headers: { Authorization: `Bearer ${whatsappHealthRuntime.accessToken}` },
+        timeout: 5000
+      });
+      result.checks.meta_whatsapp = r.status === 200 ? "ok" : `status_${r.status}`;
+    } catch (e) {
+      result.checks.meta_whatsapp = `error: ${e.response?.data?.error?.message || e.message}`;
+    }
+  } else {
+    result.checks.meta_whatsapp = "not_configured";
+  }
+  if (instagramHealthRuntime && instagramHealthRuntime.instagramUserId && instagramHealthRuntime.accessToken) {
+    try {
+      const graphOrigin = instagramGraphOriginForRuntime(instagramHealthRuntime);
+      const r = await axios.get(`${graphOrigin}/${META_GRAPH_VERSION}/${instagramHealthRuntime.instagramUserId}`, {
         params: { fields: "id,username" },
-        headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+        headers: { Authorization: `Bearer ${instagramHealthRuntime.accessToken}` },
         timeout: 5000
       });
       result.checks.meta_instagram = r.status === 200 ? "ok" : `status_${r.status}`;
@@ -14663,11 +14610,11 @@ async function buildAdminHealthResult() {
   } else {
     result.checks.meta_instagram = "not_configured";
   }
-  if (MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID) {
+  if (messengerHealthRuntime && messengerHealthRuntime.pageId && messengerHealthRuntime.accessToken) {
     try {
-      const r = await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}`, {
+      const r = await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${messengerHealthRuntime.pageId}`, {
         params: { fields: "id,name" },
-        headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}` },
+        headers: { Authorization: `Bearer ${messengerHealthRuntime.accessToken}` },
         timeout: 5000
       });
       result.checks.meta_messenger = r.status === 200 ? "ok" : `status_${r.status}`;
@@ -14694,8 +14641,7 @@ async function buildAdminHealthResult() {
     : appointmentStorageHealth.error || "not_configured";
   const blockers = [];
   if (!result.env.anthropic_key_present) blockers.push("missing_anthropic_key");
-  if (!result.env.wa_token_present) blockers.push("missing_wa_token");
-  if (!PHONE_NUMBER_ID) blockers.push("missing_phone_number_id");
+  if (!whatsappHealthRuntime) blockers.push("missing_tenant_whatsapp_connection");
   if (result.checks.meta_whatsapp !== "ok") blockers.push("meta_whatsapp_not_ok");
   if (result.checks.shopify_storefront !== "ok") blockers.push("shopify_storefront_not_ok");
   if (result.checks.shopify_app_install !== "ok") blockers.push("shopify_app_install_not_ready");
@@ -15256,11 +15202,11 @@ app.get("/admin/test-search", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`RAV-Bot ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
-  console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
+  console.log("Meta channel delivery: encrypted tenant connections only");
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
-  if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
+  if (RENDER_SELF_HEALTH_URL) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;
     const runSelfCheck = async function () {
       try {

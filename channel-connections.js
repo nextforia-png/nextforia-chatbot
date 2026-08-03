@@ -412,7 +412,7 @@ class MetaChannelProvider {
     this.appId = cleanText(options.appId, 160);
     this.appSecret = cleanText(options.appSecret, 400);
     this.whatsappConfigId = cleanText(options.whatsappConfigId, 240);
-    this.graphVersion = cleanText(options.graphVersion, 20) || "v23.0";
+    this.graphVersion = cleanText(options.graphVersion, 20) || "v26.0";
     this.graphOrigin = String(options.graphOrigin || "https://graph.facebook.com").replace(/\/$/, "");
     this.dialogOrigin = String(options.dialogOrigin || "https://www.facebook.com").replace(/\/$/, "");
     this.redirectUri = cleanText(options.redirectUri, 500);

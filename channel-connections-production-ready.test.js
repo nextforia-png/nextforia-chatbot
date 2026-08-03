@@ -38,6 +38,16 @@ function waitForServer(child, port) {
   });
 }
 
+function postSignedWebhook(base, route, secret, body) {
+  const raw = JSON.stringify(body);
+  const signature = "sha256=" + crypto.createHmac("sha256", secret).update(raw).digest("hex");
+  return fetch(base + route, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-hub-signature-256": signature },
+    body: raw
+  });
+}
+
 (async function run() {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   assert.match(source, /runStartupProtectionDiagnostics\(\{[\s\S]*?store: channelConnectionStore,[\s\S]*?env: process\.env,[\s\S]*?log/);
@@ -57,15 +67,17 @@ function waitForServer(child, port) {
   assert.match(source, /instagramRuntimeState\.last_error_code = metaError\.code \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_subcode = metaError\.error_subcode \|\| null/);
   assert.match(source, /instagramRuntimeState\.last_error_type = metaError\.type \|\| err\.code \|\| null/);
-  assert.match(source, /record\.protected_legacy && record\.status === "needs_attention"/);
-  assert.match(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
+  assert.match(source, /record\.status === "connected" && !record\.protected_legacy/);
+  assert.doesNotMatch(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
   assert.match(source, /function customerTenantForAuth\(auth\)[\s\S]*?tenantId === DEFAULT_TENANT_ID[\s\S]*?return CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
   assert.match(source, /function isRavTenantId\(tenantId\)[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
   assert.match(source, /handoffCustomerReply[\s\S]*?recordTurn\(/);
-  assert.match(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
-  assert.match(source, /const RAV_INSTAGRAM_LOGIN_OVERRIDE = process\.env\.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1"/);
-  assert.match(source, /const CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID =[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
-  assert.match(source, /const ravInstagramLoginWins =[\s\S]*?runtime\.channel === "instagram"[\s\S]*?\.includes\(String\(IG_SEND_ID \|\| IG_USER_ID\)\)[\s\S]*?if \(runtime && !ravInstagramLoginWins\) rows\.push\(runtime\)/);
+  assert.doesNotMatch(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
+  assert.doesNotMatch(source, /source: "environment"/);
+  assert.doesNotMatch(source, /source: "legacy_destination"/);
+  assert.doesNotMatch(source, /instagramEntryMatchesLegacyRuntime/);
+  assert.doesNotMatch(source, /runtime && runtime\.accessToken \|\| (?:WA_TOKEN|IG_ACCESS_TOKEN|MESSENGER_PAGE_ACCESS_TOKEN)/);
+  assert.match(source, /async function outboundRuntimeForConversation\(userId, options\)[\s\S]*?return null;\n}/);
   assert.match(source, /ambiguous_instagram_destination_ids/);
   assert.match(source, /instagram_asset_tenant_conflict/);
 
@@ -85,6 +97,13 @@ function waitForServer(child, port) {
       VERIFY_TOKEN: "channel-production-verify",
       WA_TOKEN: "channel-production-wa-legacy",
       PHONE_NUMBER_ID: "rav-phone-id",
+      META_APP_ID: "channel-production-meta-app",
+      META_APP_SECRET: "channel-production-meta-secret-value",
+      IG_ACCESS_TOKEN: "channel-production-instagram-env-token",
+      IG_USER_ID: "instagram-env-business-id",
+      IG_SEND_ID: "instagram-env-business-id",
+      MESSENGER_PAGE_ACCESS_TOKEN: "channel-production-messenger-env-token",
+      MESSENGER_PAGE_ID: "messenger-env-page-id",
       PUBLIC_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
       CUSTOMER_PANEL_BASE_URL: "https://rav-whatsapp-bot.onrender.com",
       ANTHROPIC_API_KEY: "channel-production-anthropic",
@@ -99,9 +118,36 @@ function waitForServer(child, port) {
   try {
     await waitForServer(child, port);
 
-    let response = await fetch(base + "/");
+    let response = await postSignedWebhook(base, "/webhook", "channel-production-meta-secret-value", {
+      object: "whatsapp_business_account",
+      entry: [{ changes: [{ value: {
+        metadata: { phone_number_id: "rav-phone-id" },
+        messages: [{ id: "wamid.environment-must-not-route", from: "573001112233", type: "text", text: { body: "No enrutar por ambiente" } }]
+      } }] }]
+    });
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("v326-instagram-conversation-delivery"));
+    response = await postSignedWebhook(base, "/instagram/webhook", "channel-production-meta-secret-value", {
+      object: "instagram",
+      entry: [{ id: "instagram-env-business-id", messaging: [{
+        sender: { id: "instagram-env-sender" },
+        recipient: { id: "instagram-env-business-id" },
+        message: { mid: "igmid.environment-must-not-route", text: "No enrutar por ambiente" }
+      }] }]
+    });
+    assert.strictEqual(response.status, 200);
+    response = await postSignedWebhook(base, "/messenger/webhook", "channel-production-meta-secret-value", {
+      object: "page",
+      entry: [{ id: "messenger-env-page-id", messaging: [{
+        sender: { id: "messenger-env-sender" },
+        recipient: { id: "messenger-env-page-id" },
+        message: { mid: "msmid.environment-must-not-route", text: "No enrutar por ambiente" }
+      }] }]
+    });
+    assert.strictEqual(response.status, 200);
+
+    response = await fetch(base + "/");
+    assert.strictEqual(response.status, 200);
+    assert((await response.text()).includes("v327-tenant-safe-meta-webhooks"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");
@@ -109,8 +155,12 @@ function waitForServer(child, port) {
     response = await fetch(base + "/whatsapp/health");
     assert.strictEqual(response.status, 503);
     const whatsappHealth = await response.json();
-    assert.strictEqual(whatsappHealth.configured, true);
-    assert.strictEqual(whatsappHealth.runtime.webhook_requests, 0);
+    assert.strictEqual(whatsappHealth.configured, false, "environment credentials must not configure WhatsApp runtime");
+    assert.strictEqual(whatsappHealth.status, "not_configured");
+    assert.strictEqual(whatsappHealth.runtime.runtime_source, null);
+    assert.strictEqual(whatsappHealth.runtime.webhook_requests, 1);
+    assert.strictEqual(whatsappHealth.runtime.inbound_messages, 0);
+    assert.strictEqual(whatsappHealth.runtime.last_skip_reason, "tenant_runtime_not_configured");
 
     response = await fetch(base + "/instagram/health");
     assert.strictEqual(response.status, 503);
@@ -119,6 +169,19 @@ function waitForServer(child, port) {
     assert.strictEqual(instagramHealth.runtime.last_error_code, null);
     assert.strictEqual(instagramHealth.runtime.last_error_subcode, null);
     assert.strictEqual(instagramHealth.runtime.last_error_type, null);
+    assert.strictEqual(instagramHealth.runtime.webhook_requests, 1);
+    assert.strictEqual(instagramHealth.runtime.inbound_messages, 0);
+    assert.strictEqual(instagramHealth.runtime.last_skip_reason, "tenant_runtime_not_configured");
+
+    response = await fetch(base + "/messenger/health");
+    assert.strictEqual(response.status, 503);
+    const messengerHealth = await response.json();
+    assert.strictEqual(messengerHealth.configured, false);
+    assert.strictEqual(messengerHealth.status, "not_configured");
+    assert.strictEqual(messengerHealth.runtime.last_health_runtime_source, null);
+    assert.strictEqual(messengerHealth.runtime.webhook_requests, 1);
+    assert.strictEqual(messengerHealth.runtime.inbound_messages, 0);
+    assert.strictEqual(messengerHealth.runtime.last_skip_reason, "tenant_runtime_not_configured");
 
     response = await fetch(base + "/admin/panel-demo?tab=channels");
     assert.strictEqual(response.status, 200);

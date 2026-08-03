@@ -106,7 +106,10 @@ function buildAppointmentIntegrations(record, tenantId, options) {
   else if (normalizedProvider === "google") calendarStatus = "oauth_not_configured";
   else calendarStatus = "manual_connection_required";
 
-  const appointmentWhatsappEnabled = appointment.appointment_whatsapp_enabled !== false;
+  const appointmentWhatsappEnabled = appointment.appointment_whatsapp_enabled === true ||
+    appointment.reminder_channel === "whatsapp" ||
+    !!appointment.appointment_whatsapp_number ||
+    (!!meta.whatsapp_number && meta.whatsapp_integration_intent !== "no");
   const appointmentWhatsappNumber = cleanText(appointment.appointment_whatsapp_number || meta.whatsapp_number, 40);
   const tenantMetaConnected = !!options.whatsappConnected;
   let whatsappStatus = "disabled";

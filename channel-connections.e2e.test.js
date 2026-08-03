@@ -168,6 +168,49 @@ async function login(base, body) {
     body = await response.json();
     assert.strictEqual(body.error, "channel_delivery_failed");
     assert.strictEqual(body.meta_sent, false);
+    response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert(!JSON.stringify(body).includes("Prueba de entrega"), "a rejected reply must not appear as a sent message");
+    assert(!JSON.stringify(body).includes("DeliveryFailure"), "delivery audit rows must stay internal");
+
+    response = await fetch(base + "/admin/takeover/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/release/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userB.cookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.wasInHandoff, false, "tenant B must not release tenant A's handoff state");
+    response = await fetch(base + "/admin/release/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: "{}"
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.wasInHandoff, true, "tenant A must retain its own handoff state");
+
+    response = await fetch(base + "/admin/customer-meta/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: JSON.stringify({ tags: ["vip"], note: "Solo Empresa A", name: "Cliente A" })
+    });
+    assert.strictEqual(response.status, 200);
+    response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert(JSON.stringify(body).includes("Solo Empresa A"));
+    response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userB.cookie } });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert(!JSON.stringify(body).includes("Solo Empresa A"), "tenant metadata must not leak across companies");
 
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
       method: "POST",
@@ -215,9 +258,10 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     body = await response.json();
     const authorization = new URL(body.authorization_url);
-    assert.strictEqual(authorization.hostname, "www.facebook.com");
-    assert.strictEqual(authorization.searchParams.get("redirect_uri"), "https://nextforia.com/admin/channel-connections/meta/callback");
-    assert(authorization.searchParams.get("scope").includes("instagram_manage_messages"));
+    assert.strictEqual(authorization.hostname, "www.instagram.com");
+    assert.strictEqual(authorization.searchParams.get("redirect_uri"), "https://nextforia.com/admin/channel-connections/meta/callback/");
+    assert(authorization.searchParams.get("scope").includes("instagram_business_manage_messages"));
+    assert(!authorization.searchParams.get("scope").includes("pages_show_list"));
     assert(!body.authorization_url.includes("channel-e2e-meta-app-secret-value"));
 
     response = await fetch(base + "/admin/panel/channel-connections", { headers: { cookie: userA.cookie } });
@@ -253,9 +297,9 @@ async function login(base, body) {
     response = await fetch(base + "/admin/channel-connections", { headers: { cookie: superAdmin.cookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
-    assert(body.channels.some(function (row) {
-      return row.tenant_id === "rav-toys" && row.channel === "whatsapp" && row.protected_legacy;
-    }));
+    assert(!body.channels.some(function (row) {
+      return row.protected_legacy || row.credential_source === "environment";
+    }), "environment credentials must not create tenant-owned channel records on startup");
     assert(!JSON.stringify(body).toLowerCase().includes("access_token"));
     assert(!JSON.stringify(body).includes("channel-e2e-wa-legacy"));
     assert(!JSON.stringify(body).includes(encryptionKey));
@@ -298,8 +342,8 @@ async function login(base, body) {
       headers: { "content-type": "application/json", origin: base, cookie: superAdmin.cookie },
       body: "{}"
     });
-    assert.strictEqual(response.status, 409);
-    assert.strictEqual((await response.json()).error, "legacy_connection_protected");
+    assert.strictEqual(response.status, 404);
+    assert.strictEqual((await response.json()).error, "connection_not_found");
 
     console.log("channel-connections.e2e.test.js: ok");
   } finally {

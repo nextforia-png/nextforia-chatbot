@@ -138,6 +138,28 @@ assert.strictEqual(snapshot.plan_contratado_en, "2026-07-22T10:00:00.000Z");
   assert.strictEqual(persistedSelection.plan_id, "scale");
   assert.deepStrictEqual(calls.map(function (call) { return call.method; }), ["patch", "get"]);
 
+  // PostgREST devuelve directamente el jsonb[] de platform_list_tenants_v1.
+  // No debe confundirse el primer tenant con un contenedor y ocultar toda la lista.
+  const directTenantRows = [{
+    id: "empresa-real",
+    company_name: "Empresa Real",
+    status: "activo"
+  }];
+  const directRowsStore = new SupabaseCatalogStore({
+    url: "https://supabase.example",
+    headers: { apikey: "service-role-test" },
+    axiosClient: { post: async function () { return { data: directTenantRows }; } }
+  });
+  assert.deepStrictEqual(await directRowsStore.listTenants(), directTenantRows);
+
+  // Conserva compatibilidad con la forma anidada usada por funciones antiguas.
+  const wrappedRowsStore = new SupabaseCatalogStore({
+    url: "https://supabase.example",
+    headers: { apikey: "service-role-test" },
+    axiosClient: { post: async function () { return { data: [directTenantRows] }; } }
+  });
+  assert.deepStrictEqual(await wrappedRowsStore.listTenants(), directTenantRows);
+
   // Si la función RPC de Supabase no existe/falla en producción, el respaldo cae
   // a REST sin exponer token_hash ni hashes de contraseña.
   const backupCalls = [];

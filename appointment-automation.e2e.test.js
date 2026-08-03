@@ -59,7 +59,7 @@ function appointmentAnswers() {
     },
     meta: {
       whatsapp_number: "+57 300 100 2000",
-      whatsapp_integration_intent: "yes"
+      whatsapp_integration_intent: "no"
     },
     operations: {
       primary_country: "Colombia",
@@ -93,10 +93,10 @@ function appointmentAnswers() {
       cancellation_policy: "Avisar con al menos 12 horas",
       calendar_provider: "google",
       calendar_email: "agenda@appointment-auto.example",
-      reminder_channel: "whatsapp",
+      reminder_channel: "email",
       reminder_timing: "both",
       survey_enabled: "yes",
-      appointment_whatsapp_enabled: true,
+      appointment_whatsapp_enabled: false,
       data_consent: true
     }
   };

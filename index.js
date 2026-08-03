@@ -1,6 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
+const { EventEmitter } = require("events");
 const path = require("path");
 const { ElevenLabsClient } = require("@elevenlabs/elevenlabs-js");
 const {
@@ -20,6 +21,12 @@ const COMMERCIAL_READINESS = require("./commercial-readiness");
 const renderCustomerPanel = require("./customer-panel");
 const renderSuperAdminPanel = require("./super-admin-panel");
 const renderSuperAdminLogin = require("./super-admin-login");
+const renderSuperAdminInviteSetup = require("./super-admin-invite-setup");
+const { renderSignatureAdmin, renderSignatureForm } = require("./signature-pages");
+const {
+  SIGNATURE_TOOL,
+  createSignatureService
+} = require("./signature");
 const renderAppointmentPanel = require("./appointment-panel");
 const {
   customerAppointmentSnapshot,
@@ -80,6 +87,11 @@ const {
   mergeCustomerSetupQuestionnaireHistory,
   pendingQuestionnaireItems
 } = require("./client-onboarding");
+const {
+  assertClientOnboardingRecordScope,
+  clientOnboardingRecordId,
+  inspectClientOnboardingScope
+} = require("./client-onboarding-scope");
 const {
   INDUSTRY_PROFILES,
   copyDefaults: defaultBotSetupAnswers,
@@ -159,16 +171,21 @@ const {
   SupabaseChannelConnectionStore,
   cleanChannel,
   createChannelConnectionService,
-  createLegacyConnections,
   createOAuthState,
   readOAuthState
 } = require("./channel-connections");
+const { runStartupProtectionDiagnostics } = require("./startup-protection");
 const {
   buildServiceAreaContext,
   buildServiceAreaQuestion,
   classifyServiceAreaReply,
   serviceAreaCheckForPhone
 } = require("./service-area");
+const {
+  createMultimodalAgent,
+  imageAnalysisPrompt,
+  multimodalConfigFromEnv
+} = require("./multimodal-agent");
 
 function boundedEnvInt(name, fallback, min, max) {
   const parsed = Number(process.env[name]);
@@ -290,7 +307,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v300-appointment-calls-google-brand";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v327-tenant-safe-meta-webhooks";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -338,7 +355,6 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS || "");
 const DASHBOARD_SESSION_SECRET = process.env.DASHBOARD_SESSION_SECRET || (DASHBOARD_KEY ? "development-only:" + DASHBOARD_KEY : crypto.randomBytes(32).toString("base64url"));
 const DASHBOARD_SESSION_TTL_HOURS = boundedEnvInt("DASHBOARD_SESSION_TTL_HOURS", 8, 1, 24);
 const PUBLIC_BASE_URL = configuredHttpsOrigin(process.env.PUBLIC_BASE_URL, process.env.RENDER_EXTERNAL_URL);
-const NEXTFOR_PRICING_SYNC_ON_BOOT = process.env.NEXTFOR_PRICING_SYNC_ON_BOOT !== "0";
 const RAW_SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
 const normalizedSupabaseUrl = configuredHttpsOrigin(RAW_SUPABASE_URL);
 const SUPABASE_URL = normalizedSupabaseUrl && (
@@ -347,7 +363,11 @@ const SUPABASE_URL = normalizedSupabaseUrl && (
 const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
 const SUPABASE_TABLE = "conversation_logs";
 const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de conversaciones
-const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
+// Production is multi-tenant and must fail closed. The tenant columns already
+// exist in the live schema; treating an omitted/legacy flag as disabled makes
+// customer panels read and write the shared table without tenant filters.
+const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.NODE_ENV === "production" ||
+  process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
 const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
@@ -428,8 +448,8 @@ const PAYMENTS_PRODUCTION_AUTO_ENABLED = process.env.PAYMENTS_V1_ENABLED !== "0"
 const PAYMENTS_V1_ENABLED = PAYMENTS_V1_GATE || PAYMENTS_TEST_MODE || PAYMENTS_PRODUCTION_AUTO_ENABLED;
 const ELEVENLABS_WEBHOOK_SECRET = String(process.env.ELEVENLABS_WEBHOOK_SECRET || "").trim();
 const ELEVENLABS_AGENT_TENANT_MAP = parseAgentTenantMap(process.env);
-const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY || "webhook-verification-only" });
 const ELEVENLABS_API_KEY = String(process.env.ELEVENLABS_API_KEY || "").trim();
+const ELEVENLABS_WEBHOOK_CLIENT = new ElevenLabsClient({ apiKey: ELEVENLABS_API_KEY || "webhook-verification-only" });
 const ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID = String(
   process.env.ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID ||
   process.env.ELEVENLABS_LUCIANA_AGENT_ID ||
@@ -456,9 +476,8 @@ const IG_ACCESS_TOKEN = process.env.IG_ACCESS_TOKEN || "";
 const IG_USER_ID = process.env.IG_USER_ID || "";
 const IG_SEND_ID = process.env.IG_SEND_ID || IG_USER_ID;
 const IG_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.IG_GRAPH_BASE_URL, "https://graph.instagram.com", ["graph.instagram.com", "graph.facebook.com"]);
-const RAV_INSTAGRAM_LOGIN_OVERRIDE = process.env.RAV_INSTAGRAM_LOGIN_OVERRIDE === "1";
 const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
-const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v23.0";
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v26.0";
 const META_APP_ID = String(process.env.META_APP_ID || "").trim();
 const META_WHATSAPP_CONFIG_ID = String(process.env.META_WHATSAPP_CONFIG_ID || "").trim();
 const META_WHATSAPP_BUSINESS_ACCOUNT_ID = String(
@@ -469,10 +488,6 @@ const CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID = cleanTenantId(
 );
 const CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID =
   CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
-const CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID =
-  RAV_INSTAGRAM_LOGIN_OVERRIDE && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-    ? CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-    : DEFAULT_TENANT_ID;
 const RENDER_SELF_HEALTH_URL = process.env.RENDER === "true"
   ? configuredHttpsOrigin(process.env.RENDER_EXTERNAL_URL)
   : "";
@@ -488,6 +503,14 @@ const MESSENGER_PAGE_ACCESS_TOKEN = process.env.MESSENGER_PAGE_ACCESS_TOKEN || p
 const MESSENGER_PAGE_ID = process.env.MESSENGER_PAGE_ID || process.env.FB_PAGE_ID || "";
 const MESSENGER_VERIFY_TOKEN = process.env.MESSENGER_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_APP_SECRET = process.env.META_APP_SECRET || process.env.MESSENGER_APP_SECRET || "";
+const INSTAGRAM_LOGIN_APP_ID = String(
+  process.env.INSTAGRAM_LOGIN_APP_ID || process.env.IG_APP_ID || "2073069230231933"
+).trim();
+const INSTAGRAM_LOGIN_APP_SECRET = String(
+  process.env.INSTAGRAM_LOGIN_APP_SECRET || process.env.IG_APP_SECRET || META_APP_SECRET || ""
+).trim();
+const INSTAGRAM_LOGIN_ENABLED = process.env.INSTAGRAM_LOGIN_ENABLED !== "0" &&
+  !!(INSTAGRAM_LOGIN_APP_ID && INSTAGRAM_LOGIN_APP_SECRET);
 const MESSENGER_APP_SECRET = META_APP_SECRET;
 const CHANNEL_CONNECTION_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
   ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/channel-connections/meta/callback"
@@ -498,6 +521,11 @@ const APPOINTMENT_CALENDAR_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BAS
 const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
 const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
+const MULTIMODAL_CONFIG = multimodalConfigFromEnv(process.env);
+const OPENAI_TRANSCRIPTION_MODEL = String(process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe").trim();
+const OPENAI_VISION_MODEL = String(process.env.OPENAI_VISION_MODEL || "gpt-4.1-mini").trim();
+const multimodalAgent = createMultimodalAgent(MULTIMODAL_CONFIG);
 const ADAPTIVE_TOKEN_LIMITS = {
   standard: {
     maxTokens: boundedEnvInt("AI_STANDARD_MAX_TOKENS", 1000, 400, 2400),
@@ -538,6 +566,8 @@ const INSTAGRAM_PROFILE_TTL_MS = 24 * 60 * 60 * 1000;
 const INSTAGRAM_PROFILE_RETRY_MS = 15 * 60 * 1000;
 const DASHBOARD_CUSTOMER_USER_TOOL = "dashboard_customer_user_v1";
 const DASHBOARD_CUSTOMER_USER_RECORD_ID = "dashboard-user:" + DEFAULT_TENANT_ID + ":primary-admin";
+const SUPER_ADMIN_ACCESS_TOOL = "super_admin_access_v1";
+const SUPER_ADMIN_ACCESS_RECORD_ID = "super-admin-access:platform";
 const BOT_SETUP_TOOL = "tenant_bot_setup_v1";
 const BOT_SETUP_DRAFT_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":draft";
 const BOT_SETUP_PUBLISHED_RECORD_ID = "bot-setup:" + DEFAULT_TENANT_ID + ":published";
@@ -583,7 +613,6 @@ const productionConfigErrors = validateProductionConfig({
   publicBaseUrl: PUBLIC_BASE_URL,
   allowUnsignedWebhooks: ALLOW_UNSIGNED_WEBHOOKS
 });
-if (process.env.NODE_ENV === "production" && !PHONE_NUMBER_ID) productionConfigErrors.push("PHONE_NUMBER_ID must be set in production");
 if (process.env.NODE_ENV === "production" && SHOPIFY_ADMIN_TOKEN && !SHOPIFY_STORE_DOMAIN) productionConfigErrors.push("SHOPIFY_STORE_DOMAIN must be set when SHOPIFY_ADMIN_TOKEN is configured");
 if (process.env.NODE_ENV === "production" && SHOPIFY_STORE_DOMAIN && !SHOPIFY_STORE_DOMAIN.endsWith(".myshopify.com")) productionConfigErrors.push("SHOPIFY_STORE_DOMAIN must be the shop's .myshopify.com hostname");
 if (process.env.NODE_ENV === "production" && RAW_SUPABASE_URL && !SUPABASE_URL) productionConfigErrors.push("SUPABASE_URL must be a valid supabase.co HTTPS origin (or explicitly allow a self-hosted origin)");
@@ -612,6 +641,8 @@ if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FIXED_FEE) || WOMPI
 if (PAYMENTS_V1_ENABLED && (!Number.isFinite(WOMPI_ESTIMATED_FEE_TAX_RATE) || WOMPI_ESTIMATED_FEE_TAX_RATE < 0 || WOMPI_ESTIMATED_FEE_TAX_RATE > 1)) {
   productionConfigErrors.push("WOMPI_ESTIMATED_FEE_TAX_RATE must be a decimal between 0 and 1");
 }
+if (MULTIMODAL_CONFIG.enabled && (MULTIMODAL_CONFIG.voice_input_enabled || MULTIMODAL_CONFIG.image_input_enabled) && !OPENAI_API_KEY) productionConfigErrors.push("OPENAI_API_KEY is required when multimodal voice or image input is enabled");
+if (MULTIMODAL_CONFIG.enabled && MULTIMODAL_CONFIG.voice_replies_enabled && !ELEVENLABS_API_KEY) productionConfigErrors.push("ELEVENLABS_API_KEY is required when multimodal voice replies are enabled");
 if (productionConfigErrors.length) {
   console.error("Secure configuration failed:\n- " + productionConfigErrors.join("\n- "));
   process.exit(1);
@@ -619,10 +650,10 @@ if (productionConfigErrors.length) {
 if (process.env.NODE_ENV === "production" && !META_APP_SECRET) {
   console.warn("META_APP_SECRET is not configured; webhook signature enforcement remains in legacy compatibility mode");
 }
-if (!WA_TOKEN) { console.error("WA_TOKEN missing"); process.exit(1); }
 if (!ANTHROPIC_API_KEY) { console.error("ANTHROPIC_API_KEY missing"); process.exit(1); }
 
 const adminRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 600 });
+const signatureRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 900 });
 const wompiWebhookRateLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 300 });
 const loginRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -633,6 +664,14 @@ const loginRateLimiter = createRateLimiter({
   }
 });
 app.use("/admin", adminRateLimiter);
+app.use(["/signature", "/admin/signature/client", "/admin/signature/client-api"], function protectSignatureCaching(req, res, next) {
+  res.setHeader("cache-control", "no-store, max-age=0");
+  res.setHeader("pragma", "no-cache");
+  res.setHeader("x-robots-tag", "noindex, nofollow, noarchive");
+  next();
+});
+app.use("/signature/api", signatureRateLimiter);
+app.use("/admin/signature/client-api", signatureRateLimiter);
 app.use("/admin", async function revalidateCustomerSession(req, res, next) {
   if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
   const session = readDashboardSession(req);
@@ -712,6 +751,7 @@ const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
 const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
+const recentManagedInstagramOutbound = new Map();
 const inboundMessageWindows = new Map();
 const instagramRuntimeState = {
   webhook_requests: 0,
@@ -741,6 +781,40 @@ const instagramRuntimeState = {
   last_event_shape: null,
   last_skip_reason: null
 };
+
+function tenantConversationStateKey(userId, tenantId) {
+  const cleanUser = normalizeConversationUserId(userId);
+  const cleanTenant = canonicalRuntimeTenantId(tenantId) || canonicalRuntimeTenantId(DEFAULT_TENANT_ID);
+  return cleanUser ? cleanTenant + "\u001f" + cleanUser : "";
+}
+
+function tenantConversationStateUserId(key) {
+  const parts = String(key || "").split("\u001f");
+  return parts.length > 1 ? normalizeConversationUserId(parts.slice(1).join("\u001f")) : normalizeConversationUserId(key);
+}
+
+function addHumanHandoff(userId, tenantId) {
+  const key = tenantConversationStateKey(userId, tenantId);
+  if (key) humanHandoff.add(key);
+  return !!key;
+}
+
+function hasHumanHandoff(userId, tenantId) {
+  const key = tenantConversationStateKey(userId, tenantId);
+  return !!key && humanHandoff.has(key);
+}
+
+function deleteHumanHandoff(userId, tenantId) {
+  const key = tenantConversationStateKey(userId, tenantId);
+  return !!key && humanHandoff.delete(key);
+}
+
+function activeHumanHandoffUsers(tenantId) {
+  const cleanTenant = canonicalRuntimeTenantId(tenantId);
+  return Array.from(humanHandoff).filter(function (key) {
+    return !cleanTenant || String(key).startsWith(cleanTenant + "\u001f");
+  }).map(tenantConversationStateUserId).filter(Boolean);
+}
 const whatsappRuntimeState = {
   webhook_requests: 0,
   inbound_messages: 0,
@@ -757,9 +831,33 @@ const whatsappRuntimeState = {
   last_raw_body_present: null,
   last_skip_reason: null
 };
+const messengerRuntimeState = {
+  webhook_requests: 0,
+  inbound_messages: 0,
+  outbound_messages: 0,
+  last_webhook_at: null,
+  last_inbound_at: null,
+  last_outbound_at: null,
+  last_error_at: null,
+  last_error_stage: null,
+  last_error_code: null,
+  last_webhook_object: null,
+  last_signature_present: null,
+  last_signature_format_valid: null,
+  last_raw_body_present: null,
+  last_send_runtime_source: null,
+  last_send_tenant_id: null,
+  last_send_destination_suffix: null,
+  last_health_runtime_source: null,
+  last_health_tenant_id: null,
+  last_health_destination_suffix: null,
+  last_skip_reason: null
+};
 let dashboardCustomerUserCache = { loaded_at: 0, user: null };
+let superAdminAccessCache = { loaded_at: 0, users: [], invitations: [] };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 const clientOnboardingCacheByTenant = new Map();
+const clientOnboardingScopeConflictByKey = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
@@ -902,45 +1000,29 @@ const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? new MetaChannelProvider({
       appId: META_APP_ID,
       appSecret: META_APP_SECRET,
+      instagramAppId: INSTAGRAM_LOGIN_APP_ID,
+      instagramAppSecret: INSTAGRAM_LOGIN_APP_SECRET,
+      instagramLoginEnabled: INSTAGRAM_LOGIN_ENABLED,
       whatsappConfigId: META_WHATSAPP_CONFIG_ID,
       graphVersion: META_GRAPH_VERSION,
       redirectUri: CHANNEL_CONNECTION_CALLBACK_URL,
       axiosClient: axios
     })
   : null;
-const protectedLegacyChannelConnections = createLegacyConnections({
-  tenantId: DEFAULT_TENANT_ID,
-  whatsapp: {
-    configured: !!(WA_TOKEN && PHONE_NUMBER_ID),
-    phoneNumberId: PHONE_NUMBER_ID,
-    displayPhone: process.env.TENANT_DISPLAY_PHONE || "",
-    webhookStatus: VERIFY_TOKEN ? "configured" : "needs_attention"
-  },
-  instagram: {
-    configured: !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID),
-    userId: IG_USER_ID,
-    label: process.env.IG_USERNAME || "",
-    webhookStatus: IG_VERIFY_TOKEN ? "configured" : "needs_attention"
-  },
-  messenger: {
-    configured: !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID),
-    pageId: MESSENGER_PAGE_ID,
-    label: process.env.MESSENGER_PAGE_NAME || "",
-    webhookStatus: MESSENGER_VERIFY_TOKEN ? "configured" : "needs_attention"
-  }
-});
+// Startup must never infer channel ownership from environment credentials or
+// alias tenants. Persisted tenant-scoped connections are the only source of
+// ownership; environment hints are inspected by the read-only diagnostic below.
+const CHANNEL_CONNECTION_TENANT_ALIASES = Object.freeze({});
+const protectedLegacyChannelConnections = Object.freeze([]);
 const channelConnectionService = CHANNEL_CONNECTIONS_V1_VISIBLE
   ? createChannelConnectionService({
       store: channelConnectionStore,
       provider: channelConnectionProvider,
       encryptionKey: DATA_ENCRYPTION_KEY,
+      tenantAliases: CHANNEL_CONNECTION_TENANT_ALIASES,
       legacyConnections: protectedLegacyChannelConnections,
-      allowProtectedLegacyReconnect: function (tenantId, channel) {
-        return ["whatsapp", "instagram", "messenger"].includes(channel) && [
-          DEFAULT_TENANT_ID,
-          CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
-        ].filter(Boolean).includes(cleanTenantId(tenantId));
-      }
+      allowProtectedLegacyReconnect: function () { return false; },
+      replaceableOwnershipTenant: function () { return false; }
     })
   : null;
 let channelConnectionBootstrapPromise = Promise.resolve({ skipped: true });
@@ -1014,6 +1096,7 @@ const channelRuntimeCache = {
   rows: [],
   by_whatsapp_phone_id: new Map(),
   by_instagram_destination_id: new Map(),
+  ambiguous_instagram_destination_ids: new Set(),
   by_messenger_page_id: new Map(),
   by_tenant_channel: new Map()
 };
@@ -1022,160 +1105,59 @@ function cleanRuntimeText(value, max) {
   return String(value || "").trim().slice(0, max || 4096);
 }
 
-async function bootstrapExistingWhatsAppConnection() {
-  if (!channelConnectionService ||
-      !CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID ||
-      !META_WHATSAPP_BUSINESS_ACCOUNT_ID ||
-      !PHONE_NUMBER_ID ||
-      !WA_TOKEN) {
-    return { skipped: true };
+channelConnectionBootstrapPromise = runStartupProtectionDiagnostics({
+  store: channelConnectionStore,
+  env: process.env,
+  log
+});
+
+function canonicalRuntimeTenantId(tenantId) {
+  let current = cleanTenantId(tenantId);
+  const seen = new Set();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const next = cleanTenantId(CHANNEL_CONNECTION_TENANT_ALIASES[current]);
+    if (!next || next === current) break;
+    current = next;
   }
-  try {
-    // Once a customer has completed Embedded Signup, its business token must
-    // remain the source of truth. Never overwrite that live OAuth credential
-    // with the environment bootstrap on a later deploy/restart.
-    if (channelConnectionStore && typeof channelConnectionStore.get === "function") {
-      const existing = await channelConnectionStore.get(
-        CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-        "whatsapp"
-      );
-      if (existing && existing.credentials_ciphertext && !existing.protected_legacy) {
-        try {
-          const repaired = await channelConnectionService.repairSubscription(
-            CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-            "whatsapp",
-            "system:webhook-repair"
-          );
-          channelRuntimeCache.loaded_at = 0;
-          return { skipped: true, reason: "existing_connection_preserved", repaired };
-        } catch (error) {
-          channelRuntimeCache.loaded_at = 0;
-          return {
-            skipped: true,
-            ok: false,
-            reason: "existing_connection_repair_failed",
-            error: String(error.internalMessage || error.message || "repair_failed").slice(0, 300)
-          };
-        }
-      }
-    }
-    const connection = await channelConnectionService.adoptExisting(
-      CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      "whatsapp",
-      "system:environment-bootstrap",
-      {
-        id: "wa:" + PHONE_NUMBER_ID,
-        account_id: PHONE_NUMBER_ID,
-        account_label: process.env.TENANT_DISPLAY_PHONE || "WhatsApp Business",
-        meta_business_id: String(process.env.META_BUSINESS_ID || "").trim() || null,
-        whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-        phone_number_id: PHONE_NUMBER_ID,
-        access_token: WA_TOKEN,
-        // The environment bootstrap adopts a number that Meta already owns and
-        // has verified. Re-registering that number is both unnecessary and
-        // rejected for WhatsApp Business App coexistence accounts.
-        coexistence: true
-      }
-    );
-    channelRuntimeCache.loaded_at = 0;
-    log("info", "whatsapp_existing_asset_adopted", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      status: connection.status
-    });
-    return { skipped: false, ok: true, connection };
-  } catch (error) {
-    channelRuntimeCache.loaded_at = 0;
-    log("error", "whatsapp_existing_asset_adoption_failed", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      error: error.internalMessage || error.message
-    });
-    return { skipped: false, ok: false, error: error.internalMessage || error.message };
-  }
+  return current;
 }
 
-async function registerRavWhatsAppCloudNumberIfNeeded(bootstrapResult) {
-  const isRavSpecialCase =
-    process.env.RAV_WHATSAPP_REGISTER_NOW === "1" &&
-    CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID === "rav-toys-adac1e" &&
-    META_WHATSAPP_BUSINESS_ACCOUNT_ID === "785782538875606" &&
-    PHONE_NUMBER_ID === "334999901166332" &&
-    !!WA_TOKEN &&
-    !!channelConnectionProvider;
-  if (!isRavSpecialCase) return bootstrapResult;
-  try {
-    const phone = await channelConnectionProvider.graph(encodeURIComponent(PHONE_NUMBER_ID), WA_TOKEN, {
-      params: { fields: "id,code_verification_status,platform_type" }
-    });
-    const verification = String(phone.data && phone.data.code_verification_status || "").toUpperCase();
-    const platform = String(phone.data && phone.data.platform_type || "").toUpperCase();
-    if (verification === "VERIFIED" && platform === "CLOUD_API") {
-      return Object.assign({}, bootstrapResult, {
-        ok: true,
-        registration: { skipped: true, reason: "already_cloud_registered" }
-      });
-    }
-    if (verification !== "NOT_VERIFIED" || platform !== "ON_PREMISE") {
-      return Object.assign({}, bootstrapResult, {
-        ok: false,
-        registration: {
-          skipped: true,
-          reason: "unexpected_registration_state",
-          code_verification_status: verification || null,
-          platform_type: platform || null
-        }
-      });
-    }
-    await channelConnectionProvider.graph(encodeURIComponent(PHONE_NUMBER_ID) + "/register", WA_TOKEN, {
-      method: "POST",
-      data: {
-        messaging_product: "whatsapp",
-        pin: channelConnectionProvider.whatsappRegistrationPin(PHONE_NUMBER_ID)
-      },
-      timeout: 20000
-    });
-    channelRuntimeCache.loaded_at = 0;
-    log("info", "rav_whatsapp_cloud_registration_completed", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID
-    });
-    return Object.assign({}, bootstrapResult, {
-      ok: true,
-      registration: { skipped: false, registered: true }
-    });
-  } catch (error) {
-    const metaError = error.response && error.response.data && error.response.data.error || {};
-    const message = cleanRuntimeText(metaError.message || error.message, 300) || "registration_failed";
-    log("error", "rav_whatsapp_cloud_registration_failed", {
-      tenant_id: CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      error_code: metaError.code || null,
-      error_subcode: metaError.error_subcode || null,
-      error: message
-    });
-    return Object.assign({}, bootstrapResult, {
-      ok: false,
-      registration: {
-        skipped: false,
-        registered: false,
-        error_code: metaError.code || null,
-        error_subcode: metaError.error_subcode || null,
-        error: message
-      }
-    });
-  }
+function isRavTenantId(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  return !!cleanTenant && [
+    DEFAULT_TENANT_ID,
+    CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID
+  ].map(cleanTenantId).filter(Boolean).includes(cleanTenant);
 }
-
-channelConnectionBootstrapPromise = bootstrapExistingWhatsAppConnection()
-  .then(registerRavWhatsAppCloudNumberIfNeeded);
 
 function runtimeTenantChannelKey(tenantId, channel) {
-  return cleanTenantId(tenantId) + ":" + cleanChannel(channel);
+  return canonicalRuntimeTenantId(tenantId) + ":" + cleanChannel(channel);
 }
 
-function conversationRuntimeKey(userId) {
-  return normalizeConversationUserId(userId);
+function conversationRuntimeKey(userId, tenantId) {
+  const cleanUser = normalizeConversationUserId(userId);
+  const cleanTenant = canonicalRuntimeTenantId(tenantId);
+  return cleanUser && cleanTenant ? cleanTenant + ":" + cleanUser : "";
+}
+
+function cachedConversationRuntime(userId, tenantId) {
+  const cleanUser = normalizeConversationUserId(userId);
+  const cleanTenant = canonicalRuntimeTenantId(tenantId);
+  if (!cleanUser) return null;
+  if (cleanTenant) return conversationOutboundRuntime.get(conversationRuntimeKey(cleanUser, cleanTenant)) || null;
+  const suffix = ":" + cleanUser;
+  const matches = [];
+  conversationOutboundRuntime.forEach(function (runtime, key) {
+    if (String(key).endsWith(suffix)) matches.push(runtime);
+  });
+  const tenantIds = new Set(matches.map(function (runtime) {
+    return cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
+  }).filter(Boolean));
+  // A caller without tenant context may reuse a cached route only when it is
+  // unambiguous. Never guess between two businesses that share the same Meta
+  // sender id.
+  return tenantIds.size === 1 ? matches[0] || null : null;
 }
 
 function credentialPayloadFromConnection(record) {
@@ -1195,37 +1177,8 @@ function credentialPayloadFromConnection(record) {
 function connectionRuntimeFromRecord(record) {
   const channel = cleanChannel(record && record.channel);
   const tenantId = cleanTenantId(record && record.tenant_id);
-  if (!tenantId || !channel || !record || record.status !== "connected") return null;
-  if (record.protected_legacy) {
-    const legacyRuntime = {
-      tenantId,
-      tenant_id: tenantId,
-      channel,
-      source: "legacy"
-    };
-    if (channel === "whatsapp") {
-      legacyRuntime.phoneNumberId = cleanRuntimeText(record.phone_number_id || PHONE_NUMBER_ID, 240);
-      legacyRuntime.phone_number_id = legacyRuntime.phoneNumberId;
-      legacyRuntime.whatsappBusinessAccountId = cleanRuntimeText(
-        record.whatsapp_business_account_id || META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-        240
-      );
-      legacyRuntime.whatsapp_business_account_id = legacyRuntime.whatsappBusinessAccountId;
-      legacyRuntime.accessToken = WA_TOKEN;
-    } else if (channel === "instagram") {
-      legacyRuntime.instagramUserId = cleanRuntimeText(record.instagram_user_id || IG_SEND_ID || IG_USER_ID, 240);
-      legacyRuntime.instagram_user_id = legacyRuntime.instagramUserId;
-      legacyRuntime.pageId = cleanRuntimeText(record.page_id, 240);
-      legacyRuntime.page_id = legacyRuntime.pageId;
-      legacyRuntime.accessToken = IG_ACCESS_TOKEN;
-    } else if (channel === "messenger") {
-      legacyRuntime.pageId = cleanRuntimeText(record.page_id || MESSENGER_PAGE_ID, 240);
-      legacyRuntime.page_id = legacyRuntime.pageId;
-      legacyRuntime.accessToken = MESSENGER_PAGE_ACCESS_TOKEN;
-    }
-    legacyRuntime.access_token = legacyRuntime.accessToken;
-    return legacyRuntime.accessToken ? legacyRuntime : null;
-  }
+  const runtimeEligible = record && record.status === "connected" && !record.protected_legacy;
+  if (!tenantId || !channel || !runtimeEligible) return null;
   const credential = credentialPayloadFromConnection(record);
   const accessToken = cleanRuntimeText(credential && credential.access_token, 4096);
     if (channel === "whatsapp") {
@@ -1251,6 +1204,7 @@ function connectionRuntimeFromRecord(record) {
   if (channel === "instagram") {
     const instagramUserId = cleanRuntimeText(record.instagram_user_id || credential && credential.instagram_user_id, 240);
     const pageId = cleanRuntimeText(record.page_id || credential && credential.page_id, 240);
+    const instagramLoginType = cleanRuntimeText(credential && credential.login_type, 40) || "facebook";
     if (!instagramUserId || !accessToken) return null;
     return {
       tenantId,
@@ -1260,6 +1214,8 @@ function connectionRuntimeFromRecord(record) {
       instagram_user_id: instagramUserId,
       pageId,
       page_id: pageId,
+      instagramLoginType,
+      instagram_login_type: instagramLoginType,
       accessToken,
       access_token: accessToken,
       source: "channel_connection"
@@ -1287,57 +1243,12 @@ async function loadChannelRuntimeRows(force) {
   const now = Date.now();
   if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < 15000) return channelRuntimeCache;
   const rows = [];
-  if (PHONE_NUMBER_ID && WA_TOKEN) {
-    rows.push({
-      tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-      tenant_id: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-      channel: "whatsapp",
-      phoneNumberId: PHONE_NUMBER_ID,
-      phone_number_id: PHONE_NUMBER_ID,
-      whatsappBusinessAccountId: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-      whatsapp_business_account_id: META_WHATSAPP_BUSINESS_ACCOUNT_ID,
-      accessToken: WA_TOKEN,
-      access_token: WA_TOKEN,
-      source: "environment"
-    });
-  }
-  if (IG_ACCESS_TOKEN && (IG_SEND_ID || IG_USER_ID)) {
-    rows.push({
-      tenantId: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-      tenant_id: CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID,
-      channel: "instagram",
-      instagramUserId: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
-      instagram_user_id: cleanRuntimeText(IG_SEND_ID || IG_USER_ID, 240),
-      accessToken: IG_ACCESS_TOKEN,
-      access_token: IG_ACCESS_TOKEN,
-      source: "environment"
-    });
-  }
-  if (MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID) {
-    rows.push({
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
-      channel: "messenger",
-      pageId: cleanRuntimeText(MESSENGER_PAGE_ID, 240),
-      page_id: cleanRuntimeText(MESSENGER_PAGE_ID, 240),
-      accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
-      access_token: MESSENGER_PAGE_ACCESS_TOKEN,
-      source: "environment"
-    });
-  }
   if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionStore && typeof channelConnectionStore.listAll === "function") {
     try {
       const stored = await channelConnectionStore.listAll();
       (Array.isArray(stored) ? stored : []).forEach(function (record) {
         const runtime = connectionRuntimeFromRecord(record);
-        const ravInstagramLoginWins =
-          RAV_INSTAGRAM_LOGIN_OVERRIDE &&
-          IG_ACCESS_TOKEN &&
-          (IG_SEND_ID || IG_USER_ID) &&
-          runtime &&
-          runtime.channel === "instagram" &&
-          cleanTenantId(runtime.tenantId || runtime.tenant_id) === CHANNEL_CONNECTION_INSTAGRAM_RUNTIME_TENANT_ID;
-        if (runtime && !ravInstagramLoginWins) rows.push(runtime);
+        if (runtime) rows.push(runtime);
       });
     } catch (error) {
       log("warn", "channel_runtime_load_failed", { error: error.message });
@@ -1345,6 +1256,7 @@ async function loadChannelRuntimeRows(force) {
   }
   const byPhone = new Map();
   const byInstagramDestination = new Map();
+  const ambiguousInstagramDestinations = new Set();
   const byMessengerPage = new Map();
   const byTenantChannel = new Map();
   rows.forEach(function (runtime) {
@@ -1352,7 +1264,23 @@ async function loadChannelRuntimeRows(force) {
     if (runtime.channel === "instagram") {
       [runtime.instagramUserId, runtime.instagram_user_id, runtime.pageId, runtime.page_id]
         .filter(Boolean)
-        .forEach(function (id) { byInstagramDestination.set(String(id), runtime); });
+        .forEach(function (id) {
+          const key = String(id);
+          if (ambiguousInstagramDestinations.has(key)) return;
+          const existing = byInstagramDestination.get(key);
+          const existingTenant = canonicalRuntimeTenantId(existing && (existing.tenantId || existing.tenant_id));
+          const runtimeTenant = canonicalRuntimeTenantId(runtime.tenantId || runtime.tenant_id);
+          if (existing && existingTenant && runtimeTenant && existingTenant !== runtimeTenant) {
+            byInstagramDestination.delete(key);
+            ambiguousInstagramDestinations.add(key);
+            log("error", "instagram_asset_tenant_conflict", {
+              destination_suffix: key.slice(-8),
+              tenant_count: 2
+            });
+            return;
+          }
+          if (!existing) byInstagramDestination.set(key, runtime);
+        });
     }
     if (runtime.channel === "messenger" && (runtime.pageId || runtime.page_id)) {
       byMessengerPage.set(String(runtime.pageId || runtime.page_id), runtime);
@@ -1363,35 +1291,40 @@ async function loadChannelRuntimeRows(force) {
   channelRuntimeCache.rows = rows;
   channelRuntimeCache.by_whatsapp_phone_id = byPhone;
   channelRuntimeCache.by_instagram_destination_id = byInstagramDestination;
+  channelRuntimeCache.ambiguous_instagram_destination_ids = ambiguousInstagramDestinations;
   channelRuntimeCache.by_messenger_page_id = byMessengerPage;
   channelRuntimeCache.by_tenant_channel = byTenantChannel;
   return channelRuntimeCache;
 }
 
 function rememberConversationRuntime(userId, runtime) {
-  const key = conversationRuntimeKey(userId);
   const channel = cleanChannel(runtime && runtime.channel) || conversationChannel(userId);
-  if (!key || !runtime || !channel) return null;
+  const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
+  if (!runtime || !channel || !tenantId) return null;
   const normalized = {
-    tenantId: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
-    tenant_id: cleanTenantId(runtime.tenantId || runtime.tenant_id) || DEFAULT_TENANT_ID,
+    tenantId,
+    tenant_id: tenantId,
     channel,
-    phoneNumberId: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
-    phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id || PHONE_NUMBER_ID, 240),
+    phoneNumberId: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id, 240),
+    phone_number_id: cleanRuntimeText(runtime.phoneNumberId || runtime.phone_number_id, 240),
     instagramUserId: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
     instagram_user_id: cleanRuntimeText(runtime.instagramUserId || runtime.instagram_user_id, 240),
+    instagramLoginType: cleanRuntimeText(runtime.instagramLoginType || runtime.instagram_login_type, 40),
+    instagram_login_type: cleanRuntimeText(runtime.instagramLoginType || runtime.instagram_login_type, 40),
     pageId: cleanRuntimeText(runtime.pageId || runtime.page_id, 240),
     page_id: cleanRuntimeText(runtime.pageId || runtime.page_id, 240),
     accessToken: cleanRuntimeText(runtime.accessToken || runtime.access_token, 4096),
     access_token: cleanRuntimeText(runtime.accessToken || runtime.access_token, 4096),
     source: runtime.source || "conversation"
   };
-  if (!normalized.accessToken) {
-    if (channel === "whatsapp") normalized.accessToken = normalized.access_token = WA_TOKEN;
-    if (channel === "instagram") normalized.accessToken = normalized.access_token = IG_ACCESS_TOKEN;
-    if (channel === "messenger") normalized.accessToken = normalized.access_token = MESSENGER_PAGE_ACCESS_TOKEN;
-  }
+  const key = conversationRuntimeKey(userId, normalized.tenantId);
+  if (!key) return null;
+  if (!normalized.accessToken) return null;
   conversationOutboundRuntime.set(key, normalized);
+  if (conversationOutboundRuntime.size > 20000) {
+    const oldest = conversationOutboundRuntime.keys().next().value;
+    if (oldest) conversationOutboundRuntime.delete(oldest);
+  }
   return normalized;
 }
 
@@ -1400,23 +1333,7 @@ async function resolveChannelRuntimeForTenant(tenantId, channel) {
   const clean = cleanChannel(channel);
   if (!cleanTenant || !clean) return null;
   const cache = await loadChannelRuntimeRows(false);
-  const exact = cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
-  // RAV existed before customer-access v2, so historic conversations use the
-  // default tenant while the real OAuth connections belong to the first v2
-  // customer tenant. Prefer that encrypted connection over a stale environment
-  // credential, but only for the explicitly configured RAV bootstrap pair.
-  const ravAliasTenant = cleanTenantId(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID);
-  const aliasTenant = ravAliasTenant && ravAliasTenant !== DEFAULT_TENANT_ID
-    ? (cleanTenant === DEFAULT_TENANT_ID
-        ? ravAliasTenant
-        : cleanTenant === ravAliasTenant ? DEFAULT_TENANT_ID : "")
-    : "";
-  const alias = aliasTenant
-    ? cache.by_tenant_channel.get(runtimeTenantChannelKey(aliasTenant, clean)) || null
-    : null;
-  if (exact && exact.source === "channel_connection") return exact;
-  if (alias && alias.source === "channel_connection") return alias;
-  return exact || alias || null;
+  return cache.by_tenant_channel.get(runtimeTenantChannelKey(cleanTenant, clean)) || null;
 }
 
 async function resolveWhatsAppRuntimeForTenant(tenantId) {
@@ -1442,13 +1359,10 @@ async function resolveWhatsAppDestinationRuntime(webhookValue) {
       };
     }
   }
-  const legacy = validateWhatsAppDestination(TENANT_CONFIG, webhookValue, { requireMetadata: process.env.NODE_ENV === "production" });
-  if (!legacy.ok) return legacy;
-  return Object.assign({}, legacy, {
-    accessToken: WA_TOKEN,
-    access_token: WA_TOKEN,
-    source: "legacy_destination"
-  });
+  return {
+    ok: false,
+    reason: incomingPhoneNumberId ? "tenant_runtime_not_configured" : "missing_destination_metadata"
+  };
 }
 
 async function resolveInstagramDestinationRuntime(entry, events) {
@@ -1474,7 +1388,6 @@ async function resolveMessengerDestinationRuntime(entry) {
 async function outboundRuntimeForConversation(userId, options) {
   const recipient = parseChannelRecipient(userId);
   const channel = recipient.channel;
-  const key = conversationRuntimeKey(userId);
   const suppliedTenant = cleanTenantId(options && (options.tenantId || options.tenant_id));
   const supplied = {
     tenantId: suppliedTenant,
@@ -1484,6 +1397,8 @@ async function outboundRuntimeForConversation(userId, options) {
     phone_number_id: cleanRuntimeText(options && (options.phoneNumberId || options.phone_number_id), 240),
     instagramUserId: cleanRuntimeText(options && (options.instagramUserId || options.instagram_user_id), 240),
     instagram_user_id: cleanRuntimeText(options && (options.instagramUserId || options.instagram_user_id), 240),
+    instagramLoginType: cleanRuntimeText(options && (options.instagramLoginType || options.instagram_login_type), 40),
+    instagram_login_type: cleanRuntimeText(options && (options.instagramLoginType || options.instagram_login_type), 40),
     pageId: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
     page_id: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
     accessToken: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
@@ -1498,54 +1413,21 @@ async function outboundRuntimeForConversation(userId, options) {
     if (byTenant) return rememberConversationRuntime(userId, Object.assign({}, supplied, byTenant));
   }
   if (suppliedDestination && supplied.accessToken) return rememberConversationRuntime(userId, supplied);
-  if (key && conversationOutboundRuntime.has(key)) return conversationOutboundRuntime.get(key);
+  const remembered = cachedConversationRuntime(userId, suppliedTenant);
+  if (remembered) return remembered;
   if (supplied.tenantId) {
     const byTenant = await resolveChannelRuntimeForTenant(supplied.tenantId, channel);
     if (byTenant) return rememberConversationRuntime(userId, byTenant);
   }
-  if (channel === "instagram") {
-    return {
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
-      channel,
-      instagramUserId: IG_SEND_ID || IG_USER_ID,
-      instagram_user_id: IG_SEND_ID || IG_USER_ID,
-      accessToken: IG_ACCESS_TOKEN,
-      access_token: IG_ACCESS_TOKEN,
-      source: "environment"
-    };
-  }
-  if (channel === "messenger") {
-    return {
-      tenantId: DEFAULT_TENANT_ID,
-      tenant_id: DEFAULT_TENANT_ID,
-      channel,
-      pageId: MESSENGER_PAGE_ID,
-      page_id: MESSENGER_PAGE_ID,
-      accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
-      access_token: MESSENGER_PAGE_ACCESS_TOKEN,
-      source: "environment"
-    };
-  }
-  return {
-    tenantId: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-    tenant_id: CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID,
-    channel: "whatsapp",
-    phoneNumberId: PHONE_NUMBER_ID,
-    phone_number_id: PHONE_NUMBER_ID,
-    accessToken: WA_TOKEN,
-    access_token: WA_TOKEN,
-    source: "environment"
-  };
+  return null;
 }
 
 function instagramGraphOriginForRuntime(runtime) {
-  // Connections created through Facebook Login use a Page access token and the
-  // Instagram Messaging API hosted on graph.facebook.com. The legacy
-  // Instagram Login integration keeps its explicitly configured origin.
-  return runtime && runtime.source === "channel_connection"
-    ? "https://graph.facebook.com"
-    : IG_GRAPH_BASE_URL;
+  // Instagram Login does not require a Facebook Page and uses the Instagram
+  // Graph host. Facebook Login connections keep using their Page token and the
+  // Facebook Graph host.
+  if (runtime && (runtime.instagramLoginType || runtime.instagram_login_type) === "instagram") return "https://graph.instagram.com";
+  return runtime && runtime.source === "channel_connection" ? "https://graph.facebook.com" : IG_GRAPH_BASE_URL;
 }
 // Catálogo editable de planes y bots. Comparte el gate de customer access v2.
 const catalogStore = CUSTOMER_ACCESS_V2_ENABLED
@@ -1600,48 +1482,6 @@ const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
   publicBaseUrl: PUBLIC_BASE_URL
 }) : null;
 
-async function syncNextforPricingJuly2026() {
-  if (!NEXTFOR_PRICING_SYNC_ON_BOOT || CUSTOMER_ACCESS_TEST_MODE || !CUSTOMER_ACCESS_V2_ENABLED || !SUPABASE_ENABLED) return;
-  const rest = SUPABASE_URL + "/rest/v1/";
-  const upsertHeaders = Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS);
-  const patchHeaders = Object.assign({ Prefer: "return=minimal" }, SB_HEADERS);
-  const bots = [
-    { id: "atencion-cliente", name: "Atención al cliente", descripcion: "Atiende, orienta, responde preguntas y escala casos a humanos.", orden: 1, active: true, updated_at: new Date().toISOString() },
-    { id: "agendamiento", name: "Agendamiento", descripcion: "Agenda, confirma, reprograma y recuerda citas o reservas.", orden: 2, active: true, updated_at: new Date().toISOString() },
-    { id: "commerce", name: "Commerce", descripcion: "Consulta productos, precios, disponibilidad y pedidos cuando aplique.", orden: 3, active: true, updated_at: new Date().toISOString() }
-  ];
-  const plans = NEXTFOR_PRICING_JULY_2026.map(function (plan) {
-    return {
-      id: plan.id,
-      name: plan.nombre,
-      descripcion: plan.descripcion,
-      bot_id: plan.bot_id,
-      precio_setup: 0,
-      precio_mensual: plan.precio_mensual,
-      chats_incluidos: plan.chats_incluidos,
-      beneficios: plan.beneficios,
-      etiqueta: plan.etiqueta,
-      orden: plan.orden,
-      active: true,
-      updated_at: new Date().toISOString()
-    };
-  });
-  try {
-    await axios.post(rest + "platform_bots?on_conflict=id", bots, { headers: upsertHeaders, timeout: 10000 });
-    await axios.post(rest + "platform_plans?on_conflict=id", plans, { headers: upsertHeaders, timeout: 10000 });
-    await axios.patch(rest + "platform_plans?id=in.(starter,growth,scale)", { active: false, precio_setup: 0, updated_at: new Date().toISOString() }, { headers: patchHeaders, timeout: 10000 });
-    await axios.patch(rest + "tenants", { precio_setup_contratado: 0 }, { params: { precio_setup_contratado: "not.is.null" }, headers: patchHeaders, timeout: 10000 });
-    try {
-      await axios.patch(rest + "billing_contracts", { contracted_setup_price: 0, updated_at: new Date().toISOString() }, { params: { contracted_setup_price: "gt.0" }, headers: patchHeaders, timeout: 10000 });
-    } catch (billingError) {
-      const status = billingError && billingError.response && billingError.response.status;
-      if (status && status !== 404) throw billingError;
-    }
-    console.log("Nextfor pricing July 2026 synced");
-  } catch (error) {
-    console.error("Nextfor pricing sync failed:", error.response && error.response.data || error.message);
-  }
-}
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
@@ -1725,7 +1565,7 @@ async function supabaseInsert(rec) {
     };
     if (SUPABASE_TENANT_COLUMNS_ENABLED) {
       payload.tenant_id = rec.tenantId || DEFAULT_TENANT_ID;
-      payload.phone_number_id = rec.phoneNumberId || PHONE_NUMBER_ID || null;
+      payload.phone_number_id = rec.phoneNumberId || null;
       payload.channel = rec.channel || conversationChannel(rec.userId);
     }
     if (rec.eval !== undefined) payload.eval = rec.eval;
@@ -1741,7 +1581,7 @@ async function supabaseInsertStrict(rec) {
   };
   if (SUPABASE_TENANT_COLUMNS_ENABLED) {
     payload.tenant_id = rec.tenantId || DEFAULT_TENANT_ID;
-    payload.phone_number_id = rec.phoneNumberId || PHONE_NUMBER_ID || null;
+    payload.phone_number_id = rec.phoneNumberId || null;
     payload.channel = rec.channel || conversationChannel(rec.userId);
   }
   if (rec.eval !== undefined) payload.eval = rec.eval;
@@ -1856,6 +1696,104 @@ function normalizeTurnRow(r) {
   };
 }
 
+const signatureEvents = new EventEmitter();
+signatureEvents.setMaxListeners(200);
+
+function signaturePayloadFromTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(SIGNATURE_TOOL)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[NextforSignature\]\s*/, "");
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+const signatureStore = {
+  async append(userId, payload) {
+    const rec = {
+      ts: payload.saved_at || new Date().toISOString(),
+      userId,
+      tenantId: DEFAULT_TENANT_ID,
+      userMessage: "",
+      botReply: "[NextforSignature] " + JSON.stringify(payload),
+      tools: [SIGNATURE_TOOL],
+      zeroResultQueries: [],
+      handoff: false,
+      rating: null,
+      numTools: 1,
+      status: "ok",
+      eval: { skip: true, reason: SIGNATURE_TOOL }
+    };
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+    conversationLogs.push(rec);
+    if (conversationLogs.length > 300) conversationLogs.shift();
+  },
+  async latest(userId) {
+    if (SUPABASE_ENABLED) {
+      const rows = await supabaseFetchUserRecent(userId, 1);
+      if (rows === null) throw new Error("signature_store_unavailable");
+      const turn = rows.map(normalizeTurnRow).map(signaturePayloadFromTurn).find(Boolean);
+      return turn || null;
+    }
+    return conversationLogs.slice().reverse().filter(function (turn) {
+      return turn.userId === userId;
+    }).map(signaturePayloadFromTurn).find(Boolean) || null;
+  }
+};
+
+const signatureService = createSignatureService({
+  store: signatureStore,
+  persistent: SUPABASE_ENABLED || process.env.NODE_ENV === "test",
+  onUpdate: function (event) {
+    signatureEvents.emit("signature", event);
+  }
+});
+
+const SIGNATURE_STORAGE_BUCKET = "nextfor-signature-private";
+let signatureBucketReady = null;
+
+function encryptSignatureFile(buffer) {
+  if (!DATA_ENCRYPTION_KEY) throw new Error("signature_encryption_unavailable");
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", DATA_ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+  return Buffer.concat([Buffer.from("NXFS1"), iv, cipher.getAuthTag(), encrypted]);
+}
+
+function decryptSignatureFile(buffer) {
+  if (!DATA_ENCRYPTION_KEY || !Buffer.isBuffer(buffer) || buffer.length < 34 || buffer.subarray(0, 5).toString() !== "NXFS1") {
+    throw new Error("signature_file_invalid");
+  }
+  const decipher = crypto.createDecipheriv("aes-256-gcm", DATA_ENCRYPTION_KEY, buffer.subarray(5, 17));
+  decipher.setAuthTag(buffer.subarray(17, 33));
+  return Buffer.concat([decipher.update(buffer.subarray(33)), decipher.final()]);
+}
+
+async function ensureSignatureStorageBucket() {
+  if (!SUPABASE_ENABLED) throw new Error("signature_storage_unavailable");
+  if (signatureBucketReady) return signatureBucketReady;
+  signatureBucketReady = axios.post(SUPABASE_URL + "/storage/v1/bucket", {
+    id: SIGNATURE_STORAGE_BUCKET,
+    name: SIGNATURE_STORAGE_BUCKET,
+    public: false,
+    file_size_limit: 12 * 1024 * 1024,
+    allowed_mime_types: null
+  }, { headers: SB_HEADERS, timeout: 8000 }).catch(function (error) {
+    const status = error && error.response && error.response.status;
+    const detail = JSON.stringify(error && error.response && error.response.data || "").toLowerCase();
+    if (status === 409 || detail.includes("already exists") || detail.includes("duplicate")) return true;
+    signatureBucketReady = null;
+    throw error;
+  });
+  return signatureBucketReady;
+}
+
+function signatureStorageUrl(objectKey) {
+  return SUPABASE_URL + "/storage/v1/object/" + SIGNATURE_STORAGE_BUCKET + "/" + objectKey.split("/").map(encodeURIComponent).join("/");
+}
+
 function retargetingRecordId(tenantId) {
   return RETARGETING_EVENT_RECORD_PREFIX + String(tenantId || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
 }
@@ -1935,6 +1873,11 @@ function isDashboardCustomerUserTurn(turn) {
   return tools.includes(DASHBOARD_CUSTOMER_USER_TOOL);
 }
 
+function isSuperAdminAccessTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(SUPER_ADMIN_ACCESS_TOOL);
+}
+
 function isBotSetupTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(BOT_SETUP_TOOL);
@@ -1982,9 +1925,11 @@ function isShopifySessionStateTurn(turn) {
 
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
-  if (/^\[(ShopifySessionState|ChannelConnectionState|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta)\]\s*/.test(botReply)) return true;
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
+    isSuperAdminAccessTurn(turn) ||
     isBotSetupTurn(turn) ||
     isClientOnboardingTurn(turn) ||
     isCustomerSetupQuestionnaireTurn(turn) ||
@@ -1993,7 +1938,9 @@ function isInternalAdminTurn(turn) {
     isInstagramProfileTurn(turn) ||
     isCustomerMemoryTurn(turn) ||
     isChannelConnectionStateTurn(turn) ||
-    isShopifySessionStateTurn(turn);
+    isShopifySessionStateTurn(turn) ||
+    tools.includes(SIGNATURE_TOOL) ||
+    tools.includes(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
 }
 
 function normalizeCustomerTags(tags) {
@@ -2008,6 +1955,14 @@ function normalizeCustomerTags(tags) {
 
 function normalizeCustomerNote(note) {
   return String(note || "").replace(/\s+\n/g, "\n").trim().slice(0, 1200);
+}
+
+function normalizeCustomerName(name) {
+  return String(name || "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
 }
 
 function normalizeConversationUserId(value) {
@@ -2061,13 +2016,19 @@ function maskedIdentifier(value) {
   return external ? prefix + "***" + external.slice(-4) : prefix + "unknown";
 }
 
-function validMetaWebhookSignature(req) {
-  return validMetaSignature(
-    req.rawBody,
-    req.get("x-hub-signature-256"),
-    META_APP_SECRET,
-    ALLOW_UNSIGNED_WEBHOOKS || !META_APP_SECRET
-  );
+function validMetaWebhookSignature(req, secrets) {
+  const candidates = Array.from(new Set((Array.isArray(secrets) ? secrets : [META_APP_SECRET])
+    .map(function (secret) { return String(secret || ""); })
+    .filter(Boolean)));
+  if (!candidates.length) return ALLOW_UNSIGNED_WEBHOOKS === true;
+  return candidates.some(function (secret) {
+    return validMetaSignature(
+      req.rawBody,
+      req.get("x-hub-signature-256"),
+      secret,
+      false
+    );
+  });
 }
 
 function acceptMessengerEvent(event) {
@@ -2086,6 +2047,34 @@ function acceptMetaEventId(messageId) {
   return true;
 }
 
+function managedInstagramTextFingerprint(text) {
+  const value = String(text || "").trim();
+  return value ? crypto.createHash("sha256").update(value).digest("hex") : "";
+}
+
+function rememberManagedInstagramOutbound(text) {
+  const fingerprint = managedInstagramTextFingerprint(text);
+  if (!fingerprint) return;
+  const now = Date.now();
+  recentManagedInstagramOutbound.set(fingerprint, now + 10 * 60 * 1000);
+  for (const [key, expiresAt] of recentManagedInstagramOutbound) {
+    if (expiresAt <= now || recentManagedInstagramOutbound.size > 2000) {
+      recentManagedInstagramOutbound.delete(key);
+    }
+  }
+}
+
+function isRecentManagedInstagramOutbound(text) {
+  const fingerprint = managedInstagramTextFingerprint(text);
+  if (!fingerprint) return false;
+  const expiresAt = recentManagedInstagramOutbound.get(fingerprint) || 0;
+  if (expiresAt <= Date.now()) {
+    if (expiresAt) recentManagedInstagramOutbound.delete(fingerprint);
+    return false;
+  }
+  return true;
+}
+
 function parseCustomerMetaTurn(turn) {
   if (!isCustomerMetaTurn(turn)) return null;
   const raw = String(turn.botReply || "").replace(/^\[Meta\]\s*/, "");
@@ -2094,6 +2083,7 @@ function parseCustomerMetaTurn(turn) {
     return {
       tags: normalizeCustomerTags(parsed.tags),
       note: normalizeCustomerNote(parsed.note),
+      name: normalizeCustomerName(parsed.name),
       updated_at: turn.ts || null
     };
   } catch (e) {
@@ -2138,15 +2128,17 @@ function customerMemoriesFromTurns(turns) {
   return memories;
 }
 
-function recordCustomerMemory(userId, memory) {
+function recordCustomerMemory(userId, memory, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   const normalized = normalizeMemory(memory);
   if (!cleanUserId || !isMeaningfulMemory(normalized)) return null;
-  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+  const explicitTenantId = cleanTenantId(tenantId);
+  const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+  const memoryTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
   const rec = {
     ts: new Date().toISOString(),
-    tenantId: cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID,
-    phoneNumberId: cleanRuntimeText(remembered && remembered.phoneNumberId, 240) || PHONE_NUMBER_ID || null,
+    tenantId: memoryTenantId,
+    phoneNumberId: cleanRuntimeText(remembered && remembered.phoneNumberId, 240) || null,
     channel: conversationChannel(cleanUserId),
     userId: cleanUserId,
     userMessage: "",
@@ -2159,40 +2151,42 @@ function recordCustomerMemory(userId, memory) {
     status: "ok",
     eval: { skip: true, reason: CUSTOMER_MEMORY_TOOL }
   };
-  customerMemoryCache.set(cleanUserId, { memory: normalized, loaded_at: Date.now() });
+  customerMemoryCache.set(tenantConversationStateKey(cleanUserId, memoryTenantId), { memory: normalized, loaded_at: Date.now() });
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
   supabaseInsert(rec);
   return normalized;
 }
 
-async function loadCustomerMemory(userId) {
+async function loadCustomerMemory(userId, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   if (!cleanUserId) return null;
-  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-  const tenantId = cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
-  const cached = customerMemoryCache.get(cleanUserId);
+  const explicitTenantId = cleanTenantId(tenantId);
+  const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+  const memoryTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
+  const memoryKey = tenantConversationStateKey(cleanUserId, memoryTenantId);
+  const cached = customerMemoryCache.get(memoryKey);
   if (cached && Date.now() - cached.loaded_at < CUSTOMER_MEMORY_CACHE_TTL_MS) return cached.memory;
 
   let turns = conversationLogs.filter(function (turn) { return normalizeConversationUserId(turn.userId) === cleanUserId; });
   if (SUPABASE_ENABLED) {
-    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1, { tenantId });
+    const memoryRows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_MEMORY_TOOL, 1, { tenantId: memoryTenantId });
     if (memoryRows && memoryRows.length) turns = memoryRows.map(normalizeTurnRow);
     else {
-      const rows = await supabaseFetchUserRecent(cleanUserId, 60, tenantId);
+      const rows = await supabaseFetchUserRecent(cleanUserId, 60, memoryTenantId);
       if (rows) turns = rows.map(normalizeTurnRow);
     }
   }
   const memory = customerMemoriesFromTurns(turns)[cleanUserId] || null;
-  customerMemoryCache.set(cleanUserId, { memory, loaded_at: Date.now() });
+  customerMemoryCache.set(memoryKey, { memory, loaded_at: Date.now() });
   return memory;
 }
 
-function evolveAndPersistCustomerMemory(userId, currentMemory, event) {
+function evolveAndPersistCustomerMemory(userId, currentMemory, event, tenantId) {
   const evolved = evolveCustomerMemory(currentMemory, event);
   if (!evolved.changed || !isMeaningfulMemory(evolved.memory)) return currentMemory || null;
   if (memoryFingerprint(evolved.memory) === memoryFingerprint(currentMemory)) return currentMemory || null;
-  return recordCustomerMemory(userId, evolved.memory) || evolved.memory;
+  return recordCustomerMemory(userId, evolved.memory, tenantId) || evolved.memory;
 }
 
 function normalizeInstagramUsername(username) {
@@ -2225,14 +2219,16 @@ function instagramProfilesFromTurns(turns) {
   return profiles;
 }
 
-function recordInstagramProfile(userId, username) {
+function recordInstagramProfile(userId, username, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   const cleanUsername = normalizeInstagramUsername(username);
   if (conversationChannel(cleanUserId) !== "instagram" || !cleanUsername) return null;
-  const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
+  const explicitTenantId = cleanTenantId(tenantId);
+  const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+  const profileTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
   const rec = {
     ts: new Date().toISOString(),
-    tenantId: cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID,
+    tenantId: profileTenantId,
     channel: "instagram",
     userId: cleanUserId,
     userMessage: "",
@@ -2245,23 +2241,26 @@ function recordInstagramProfile(userId, username) {
     status: "ok",
     eval: { skip: true, reason: INSTAGRAM_PROFILE_TOOL }
   };
-  instagramProfileCache.set(cleanUserId, { username: cleanUsername, fetched_at: Date.now() });
+  instagramProfileCache.set(tenantConversationStateKey(cleanUserId, profileTenantId), { username: cleanUsername, fetched_at: Date.now() });
   conversationLogs.push(rec);
   if (conversationLogs.length > 100) conversationLogs.shift();
   supabaseInsert(rec);
   return parseInstagramProfileTurn(rec);
 }
 
-async function refreshInstagramProfile(userId) {
+async function refreshInstagramProfile(userId, tenantId) {
   const cleanUserId = normalizeConversationUserId(userId);
   if (conversationChannel(cleanUserId) !== "instagram") return null;
-  const runtime = await outboundRuntimeForConversation(cleanUserId);
-  const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
+  const explicitTenantId = cleanTenantId(tenantId);
+  const runtime = await outboundRuntimeForConversation(cleanUserId, explicitTenantId ? { tenant_id: explicitTenantId } : undefined);
+  const accessToken = runtime && runtime.accessToken;
   if (!accessToken) return null;
-  const cached = instagramProfileCache.get(cleanUserId);
+  const profileTenantId = explicitTenantId || cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
+  const profileKey = tenantConversationStateKey(cleanUserId, profileTenantId);
+  const cached = instagramProfileCache.get(profileKey);
   const cacheTtl = cached && cached.username ? INSTAGRAM_PROFILE_TTL_MS : INSTAGRAM_PROFILE_RETRY_MS;
   if (cached && Date.now() - cached.fetched_at < cacheTtl) return cached.username ? cached : null;
-  instagramProfileCache.set(cleanUserId, { username: "", fetched_at: Date.now() });
+  instagramProfileCache.set(profileKey, { username: "", fetched_at: Date.now() });
   try {
     const instagramScopedId = conversationExternalId(cleanUserId);
     const graphOrigin = instagramGraphOriginForRuntime(runtime);
@@ -2272,7 +2271,7 @@ async function refreshInstagramProfile(userId) {
     });
     const username = normalizeInstagramUsername(response.data && response.data.username);
     if (!username) return null;
-    return recordInstagramProfile(cleanUserId, username);
+    return recordInstagramProfile(cleanUserId, username, profileTenantId);
   } catch (error) {
     log("warn", "instagram_profile_lookup_failed", {
       user_suffix: conversationExternalId(cleanUserId).slice(-6),
@@ -2282,7 +2281,7 @@ async function refreshInstagramProfile(userId) {
   }
 }
 
-function queueInstagramProfileRefreshes(turns) {
+function queueInstagramProfileRefreshes(turns, tenantId) {
   const storedProfiles = instagramProfilesFromTurns(turns);
   const userIds = [];
   (turns || []).forEach(function (turn) {
@@ -2290,16 +2289,19 @@ function queueInstagramProfileRefreshes(turns) {
     if (conversationChannel(userId) !== "instagram" || storedProfiles[userId] || userIds.includes(userId)) return;
     userIds.push(userId);
   });
-  userIds.slice(0, 10).forEach(function (userId) { refreshInstagramProfile(userId); });
+  userIds.slice(0, 10).forEach(function (userId) { refreshInstagramProfile(userId, tenantId); });
 }
 
-function recordCustomerMeta(userId, meta) {
+function recordCustomerMeta(userId, meta, tenantId) {
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const payload = {
     tags: normalizeCustomerTags(meta && meta.tags),
-    note: normalizeCustomerNote(meta && meta.note)
+    note: normalizeCustomerNote(meta && meta.note),
+    name: normalizeCustomerName(meta && meta.name)
   };
   const rec = {
     ts: new Date().toISOString(),
+    tenantId: cleanTenant,
     userId,
     userMessage: "",
     botReply: "[Meta] " + JSON.stringify(payload),
@@ -2353,7 +2355,7 @@ function inferHandoffStates(turns, activeUsers) {
 }
 
 async function inferRecentHandoffs(limit) {
-  const activeMemory = Array.from(humanHandoff.values());
+  const activeMemory = activeHumanHandoffUsers(DEFAULT_TENANT_ID);
   let turns = conversationLogs.slice();
   if (SUPABASE_ENABLED) {
     const rows = await supabaseFetchRecent(limit || 100);
@@ -2369,13 +2371,13 @@ async function inferRecentHandoffs(limit) {
 function recordTurn(userId, userMessage, botReply, status, meta) {
   try {
     const cleanUserId = normalizeConversationUserId(userId) || userId;
-    const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+    const explicitTenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id));
+    const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+    const tenantId = explicitTenantId ||
       cleanTenantId(remembered && remembered.tenantId) ||
       DEFAULT_TENANT_ID;
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
-      PHONE_NUMBER_ID ||
       null;
     const rec = {
       ts: new Date().toISOString(),
@@ -2402,13 +2404,13 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
   try {
     const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : !["admin_release", "admin_resolve"].includes(tool);
     const cleanUserId = normalizeConversationUserId(userId) || userId;
-    const remembered = conversationOutboundRuntime.get(conversationRuntimeKey(cleanUserId)) || null;
-    const tenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id)) ||
+    const explicitTenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id));
+    const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
+    const tenantId = explicitTenantId ||
       cleanTenantId(remembered && remembered.tenantId) ||
       DEFAULT_TENANT_ID;
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
-      PHONE_NUMBER_ID ||
       null;
     const rec = {
       ts: new Date().toISOString(),
@@ -2442,21 +2444,22 @@ function describeInboundMessage(message) {
   return "[" + (type || "mensaje") + " recibido]";
 }
 
-function recordHumanPausedInbound(userId, message) {
+function recordHumanPausedInbound(userId, message, runtime) {
   trackIncomingMessage(userId);
   turnZeroSearchActive = false;
   turnTools = ["human_handoff_active"];
   turnZeroQueries = [];
   turnHandoff = true;
   turnRating = null;
-  recordTurn(userId, describeInboundMessage(message), "", "ok");
+  recordTurn(userId, describeInboundMessage(message), "", "ok", runtime);
 }
 
-async function humanControlActiveFor(userId) {
+async function humanControlActiveFor(userId, tenantId) {
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const instagramConversation = conversationChannel(userId) === "instagram";
-  if (humanHandoff.has(userId) && !instagramConversation) return true;
-  if (instagramConversation) humanHandoff.delete(userId);
-  const rows = await supabaseFetchUserRecent(userId, 20);
+  if (hasHumanHandoff(userId, cleanTenant) && !instagramConversation) return true;
+  if (instagramConversation) deleteHumanHandoff(userId, cleanTenant);
+  const rows = await supabaseFetchUserRecent(userId, 20, cleanTenant);
   if (!rows || !rows.length) return false;
   for (const row of rows) {
     const tools = row.tools || [];
@@ -2467,11 +2470,11 @@ async function humanControlActiveFor(userId) {
       const activatedAt = Date.parse(row.ts || row.created_at || "");
       const ttl = adminHandoff ? ADMIN_HANDOFF_TTL_MS : BOT_HANDOFF_TTL_MS;
       if (activatedAt && Date.now() - activatedAt > ttl) {
-        recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false);
+        recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false, { tenant_id: cleanTenant });
         if (conversationChannel(userId) === "instagram") instagramRuntimeState.last_handoff_auto_release_at = new Date().toISOString();
         return false;
       }
-      humanHandoff.add(userId);
+      addHumanHandoff(userId, cleanTenant);
       return true;
     }
   }
@@ -2589,6 +2592,8 @@ Ejemplos del tono que queremos:
 NO uses frases frías como "No entiendo tu mensaje", "Procesa de nuevo", "Solicitud no válida", "No es posible". El cliente debe sentir que le estás dando lo mejor de ti.
 
 IMÁGENES Y MULTIMEDIA:
+Si el mensaje del cliente empieza con "[AGENTE MULTIMODAL: NOTA DE VOZ TRANSCRITA]" o "[AGENTE MULTIMODAL: IMAGEN ANALIZADA]", significa que Nextfor ya proceso ese audio o imagen de forma controlada. Usa SOLO esa transcripcion o analisis como contexto, responde natural y no digas que no puedes escuchar/ver ese archivo.
+
 Si el cliente menciona que va a mandar o mandó una imagen/foto/video/audio (ej: "te mando foto", "mira esta imagen", "ahí te paso una pic", "te grabo un audio"), o si por el contexto entiendes que está intentando compartir algo que no es texto, responde con calidez y honestidad sobre tu limitación. NO inventes que viste algo, sé honesto.
 
 Frases tipo (varía, no las copies idénticas):
@@ -3446,6 +3451,27 @@ function channelContactLabel(to) {
   return "PSID " + recipient.id;
 }
 
+function splitMetaMessageText(value, maxLength) {
+  const limit = Math.max(1, Number(maxLength) || 1);
+  let remaining = String(value || "").trim();
+  const chunks = [];
+  while (remaining.length > limit) {
+    const candidate = remaining.slice(0, limit + 1);
+    const boundaries = [
+      candidate.lastIndexOf("\n\n", limit),
+      candidate.lastIndexOf("\n", limit),
+      candidate.lastIndexOf(" ", limit)
+    ];
+    let cut = Math.max.apply(Math, boundaries);
+    if (cut < Math.max(1, Math.floor(limit * 0.6))) cut = limit;
+    const chunk = remaining.slice(0, cut).trim();
+    if (chunk) chunks.push(chunk);
+    remaining = remaining.slice(cut).trim();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks.length ? chunks : [""];
+}
+
 async function sendText(to, text, options) {
   // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
   // (A) EXCUSAS TÉCNICAS — INCONDICIONAL: este bot JAMÁS debe decirle al cliente que tiene
@@ -3471,48 +3497,57 @@ async function sendText(to, text, options) {
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
-      const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const sendId = runtime && runtime.instagramUserId;
       const graphOrigin = instagramGraphOriginForRuntime(runtime);
-      instagramRuntimeState.last_send_runtime_source = runtime && runtime.source || "environment";
+      instagramRuntimeState.last_send_runtime_source = runtime && runtime.source || null;
       instagramRuntimeState.last_send_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
       instagramRuntimeState.last_send_destination_suffix = String(sendId || "").slice(-8) || null;
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
-      await axios.post(
-        `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
-        { recipient: { id: recipient.id }, message: { text: String(text || "").slice(0, 2000) } },
-        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
-      );
-      instagramRuntimeState.outbound_messages++;
+      const chunks = splitMetaMessageText(text, 950);
+      for (const chunk of chunks) {
+        await axios.post(
+          `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
+          { recipient: { id: recipient.id }, message: { text: chunk } },
+          { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
+        );
+        rememberManagedInstagramOutbound(chunk);
+        instagramRuntimeState.outbound_messages++;
+      }
       instagramRuntimeState.last_outbound_at = new Date().toISOString();
-      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
+      console.log(`Instagram text sent to ${maskedIdentifier(to)} via ${runtime.source} (${chunks.length} part${chunks.length === 1 ? "" : "s"})`);
       return true;
     }
     if (recipient.channel === "messenger") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || MESSENGER_PAGE_ACCESS_TOKEN;
-      const pageId = runtime && runtime.pageId || MESSENGER_PAGE_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const pageId = runtime && runtime.pageId;
+      messengerRuntimeState.last_send_runtime_source = runtime && runtime.source || null;
+      messengerRuntimeState.last_send_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
+      messengerRuntimeState.last_send_destination_suffix = String(pageId || "").slice(-8) || null;
       if (!accessToken || !pageId) throw new Error("Messenger messaging is not configured");
       await axios.post(
         `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${pageId}/messages`,
         { recipient: { id: recipient.id }, messaging_type: "RESPONSE", message: { text: String(text || "").slice(0, 2000) } },
         { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
       );
-      console.log(`Messenger text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
+      messengerRuntimeState.outbound_messages++;
+      messengerRuntimeState.last_outbound_at = new Date().toISOString();
+      console.log(`Messenger text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
-    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
-    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
     whatsappRuntimeState.outbound_messages++;
     whatsappRuntimeState.last_outbound_at = new Date().toISOString();
-    console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime && runtime.source || "environment"}`);
+    console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
     return true;
   } catch (err) {
     if (recipient.channel === "instagram") {
@@ -3525,6 +3560,12 @@ async function sendText(to, text, options) {
       instagramRuntimeState.last_error_message = String(metaError.message || err.message || "instagram_send_failed")
         .replace(/(?:EA[A-Za-z0-9]{20,}|IG[A-Za-z0-9]{20,})/g, "[redacted]")
         .slice(0, 300);
+    }
+    if (recipient.channel === "messenger") {
+      const metaError = err.response?.data?.error || {};
+      messengerRuntimeState.last_error_at = new Date().toISOString();
+      messengerRuntimeState.last_error_stage = "send_text";
+      messengerRuntimeState.last_error_code = metaError.code || err.code || null;
     }
     if (recipient.channel === "whatsapp") {
       const metaError = err.response?.data?.error || {};
@@ -3587,13 +3628,17 @@ function buildTemplatePayload(to, templateName, params) {
   };
 }
 
-async function sendTemplate(to, templateName, params) {
+async function sendTemplate(to, templateName, params, options) {
   const payload = buildTemplatePayload(to, templateName, params);
   try {
+    const runtime = await outboundRuntimeForConversation(to, options);
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
+    if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       payload,
-      { headers: { Authorization: `Bearer ${WA_TOKEN}`, "Content-Type": "application/json" }, timeout: 10000 }
+      { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
     console.log(`Template ${templateName} sent to ${maskedIdentifier(to)}`);
     return { ok: true, meta: response.data };
@@ -3609,8 +3654,8 @@ async function sendImage(to, imageUrl, caption, options) {
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
-      const sendId = runtime && runtime.instagramUserId || IG_SEND_ID || IG_USER_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const sendId = runtime && runtime.instagramUserId;
       const graphOrigin = instagramGraphOriginForRuntime(runtime);
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       await axios.post(
@@ -3623,8 +3668,8 @@ async function sendImage(to, imageUrl, caption, options) {
     }
     if (recipient.channel === "messenger") {
       const runtime = await outboundRuntimeForConversation(to, options);
-      const accessToken = runtime && runtime.accessToken || MESSENGER_PAGE_ACCESS_TOKEN;
-      const pageId = runtime && runtime.pageId || MESSENGER_PAGE_ID;
+      const accessToken = runtime && runtime.accessToken;
+      const pageId = runtime && runtime.pageId;
       if (!accessToken || !pageId) throw new Error("Messenger messaging is not configured");
       await axios.post(
         `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${pageId}/messages`,
@@ -3639,11 +3684,11 @@ async function sendImage(to, imageUrl, caption, options) {
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
-    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
-    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "image", image: { link: imageUrl, caption } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
@@ -3654,6 +3699,130 @@ async function sendImage(to, imageUrl, caption, options) {
   }
 }
 
+function mediaFilename(media) {
+  const mime = String(media && media.mime_type || "").toLowerCase();
+  if (media && media.kind === "image") return "whatsapp-image." + (mime.includes("png") ? "png" : "jpg");
+  if (mime.includes("mpeg") || mime.includes("mp3")) return "whatsapp-audio.mp3";
+  if (mime.includes("m4a")) return "whatsapp-audio.m4a";
+  if (mime.includes("mp4")) return "whatsapp-audio.mp4";
+  if (mime.includes("wav")) return "whatsapp-audio.wav";
+  if (mime.includes("webm")) return "whatsapp-audio.webm";
+  if (mime.includes("aac")) return "whatsapp-audio.aac";
+  return "whatsapp-audio.ogg";
+}
+
+function extractOpenAIText(data) {
+  if (data && typeof data.text === "string") return data.text.trim();
+  if (data && typeof data.output_text === "string") return data.output_text.trim();
+  const chunks = [];
+  for (const item of data && data.output || []) {
+    for (const content of item && item.content || []) {
+      const text = content && typeof content.text === "string"
+        ? content.text
+        : (content && content.text && typeof content.text.value === "string" ? content.text.value : "");
+      if (text && ["output_text", "text"].includes(content.type)) chunks.push(text);
+    }
+  }
+  return chunks.join("\n").trim();
+}
+
+async function downloadWhatsAppMediaForMultimodal(media, context) {
+  const accessToken = String(context && context.access_token || "").trim();
+  if (!accessToken) throw new Error("wa_token_missing");
+  const metadata = await axios.get(
+    `https://graph.facebook.com/${META_GRAPH_VERSION}/${encodeURIComponent(media.media_id)}`,
+    {
+      params: context && context.phone_number_id ? { phone_number_id: context.phone_number_id } : undefined,
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000
+    }
+  );
+  const mediaUrl = metadata.data && metadata.data.url;
+  if (!mediaUrl) throw new Error("media_url_missing");
+  const response = await axios.get(mediaUrl, {
+    responseType: "arraybuffer",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    timeout: 20000,
+    maxContentLength: Math.max(MULTIMODAL_CONFIG.max_audio_bytes, MULTIMODAL_CONFIG.max_image_bytes)
+  });
+  return {
+    buffer: Buffer.from(response.data),
+    mime_type: response.headers && response.headers["content-type"] || metadata.data.mime_type || media.mime_type,
+    file_size: Number(metadata.data.file_size || response.data.byteLength || 0),
+    sha256: metadata.data.sha256 || media.sha256 || ""
+  };
+}
+
+async function transcribeMultimodalAudio(downloaded, media) {
+  if (!OPENAI_API_KEY) throw new Error("openai_api_key_missing");
+  const form = new FormData();
+  form.append("model", OPENAI_TRANSCRIPTION_MODEL);
+  form.append("file", new Blob([downloaded.buffer], { type: downloaded.mime_type || media.mime_type || "audio/ogg" }), mediaFilename(media));
+  form.append("response_format", "json");
+  const response = await axios.post("https://api.openai.com/v1/audio/transcriptions", form, {
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    timeout: 45000,
+    maxBodyLength: MULTIMODAL_CONFIG.max_audio_bytes + 1024 * 1024
+  });
+  const text = extractOpenAIText(response.data);
+  if (!text) throw new Error("transcription_empty");
+  return { text, provider: "openai", model: OPENAI_TRANSCRIPTION_MODEL };
+}
+
+async function multimodalBotModeForTenant(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  try {
+    const onboarding = cleanTenant ? await loadClientOnboarding(false, cleanTenant) : null;
+    const answers = onboarding && onboarding.answers || {};
+    const goal = String(answers.setup_goal || "").trim().toLowerCase();
+    if (goal === "appointments") return "appointments";
+    if (goal === "both") return "both";
+    if (goal === "customer_service") return "customer_service";
+    const assignedBot = String(onboarding && onboarding.assigned_bot_id || answers.selected_bot_id || "").trim().toLowerCase();
+    if (["agendamiento", "appointments", "appointment"].includes(assignedBot)) return "appointments";
+    if (["both", "duo"].includes(assignedBot)) return "both";
+    if (["atencion-cliente", "customer_service", "customer-service"].includes(assignedBot)) return "customer_service";
+    if (assignedBot) return "generic";
+  } catch (error) {
+    log("warn", "multimodal_bot_mode_lookup_failed", {
+      tenant_id: cleanTenant,
+      error: String(error && error.message || "lookup_failed").slice(0, 160)
+    });
+  }
+  const registered = getRegisteredClient(cleanTenant);
+  if (registered && registered.modules && registered.modules.appointments) return "appointments";
+  if ([DEFAULT_TENANT_ID, CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID].filter(Boolean).includes(cleanTenant)) return "customer_service";
+  return "generic";
+}
+
+async function analyzeMultimodalImage(downloaded, media, context) {
+  if (!OPENAI_API_KEY) throw new Error("openai_api_key_missing");
+  const mime = downloaded.mime_type || media.mime_type || "image/jpeg";
+  const dataUrl = "data:" + mime + ";base64," + downloaded.buffer.toString("base64");
+  const botMode = await multimodalBotModeForTenant(context && context.tenant_id);
+  const response = await axios.post("https://api.openai.com/v1/responses", {
+    model: OPENAI_VISION_MODEL,
+    max_output_tokens: 450,
+    input: [{
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: imageAnalysisPrompt(botMode)
+        },
+        { type: "input_image", image_url: dataUrl }
+      ]
+    }]
+  }, {
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, "Content-Type": "application/json" },
+    timeout: 45000,
+    maxBodyLength: MULTIMODAL_CONFIG.max_image_bytes + 1024 * 1024
+  });
+  const text = extractOpenAIText(response.data);
+  if (!text) throw new Error("vision_empty");
+  return { text, provider: "openai", model: OPENAI_VISION_MODEL };
+}
+
 async function sendLocation(to, lat, lng, name, address, options) {
   if (["instagram", "messenger"].includes(parseChannelRecipient(to).channel)) {
     await sendText(to, `${name}\n${address}\nhttps://www.google.com/maps?q=${lat},${lng}`);
@@ -3661,11 +3830,11 @@ async function sendLocation(to, lat, lng, name, address, options) {
   }
   try {
     const runtime = await outboundRuntimeForConversation(to, options);
-    const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
-    const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+    const phoneNumberId = runtime && runtime.phoneNumberId;
+    const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
     await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to, type: "location", location: { latitude: lat, longitude: lng, name, address } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
     );
@@ -4033,8 +4202,9 @@ async function executeNotifyTeam(userId) {
   return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length };
 }
 
-async function executeHumanHandoff(userId, input) {
-  humanHandoff.add(userId);
+async function executeHumanHandoff(userId, input, runtime) {
+  const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
+  addHumanHandoff(userId, tenantId);
   const reason = input.reason || "solicitud_cliente";
   await recordRetargetingSignal(userId, "handoff", "handoff:" + Date.now(), "system");
   const state = checkouts.get(userId);
@@ -4050,9 +4220,10 @@ async function executeHumanHandoff(userId, input) {
   }
   notif += `Toma el control en ${channelLabel(userId)}.`;
   await notifyTeam(notif, userId);
-  await sendText(userId, "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏");
+  const customerMessage = "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏";
+  const delivered = await sendText(userId, customerMessage, runtime);
   console.log(`Handoff activated for ${maskedIdentifier(userId)}, reason: ${String(reason || "").slice(0, 80)}`);
-  return { handoff: true, bot_paused: true };
+  return { handoff: true, bot_paused: true, delivered: !!delivered, customer_message: customerMessage };
 }
 
 async function executeCheckAppointmentAvailability(tenantId, input, actor) {
@@ -4160,6 +4331,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     channel: conversationChannel(userId),
     phone_number_id: conversationMeta.phone_number_id,
     instagram_user_id: conversationMeta.instagram_user_id,
+    instagram_login_type: conversationMeta.instagram_login_type,
     page_id: conversationMeta.page_id,
     access_token: conversationMeta.access_token,
     source: conversationMeta.source || "inbound_webhook"
@@ -4167,10 +4339,12 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     tenantId: cleanTenantId(conversationMeta.tenant_id) || DEFAULT_TENANT_ID,
     tenant_id: cleanTenantId(conversationMeta.tenant_id) || DEFAULT_TENANT_ID,
     channel: conversationChannel(userId),
-    phoneNumberId: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
-    phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240) || PHONE_NUMBER_ID,
+    phoneNumberId: cleanRuntimeText(conversationMeta.phone_number_id, 240),
+    phone_number_id: cleanRuntimeText(conversationMeta.phone_number_id, 240),
     instagramUserId: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
     instagram_user_id: cleanRuntimeText(conversationMeta.instagram_user_id, 240),
+    instagramLoginType: cleanRuntimeText(conversationMeta.instagram_login_type, 40),
+    instagram_login_type: cleanRuntimeText(conversationMeta.instagram_login_type, 40),
     pageId: cleanRuntimeText(conversationMeta.page_id, 240),
     page_id: cleanRuntimeText(conversationMeta.page_id, 240),
     accessToken: cleanRuntimeText(conversationMeta.access_token, 4096),
@@ -4178,6 +4352,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     source: conversationMeta.source || "inbound_webhook"
   };
   const tenantId = cleanTenantId(conversationRuntime.tenantId) || DEFAULT_TENANT_ID;
+  const stateKey = tenantConversationStateKey(userId, tenantId);
   async function sendBotReply(message) {
     return sendText(userId, message, conversationRuntime);
   }
@@ -4186,17 +4361,17 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     await sendBotReply("Tu mensaje es demasiado largo para procesarlo con seguridad. Envíalo en partes más cortas, por favor.");
     return;
   }
-  if (!acceptInboundMessageRate(userId)) {
+  if (!acceptInboundMessageRate(stateKey)) {
     log("warn", "inbound_message_rejected", { user: maskedIdentifier(userId), reason: "rate_limit" });
     return;
   }
   trackIncomingMessage(userId);
-  const previousActivityAt = conversationLastActiveAt.get(userId) || 0;
+  const previousActivityAt = conversationLastActiveAt.get(stateKey) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
-  conversationLastActiveAt.set(userId, Date.now());
+  conversationLastActiveAt.set(stateKey, Date.now());
   turnZeroSearchActive = false;  // (v33.4) reset por turno
   turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
-  if (await humanControlActiveFor(userId)) {
+  if (await humanControlActiveFor(userId, tenantId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${maskedIdentifier(userId)}`);
     turnHandoff = true;
     turnTools.push("human_handoff_active");
@@ -4204,8 +4379,8 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     return;
   }
 
-  if (!conversations.has(userId) || newSession) conversations.set(userId, []);
-  const history = conversations.get(userId);
+  if (!conversations.has(stateKey) || newSession) conversations.set(stateKey, []);
+  const history = conversations.get(stateKey);
   const activeBotSetup = await loadBotSetup(false);
   const activeClientOnboarding = await loadClientOnboarding(false, tenantId);
   const onboardingGoal = String(activeClientOnboarding && activeClientOnboarding.answers && activeClientOnboarding.answers.setup_goal || "").trim().toLowerCase();
@@ -4238,8 +4413,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const configuredTenantBot = tenantConfigurationPrompts.length > 0;
   const conversationSystemPrompt = configuredTenantBot
     ? "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad."
-    : SYSTEM_PROMPT;
-  let conversationTools = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot
+    : isRavTenantId(tenantId)
+      ? SYSTEM_PROMPT
+      : "Eres un asistente temporal de Nextfor IA para este negocio. No uses nombres, catálogo, políticas, productos ni datos de ningún otro cliente. La configuración comercial de este tenant todavía no está aprobada: limita tu ayuda a respuestas generales, explica que el equipo está terminando la configuración y deriva a una persona cuando la solicitud dependa de información del negocio.";
+  let conversationTools = isRavTenantId(tenantId) && !configuredTenantBot
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
   if (usesAppointmentBot) {
@@ -4251,11 +4428,11 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const phoneCheck = conversationChannel(userId) === "whatsapp"
     ? serviceAreaCheckForPhone(conversationExternalId(userId), serviceAreaConfig)
     : null;
-  let serviceAreaState = serviceAreaChecks.get(userId) || null;
+  let serviceAreaState = serviceAreaChecks.get(stateKey) || null;
   let serviceAreaContext = "";
 
   if (serviceAreaState && (!phoneCheck || !phoneCheck.shouldAsk || serviceAreaState.serviceCountryCode !== phoneCheck.serviceCountryCode)) {
-    serviceAreaChecks.delete(userId);
+    serviceAreaChecks.delete(stateKey);
     serviceAreaState = null;
   }
   if (phoneCheck && phoneCheck.shouldAsk && !serviceAreaState) {
@@ -4263,11 +4440,11 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     const askedAt = new Date().toISOString();
     history.push({ role: "user", content: userMessage });
     history.push({ role: "assistant", content: question });
-    conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+    conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
     turnTools.push("service_area_confirmation");
     const sent = await sendBotReply(question);
     if (sent) {
-      rememberServiceAreaCheck(userId, {
+      rememberServiceAreaCheck(stateKey, {
         status: "pending",
         serviceCountryCode: phoneCheck.serviceCountryCode,
         phoneCountryCode: phoneCheck.phoneCountryCode,
@@ -4282,17 +4459,17 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     if (["pending", "unclear"].includes(serviceAreaState.status)) {
       serviceAreaState.status = classifyServiceAreaReply(userMessage, serviceAreaConfig.countryName);
       serviceAreaState.updatedAt = new Date().toISOString();
-      rememberServiceAreaCheck(userId, serviceAreaState);
+      rememberServiceAreaCheck(stateKey, serviceAreaState);
     }
     serviceAreaContext = buildServiceAreaContext(serviceAreaState, serviceAreaConfig);
   }
 
-  let customerMemory = await loadCustomerMemory(userId);
+  let customerMemory = await loadCustomerMemory(userId, tenantId);
   customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
     userMessage,
     checkout: checkouts.get(userId),
     now: new Date().toISOString()
-  });
+  }, tenantId);
   history.push({ role: "user", content: userMessage });
 
   let adaptiveBudget = adaptiveConversationBudget({
@@ -4304,7 +4481,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   });
   let memoryContext = buildCustomerMemoryContext(customerMemory, { newSession });
   let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
-  let publishedSetupPrompt = tenantId === DEFAULT_TENANT_ID && !configuredTenantBot && activeBotSetup.published && activeBotSetup.published.derived
+  let publishedSetupPrompt = isRavTenantId(tenantId) && !configuredTenantBot && activeBotSetup.published && activeBotSetup.published.derived
     ? activeBotSetup.published.derived.system_prompt
     : "";
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
@@ -4354,6 +4531,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         workingHistory.push({ role: "assistant", content });
 
         const toolResults = [];
+        let handoffCustomerReply = null;
         for (const toolUse of toolUses) {
           turnTools.push(toolUse.name);  // (Tarea 1)
           let result;
@@ -4430,7 +4608,11 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 break;
               case "request_human_handoff":
               turnHandoff = true;  // (Tarea 1)
-                result = await executeHumanHandoff(userId, toolUse.input);
+                result = await executeHumanHandoff(userId, toolUse.input, conversationRuntime);
+                handoffCustomerReply = result && result.customer_message ? {
+                  text: result.customer_message,
+                  delivered: result.delivered === true
+                } : null;
                 break;
               case "check_appointment_availability":
                 result = await executeCheckAppointmentAvailability(tenantId, toolUse.input, "appointment_bot:" + conversationChannel(userId));
@@ -4451,7 +4633,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
             toolResult: result,
             checkout: checkouts.get(userId),
             now: new Date().toISOString()
-          });
+          }, tenantId);
           toolResults.push({
             type: "tool_result",
             tool_use_id: toolUse.id,
@@ -4468,8 +4650,18 @@ async function handleConversation(userId, userMessage, conversationMeta) {
           limits: ADAPTIVE_TOKEN_LIMITS
         });
 
-        if (humanHandoff.has(userId)) {
-          conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+        if (hasHumanHandoff(userId, tenantId)) {
+          if (handoffCustomerReply && handoffCustomerReply.text) {
+            history.push({ role: "assistant", content: handoffCustomerReply.text });
+            recordTurn(
+              userId,
+              userMessage,
+              handoffCustomerReply.text,
+              handoffCustomerReply.delivered ? "ok" : "error",
+              conversationRuntime
+            );
+          }
+          conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
           return;
         }
         continue;
@@ -4478,7 +4670,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       const textBlock = content.find(c => c.type === "text");
       const reply = textBlock ? textBlock.text.trim() : "";
       history.push({ role: "assistant", content: reply || "(sin texto)" });
-      conversations.set(userId, history.slice(-MAX_CONVERSATION_HISTORY));
+      conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
       const replySent = await sendBotReply(reply);
       if (reply) recordTurn(userId, userMessage, reply, replySent ? "ok" : "error", conversationRuntime);
       if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
@@ -4541,7 +4733,7 @@ app.post("/webhook", async (req, res) => {
   whatsappRuntimeState.last_signature_present = !!suppliedSignature;
   whatsappRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
   whatsappRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
-  if (!validMetaWebhookSignature(req)) {
+  if (!validMetaWebhookSignature(req, [META_APP_SECRET])) {
     whatsappRuntimeState.last_error_at = new Date().toISOString();
     whatsappRuntimeState.last_error_stage = "webhook_signature";
     return res.sendStatus(401);
@@ -4564,9 +4756,8 @@ app.post("/webhook", async (req, res) => {
     if (!destination.ok) {
       whatsappRuntimeState.last_skip_reason = destination.reason || "destination_rejected";
       log("warn", "whatsapp_destination_rejected", {
-        tenant_id: DEFAULT_TENANT_ID,
         reason: destination.reason,
-        configured_phone_number_id: PHONE_NUMBER_ID ? "configured" : "missing"
+        incoming_phone_number_suffix: String(value && value.metadata && value.metadata.phone_number_id || "").slice(-8) || null
       });
       return;
     }
@@ -4597,20 +4788,59 @@ app.post("/webhook", async (req, res) => {
       });
     } else if (type === "audio" || type === "voice") {
       console.log(`Inbound ${maskedIdentifier(from)}: voice note`);
-      if (await humanControlActiveFor(from)) {
-        recordHumanPausedInbound(from, message);
+      if (await humanControlActiveFor(from, destination.tenantId)) {
+        recordHumanPausedInbound(from, message, destination);
       } else {
-        await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
+        const multimodalResult = await multimodalAgent.handleIncomingMedia({
+          user_id: from,
+          tenant_id: destination.tenantId,
+          message,
+          conversation_meta: {
+            tenant_id: destination.tenantId,
+            phone_number_id: destination.phoneNumberId,
+            access_token: destination.accessToken,
+            source: destination.source || "webhook",
+            source_event_id: message.id || "wa:" + Date.now(),
+            source_at: new Date().toISOString()
+          },
+          downloadMedia: function (media) { return downloadWhatsAppMediaForMultimodal(media, { phone_number_id: destination.phoneNumberId, access_token: destination.accessToken }); },
+          transcribeAudio: transcribeMultimodalAudio,
+          sendText: function (userId, text) { return sendText(userId, text, destination); },
+          handleConversation,
+          recordTurn: function (userId, inbound, outbound, status) { return recordTurn(userId, inbound, outbound, status, destination); },
+          log
+        });
+        if (!multimodalResult.handled) await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
       }
     } else if (type === "image" || type === "document") {
       console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
-      if (await humanControlActiveFor(from)) {
-        recordHumanPausedInbound(from, message);
+      if (await humanControlActiveFor(from, destination.tenantId)) {
+        recordHumanPausedInbound(from, message, destination);
+      } else if (type === "image") {
+        await multimodalAgent.handleIncomingMedia({
+          user_id: from,
+          tenant_id: destination.tenantId,
+          message,
+          conversation_meta: {
+            tenant_id: destination.tenantId,
+            phone_number_id: destination.phoneNumberId,
+            access_token: destination.accessToken,
+            source: destination.source || "webhook",
+            source_event_id: message.id || "wa:" + Date.now(),
+            source_at: new Date().toISOString()
+          },
+          downloadMedia: function (media) { return downloadWhatsAppMediaForMultimodal(media, { phone_number_id: destination.phoneNumberId, access_token: destination.accessToken }); },
+          analyzeImage: analyzeMultimodalImage,
+          sendText: function (userId, text) { return sendText(userId, text, destination); },
+          handleConversation,
+          recordTurn: function (userId, inbound, outbound, status) { return recordTurn(userId, inbound, outbound, status, destination); },
+          log
+        });
       }
     } else {
       console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
-      if (await humanControlActiveFor(from)) {
-        recordHumanPausedInbound(from, message);
+      if (await humanControlActiveFor(from, destination.tenantId)) {
+        recordHumanPausedInbound(from, message, destination);
       } else {
         await sendText(from, "Solo puedo leer texto por ahora 😊 ¿En qué te ayudo?");
       }
@@ -4626,10 +4856,10 @@ async function instagramConnectionHealth() {
   const checkedAt = new Date().toISOString();
   const tenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
   const runtime = await resolveChannelRuntimeForTenant(tenantId, "instagram");
-  const accessToken = runtime && runtime.accessToken || IG_ACCESS_TOKEN;
-  const instagramUserId = runtime && runtime.instagramUserId || IG_USER_ID;
+  const accessToken = runtime && runtime.accessToken;
+  const instagramUserId = runtime && runtime.instagramUserId;
   const graphOrigin = instagramGraphOriginForRuntime(runtime);
-  instagramRuntimeState.last_health_runtime_source = runtime && runtime.source || "environment";
+  instagramRuntimeState.last_health_runtime_source = runtime && runtime.source || null;
   instagramRuntimeState.last_health_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
   instagramRuntimeState.last_health_destination_suffix = String(instagramUserId || "").slice(-8) || null;
   if (!accessToken || !instagramUserId) {
@@ -4642,6 +4872,33 @@ async function instagramConnectionHealth() {
       headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000
     });
+    const subscription = await axios.get(
+      `${graphOrigin}/${META_GRAPH_VERSION}/${encodeURIComponent(instagramUserId)}/subscribed_apps`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 10000
+      }
+    );
+    const expectedAppIds = new Set([META_APP_ID, INSTAGRAM_LOGIN_APP_ID].filter(Boolean).map(String));
+    const appSubscribed = (subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : [])
+      .some(function (item) {
+        if (expectedAppIds.has(String(item && item.id || ""))) return true;
+        if (!(runtime && runtime.instagramLoginType === "instagram")) return false;
+        const subscribedFields = new Set(Array.isArray(item && item.subscribed_fields)
+          ? item.subscribed_fields.map(String)
+          : []);
+        return ["messages", "messaging_postbacks", "message_reactions", "messaging_seen"]
+          .every(function (field) { return subscribedFields.has(field); });
+      });
+    if (!appSubscribed) {
+      return {
+        ok: false,
+        configured: true,
+        status: "webhook_not_subscribed",
+        checked_at: checkedAt,
+        runtime: { ...instagramRuntimeState }
+      };
+    }
     const lastErrorAt = Date.parse(instagramRuntimeState.last_error_at || "") || 0;
     const lastOutboundAt = Date.parse(instagramRuntimeState.last_outbound_at || "") || 0;
     const outboundBlocked = !!instagramRuntimeState.last_error_code && lastErrorAt > lastOutboundAt;
@@ -4676,17 +4933,65 @@ app.get("/instagram/health", async (req, res) => {
   res.status(health.ok ? 200 : 503).json(health);
 });
 
+async function messengerConnectionHealth() {
+  const checkedAt = new Date().toISOString();
+  const tenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
+  const runtime = await resolveChannelRuntimeForTenant(tenantId, "messenger");
+  const accessToken = runtime && runtime.accessToken;
+  const pageId = runtime && runtime.pageId;
+  messengerRuntimeState.last_health_runtime_source = runtime && runtime.source || null;
+  messengerRuntimeState.last_health_tenant_id = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null;
+  messengerRuntimeState.last_health_destination_suffix = String(pageId || "").slice(-8) || null;
+  if (!accessToken || !pageId) {
+    return { ok: false, configured: false, status: "not_configured", checked_at: checkedAt, runtime: { ...messengerRuntimeState } };
+  }
+  try {
+    await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}`, {
+      params: { fields: "id,name" },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000
+    });
+    const subscription = await axios.get(
+      `${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${encodeURIComponent(pageId)}/subscribed_apps`,
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 10000 }
+    );
+    const appSubscribed = !!META_APP_ID && (
+      subscription.data && Array.isArray(subscription.data.data) ? subscription.data.data : []
+    ).some(function (item) { return String(item && item.id || "") === String(META_APP_ID); });
+    if (!appSubscribed) {
+      return { ok: false, configured: true, status: "webhook_not_subscribed", checked_at: checkedAt, runtime: { ...messengerRuntimeState } };
+    }
+    return { ok: true, configured: true, status: "connected", checked_at: checkedAt, runtime: { ...messengerRuntimeState } };
+  } catch (err) {
+    const metaError = err.response?.data?.error || {};
+    return {
+      ok: false,
+      configured: true,
+      status: "api_error",
+      error_code: metaError.code || null,
+      error_type: metaError.type || "request_failed",
+      checked_at: checkedAt,
+      runtime: { ...messengerRuntimeState }
+    };
+  }
+}
+
+app.get("/messenger/health", async (req, res) => {
+  const health = await messengerConnectionHealth();
+  res.status(health.ok ? 200 : 503).json(health);
+});
+
 app.get("/whatsapp/health", async (req, res) => {
   const checkedAt = new Date().toISOString();
   const bootstrap = await channelConnectionBootstrapPromise;
   const runtime = await resolveWhatsAppRuntimeForTenant(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
-  const phoneNumberId = runtime && runtime.phoneNumberId || PHONE_NUMBER_ID;
+  const phoneNumberId = runtime && runtime.phoneNumberId;
   const whatsappBusinessAccountId = runtime && (
     runtime.whatsappBusinessAccountId || runtime.whatsapp_business_account_id
-  ) || META_WHATSAPP_BUSINESS_ACCOUNT_ID;
-  const accessToken = runtime && runtime.accessToken || WA_TOKEN;
+  );
+  const accessToken = runtime && runtime.accessToken;
   const safeRuntime = Object.assign({}, whatsappRuntimeState, {
-    runtime_source: runtime && runtime.source || "environment",
+    runtime_source: runtime && runtime.source || null,
     tenant_id: cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null,
     phone_number_suffix: String(phoneNumberId || "").slice(-8) || null,
     waba_suffix: String(whatsappBusinessAccountId || "").slice(-8) || null,
@@ -4852,16 +5157,6 @@ function instagramEventsFromEntry(entry) {
   return events;
 }
 
-function instagramEntryMatchesLegacyRuntime(entry, events) {
-  const expected = [IG_USER_ID, IG_SEND_ID].filter(Boolean).map(String);
-  if (!expected.length) return false;
-  const destinations = [entry && entry.id];
-  (events || []).forEach(function (event) {
-    destinations.push(event && event.recipient && event.recipient.id);
-  });
-  return destinations.filter(Boolean).map(String).some(function (id) { return expected.includes(id); });
-}
-
 app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.webhook_requests++;
   instagramRuntimeState.last_webhook_at = new Date().toISOString();
@@ -4870,7 +5165,7 @@ app.post("/instagram/webhook", async (req, res) => {
   instagramRuntimeState.last_signature_present = !!suppliedSignature;
   instagramRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
   instagramRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
-  if (!validMetaWebhookSignature(req)) {
+  if (!validMetaWebhookSignature(req, [INSTAGRAM_LOGIN_APP_SECRET, META_APP_SECRET])) {
     instagramRuntimeState.last_error_at = new Date().toISOString();
     instagramRuntimeState.last_error_stage = "webhook_signature";
     return res.sendStatus(401);
@@ -4883,19 +5178,7 @@ app.post("/instagram/webhook", async (req, res) => {
     }
     for (const entry of req.body?.entry || []) {
       const events = instagramEventsFromEntry(entry);
-      let destination = await resolveInstagramDestinationRuntime(entry, events);
-      if (!destination && instagramEntryMatchesLegacyRuntime(entry, events)) {
-        destination = {
-          tenantId: DEFAULT_TENANT_ID,
-          tenant_id: DEFAULT_TENANT_ID,
-          channel: "instagram",
-          instagramUserId: IG_SEND_ID || IG_USER_ID,
-          instagram_user_id: IG_SEND_ID || IG_USER_ID,
-          accessToken: IG_ACCESS_TOKEN,
-          access_token: IG_ACCESS_TOKEN,
-          source: "legacy_destination"
-        };
-      }
+      const destination = await resolveInstagramDestinationRuntime(entry, events);
       if (!destination) {
         instagramRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
         log("info", "instagram_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
@@ -4913,7 +5196,7 @@ app.post("/instagram/webhook", async (req, res) => {
           instagramRuntimeState.last_skip_reason = "missing_sender";
           continue;
         }
-        if (event.message?.is_echo || String(event.sender.id) === String(IG_USER_ID)) {
+        if (event.message?.is_echo || String(event.sender.id) === String(destination.instagramUserId)) {
           instagramRuntimeState.last_skip_reason = "echo_or_business_sender";
           continue;
         }
@@ -4922,18 +5205,26 @@ app.post("/instagram/webhook", async (req, res) => {
           instagramRuntimeState.last_skip_reason = "duplicate_event";
           continue;
         }
+        if (event.message?.text && isRecentManagedInstagramOutbound(event.message.text)) {
+          instagramRuntimeState.last_skip_reason = "managed_outbound_echo";
+          log("info", "instagram_managed_outbound_echo_skipped", {
+            destination_tenant_id: destination.tenantId
+          });
+          continue;
+        }
         const userId = `ig:${event.sender.id}`;
         rememberConversationRuntime(userId, destination);
         instagramRuntimeState.inbound_messages++;
         instagramRuntimeState.last_inbound_at = new Date().toISOString();
         instagramRuntimeState.last_skip_reason = null;
-        refreshInstagramProfile(userId);
+        refreshInstagramProfile(userId, destination.tenantId);
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
           await handleConversation(userId, event.message.text, {
             tenant_id: destination.tenantId,
             instagram_user_id: destination.instagramUserId,
+            instagram_login_type: destination.instagramLoginType || destination.instagram_login_type,
             page_id: destination.pageId,
             access_token: destination.accessToken,
             source: destination.source || "instagram_webhook",
@@ -4942,8 +5233,8 @@ app.post("/instagram/webhook", async (req, res) => {
           });
         } else if (event.message?.attachments?.length) {
           console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
-          if (await humanControlActiveFor(userId)) {
-            recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments });
+          if (await humanControlActiveFor(userId, destination.tenantId)) {
+            recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments }, destination);
           } else {
             await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
           }
@@ -4968,25 +5259,28 @@ app.get("/messenger/webhook", (req, res) => {
 });
 
 app.post("/messenger/webhook", async (req, res) => {
-  if (!validMetaWebhookSignature(req)) return res.sendStatus(401);
+  messengerRuntimeState.webhook_requests++;
+  messengerRuntimeState.last_webhook_at = new Date().toISOString();
+  messengerRuntimeState.last_webhook_object = String(req.body?.object || "missing").slice(0, 40);
+  const suppliedSignature = String(req.get("x-hub-signature-256") || "");
+  messengerRuntimeState.last_signature_present = !!suppliedSignature;
+  messengerRuntimeState.last_signature_format_valid = /^sha256=[a-f0-9]{64}$/i.test(suppliedSignature);
+  messengerRuntimeState.last_raw_body_present = Buffer.isBuffer(req.rawBody);
+  if (!validMetaWebhookSignature(req, [META_APP_SECRET])) {
+    messengerRuntimeState.last_error_at = new Date().toISOString();
+    messengerRuntimeState.last_error_stage = "webhook_signature";
+    return res.sendStatus(401);
+  }
   res.sendStatus(200);
   try {
-    if (req.body?.object !== "page") return;
+    if (req.body?.object !== "page") {
+      messengerRuntimeState.last_skip_reason = "unsupported_object";
+      return;
+    }
     for (const entry of req.body?.entry || []) {
-      let destination = await resolveMessengerDestinationRuntime(entry);
-      if (!destination && MESSENGER_PAGE_ID && String(entry && entry.id || "") === String(MESSENGER_PAGE_ID)) {
-        destination = {
-          tenantId: DEFAULT_TENANT_ID,
-          tenant_id: DEFAULT_TENANT_ID,
-          channel: "messenger",
-          pageId: MESSENGER_PAGE_ID,
-          page_id: MESSENGER_PAGE_ID,
-          accessToken: MESSENGER_PAGE_ACCESS_TOKEN,
-          access_token: MESSENGER_PAGE_ACCESS_TOKEN,
-          source: "legacy_destination"
-        };
-      }
+      const destination = await resolveMessengerDestinationRuntime(entry);
       if (!destination) {
+        messengerRuntimeState.last_skip_reason = "tenant_runtime_not_configured";
         log("info", "messenger_tenant_runtime_deferred", { entry_id_present: !!entry && !!entry.id });
         continue;
       }
@@ -4994,6 +5288,9 @@ app.post("/messenger/webhook", async (req, res) => {
         if (!event.sender?.id || event.message?.is_echo || !acceptMessengerEvent(event)) continue;
         const userId = `ms:${event.sender.id}`;
         rememberConversationRuntime(userId, destination);
+        messengerRuntimeState.inbound_messages++;
+        messengerRuntimeState.last_inbound_at = new Date().toISOString();
+        messengerRuntimeState.last_skip_reason = null;
         await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ms:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
@@ -5020,8 +5317,8 @@ app.post("/messenger/webhook", async (req, res) => {
           }
         } else if (event.message?.attachments?.length) {
           console.log(`Inbound ${maskedIdentifier(userId)}: attachment`);
-          if (await humanControlActiveFor(userId)) {
-            recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments });
+          if (await humanControlActiveFor(userId, destination.tenantId)) {
+            recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments }, destination);
           } else {
             await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
           }
@@ -5029,6 +5326,8 @@ app.post("/messenger/webhook", async (req, res) => {
       }
     }
   } catch (err) {
+    messengerRuntimeState.last_error_at = new Date().toISOString();
+    messengerRuntimeState.last_error_stage = "webhook_processing";
     console.error("Error processing Messenger message:", err.response?.data || err.message);
   }
 });
@@ -5649,8 +5948,26 @@ async function persistBotSetup(answers, status, auth) {
   return record;
 }
 
-function clientOnboardingRecordId(tenantId) {
-  return "client-onboarding:" + (cleanTenantId(tenantId) || DEFAULT_TENANT_ID);
+function registerClientOnboardingScopeConflict(turn, assessment) {
+  if (!assessment || assessment.ok) return;
+  const conflict = {
+    row_id: turn && turn._id || null,
+    timestamp: turn && turn.ts || null,
+    outer_tenant_id: assessment.outer_tenant_id,
+    record_tenant_id: assessment.record_tenant_id,
+    record_user_id: assessment.record_user_id,
+    expected_user_id: assessment.expected_user_id,
+    reasons: assessment.reasons.slice()
+  };
+  const key = [conflict.row_id, conflict.timestamp, conflict.record_user_id, conflict.reasons.join(",")].join(":");
+  if (!clientOnboardingScopeConflictByKey.has(key)) {
+    clientOnboardingScopeConflictByKey.set(key, conflict);
+    log("warn", "client_onboarding_scope_conflict", conflict);
+  }
+}
+
+function listClientOnboardingScopeConflicts() {
+  return Array.from(clientOnboardingScopeConflictByKey.values()).slice(-200);
 }
 
 function parseClientOnboardingTurn(turn, tenantId) {
@@ -5658,7 +5975,12 @@ function parseClientOnboardingTurn(turn, tenantId) {
   const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    if (![1, 2].includes(parsed.version) || parsed.tenant_id !== (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) || !parsed.answers) return null;
+    if (![1, 2].includes(parsed.version) || !parsed.answers) return null;
+    const assessment = inspectClientOnboardingScope(turn, parsed, cleanTenantId(tenantId) || DEFAULT_TENANT_ID);
+    if (!assessment.ok) {
+      registerClientOnboardingScopeConflict(turn, assessment);
+      return null;
+    }
     if (parsed.version === 1) {
       parsed.setup_completed = false;
       parsed.setup_completed_at = null;
@@ -5691,6 +6013,7 @@ function isMissingConversationLogsError(error) {
 async function appendClientOnboardingAuditFallback(record, tenantId, actor) {
   if (!SUPABASE_ENABLED || !record) return null;
   const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  assertClientOnboardingRecordScope(record, cleanTenant);
   const payload = {
     tenant_id: cleanTenant,
     invitation_id: null,
@@ -5754,7 +6077,7 @@ async function fetchRecentClientOnboardingAuditFallbacks(limit) {
       const metadata = row && row.metadata || {};
       const record = metadata.source === CLIENT_ONBOARDING_TOOL && metadata.record ? metadata.record : null;
       if (!record || !record.tenant_id || !record.answers) return null;
-      return record;
+      return { record, outer_tenant_id: cleanTenantId(row && row.tenant_id), created_at: row && row.created_at || null };
     }).filter(Boolean);
   } catch (error) {
     console.error("client onboarding audit fallback list error:", error.message);
@@ -5767,10 +6090,10 @@ async function fetchSetupReviewDeletedTenantIds() {
   async function collectFromTurns(turns) {
     (turns || []).map(normalizeTurnRow).forEach(function (turn) {
       const record = parseAnyClientOnboardingTurn(turn);
-      if (record && record.setup_deleted === true) {
-        const tenantId = cleanTenantId(record.tenant_id);
-        if (tenantId) deleted.add(tenantId);
-      }
+      if (!record || record.setup_deleted !== true) return;
+      const assessment = inspectClientOnboardingScope(turn, record, record.tenant_id);
+      if (!assessment.ok) return registerClientOnboardingScopeConflict(turn, assessment);
+      if (assessment.tenant_id) deleted.add(assessment.tenant_id);
     });
   }
   if (!SUPABASE_ENABLED) return deleted;
@@ -6000,9 +6323,12 @@ async function listRecentClientOnboardingRecords(limit) {
   }
   function collect(turn) {
     const fallbackRecord = parseAnyClientOnboardingTurn(turn);
-    const tenantId = cleanTenantId(fallbackRecord && fallbackRecord.tenant_id) || cleanTenantId(turn && turn.tenantId);
+    if (!fallbackRecord) return;
+    const assessment = inspectClientOnboardingScope(turn, fallbackRecord, fallbackRecord.tenant_id);
+    if (!assessment.ok) return registerClientOnboardingScopeConflict(turn, assessment);
+    const tenantId = assessment.tenant_id;
     if (!tenantId || seen.has(tenantId)) return;
-    const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
+    const record = parseClientOnboardingTurn(turn, tenantId);
     collectRecord(record, tenantId);
   }
   if (SUPABASE_ENABLED) {
@@ -6010,8 +6336,17 @@ async function listRecentClientOnboardingRecords(limit) {
       allTenants: true
     });
     (rows || []).map(normalizeTurnRow).forEach(collect);
-    (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (record) {
-      collectRecord(record, record.tenant_id);
+    (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (envelope) {
+      const record = envelope.record;
+      const turn = {
+        tenantId: envelope.outer_tenant_id,
+        userId: clientOnboardingRecordId(record && record.tenant_id),
+        ts: envelope.created_at,
+        _id: null
+      };
+      const assessment = inspectClientOnboardingScope(turn, record, record && record.tenant_id);
+      if (!assessment.ok) return registerClientOnboardingScopeConflict(turn, assessment);
+      collectRecord(record, assessment.tenant_id);
     });
   } else {
     conversationLogs.slice().reverse().filter(isClientOnboardingTurn).forEach(collect);
@@ -6075,6 +6410,7 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
       });
     }
   }
+  assertClientOnboardingRecordScope(record, tenantId);
   const rec = {
     ts: record.updated_at,
     userId: clientOnboardingRecordId(tenantId),
@@ -6105,6 +6441,7 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
 
 async function appendClientOnboardingRecord(record, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  assertClientOnboardingRecordScope(record, tenantId);
   const rec = {
     ts: record.updated_at || new Date().toISOString(),
     userId: clientOnboardingRecordId(tenantId),
@@ -6257,6 +6594,7 @@ function setupReviewFailure(code, status) {
 
 function setupWantsWhatsApp(answers) {
   const meta = answers && answers.meta || {};
+  if (meta.whatsapp_integration_intent === "no") return false;
   return !!(meta.whatsapp_number || meta.whatsapp_integration_intent === "yes" || meta.whatsapp_integration_status === "requested");
 }
 
@@ -7590,6 +7928,8 @@ async function dashboardUserFromCredentials(username, password, options) {
     (user.email && user.email === normalizedUser)
   ) && safeEqualText(user.password, cleanPass));
   if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
+  const platformUser = await dashboardPlatformUserFromCredentials(normalizedUser, cleanPass);
+  if (platformUser) return platformUser;
   if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
     let customerAccessUser = null;
     try {
@@ -7625,6 +7965,232 @@ function sendCustomerAccessError(res, error) {
   const payload = { ok: false, error: problem.code };
   if (problem.details && typeof problem.details === "object") Object.assign(payload, problem.details);
   res.status(problem.status).json(payload);
+}
+
+function tokenHash(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function platformAccessError(code, status) {
+  const err = new Error(code);
+  err.code = code;
+  err.status = status || 400;
+  return err;
+}
+
+function validatePlatformAccessPassword(password, confirmation) {
+  const value = String(password || "");
+  if (value.length < 12 || value.length > 128 || !/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(value) || !/\d/.test(value)) {
+    throw platformAccessError("weak_password", 400);
+  }
+  if (value !== String(confirmation || "")) throw platformAccessError("password_mismatch", 400);
+  return value;
+}
+
+function parseSuperAdminAccessTurn(turn) {
+  if (!isSuperAdminAccessTurn(turn)) return null;
+  const raw = String(turn.botReply || "").replace(/^\[SuperAdminAccess\]\s*/, "");
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== 1 || !parsed.type) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function reduceSuperAdminAccessEvents(events) {
+  const usersByEmail = new Map();
+  const invitationsById = new Map();
+  events.forEach(function (event) {
+    const type = String(event.type || "");
+    if (type === "user") {
+      const email = normalizeDashboardUsername(event.email);
+      if (!email || !event.password_hash || !event.salt) return;
+      usersByEmail.set(email, {
+        user_id: String(event.user_id || email),
+        username: email,
+        email,
+        name: String(event.name || email).slice(0, 100),
+        role: "super_admin",
+        tenant_id: null,
+        password_hash: String(event.password_hash),
+        salt: String(event.salt),
+        created_at: event.created_at || null,
+        method: "platform_user"
+      });
+      return;
+    }
+    if (type === "invitation") {
+      const id = String(event.id || "");
+      const email = normalizeDashboardUsername(event.email);
+      if (!id || !email || !event.token_hash) return;
+      invitationsById.set(id, {
+        id,
+        email,
+        name_hint: String(event.name_hint || "").slice(0, 100),
+        token_hash: String(event.token_hash),
+        status: "pending",
+        created_by: String(event.created_by || "super_admin").slice(0, 160),
+        created_at: event.created_at || null,
+        expires_at: event.expires_at || null,
+        used_at: null,
+        revoked_at: null
+      });
+      return;
+    }
+    if (type === "invitation_used" || type === "invitation_revoked") {
+      const invitation = invitationsById.get(String(event.invitation_id || ""));
+      if (!invitation) return;
+      if (type === "invitation_used") {
+        invitation.status = "used";
+        invitation.used_at = event.used_at || event.created_at || new Date().toISOString();
+      } else {
+        invitation.status = "revoked";
+        invitation.revoked_at = event.revoked_at || event.created_at || new Date().toISOString();
+      }
+    }
+  });
+  const now = Date.now();
+  const users = Array.from(usersByEmail.values());
+  const invitations = Array.from(invitationsById.values()).map(function (invitation) {
+    if (invitation.status === "pending" && Date.parse(invitation.expires_at || "") <= now) invitation.status = "expired";
+    return invitation;
+  }).sort(function (a, b) { return Date.parse(b.created_at || "") - Date.parse(a.created_at || ""); });
+  return { users, invitations };
+}
+
+async function loadSuperAdminAccess(force) {
+  const now = Date.now();
+  if (!force && superAdminAccessCache.loaded_at && now - superAdminAccessCache.loaded_at < 30000) return superAdminAccessCache;
+  let turns = conversationLogs.slice().reverse().filter(isSuperAdminAccessTurn);
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserRecent(SUPER_ADMIN_ACCESS_RECORD_ID, 100);
+    if (rows) turns = rows.map(normalizeTurnRow).filter(isSuperAdminAccessTurn);
+  }
+  const state = reduceSuperAdminAccessEvents(turns.map(parseSuperAdminAccessTurn).filter(Boolean).reverse());
+  superAdminAccessCache = { loaded_at: now, users: state.users, invitations: state.invitations };
+  return superAdminAccessCache;
+}
+
+function buildSuperAdminAccessRecord(event) {
+  const createdAt = event.created_at || new Date().toISOString();
+  return {
+    ts: createdAt,
+    userId: SUPER_ADMIN_ACCESS_RECORD_ID,
+    userMessage: "",
+    botReply: "[SuperAdminAccess] " + JSON.stringify(Object.assign({ version: 1, created_at: createdAt }, event)),
+    tools: [SUPER_ADMIN_ACCESS_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: SUPER_ADMIN_ACCESS_TOOL }
+  };
+}
+
+async function persistSuperAdminAccessEvent(event) {
+  if (!SUPABASE_ENABLED) throw platformAccessError("persistent_user_store_unavailable", 503);
+  const rec = buildSuperAdminAccessRecord(event);
+  await supabaseInsertStrict(rec);
+  conversationLogs.push(rec);
+  if (conversationLogs.length > 100) conversationLogs.shift();
+  superAdminAccessCache.loaded_at = 0;
+  return rec;
+}
+
+async function createSuperAdminInvitation(input, auth, req) {
+  const email = normalizeDashboardUsername(input && input.email);
+  const nameHint = String(input && input.name || "").trim().slice(0, 100);
+  if (!validEmailIdentity(email)) throw platformAccessError("invalid_email", 400);
+  const existingEnv = DASHBOARD_USERS.some(function (user) {
+    return user.role === "super_admin" && (normalizeDashboardUsername(user.username) === email || normalizeDashboardUsername(user.email) === email);
+  });
+  const state = await loadSuperAdminAccess(true);
+  if (existingEnv || state.users.some(function (user) { return user.email === email; })) {
+    throw platformAccessError("super_admin_already_exists", 409);
+  }
+  if (state.invitations.some(function (invitation) { return invitation.email === email && invitation.status === "pending"; })) {
+    throw platformAccessError("super_admin_invitation_already_open", 409);
+  }
+  const token = crypto.randomBytes(32).toString("base64url");
+  const id = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + CUSTOMER_INVITE_TTL_HOURS * 60 * 60 * 1000).toISOString();
+  await persistSuperAdminAccessEvent({
+    type: "invitation",
+    id,
+    email,
+    name_hint: nameHint,
+    token_hash: tokenHash(token),
+    expires_at: expiresAt,
+    created_by: auth && (auth.email || auth.username || auth.name) || "super_admin"
+  });
+  const requestOrigin = requestHeaderOrigin(req.get("x-nextforia-panel-origin")) ||
+    requestHeaderOrigin(req.get("origin")) ||
+    requestHeaderOrigin(req.get("referer"));
+  const baseUrl = requestOrigin || PUBLIC_BASE_URL || req.protocol + "://" + req.get("host");
+  return {
+    id,
+    email,
+    name_hint: nameHint,
+    expires_at: expiresAt,
+    setup_url: baseUrl + "/admin/super-admin/setup?invite=" + encodeURIComponent(token)
+  };
+}
+
+async function inspectSuperAdminInvitation(token) {
+  const hash = tokenHash(token);
+  const state = await loadSuperAdminAccess(true);
+  const invitation = state.invitations.find(function (item) { return item.token_hash === hash; });
+  if (!invitation) throw platformAccessError("invalid_invitation", 403);
+  if (invitation.status === "used") throw platformAccessError("invitation_already_used", 409);
+  if (invitation.status === "revoked") throw platformAccessError("invitation_revoked", 403);
+  if (invitation.status === "expired") throw platformAccessError("invitation_expired", 410);
+  return invitation;
+}
+
+async function consumeSuperAdminInvitation(input) {
+  const token = String(input && input.invite || "");
+  const invitation = await inspectSuperAdminInvitation(token);
+  const password = validatePlatformAccessPassword(input && input.password, input && input.password_confirmation);
+  const name = String(input && input.name || invitation.name_hint || invitation.email).trim().slice(0, 100);
+  const salt = crypto.randomBytes(16);
+  const createdAt = new Date().toISOString();
+  await persistSuperAdminAccessEvent({
+    type: "user",
+    user_id: crypto.randomUUID(),
+    email: invitation.email,
+    username: invitation.email,
+    name,
+    role: "super_admin",
+    salt: salt.toString("base64url"),
+    password_hash: hashDashboardPassword(password, salt),
+    created_at: createdAt,
+    invitation_id: invitation.id
+  });
+  await persistSuperAdminAccessEvent({
+    type: "invitation_used",
+    invitation_id: invitation.id,
+    email: invitation.email,
+    used_at: createdAt
+  });
+  const state = await loadSuperAdminAccess(true);
+  return state.users.find(function (user) { return user.email === invitation.email; });
+}
+
+async function dashboardPlatformUserFromCredentials(username, password) {
+  const normalizedUser = normalizeDashboardUsername(username);
+  const state = await loadSuperAdminAccess(false);
+  const user = state.users.find(function (item) { return item.email === normalizedUser || normalizeDashboardUsername(item.username) === normalizedUser; });
+  if (!user) return null;
+  let candidate = "";
+  try {
+    candidate = hashDashboardPassword(password, Buffer.from(user.salt, "base64url"));
+  } catch (_) {
+    return null;
+  }
+  return safeEqualText(candidate, user.password_hash) ? user : null;
 }
 
 async function resetCustomerPanelAccess(actor, options) {
@@ -7769,9 +8335,8 @@ function adminAuthOk(req, minRole = "viewer") {
 }
 
 function customerTenantForAuth(auth) {
-  if (!auth || !auth.ok) return "";
-  if (auth.version === 2) return cleanTenantId(auth.tenant_id);
-  return DEFAULT_TENANT_ID;
+  if (!auth || !auth.ok || auth.version !== 2 || auth.session_version !== 2) return "";
+  return cleanTenantId(auth.tenant_id);
 }
 
 function customerChannelTenantForAuth(auth) {
@@ -7780,7 +8345,7 @@ function customerChannelTenantForAuth(auth) {
 
 function customerPanelAuthOk(req, minRole = "viewer") {
   const auth = dashboardAuth(req);
-  if (auth.version !== 2) return adminAuthOk(req, minRole);
+  if (auth.version !== 2 || auth.session_version !== 2) return false;
   const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
   const actual = DASHBOARD_ROLES[auth.role] || 0;
   const tenantId = customerTenantForAuth(auth);
@@ -8032,6 +8597,12 @@ function channelConnectionCallbackUrlForRequest(req) {
   return origin ? origin + "/admin/channel-connections/meta/callback" : CHANNEL_CONNECTION_CALLBACK_URL;
 }
 
+function channelConnectionOAuthRedirectUrlForRequest(req, channel) {
+  const callbackUrl = channelConnectionCallbackUrlForRequest(req);
+  if (cleanChannel(channel) !== "instagram" || !INSTAGRAM_LOGIN_ENABLED || !callbackUrl) return callbackUrl;
+  return callbackUrl.endsWith("/") ? callbackUrl : callbackUrl + "/";
+}
+
 function appointmentCalendarCallbackUrlForRequest(req) {
   const base = channelConnectionCallbackUrlForRequest(req);
   if (base) return base.replace("/admin/channel-connections/meta/callback", "/admin/appointment-calendar/google/callback");
@@ -8043,6 +8614,9 @@ function externalIntegrationCallbackPage(res, options) {
     ? options.status
     : "error";
   const provider = String(options && options.provider || "integration").replace(/[^a-z0-9_-]/gi, "").slice(0, 30) || "integration";
+  const errorCode = options && options.error === "channel_asset_already_assigned"
+    ? "channel_asset_already_assigned"
+    : "";
   const returnPath = String(options && options.returnPath || "/admin/panel?tab=channels");
   const success = status === "success";
   const selection = status === "select";
@@ -8051,13 +8625,16 @@ function externalIntegrationCallbackPage(res, options) {
     ? "La autorización quedó guardada. Volverás al Customer Panel para ver el canal actualizado."
     : selection
       ? "La autorización quedó guardada. Vuelve al Customer Panel para elegir la cuenta que usará tu Nextfor."
-      : "Vuelve al Customer Panel e intenta nuevamente. Si el error continúa, habla con el equipo de NextforIA.";
+      : errorCode === "channel_asset_already_assigned"
+        ? "Esta cuenta ya pertenece a otra empresa en Nextfor. Debe desconectarse allí antes de poder asignarla de nuevo."
+        : "Vuelve al Customer Panel e intenta nuevamente. Si el error continúa, habla con el equipo de NextforIA.";
   const badge = success ? "✓ Todo listo" : selection ? "→ Un paso más" : "Revisar conexión";
   const nonce = crypto.randomBytes(18).toString("base64url");
   const payload = JSON.stringify({
     type: "nextfor-integration-result",
     provider,
     status,
+    error: errorCode,
     return_path: returnPath
   }).replace(/</g, "\\u003c");
   res.setHeader("Cache-Control", "no-store");
@@ -8463,31 +9040,27 @@ function customerPanelCapabilities(role) {
 }
 
 function customerPanelWhatsappSetup() {
-  const integration = currentRavIntegration();
-  const ready = integration.connection.real_number_active;
   return {
-    status: ready ? "ready" : "pending",
-    label: ready ? "WhatsApp en funcionamiento" : "Meta aprobada; falta activar el numero real",
-    app_review_approved: integration.app_review.approved,
-    real_number_active: integration.connection.real_number_active,
-    target_display_phone: integration.target_display_phone,
-    integration_status: integration.status
+    status: "pending",
+    label: "Configuracion de WhatsApp pendiente",
+    app_review_approved: false,
+    real_number_active: false,
+    target_display_phone: null,
+    integration_status: "pending"
   };
 }
 
 function customerPanelInstagramSetup() {
-  const ready = !!(IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID);
   return {
-    status: ready ? "ready" : "pending",
-    label: ready ? "Instagram conectado" : "Configuracion de Instagram pendiente"
+    status: "pending",
+    label: "Configuracion de Instagram pendiente"
   };
 }
 
 function customerPanelMessengerSetup() {
-  const ready = !!(MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID);
   return {
-    status: ready ? "ready" : "pending",
-    label: ready ? "Messenger conectado" : "Configuracion de Messenger pendiente"
+    status: "pending",
+    label: "Configuracion de Messenger pendiente"
   };
 }
 
@@ -8589,16 +9162,22 @@ function summarizeCustomerPanelChannel(conversations, stats) {
 }
 
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
+  const panelTenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
+  const panelStateTenantId = canonicalRuntimeTenantId(panelTenantId);
   const instagramProfiles = instagramProfilesFromTurns(rawTurns);
   const memoriesByCustomer = customerMemoriesFromTurns(rawTurns);
-  customerMemoryCache.forEach(function (entry, userId) {
-    if (entry && isMeaningfulMemory(entry.memory)) memoriesByCustomer[userId] = normalizeMemory(entry.memory);
+  customerMemoryCache.forEach(function (entry, stateKey) {
+    if (!String(stateKey).startsWith(panelStateTenantId + "\u001f")) return;
+    const userId = tenantConversationStateUserId(stateKey);
+    if (userId && entry && isMeaningfulMemory(entry.memory)) memoriesByCustomer[userId] = normalizeMemory(entry.memory);
   });
-  instagramProfileCache.forEach(function (profile, userId) {
-    if (profile && profile.username) instagramProfiles[userId] = { user_id: userId, username: profile.username, updated_at: profile.fetched_at || null };
+  instagramProfileCache.forEach(function (profile, stateKey) {
+    if (!String(stateKey).startsWith(panelStateTenantId + "\u001f")) return;
+    const userId = tenantConversationStateUserId(stateKey);
+    if (userId && profile && profile.username) instagramProfiles[userId] = { user_id: userId, username: profile.username, updated_at: profile.fetched_at || null };
   });
   const operationalTurns = (rawTurns || []).filter(function (turn) { return !isInternalAdminTurn(turn); });
-  const states = inferHandoffStates(operationalTurns, Array.from(humanHandoff.values()));
+  const states = inferHandoffStates(operationalTurns, activeHumanHandoffUsers(panelTenantId));
   const allTurns = operationalTurns.slice(0, turnLimit);
   const groups = {};
   const channelStats = {
@@ -8727,7 +9306,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
 
   const conversations = Object.keys(groups).map(function (userId) {
     const group = groups[userId];
-    const meta = metaByCustomer[userId] || { tags: [], note: "", updated_at: null };
+    const meta = metaByCustomer[userId] || { tags: [], note: "", name: "", updated_at: null };
     const memory = normalizeMemory(memoriesByCustomer[userId]);
     const active = !!(states[userId] && states[userId].active);
     const tags = normalizeCustomerTags(meta.tags);
@@ -8748,7 +9327,9 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     const channelDisplayName = group.channel === "instagram"
       ? (instagramUsername ? "@" + instagramUsername : "Instagram · …" + suffix)
       : group.channel === "messenger" ? "Messenger · …" + suffix : "+" + group.external_id;
-    const displayName = memory.preferred_name || channelDisplayName;
+    const savedCustomerName = normalizeCustomerName(meta.name);
+    const suggestedCustomerName = normalizeCustomerName(memory.preferred_name);
+    const displayName = savedCustomerName || suggestedCustomerName || channelDisplayName;
     const copyValue = group.channel === "instagram"
       ? (instagramUsername ? "@" + instagramUsername : group.external_id)
       : group.channel === "messenger" ? group.external_id : "+" + group.external_id;
@@ -8760,6 +9341,8 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       instagram_username: instagramUsername || null,
       messenger_username: null,
       display_name: displayName,
+      customer_name: savedCustomerName || null,
+      suggested_name: suggestedCustomerName && suggestedCustomerName !== savedCustomerName ? suggestedCustomerName : null,
       copy_value: copyValue,
       last_ts: group.last_ts,
       last_text: group.last_text,
@@ -9902,7 +10485,7 @@ function releaseAdminConversation(req, res) {
   }
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
-  const wasActive = humanHandoff.delete(userId);
+  const wasActive = deleteHumanHandoff(userId, tenantMeta.tenant_id);
   pendingRatings.add(userId);
   recordAdminEvent(userId, "admin_release", "[Humano] Conversación devuelta al bot.", "ok", undefined, tenantMeta);
   console.log(`[ADMIN] Released ${maskedIdentifier(userId)} (was handoff: ${wasActive})`);
@@ -9910,95 +10493,6 @@ function releaseAdminConversation(req, res) {
 }
 
 app.post("/admin/release/:userId", releaseAdminConversation);
-
-const RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT = "rav-toys-adac1e";
-const RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER = "repair:rav-instagram-handoff-v274";
-const RAV_INSTAGRAM_DELIVERY_TEST_INBOUND = "Prueba real Nextfor IG 29-07 14:40";
-const RAV_INSTAGRAM_DELIVERY_TEST_MARKER = "verification:rav-instagram-delivery-v275";
-
-async function runRavInstagramHandoffRepairOnce() {
-  if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
-    return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
-  }
-  const rows = await supabaseFetchRecent(500, { tenantId: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
-  if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
-  const turns = rows.map(normalizeTurnRow).filter(function (turn) {
-    return cleanTenantId(turn.tenantId || turn.tenant_id) === RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT;
-  });
-  const alreadyApplied = turns.some(function (turn) {
-    return Array.isArray(turn.tools) &&
-      turn.tools.includes("admin_release") &&
-      String(turn.botReply || "").includes(RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER);
-  });
-  if (alreadyApplied) return { ok: true, skipped: true, reason: "already_applied" };
-  const states = inferHandoffStates(turns, []);
-  const userIds = Object.keys(states).filter(function (userId) {
-    return states[userId].active && conversationChannel(userId) === "instagram";
-  });
-  for (const userId of userIds) {
-    humanHandoff.delete(userId);
-    await recordAdminEvent(
-      userId,
-      "admin_release",
-      "[Soporte NexforIA] Conversación devuelta a la IA (" + RAV_INSTAGRAM_HANDOFF_REPAIR_MARKER + ").",
-      "ok",
-      false,
-      { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
-    );
-  }
-  log("info", "rav_instagram_handoff_repair", {
-    tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
-    released_count: userIds.length
-  });
-  return { ok: true, skipped: false, released_count: userIds.length };
-}
-
-async function runRavInstagramDeliveryVerificationOnce() {
-  if (process.env.NODE_ENV !== "production" || !SUPABASE_ENABLED) {
-    return { ok: false, skipped: true, reason: "not_production_or_store_unavailable" };
-  }
-  const rows = await supabaseFetchRecent(1000, { allTenants: true });
-  if (!rows) return { ok: false, skipped: true, reason: "conversation_store_unavailable" };
-  const turns = rows.map(normalizeTurnRow);
-  const alreadyDelivered = turns.some(function (turn) {
-    return turn.status === "ok" &&
-      Array.isArray(turn.tools) &&
-      turn.tools.includes("support_delivery_verification") &&
-      String(turn.botReply || "").includes(RAV_INSTAGRAM_DELIVERY_TEST_MARKER);
-  });
-  if (alreadyDelivered) return { ok: true, skipped: true, reason: "already_delivered" };
-  const targetTurn = turns.find(function (turn) {
-    return conversationChannel(turn.userId) === "instagram" &&
-      String(turn.userMessage || "").trim() === RAV_INSTAGRAM_DELIVERY_TEST_INBOUND;
-  });
-  const userId = normalizeConversationUserId(targetTurn && targetTurn.userId);
-  if (!userId) return { ok: false, skipped: true, reason: "verified_test_conversation_not_found" };
-  humanHandoff.delete(userId);
-  await recordAdminEvent(
-    userId,
-    "admin_release",
-    "[Soporte NexforIA] Conversación devuelta a la IA (repair:rav-instagram-cross-scope-v276).",
-    "ok",
-    false,
-    { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
-  );
-  const reply = "¡Hola! 👋 Ya estoy de nuevo en línea y listo para ayudarte desde Instagram. ¿Qué juguete estás buscando hoy?";
-  const sent = await sendText(userId, reply, { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT });
-  await recordAdminEvent(
-    userId,
-    "support_delivery_verification",
-    reply + " (" + RAV_INSTAGRAM_DELIVERY_TEST_MARKER + ")",
-    sent ? "ok" : "error",
-    false,
-    { tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT }
-  );
-  log(sent ? "info" : "error", "rav_instagram_delivery_verification", {
-    tenant_id: RAV_INSTAGRAM_HANDOFF_REPAIR_TENANT,
-    source_tenant_id: cleanTenantId(targetTurn && targetTurn.tenantId) || null,
-    sent
-  });
-  return { ok: sent, skipped: false, sent };
-}
 
 app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) => {
   const auth = dashboardAuth(req);
@@ -10025,7 +10519,7 @@ app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) =
     return states[userId].active && conversationChannel(userId) === channel;
   });
   for (const userId of userIds) {
-    humanHandoff.delete(userId);
+    deleteHumanHandoff(userId, tenantId);
     await recordAdminEvent(
       userId,
       "admin_release",
@@ -10061,7 +10555,7 @@ app.post("/admin/resolve/:userId", (req, res) => {
   }
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
-  const wasActive = humanHandoff.delete(userId);
+  const wasActive = deleteHumanHandoff(userId, tenantMeta.tenant_id);
   pendingRatings.add(userId);
   recordAdminEvent(userId, "admin_resolve", "[Humano] Conversación marcada como resuelta por el equipo.", "ok", false, tenantMeta);
   res.json({ ok: true, userId, wasInHandoff: wasActive, conversation_status: "resolved", resolution_source: "human" });
@@ -10077,9 +10571,9 @@ app.post("/admin/takeover/:userId", async (req, res) => {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
   }
-  humanHandoff.add(userId);
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+  addHumanHandoff(userId, tenantMeta.tenant_id);
   await recordRetargetingSignal(userId, "handoff", "admin-takeover:" + Date.now(), auth.name || "admin");
   recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.", "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true });
@@ -10100,23 +10594,31 @@ app.post("/admin/send-message", async (req, res) => {
     res.status(400).json({ ok: false, error: "message_too_long" });
     return;
   }
-  humanHandoff.add(userId);
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
-  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
   const sent = await sendText(userId, text, tenantMeta);
-  recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, sent ? "ok" : "error", undefined, tenantMeta);
   if (!sent) {
+    await recordAdminEvent(
+      userId,
+      "admin_delivery_failed",
+      "[DeliveryFailure] Meta rechazó un intento de envío; el mensaje no fue entregado ni registrado como respuesta.",
+      "error",
+      false,
+      tenantMeta
+    );
     res.status(502).json({
       ok: false,
       error: "channel_delivery_failed",
       message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
       userId,
-      handoff: true,
+      handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
       meta_sent: false
     });
     return;
   }
+  addHumanHandoff(userId, tenantMeta.tenant_id);
+  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
+  await recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true, meta_sent: true });
 });
 
@@ -10139,7 +10641,7 @@ app.get("/admin/customer-meta", async (req, res) => {
   });
 });
 
-app.post("/admin/customer-meta/:userId", (req, res) => {
+app.post("/admin/customer-meta/:userId", async (req, res) => {
   if (!conversationActionAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
@@ -10149,10 +10651,22 @@ app.post("/admin/customer-meta/:userId", (req, res) => {
     res.status(400).json({ ok: false, error: "missing_user_id" });
     return;
   }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
   const meta = recordCustomerMeta(userId, {
     tags: req.body && req.body.tags,
-    note: req.body && req.body.note
-  });
+    note: req.body && req.body.note,
+    name: req.body && req.body.name
+  }, tenantId);
+  if (meta.name) {
+    const currentMemory = normalizeMemory(await loadCustomerMemory(userId, tenantId));
+    if (currentMemory.preferred_name !== meta.name) {
+      recordCustomerMemory(userId, Object.assign({}, currentMemory, {
+        preferred_name: meta.name,
+        updated_at: new Date().toISOString()
+      }), tenantId);
+    }
+  }
   res.json({ ok: true, userId, meta });
 });
 
@@ -10887,7 +11401,12 @@ app.get("/admin/customer-setups", async (req, res) => {
     setups.sort(function (a, b) {
       return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
-    res.json({ ok: true, statuses: SETUP_REVIEW_STATUSES, setups });
+    res.json({
+      ok: true,
+      statuses: SETUP_REVIEW_STATUSES,
+      setups,
+      scope_conflicts: listClientOnboardingScopeConflicts()
+    });
   } catch (error) {
     console.error("customer setups list error:", error.message);
     res.status(503).json({ ok: false, error: "setup_review_unavailable" });
@@ -11847,7 +12366,8 @@ function channelConnectionErrorResponse(res, error) {
     "connection_selection_expired",
     "invalid_asset_selection",
     "connection_not_found",
-    "legacy_connection_protected"
+    "legacy_connection_protected",
+    "channel_asset_already_assigned"
   ];
   res.status(problem.status || 503).json({
     ok: false,
@@ -11856,6 +12376,8 @@ function channelConnectionErrorResponse(res, error) {
       ? "Aún estamos preparando este paso. Habla con NextforIA."
       : problem.code === "legacy_connection_protected"
         ? "No se puede cambiar esta conexión desde aquí."
+        : problem.code === "channel_asset_already_assigned"
+          ? "Esta cuenta ya está conectada a otra empresa. Desconéctala allí antes de asignarla de nuevo."
         : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."
   });
 }
@@ -11947,7 +12469,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   const channel = cleanChannel(req.params.channel);
   const tenantId = customerChannelTenantForAuth(auth);
   try {
-    const redirectUri = channelConnectionCallbackUrlForRequest(req);
+    const redirectUri = channelConnectionOAuthRedirectUrlForRequest(req, channel);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenantId,
       channel,
@@ -12021,12 +12543,15 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
 });
 
 app.get("/admin/channel-connections/meta/callback", async (req, res) => {
-  function channelConnectionReturnUrl(state, status) {
+  function channelConnectionReturnUrl(state, status, errorCode) {
     const fallback = "/admin/panel?tab=channels";
     const raw = state && state.return_path || fallback;
     const safePath = String(raw || fallback).startsWith("/admin/") ? String(raw || fallback) : fallback;
     const separator = safePath.includes("?") ? "&" : "?";
-    return safePath + separator + "connection=" + encodeURIComponent(status);
+    const base = safePath + separator + "connection=" + encodeURIComponent(status);
+    return errorCode === "channel_asset_already_assigned"
+      ? base + "&connection_error=channel_asset_already_assigned"
+      : base;
   }
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.redirect("/admin/panel?tab=channels&connection=error");
@@ -12065,9 +12590,15 @@ app.get("/admin/channel-connections/meta/callback", async (req, res) => {
     res.redirect(returnUrl);
   } catch (error) {
     console.error("Meta channel authorization failed:", state.channel, error.internalMessage || error.message);
-    const returnUrl = channelConnectionReturnUrl(state, "error");
+    const errorCode = error instanceof ChannelConnectionError ? error.code : "";
+    const returnUrl = channelConnectionReturnUrl(state, "error", errorCode);
     if (state.return_mode === "popup") {
-      externalIntegrationCallbackPage(res, { provider: "meta", status: "error", returnPath: returnUrl });
+      externalIntegrationCallbackPage(res, {
+        provider: "meta",
+        status: "error",
+        error: errorCode,
+        returnPath: returnUrl
+      });
       return;
     }
     res.redirect(returnUrl);
@@ -12165,7 +12696,7 @@ app.post("/admin/channel-connections/:tenantId/:channel/connect", async (req, re
   }
   const channel = cleanChannel(req.params.channel);
   try {
-    const redirectUri = channelConnectionCallbackUrlForRequest(req);
+    const redirectUri = channelConnectionOAuthRedirectUrlForRequest(req, channel);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenant.id,
       channel,
@@ -12510,7 +13041,7 @@ app.get("/admin/panel/data", async (req, res) => {
     return new Date(b.ts || 0) - new Date(a.ts || 0);
   });
   const metaByCustomer = customerMetaFromTurns(turns);
-  queueInstagramProfileRefreshes(turns);
+  queueInstagramProfileRefreshes(turns, tenantId);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
   if (auth.version === 2) {
     let onboardingForPanel = null;
@@ -12770,8 +13301,9 @@ app.post("/admin/template-test", async (req, res) => {
       res.json({ ok: true, dry_run: true, templateName, payload });
       return;
     }
-    const result = await sendTemplate(userId, templateName, params);
-    recordAdminEvent(userId, "admin_send_template", "[Plantilla] " + templateName, result.ok ? "ok" : "error", false);
+    const tenantMeta = { tenant_id: customerTenantForAuth(dashboardAuth(req)) || DEFAULT_TENANT_ID };
+    const result = await sendTemplate(userId, templateName, params, tenantMeta);
+    recordAdminEvent(userId, "admin_send_template", "[Plantilla] " + templateName, result.ok ? "ok" : "error", false, tenantMeta);
     res.status(result.ok ? 200 : 502).json({ ok: result.ok, templateName, userId, result });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
@@ -12795,7 +13327,7 @@ app.get("/admin/status", (req, res) => {
     return;
   }
   res.json({
-    activeHandoffs: [...humanHandoff],
+    activeHandoffs: activeHumanHandoffUsers(),
     activeCheckouts: [...checkouts.entries()].map(([k, v]) => ({
       userId: k,
       products: v.products?.map(p => ({title: p.title, price: p.price})) || [],
@@ -12965,6 +13497,292 @@ function escapeAdminHtml(value) {
   });
 }
 
+function signatureAdminAuth(req, res) {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return null;
+  }
+  return auth;
+}
+
+function signatureWriteOriginOk(req) {
+  return isSameOriginRequestFromAny(req, ADMIN_ALLOWED_BASE_URLS);
+}
+
+function signaturePublicUrl(req, token) {
+  const base = PUBLIC_BASE_URL || ((req.secure ? "https" : "http") + "://" + req.get("host"));
+  return base.replace(/\/+$/, "") + "/admin/signature/client/" + encodeURIComponent(token);
+}
+
+function sendPlatformAccessError(res, error) {
+  const status = Number(error && error.status) || 503;
+  res.status(status).json({ ok: false, error: error && error.code || "platform_access_unavailable" });
+}
+
+app.get(["/signature/:token", "/admin/signature/client/:token"], (req, res) => {
+  renderSignatureForm(res, { token: req.params.token });
+});
+
+app.get(["/signature/api/:token", "/admin/signature/client-api/:token"], async (req, res) => {
+  try {
+    const diagnosis = await signatureService.get(req.params.token);
+    if (!diagnosis) {
+      res.status(404).json({ ok: false, error: "signature_not_found" });
+      return;
+    }
+    res.json(Object.assign({ ok: true }, diagnosis));
+  } catch (error) {
+    log("error", "signature_load_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.patch(["/signature/api/:token", "/admin/signature/client-api/:token"], async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  try {
+    const state = await signatureService.update(req.params.token, req.body || {});
+    if (!state) {
+      res.status(404).json({ ok: false, error: "signature_not_found" });
+      return;
+    }
+    const diagnosis = await signatureService.get(req.params.token);
+    res.json({ ok: true, state: diagnosis.state, priorities: diagnosis.priorities });
+  } catch (error) {
+    log("error", "signature_save_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.post(["/signature/api/:token/submit", "/admin/signature/client-api/:token/submit"], async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  try {
+    const state = await signatureService.submit(req.params.token, req.body || {});
+    if (!state) {
+      res.status(404).json({ ok: false, error: "signature_not_found" });
+      return;
+    }
+    const diagnosis = await signatureService.get(req.params.token);
+    res.json({ ok: true, state: diagnosis.state, priorities: diagnosis.priorities });
+  } catch (error) {
+    if (error && error.code === "signature_incomplete") {
+      res.status(400).json({
+        ok: false,
+        error: error.code,
+        missing: error.missing || [],
+        consent_required: !!error.consent_required
+      });
+      return;
+    }
+    log("error", "signature_submit_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.post(["/signature/api/:token/files", "/admin/signature/client-api/:token/files"], express.raw({ type: "application/octet-stream", limit: "10mb" }), async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  let filename = "";
+  try {
+    filename = decodeURIComponent(String(req.get("x-file-name") || ""));
+  } catch (_) {
+    filename = "";
+  }
+  filename = filename.replace(/[\u0000-\u001f\u007f/\\]/g, "_").trim().slice(0, 180);
+  const contentType = String(req.get("x-file-type") || "application/octet-stream").slice(0, 120);
+  if (!filename || !Buffer.isBuffer(req.body) || !req.body.length || req.body.length > 10 * 1024 * 1024) {
+    res.status(400).json({ ok: false, error: "invalid_signature_file" });
+    return;
+  }
+  try {
+    const diagnosis = await signatureService.get(req.params.token);
+    if (!diagnosis) {
+      res.status(404).json({ ok: false, error: "signature_not_found" });
+      return;
+    }
+    if ((diagnosis.state.files || []).length >= 5) {
+      res.status(400).json({ ok: false, error: "signature_file_limit" });
+      return;
+    }
+    await ensureSignatureStorageBucket();
+    const recordId = diagnosis.state.record_id;
+    const fileId = crypto.randomBytes(12).toString("base64url");
+    const objectKey = recordId + "/" + fileId + ".nxf";
+    const encrypted = encryptSignatureFile(req.body);
+    await axios.post(signatureStorageUrl(objectKey), encrypted, {
+      headers: Object.assign({}, SB_HEADERS, {
+        "Content-Type": "application/octet-stream",
+        "x-upsert": "false"
+      }),
+      maxBodyLength: 12 * 1024 * 1024,
+      timeout: 30000
+    });
+    await signatureService.addFile(req.params.token, {
+      id: fileId,
+      name: filename,
+      size: req.body.length,
+      type: contentType,
+      object_key: objectKey,
+      uploaded_at: new Date().toISOString()
+    });
+    const updated = await signatureService.get(req.params.token);
+    res.status(201).json({ ok: true, state: updated.state });
+  } catch (error) {
+    log("error", "signature_file_upload_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "signature_storage_unavailable" });
+  }
+});
+
+app.delete(["/signature/api/:token/files/:fileId", "/admin/signature/client-api/:token/files/:fileId"], async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  try {
+    const state = await signatureService.removeFile(req.params.token, req.params.fileId);
+    if (!state) {
+      res.status(404).json({ ok: false, error: "signature_not_found" });
+      return;
+    }
+    const diagnosis = await signatureService.get(req.params.token);
+    res.json({ ok: true, state: diagnosis.state });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.get("/admin/super-admin/signature", (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok) {
+    res.redirect("/admin/super-admin/login");
+    return;
+  }
+  if (auth.role !== "super_admin") {
+    res.redirect("/admin/super-admin/login?reason=role");
+    return;
+  }
+  renderSignatureAdmin(res);
+});
+
+app.get("/admin/signature/prospects", async (req, res) => {
+  if (!signatureAdminAuth(req, res)) return;
+  try {
+    res.json({ ok: true, prospects: await signatureService.list() });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.post("/admin/signature/prospects", async (req, res) => {
+  const auth = signatureAdminAuth(req, res);
+  if (!auth) return;
+  try {
+    const state = await signatureService.create(auth.name || auth.username);
+    const detail = await signatureService.get(state.token);
+    res.status(201).json({
+      ok: true,
+      prospect: {
+        record_id: detail.state.record_id,
+        token: state.token,
+        status: detail.state.status,
+        progress: detail.state.progress,
+        updated_at: detail.state.updated_at
+      },
+      url: signaturePublicUrl(req, state.token)
+    });
+  } catch (error) {
+    const code = error && error.code === "signature_persistence_required"
+      ? "signature_persistence_required"
+      : "signature_store_unavailable";
+    res.status(503).json({ ok: false, error: code });
+  }
+});
+
+app.get("/admin/signature/prospects/:recordId", async (req, res) => {
+  if (!signatureAdminAuth(req, res)) return;
+  try {
+    const detail = await signatureService.adminDetail(req.params.recordId);
+    if (!detail) {
+      res.status(404).json({ ok: false, error: "signature_not_found" });
+      return;
+    }
+    res.json(Object.assign({ ok: true }, detail));
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.get("/admin/signature/prospects/:recordId/files/:fileId", async (req, res) => {
+  if (!signatureAdminAuth(req, res)) return;
+  try {
+    const file = await signatureService.adminFile(req.params.recordId, req.params.fileId);
+    if (!file) {
+      res.status(404).json({ ok: false, error: "signature_file_not_found" });
+      return;
+    }
+    const stored = await axios.get(signatureStorageUrl(file.object_key), {
+      headers: SB_HEADERS,
+      responseType: "arraybuffer",
+      timeout: 30000
+    });
+    const clear = decryptSignatureFile(Buffer.from(stored.data));
+    const fallbackName = file.name.replace(/[^\w.\- ]/g, "_") || "documento";
+    res.setHeader("content-type", file.type || "application/octet-stream");
+    res.setHeader("content-length", String(clear.length));
+    res.setHeader("content-disposition", "attachment; filename=\"" + fallbackName.replace(/"/g, "") + "\"; filename*=UTF-8''" + encodeURIComponent(file.name));
+    res.send(clear);
+  } catch (error) {
+    log("error", "signature_file_download_failed", { error: String(error && error.message || "").slice(0, 160) });
+    res.status(503).json({ ok: false, error: "signature_storage_unavailable" });
+  }
+});
+
+app.get("/admin/signature/config", async (req, res) => {
+  if (!signatureAdminAuth(req, res)) return;
+  try {
+    res.json({ ok: true, config: await signatureService.getConfig(true) });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "signature_store_unavailable" });
+  }
+});
+
+app.put("/admin/signature/config", async (req, res) => {
+  const auth = signatureAdminAuth(req, res);
+  if (!auth) return;
+  try {
+    const config = await signatureService.saveConfig(req.body || {}, auth.name || auth.username);
+    res.json({ ok: true, config });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: "invalid_signature_config" });
+  }
+});
+
+app.get("/admin/signature/events", (req, res) => {
+  if (!signatureAdminAuth(req, res)) return;
+  res.setHeader("content-type", "text/event-stream");
+  res.setHeader("cache-control", "no-cache, no-transform");
+  res.setHeader("connection", "keep-alive");
+  res.flushHeaders();
+  res.write("retry: 2500\n\n");
+  const send = function (event) {
+    res.write("event: signature\ndata: " + JSON.stringify(event) + "\n\n");
+  };
+  const heartbeat = setInterval(function () { res.write(": keepalive\n\n"); }, 20000);
+  signatureEvents.on("signature", send);
+  req.on("close", function () {
+    clearInterval(heartbeat);
+    signatureEvents.off("signature", send);
+  });
+});
+
 app.get("/admin/super-admin", async (req, res) => {
   const auth = dashboardAuth(req);
   if (!auth.ok) {
@@ -13108,6 +13926,74 @@ app.get("/admin/super-admin/login", (req, res) => {
     currentRole: auth.ok ? auth.role : "none",
     currentRoleLabel: auth.ok ? (DASHBOARD_ROLE_LABELS[auth.role] || auth.role) : ""
   });
+});
+
+app.post("/admin/super-admin/invitations", loginRateLimiter, async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const invitation = await createSuperAdminInvitation(req.body || {}, auth, req);
+    res.status(201).json({ ok: true, invitation });
+  } catch (error) {
+    sendPlatformAccessError(res, error);
+  }
+});
+
+app.get("/admin/super-admin/setup", async (req, res) => {
+  const invite = String(req.query.invite || "");
+  try {
+    const invitation = await inspectSuperAdminInvitation(invite);
+    renderSuperAdminInviteSetup(res, {
+      valid: true,
+      invite,
+      email: invitation.email,
+      nameHint: invitation.name_hint,
+      expiresAt: invitation.expires_at
+    });
+  } catch (error) {
+    const reasons = {
+      invitation_expired: "Esta invitación venció. Pide una nueva a otro Super Admin.",
+      invitation_revoked: "Esta invitación fue revocada por NexforIA.",
+      invitation_already_used: "Esta invitación ya fue usada. Ingresa con tu correo y contraseña.",
+      invalid_invitation: "El enlace no es válido o pertenece a otra invitación."
+    };
+    renderSuperAdminInviteSetup(res, {
+      valid: false,
+      status: Number(error && error.status) || 403,
+      reason: reasons[error && error.code] || "No pudimos validar este acceso en este momento."
+    });
+  }
+});
+
+app.post("/admin/super-admin/setup", loginRateLimiter, async (req, res) => {
+  if (!signatureWriteOriginOk(req)) {
+    res.status(403).json({ ok: false, error: "invalid_request_origin" });
+    return;
+  }
+  const keys = Object.keys(req.body || {});
+  const allowed = ["invite", "name", "password", "password_confirmation"];
+  if (keys.some(function (key) { return !allowed.includes(key); }) || allowed.some(function (key) { return !keys.includes(key); })) {
+    res.status(400).json({ ok: false, error: "invalid_request" });
+    return;
+  }
+  try {
+    const user = await consumeSuperAdminInvitation(req.body || {});
+    setDashboardSessionCookie(req, res, user);
+    res.status(201).json({
+      ok: true,
+      user: { user_id: user.user_id || null, email: user.email, username: user.username, name: user.name, role: user.role },
+      redirect: "/admin/super-admin"
+    });
+  } catch (error) {
+    sendPlatformAccessError(res, error);
+  }
 });
 
 function canAccessRegisteredClient(auth, tenantId) {
@@ -13712,6 +14598,10 @@ async function buildAdminHealthResult() {
   const dercoAppointmentRecord = await loadClientOnboarding(false, DERCO_TENANT_ID).catch(function () { return null; });
   const dercoAppointmentChannels = await setupReviewChannels(DERCO_TENANT_ID).catch(function () { return []; });
   const dercoAppointmentIntegrations = await appointmentIntegrationsForRecord(dercoAppointmentRecord, DERCO_TENANT_ID, dercoAppointmentChannels);
+  const channelHealthTenantId = CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID || DEFAULT_TENANT_ID;
+  const whatsappHealthRuntime = await resolveChannelRuntimeForTenant(channelHealthTenantId, "whatsapp");
+  const instagramHealthRuntime = await resolveChannelRuntimeForTenant(channelHealthTenantId, "instagram");
+  const messengerHealthRuntime = await resolveChannelRuntimeForTenant(channelHealthTenantId, "messenger");
   const result = {
     bot: { version: BOT_VERSION, uptime_seconds: Math.round(process.uptime()) },
     env: {
@@ -13733,6 +14623,18 @@ async function buildAdminHealthResult() {
       shopify_pairing_secret_configured: String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32,
       notification_phones_count: NOTIFICATION_PHONES.length,
       dashboard_users_count: DASHBOARD_USERS.length
+    },
+    multimodal_agent: {
+      enabled: MULTIMODAL_CONFIG.enabled,
+      tenant_ids: MULTIMODAL_CONFIG.tenant_ids,
+      voice_input_enabled: MULTIMODAL_CONFIG.voice_input_enabled,
+      image_input_enabled: MULTIMODAL_CONFIG.image_input_enabled,
+      voice_replies_enabled: MULTIMODAL_CONFIG.voice_replies_enabled,
+      transcription_provider: MULTIMODAL_CONFIG.transcription_provider,
+      vision_provider: MULTIMODAL_CONFIG.vision_provider,
+      voice_provider: MULTIMODAL_CONFIG.voice_provider,
+      openai_key_present: !!OPENAI_API_KEY,
+      elevenlabs_key_present: !!ELEVENLABS_API_KEY
     },
     state: {
       active_handoffs: humanHandoff.size,
@@ -13789,21 +14691,26 @@ async function buildAdminHealthResult() {
         ? (NEXFORIA_COMMERCE_SERVICE_SECRET.length >= 32 ? "ok" : "missing_commerce_service_secret")
         : "missing_pairing_secret")
     : "missing_install_url";
-  // Probar Meta WhatsApp API (verifica que el token siga válido)
-  try {
-    const r = await axios.get(`https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}`, {
-      headers: { Authorization: `Bearer ${WA_TOKEN}` },
-      timeout: 5000
-    });
-    result.checks.meta_whatsapp = r.status === 200 ? "ok" : `status_${r.status}`;
-  } catch (e) {
-    result.checks.meta_whatsapp = `error: ${e.response?.data?.error?.message || e.message}`;
-  }
-  if (IG_ACCESS_TOKEN && IG_USER_ID) {
+  // Meta readiness is based only on each tenant's encrypted connection record.
+  if (whatsappHealthRuntime && whatsappHealthRuntime.phoneNumberId && whatsappHealthRuntime.accessToken) {
     try {
-      const r = await axios.get(`${IG_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${IG_USER_ID}`, {
+      const r = await axios.get(`https://graph.facebook.com/${META_GRAPH_VERSION}/${whatsappHealthRuntime.phoneNumberId}`, {
+        headers: { Authorization: `Bearer ${whatsappHealthRuntime.accessToken}` },
+        timeout: 5000
+      });
+      result.checks.meta_whatsapp = r.status === 200 ? "ok" : `status_${r.status}`;
+    } catch (e) {
+      result.checks.meta_whatsapp = `error: ${e.response?.data?.error?.message || e.message}`;
+    }
+  } else {
+    result.checks.meta_whatsapp = "not_configured";
+  }
+  if (instagramHealthRuntime && instagramHealthRuntime.instagramUserId && instagramHealthRuntime.accessToken) {
+    try {
+      const graphOrigin = instagramGraphOriginForRuntime(instagramHealthRuntime);
+      const r = await axios.get(`${graphOrigin}/${META_GRAPH_VERSION}/${instagramHealthRuntime.instagramUserId}`, {
         params: { fields: "id,username" },
-        headers: { Authorization: `Bearer ${IG_ACCESS_TOKEN}` },
+        headers: { Authorization: `Bearer ${instagramHealthRuntime.accessToken}` },
         timeout: 5000
       });
       result.checks.meta_instagram = r.status === 200 ? "ok" : `status_${r.status}`;
@@ -13813,11 +14720,11 @@ async function buildAdminHealthResult() {
   } else {
     result.checks.meta_instagram = "not_configured";
   }
-  if (MESSENGER_PAGE_ACCESS_TOKEN && MESSENGER_PAGE_ID) {
+  if (messengerHealthRuntime && messengerHealthRuntime.pageId && messengerHealthRuntime.accessToken) {
     try {
-      const r = await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${MESSENGER_PAGE_ID}`, {
+      const r = await axios.get(`${MESSENGER_GRAPH_BASE_URL}/${META_GRAPH_VERSION}/${messengerHealthRuntime.pageId}`, {
         params: { fields: "id,name" },
-        headers: { Authorization: `Bearer ${MESSENGER_PAGE_ACCESS_TOKEN}` },
+        headers: { Authorization: `Bearer ${messengerHealthRuntime.accessToken}` },
         timeout: 5000
       });
       result.checks.meta_messenger = r.status === 200 ? "ok" : `status_${r.status}`;
@@ -13844,8 +14751,7 @@ async function buildAdminHealthResult() {
     : appointmentStorageHealth.error || "not_configured";
   const blockers = [];
   if (!result.env.anthropic_key_present) blockers.push("missing_anthropic_key");
-  if (!result.env.wa_token_present) blockers.push("missing_wa_token");
-  if (!PHONE_NUMBER_ID) blockers.push("missing_phone_number_id");
+  if (!whatsappHealthRuntime) blockers.push("missing_tenant_whatsapp_connection");
   if (result.checks.meta_whatsapp !== "ok") blockers.push("meta_whatsapp_not_ok");
   if (result.checks.shopify_storefront !== "ok") blockers.push("shopify_storefront_not_ok");
   if (result.checks.shopify_app_install !== "ok") blockers.push("shopify_app_install_not_ready");
@@ -14406,45 +15312,11 @@ app.get("/admin/test-search", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`RAV-Bot ${BOT_VERSION} (template-ready ops) running on port ${PORT}`);
-  console.log(`WA: ${WA_TOKEN ? "OK" : "MISSING"}`);
+  console.log("Meta channel delivery: encrypted tenant connections only");
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
-  syncNextforPricingJuly2026();
-  if (customerAccessResetEnabled() && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED) {
-    resetCustomerPanelAccess({ username: "system_boot" }, { before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO })
-      .then(function (result) {
-        if ((result.disabled_users || 0) || (result.revoked_invitations || 0) || (result.archived_tenants || 0)) {
-          console.log("Customer access clean slate:", JSON.stringify({
-            before: CUSTOMER_ACCESS_RESET_CUTOFF_ISO,
-            disabled_users: result.disabled_users,
-            revoked_invitations: result.revoked_invitations,
-            archived_tenants: result.archived_tenants,
-            public_signup_enabled: CUSTOMER_PUBLIC_SIGNUP_ENABLED
-          }));
-        } else {
-          console.log("Customer access clean slate: no pre-cutoff access to reset");
-        }
-      })
-      .catch(function (error) {
-        console.error("Customer access clean slate failed:", error.message);
-      });
-  }
-  const ravInstagramHandoffRepairTimer = setTimeout(function () {
-    runRavInstagramHandoffRepairOnce()
-      .then(function (result) {
-        console.log("RAV Instagram handoff repair:", JSON.stringify(result));
-        return runRavInstagramDeliveryVerificationOnce();
-      })
-      .then(function (result) {
-        console.log("RAV Instagram delivery verification:", JSON.stringify(result));
-      })
-      .catch(function (error) {
-        console.error("RAV Instagram handoff repair failed:", error.message);
-      });
-  }, 5000);
-  ravInstagramHandoffRepairTimer.unref();
-  if (RENDER_SELF_HEALTH_URL && IG_ACCESS_TOKEN && IG_USER_ID && IG_SEND_ID) {
+  if (RENDER_SELF_HEALTH_URL) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;
     const runSelfCheck = async function () {
       try {

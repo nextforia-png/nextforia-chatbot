@@ -130,7 +130,7 @@ function evolveCustomerMemory(currentMemory, event) {
   }
 
   const explicitName = extractPreferredName(input.userMessage);
-  if (explicitName && (qualifies || isMeaningfulMemory(current))) {
+  if (explicitName) {
     next.preferred_name = explicitName;
     qualifies = true;
     signal = signal || "explicit_name";

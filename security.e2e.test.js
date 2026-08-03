@@ -42,6 +42,7 @@ function waitForServer(child, port) {
   const base = "http://127.0.0.1:" + port;
   const dashboardKey = "security-e2e-dashboard-key";
   const appSecret = "security-e2e-meta-app-secret";
+  const instagramAppSecret = "security-e2e-instagram-app-secret";
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
     cwd: __dirname,
     env: Object.assign({}, process.env, {
@@ -54,6 +55,8 @@ function waitForServer(child, port) {
       ]),
       DASHBOARD_SESSION_SECRET: "security-e2e-session-secret-value",
       META_APP_SECRET: appSecret,
+      INSTAGRAM_LOGIN_APP_ID: "security-e2e-instagram-app-id",
+      INSTAGRAM_LOGIN_APP_SECRET: instagramAppSecret,
       VERIFY_TOKEN: "security-e2e-verify-token",
       WA_TOKEN: "e2e-not-used",
       ANTHROPIC_API_KEY: "e2e-not-used",
@@ -172,6 +175,25 @@ function waitForServer(child, port) {
       body: webhookBody
     });
     assert.strictEqual(response.status, 200, "valid Meta signature should be accepted");
+
+    const instagramWebhookBody = JSON.stringify({ object: "instagram", entry: [] });
+    const instagramSignature = "sha256=" + crypto.createHmac("sha256", instagramAppSecret)
+      .update(instagramWebhookBody).digest("hex");
+    response = await fetch(base + "/instagram/webhook", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-hub-signature-256": instagramSignature },
+      body: instagramWebhookBody
+    });
+    assert.strictEqual(response.status, 200, "Instagram Login webhooks must accept the Instagram product secret");
+
+    const wrongInstagramSignature = "sha256=" + crypto.createHmac("sha256", "wrong-instagram-secret")
+      .update(instagramWebhookBody).digest("hex");
+    response = await fetch(base + "/instagram/webhook", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-hub-signature-256": wrongInstagramSignature },
+      body: instagramWebhookBody
+    });
+    assert.strictEqual(response.status, 401, "Instagram webhooks signed by an unknown app must fail closed");
 
     console.log("security e2e tests passed");
   } finally {

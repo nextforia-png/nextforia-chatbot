@@ -25,6 +25,12 @@ function run() {
   assert.strictEqual(casual.changed, false);
   assert.strictEqual(casual.memory.purchase_stage, "none");
 
+  const introduced = evolve(null, { userMessage: "Hola, me llamo Camila" });
+  assert.strictEqual(introduced.changed, true);
+  assert.strictEqual(introduced.memory.preferred_name, "Camila");
+  assert.strictEqual(introduced.memory.purchase_stage, "none");
+  assert.deepStrictEqual(introduced.memory.source_signals, ["explicit_name"]);
+
   const intent = evolve(null, { userMessage: "Hola, me llamo Laura y quiero comprar hoy" });
   assert.strictEqual(intent.changed, true);
   assert.strictEqual(intent.memory.preferred_name, "Laura");

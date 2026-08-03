@@ -62,6 +62,165 @@ function expectCode(promise, code) {
   assert(!waUrl.toString().includes("meta-app-secret"));
   const instagramUrl = new URL(meta.authorizationUrl("instagram", state));
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));
+  assert(instagramUrl.searchParams.get("scope").includes("business_management"));
+
+  const directInstagramRequests = [];
+  const directInstagramAxios = async function (request) {
+    directInstagramRequests.push(request);
+    if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps") && request.method === "POST") {
+      return { data: { success: true } };
+    }
+    if (request.url.endsWith("/v25.0/ig-direct/subscribed_apps")) {
+      // Meta may return an internal platform-app id for a direct Instagram
+      // Login subscription. Its app-scoped token and exact field set are the
+      // authoritative installation proof in that response shape.
+      return { data: { data: [{
+        id: "internal-instagram-platform-app-id",
+        subscribed_fields: ["messages", "messaging_postbacks", "message_reactions", "messaging_seen"]
+      }] } };
+    }
+    if (request.url.endsWith("/v25.0/ig-direct")) {
+      return { data: { user_id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
+    }
+    throw new Error("Unexpected direct Instagram request: " + request.url);
+  };
+  directInstagramAxios.post = async function (url, body, options) {
+    directInstagramRequests.push({ method: "POST", url, body, options });
+    assert(url.endsWith("/oauth/access_token"));
+    assert(String(body).includes("client_id=2073069230231933"));
+    assert(!String(body).includes("state-secret-value"));
+    return { data: { access_token: "short-instagram-token", user_id: "ig-direct" } };
+  };
+  directInstagramAxios.postForm = async function (url, body, options) {
+    directInstagramRequests.push({ method: "POST_FORM", url, body, options });
+    assert(url.endsWith("/oauth/access_token"));
+    assert.strictEqual(body.client_id, "2073069230231933");
+    assert.strictEqual(body.redirect_uri, "https://nextforia.com/admin/channel-connections/meta/callback");
+    assert.strictEqual(body.code, "instagram-code");
+    assert(!JSON.stringify(body).includes("state-secret-value"));
+    return { data: { data: [{ access_token: "short-instagram-token", user_id: "ig-direct" }] } };
+  };
+  directInstagramAxios.get = async function (url, options) {
+    directInstagramRequests.push({ method: "GET", url, options });
+    if (url.endsWith("/access_token")) return { data: { access_token: "long-instagram-token" } };
+    if (url.endsWith("/v25.0/me")) {
+      return { data: { user_id: "ig-direct", username: "nextfor.ia", name: "Nextfor IA" } };
+    }
+    throw new Error("Unexpected direct Instagram GET: " + url);
+  };
+  const directInstagramMeta = new MetaChannelProvider({
+    appId: "facebook-app-id",
+    appSecret: "facebook-app-secret",
+    instagramAppId: "2073069230231933",
+    instagramAppSecret: "instagram-app-secret",
+    instagramLoginEnabled: true,
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: directInstagramAxios
+  });
+  const directInstagramUrl = new URL(directInstagramMeta.authorizationUrl("instagram", state));
+  assert.strictEqual(directInstagramUrl.hostname, "www.instagram.com");
+  assert.strictEqual(directInstagramUrl.searchParams.get("client_id"), "2073069230231933");
+  assert.strictEqual(directInstagramUrl.searchParams.get("force_authentication"), null);
+  assert.strictEqual(directInstagramUrl.searchParams.get("force_reauth"), null);
+  assert(directInstagramUrl.searchParams.get("scope").includes("instagram_business_manage_messages"));
+  assert(!directInstagramUrl.searchParams.get("scope").includes("pages_show_list"));
+  let directCredential = await directInstagramMeta.exchangeCode("instagram-code", {
+    channel: "instagram",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback"
+  });
+  directCredential = await directInstagramMeta.extendUserAccessToken(directCredential);
+  assert.strictEqual(directCredential.login_type, "instagram");
+  assert.strictEqual(directCredential.access_token, "long-instagram-token");
+  assert(directInstagramRequests.some(function (request) { return request.method === "POST_FORM"; }));
+  const directCandidates = await directInstagramMeta.discoverAssets("instagram", directCredential);
+  assert.strictEqual(directCandidates.length, 1);
+  assert.strictEqual(directCandidates[0].account_label, "@nextfor.ia");
+  assert.strictEqual(directCandidates[0].page_id, undefined);
+  const activatedDirectInstagram = await directInstagramMeta.activate("instagram", directCandidates[0]);
+  assert.strictEqual(activatedDirectInstagram.login_type, "instagram");
+  assert(directInstagramRequests.some(function (request) {
+    return request.url && request.url.includes("graph.instagram.com/v25.0/ig-direct/subscribed_apps");
+  }));
+  const directInstagramVerification = await directInstagramMeta.verify("instagram", activatedDirectInstagram);
+  assert.strictEqual(directInstagramVerification.ok, true);
+
+  const failedDirectInstagramAxios = async function () {
+    throw new Error("Unexpected failed direct Instagram request");
+  };
+  failedDirectInstagramAxios.post = async function () {
+    const error = new Error("Request failed with status code 400");
+    error.response = { data: { error_type: "OAuthException", code: 400, error_message: "Invalid platform app" } };
+    throw error;
+  };
+  failedDirectInstagramAxios.postForm = failedDirectInstagramAxios.post;
+  const failedDirectInstagramMeta = new MetaChannelProvider({
+    instagramAppId: "2073069230231933",
+    instagramAppSecret: "instagram-app-secret",
+    instagramLoginEnabled: true,
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: failedDirectInstagramAxios
+  });
+  let failedDirectInstagramError = null;
+  try {
+    await failedDirectInstagramMeta.exchangeCode("instagram-code", { channel: "instagram" });
+  } catch (error) {
+    failedDirectInstagramError = error;
+  }
+  assert.strictEqual(failedDirectInstagramError && failedDirectInstagramError.code, "invalid_authorization");
+  assert.strictEqual(failedDirectInstagramError && failedDirectInstagramError.internalMessage, "Invalid platform app");
+
+  const portfolioRequests = [];
+  const portfolioMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      portfolioRequests.push(request.url);
+      if (request.url.endsWith("/me/accounts")) {
+        return { data: { data: [{
+          id: "page-rav",
+          name: "RAV Toys",
+          access_token: "page-token-rav",
+          instagram_business_account: { id: "ig-rav", username: "ravtoys" }
+        }] } };
+      }
+      if (request.url.endsWith("/me/businesses")) {
+        return { data: { data: [
+          { id: "business-rav", name: "RAV Toys Portfolio" },
+          { id: "business-nextfor", name: "NextforIA Portfolio" }
+        ] } };
+      }
+      if (request.url.endsWith("/business-rav/owned_pages")) {
+        return { data: { data: [{
+          id: "page-rav",
+          name: "RAV Toys",
+          instagram_business_account: { id: "ig-rav", username: "ravtoys" }
+        }] } };
+      }
+      if (request.url.endsWith("/business-nextfor/owned_pages")) {
+        return { data: { data: [{
+          id: "page-nextfor",
+          name: "Nextfor IA",
+          access_token: "page-token-nextfor",
+          instagram_business_account: { id: "ig-nextfor", username: "nextforia" }
+        }] } };
+      }
+      if (request.url.endsWith("/client_pages")) return { data: { data: [] } };
+      throw new Error("Unexpected Meta request: " + request.url);
+    }
+  });
+  const portfolioCandidates = await portfolioMeta.discoverAssets("instagram", "user-access-token");
+  assert.strictEqual(portfolioCandidates.length, 2);
+  const ravPortfolioCandidate = portfolioCandidates.find(function (candidate) { return candidate.id === "ig:ig-rav"; });
+  const nextforPortfolioCandidate = portfolioCandidates.find(function (candidate) { return candidate.id === "ig:ig-nextfor"; });
+  assert(ravPortfolioCandidate.detail.includes("RAV Toys Portfolio"));
+  assert.strictEqual(ravPortfolioCandidate.access_token, "page-token-rav");
+  assert.strictEqual(ravPortfolioCandidate.meta_business_id, "business-rav");
+  assert(nextforPortfolioCandidate.detail.includes("NextforIA Portfolio"));
+  assert.strictEqual(nextforPortfolioCandidate.account_label, "@nextforia");
+  assert(portfolioRequests.some(function (url) { return url.endsWith("/business-nextfor/owned_pages"); }));
 
   const activationRequests = [];
   const activationMeta = new MetaChannelProvider({
@@ -95,9 +254,21 @@ function expectCode(promise, code) {
   assert.strictEqual(activatedInstagram.account_label, "@ravtoys");
   assert.strictEqual(
     activationRequests[0].params.subscribed_fields,
-    "messages,messaging_postbacks,message_reactions,message_reads"
+    "messages,messaging_postbacks,message_reactions,messaging_seen"
   );
-  assert(!activationRequests[0].params.subscribed_fields.includes("messaging_seen"));
+  assert(!activationRequests[0].params.subscribed_fields.includes("message_reads"));
+
+  activationRequests.length = 0;
+  await activationMeta.activate("messenger", {
+    page_id: "page-rav",
+    account_label: "RAV Toys",
+    access_token: "page-access-token"
+  });
+  assert.strictEqual(
+    activationRequests[0].params.subscribed_fields,
+    "messages,messaging_postbacks,messaging_optins,message_deliveries,message_reads"
+  );
+  assert(!activationRequests[0].params.subscribed_fields.includes("messaging_reads"));
 
   activationRequests.length = 0;
   const activatedWhatsApp = await activationMeta.activate("whatsapp", {
@@ -164,6 +335,8 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(currentShapeVerification.ok, true);
 
+  let verificationResponses = [{ ok: false, error: "Meta token expired" }];
+  let subscriptionRepairs = 0;
   const provider = {
     configured: function () { return true; },
     authorizationUrl: function (channel, signedState) {
@@ -203,7 +376,13 @@ function expectCode(promise, code) {
       return candidate;
     },
     verify: async function () {
-      return { ok: false, error: "Meta token expired" };
+      return verificationResponses.length > 1
+        ? verificationResponses.shift()
+        : verificationResponses[0];
+    },
+    subscribe: async function () {
+      subscriptionRepairs++;
+      return { ok: true };
     },
     disconnect: async function (_, credential) {
       assert.strictEqual(credential.access_token, "secret-page-token-two");
@@ -254,6 +433,113 @@ function expectCode(promise, code) {
   assert.strictEqual(adoptedStored.credential_source, "oauth");
   assert(adoptedStored.credentials_ciphertext.startsWith("enc:v1:"));
   assert(!adoptedStored.credentials_ciphertext.includes("system-user-token"));
+
+  let duplicateActivations = 0;
+  const isolatedAssetStore = new InMemoryChannelConnectionStore();
+  const isolatedAssetService = createChannelConnectionService({
+    store: isolatedAssetStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) {
+        duplicateActivations++;
+        return candidate;
+      }
+    },
+    encryptionKey
+  });
+  await isolatedAssetService.adoptExisting("tenant-rav", "instagram", "owner@rav.example", {
+    account_id: "ig-rav",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav",
+    page_id: "page-rav",
+    access_token: "rav-instagram-token"
+  });
+  assert.strictEqual(duplicateActivations, 1);
+  await expectCode(isolatedAssetService.adoptExisting("tenant-nextfor", "instagram", "owner@nextfor.example", {
+    account_id: "ig-rav",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav",
+    page_id: "page-rav",
+    access_token: "wrong-tenant-token"
+  }), "channel_asset_already_assigned");
+  assert.strictEqual(duplicateActivations, 1, "a conflicting asset must be rejected before Meta subscription");
+  assert.strictEqual((await isolatedAssetStore.get("tenant-rav", "instagram")).status, "connected");
+  assert.strictEqual((await isolatedAssetStore.get("tenant-nextfor", "instagram")).status, "needs_attention");
+
+  const reviewOwnershipStore = new InMemoryChannelConnectionStore();
+  let reviewOwnershipActivations = 0;
+  const reviewOwnershipService = createChannelConnectionService({
+    store: reviewOwnershipStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) {
+        reviewOwnershipActivations++;
+        return candidate;
+      }
+    },
+    encryptionKey,
+    replaceableOwnershipTenant: function (ownerTenantId, requestedTenantId) {
+      return /^meta-app-review-/.test(ownerTenantId) && !/^meta-app-review-/.test(requestedTenantId);
+    }
+  });
+  await reviewOwnershipService.adoptExisting("meta-app-review-nextforia-demo", "instagram", "reviewer@meta.example", {
+    account_id: "ig-nextfor",
+    account_label: "@nextfor.ia",
+    instagram_user_id: "ig-nextfor",
+    access_token: "review-instagram-token"
+  });
+  const liveOwnership = await reviewOwnershipService.adoptExisting("nextforia-live", "instagram", "admin@nextforia.example", {
+    account_id: "ig-nextfor",
+    account_label: "@nextfor.ia",
+    instagram_user_id: "ig-nextfor",
+    access_token: "live-instagram-token"
+  });
+  assert.strictEqual(liveOwnership.status, "connected");
+  assert.strictEqual(reviewOwnershipActivations, 2);
+  const retiredReviewOwnership = await reviewOwnershipStore.get("meta-app-review-nextforia-demo", "instagram");
+  assert.strictEqual(retiredReviewOwnership.status, "disconnected");
+  assert.strictEqual(retiredReviewOwnership.instagram_user_id, null);
+  assert.strictEqual(retiredReviewOwnership.credentials_ciphertext, null);
+  assert(reviewOwnershipStore.audit.some(function (event) {
+    return event.action === "temporary_ownership_released" &&
+      event.details.replacement_tenant_id === "nextforia-live";
+  }));
+  await expectCode(reviewOwnershipService.adoptExisting("meta-app-review-second-demo", "instagram", "reviewer@meta.example", {
+    account_id: "ig-nextfor",
+    account_label: "@nextfor.ia",
+    instagram_user_id: "ig-nextfor",
+    access_token: "second-review-token"
+  }), "channel_asset_already_assigned");
+
+  const aliasedAssetStore = new InMemoryChannelConnectionStore();
+  const aliasedAssetService = createChannelConnectionService({
+    store: aliasedAssetStore,
+    provider: {
+      configured: function () { return true; },
+      activate: async function (_, candidate) { return candidate; }
+    },
+    encryptionKey,
+    tenantAliases: { "rav-toys-adac1e": "rav-toys" }
+  });
+  await aliasedAssetService.adoptExisting("rav-toys", "instagram", "legacy@rav.example", {
+    account_id: "ig-rav-alias",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav-alias",
+    access_token: "legacy-rav-token"
+  });
+  const aliasedAdoption = await aliasedAssetService.adoptExisting("rav-toys-adac1e", "instagram", "admin@rav.example", {
+    account_id: "ig-rav-alias",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav-alias",
+    access_token: "current-rav-token"
+  });
+  assert.strictEqual(aliasedAdoption.status, "connected");
+  await expectCode(aliasedAssetService.adoptExisting("tenant-other", "instagram", "admin@other.example", {
+    account_id: "ig-rav-alias",
+    account_label: "@ravtoys",
+    instagram_user_id: "ig-rav-alias",
+    access_token: "wrong-owner-token"
+  }), "channel_asset_already_assigned");
 
   let repairedSubscriptions = 0;
   const repairStore = new InMemoryChannelConnectionStore();
@@ -370,10 +656,24 @@ function expectCode(promise, code) {
   assert.strictEqual(publicAttention.status, "needs_attention");
   assert.strictEqual("last_error" in publicAttention, false);
 
+  verificationResponses = [
+    { ok: false, error: "Meta webhook subscription is missing" },
+    { ok: true, account_label: "Cuenta Dos" }
+  ];
+  const repairedVerification = await service.verify("tenant-a", "instagram", "support@nextforia.com");
+  assert.strictEqual(repairedVerification.status, "connected");
+  assert.strictEqual(repairedVerification.webhook_status, "subscribed");
+  assert.strictEqual(subscriptionRepairs, 1);
+
   const credentialBeforeDisconnect = store.rows[0].credentials_ciphertext;
   const disconnected = await service.disconnect("tenant-a", "instagram", "admin@a.example");
   assert.strictEqual(disconnected.status, "disconnected");
+  assert.strictEqual(disconnected.account_label, null);
   assert.strictEqual(store.rows[0].credentials_ciphertext, null);
+  assert.strictEqual(store.rows[0].account_id, null);
+  assert.strictEqual(store.rows[0].account_label, null);
+  assert.strictEqual(store.rows[0].instagram_user_id, null);
+  assert.strictEqual(store.rows[0].page_id, null);
   assert(store.audit.some(function (event) {
     return event.action === "disconnected" && event.actor === "admin@a.example";
   }));
@@ -472,8 +772,32 @@ function expectCode(promise, code) {
   });
   const rav = await legacyService.listTenant("rav-toys", { superAdmin: true });
   assert.strictEqual(rav.find(function (row) { return row.channel === "whatsapp"; }).protected_legacy, true);
+  assert.strictEqual(rav.find(function (row) { return row.channel === "whatsapp"; }).status, "needs_attention");
   await expectCode(legacyService.disconnect("rav-toys", "whatsapp", "super-admin"), "legacy_connection_protected");
   await expectCode(legacyService.begin("rav-toys", "whatsapp", "super-admin", state), "legacy_connection_protected");
+  await legacyStore.upsert({
+    tenant_id: "rav-toys",
+    channel: "whatsapp",
+    status: "disconnected",
+    account_id: "stale-phone",
+    account_label: "Stale account",
+    credentials_ciphertext: null
+  });
+  const ravWithStaleRow = await legacyService.listTenant("rav-toys", { superAdmin: true });
+  assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).status, "needs_attention");
+  assert.strictEqual(ravWithStaleRow.find(function (row) { return row.channel === "whatsapp"; }).account_id, "rav-phone");
+  await legacyStore.upsert({
+    tenant_id: "tenant-wrong-owner",
+    channel: "whatsapp",
+    status: "connected",
+    account_id: "rav-phone",
+    phone_number_id: "rav-phone",
+    account_label: "Duplicated RAV phone",
+    credentials_ciphertext: "enc:v1:duplicate"
+  });
+  const wrongOwnerRows = await legacyService.listTenant("tenant-wrong-owner", { superAdmin: true });
+  assert.strictEqual(wrongOwnerRows.find(function (row) { return row.channel === "whatsapp"; }).status, "not_connected");
+  assert.strictEqual(wrongOwnerRows.find(function (row) { return row.channel === "whatsapp"; }).account_id, null);
   await legacyStore.upsert({
     tenant_id: "rav-toys",
     channel: "whatsapp",

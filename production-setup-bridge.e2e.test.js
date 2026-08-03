@@ -46,6 +46,16 @@ async function login(base) {
   return String(response.headers.get("set-cookie") || "").split(";")[0];
 }
 
+async function loginCustomer(base) {
+  const response = await fetch(base + "/admin/login", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: base },
+    body: JSON.stringify({ email: "admin@cliente-produccion.example", password: "CustomerPassword2026" })
+  });
+  assert.strictEqual(response.status, 200);
+  return String(response.headers.get("set-cookie") || "").split(";")[0];
+}
+
 function completedAnswers() {
   return {
     setup_goal: "customer_service",
@@ -109,7 +119,20 @@ function completedAnswers() {
       ANTHROPIC_API_KEY: "production-setup-anthropic-dummy",
       SUPABASE_URL: "",
       SUPABASE_KEY: "",
-      CUSTOMER_ACCESS_V2_ENABLED: "0",
+      CUSTOMER_ACCESS_V2_ENABLED: "1",
+      CUSTOMER_ACCESS_TEST_MODE: "1",
+      CUSTOMER_ACCESS_TEST_USERS: JSON.stringify([{
+        user_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        tenant_id: "cliente-producci-n-qa",
+        company_name: "Cliente Producción QA",
+        email: "admin@cliente-produccion.example",
+        password: "CustomerPassword2026",
+        role: "admin",
+        plan_id: "nextfor-aura",
+        assigned_bot_id: "atencion-cliente",
+        setup_completed: false
+      }]),
+      CUSTOMER_PANEL_BASE_URL: "https://customer-panel.production-setup.example",
       PAYMENTS_V1_ENABLED: "0"
     }),
     stdio: ["ignore", "pipe", "pipe"]
@@ -118,9 +141,10 @@ function completedAnswers() {
   try {
     await waitForServer(child, port);
     const cookie = await login(base);
+    const customerCookie = await loginCustomer(base);
     let response = await fetch(base + "/admin/client-onboarding/data", {
       method: "PUT",
-      headers: { "content-type": "application/json", origin: base, cookie },
+      headers: { "content-type": "application/json", origin: base, cookie: customerCookie },
       body: JSON.stringify({ status: "completed", answers: completedAnswers() })
     });
     assert.strictEqual(response.status, 200);

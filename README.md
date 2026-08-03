@@ -18,7 +18,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 - **Memoria comercial persistente** — recuerda nombre preferido, productos de interés, etapa de compra y pedidos verificados sin guardar datos sensibles del checkout
 - ⭐ **Calificaciones** — pide rating 1-5 al cierre o post-handoff; rating bajo escala a humano
 - 🤝 **Handoff a humano** — Eliana (asesora comercial) recibe alertas en su WhatsApp
-- 🙈 **Manejo cálido de multimedia** — explica que aún no ve imágenes y guía al cliente a mandar links
+- **Entradas multimodales** — entiende notas de voz e imágenes en WhatsApp y las integra a la conversación normal del bot
 
 ---
 
@@ -65,6 +65,14 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
 | `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
+| `OPENAI_API_KEY` | API key usada por el agente multimodal cuando se activan voz o imagen |
+| `OPENAI_TRANSCRIPTION_MODEL` | Modelo de transcripción multimodal (default: `gpt-4o-mini-transcribe`) |
+| `OPENAI_VISION_MODEL` | Modelo de análisis de imágenes (default: `gpt-4.1-mini`) |
+| `MULTIMODAL_AGENT_ENABLED` | Gate maestro del agente de audio/imagen |
+| `MULTIMODAL_AGENT_TENANT_IDS` | Alcance de la función multimodal; usa `*` para todos los bots Nextfor o una lista CSV para una activación limitada |
+| `MULTIMODAL_VOICE_INPUT_ENABLED` | Permite transcribir notas de voz de WhatsApp y pasarlas al bot como texto controlado |
+| `MULTIMODAL_IMAGE_INPUT_ENABLED` | Permite analizar imágenes de WhatsApp y pasar hallazgos al bot |
+| `MULTIMODAL_VOICE_REPLIES_ENABLED` | Reservado para respuestas de voz con ElevenLabs; mantener `0` hasta validar envío de audio |
 | `AI_STANDARD_MAX_TOKENS` | Máximo de salida para conversaciones normales (default: `1000`) |
 | `AI_STANDARD_HISTORY_MESSAGES` | Historial usado en conversaciones normales (default: `8`) |
 | `AI_ENGAGED_MAX_TOKENS` | Máximo de salida para consultas comerciales (default: `1400`) |
@@ -81,7 +89,7 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `SUPABASE_URL` | URL del proyecto Supabase para logs persistentes |
 | `SUPABASE_KEY` | Service key de Supabase para `conversation_logs` |
 | `DATA_ENCRYPTION_KEY` | Clave independiente de 32 bytes en base64url; cifra cuerpos de conversación y registros internos antes de Supabase |
-| `SUPABASE_TENANT_COLUMNS_ENABLED` | Activa escritura y filtrado por tenant después de aplicar la migración Phase A |
+| `SUPABASE_TENANT_COLUMNS_ENABLED` | Debe ser `1` fuera de desarrollo; producción fuerza escritura y filtrado por `tenant_id` para evitar mezclar clientes |
 | `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
 | `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de la pantalla simple de conexiones: WhatsApp primero, Instagram opcional; solo Staging hasta aprobación explícita |
 | `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
@@ -125,6 +133,8 @@ Bot de atención al cliente para RAV Toys (Medellín, Colombia), preparado para 
 | `GET /admin/access-model` | Modelo futuro de acceso: `super_admin` NexforIA y roles Admin del cliente |
 | `GET /admin/super-admin` | Panel de plataforma NexforIA; acceso exclusivo para `super_admin` |
 | `GET /admin/super-admin/login` | Entrada interna y separada para usuarios Super Admin de NexforIA |
+| `GET /admin/super-admin/signature` | Consola Nextfor Signature: enlaces únicos, respuestas en vivo, resúmenes y editor del formulario |
+| `GET /admin/signature/client/:token` | Diagnóstico privado y reutilizable de un prospecto; autoguarda y permite continuar después |
 | `GET /admin/integrations/rav/test` | Super admin: prueba segura de la integración #1 sin enviar mensajes reales |
 | `GET /admin/health` | Estado mínimo público; con sesión o `X-Dashboard-Key` incluye Shopify/Meta/Supabase y readiness |
 | `GET /admin/stats` | Snapshot protegido del estado: handoffs activos, ratings pendientes, carritos en curso |
@@ -420,6 +430,7 @@ El servicio en Render auto-deploya cuando hay un push a la rama `main` de este r
 | v80 | Super Admin Panel rediseñado desde el handoff NexforIA: navegación de plataforma, clientes registrados, salud, readiness y estados futuros sin datos ficticios |
 | v81 | Entrada Super Admin separada del acceso de clientes, con cambio seguro de sesión y validación estricta del rol de plataforma |
 | v74 | Ventas asistidas y cierres por confirmar en el resumen del cliente |
+| v308 | Aislamiento de activos Meta: Instagram no puede pertenecer a dos empresas y RAV conserva su conexión heredada |
 
 ---
 

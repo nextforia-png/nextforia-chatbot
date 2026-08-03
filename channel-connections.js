@@ -485,9 +485,11 @@ class MetaChannelProvider {
   }
 
   async exchangeCode(code, options) {
+    const channel = cleanChannel(options && options.channel);
+    const omitRedirectUri = channel === "whatsapp" && options && options.omitRedirectUri === true;
     const redirectUri = cleanText(options && options.redirectUri || this.redirectUri, 500);
-    if (!redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
-    if (cleanChannel(options && options.channel) === "instagram" && this.instagramLoginEnabled) {
+    if (!omitRedirectUri && !redirectUri) throw new ChannelConnectionError("channel_oauth_not_configured", 503);
+    if (channel === "instagram" && this.instagramLoginEnabled) {
       try {
         const payload = {
           client_id: this.instagramAppId,
@@ -513,13 +515,14 @@ class MetaChannelProvider {
       }
     }
     try {
+      const params = {
+        client_id: this.appId,
+        client_secret: this.appSecret,
+        code: cleanText(code, 2000)
+      };
+      if (!omitRedirectUri) params.redirect_uri = redirectUri;
       const response = await this.axios.get(this.graphOrigin + "/" + this.graphVersion + "/oauth/access_token", {
-        params: {
-          client_id: this.appId,
-          client_secret: this.appSecret,
-          redirect_uri: redirectUri,
-          code: cleanText(code, 2000)
-        },
+        params,
         timeout: 10000
       });
       const token = cleanText(response.data && response.data.access_token, 4096);
@@ -857,7 +860,14 @@ class MetaChannelProvider {
     if (!wabaId || !phoneNumberId) {
       throw new ChannelConnectionError("invalid_authorization", 422, "Embedded Signup did not return the WhatsApp asset IDs");
     }
-    const accessToken = await this.exchangeCode(code, options);
+    // Embedded Signup runs inside Meta's JS SDK. Its OAuth dialog uses Meta's
+    // dynamic xd_arbiter URL, so sending our server callback as redirect_uri
+    // makes the authorization-code exchange fail. Meta's Embedded Signup
+    // exchange is app-id + app-secret + code only.
+    const accessToken = await this.exchangeCode(code, Object.assign({}, options || {}, {
+      channel: "whatsapp",
+      omitRedirectUri: true
+    }));
     try {
       const phones = await this.graph(encodeURIComponent(wabaId) + "/phone_numbers", accessToken, {
         params: { fields: "id,display_phone_number,verified_name,quality_rating", limit: 100 }

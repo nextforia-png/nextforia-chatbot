@@ -69,7 +69,7 @@ function postSignedWebhook(base, route, secret, body) {
   assert.match(source, /instagramRuntimeState\.last_error_type = metaError\.type \|\| err\.code \|\| null/);
   assert.match(source, /record\.status === "connected" && !record\.protected_legacy/);
   assert.doesNotMatch(source, /const ravAliasTenant = cleanTenantId\(CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID\)/);
-  assert.match(source, /function customerTenantForAuth\(auth\)[\s\S]*?tenantId === DEFAULT_TENANT_ID[\s\S]*?return CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
+  assert.match(source, /function customerTenantForAuth\(auth\)[\s\S]*?auth\.version !== 2[\s\S]*?auth\.session_version !== 2[\s\S]*?return cleanTenantId\(auth\.tenant_id\)/);
   assert.match(source, /function isRavTenantId\(tenantId\)[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
   assert.match(source, /handoffCustomerReply[\s\S]*?recordTurn\(/);
   assert.doesNotMatch(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);

@@ -88,6 +88,11 @@ const {
   pendingQuestionnaireItems
 } = require("./client-onboarding");
 const {
+  assertClientOnboardingRecordScope,
+  clientOnboardingRecordId,
+  inspectClientOnboardingScope
+} = require("./client-onboarding-scope");
+const {
   INDUSTRY_PROFILES,
   copyDefaults: defaultBotSetupAnswers,
   createSetupRecord
@@ -851,6 +856,7 @@ let dashboardCustomerUserCache = { loaded_at: 0, user: null };
 let superAdminAccessCache = { loaded_at: 0, users: [], invitations: [] };
 let botSetupCache = { loaded_at: 0, draft: null, published: null };
 const clientOnboardingCacheByTenant = new Map();
+const clientOnboardingScopeConflictByKey = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
@@ -5873,8 +5879,26 @@ async function persistBotSetup(answers, status, auth) {
   return record;
 }
 
-function clientOnboardingRecordId(tenantId) {
-  return "client-onboarding:" + (cleanTenantId(tenantId) || DEFAULT_TENANT_ID);
+function registerClientOnboardingScopeConflict(turn, assessment) {
+  if (!assessment || assessment.ok) return;
+  const conflict = {
+    row_id: turn && turn._id || null,
+    timestamp: turn && turn.ts || null,
+    outer_tenant_id: assessment.outer_tenant_id,
+    record_tenant_id: assessment.record_tenant_id,
+    record_user_id: assessment.record_user_id,
+    expected_user_id: assessment.expected_user_id,
+    reasons: assessment.reasons.slice()
+  };
+  const key = [conflict.row_id, conflict.timestamp, conflict.record_user_id, conflict.reasons.join(",")].join(":");
+  if (!clientOnboardingScopeConflictByKey.has(key)) {
+    clientOnboardingScopeConflictByKey.set(key, conflict);
+    log("warn", "client_onboarding_scope_conflict", conflict);
+  }
+}
+
+function listClientOnboardingScopeConflicts() {
+  return Array.from(clientOnboardingScopeConflictByKey.values()).slice(-200);
 }
 
 function parseClientOnboardingTurn(turn, tenantId) {
@@ -5882,7 +5906,12 @@ function parseClientOnboardingTurn(turn, tenantId) {
   const raw = String(turn.botReply || "").replace(/^\[ClientOnboarding\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    if (![1, 2].includes(parsed.version) || parsed.tenant_id !== (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) || !parsed.answers) return null;
+    if (![1, 2].includes(parsed.version) || !parsed.answers) return null;
+    const assessment = inspectClientOnboardingScope(turn, parsed, cleanTenantId(tenantId) || DEFAULT_TENANT_ID);
+    if (!assessment.ok) {
+      registerClientOnboardingScopeConflict(turn, assessment);
+      return null;
+    }
     if (parsed.version === 1) {
       parsed.setup_completed = false;
       parsed.setup_completed_at = null;
@@ -5915,6 +5944,7 @@ function isMissingConversationLogsError(error) {
 async function appendClientOnboardingAuditFallback(record, tenantId, actor) {
   if (!SUPABASE_ENABLED || !record) return null;
   const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  assertClientOnboardingRecordScope(record, cleanTenant);
   const payload = {
     tenant_id: cleanTenant,
     invitation_id: null,
@@ -5978,7 +6008,7 @@ async function fetchRecentClientOnboardingAuditFallbacks(limit) {
       const metadata = row && row.metadata || {};
       const record = metadata.source === CLIENT_ONBOARDING_TOOL && metadata.record ? metadata.record : null;
       if (!record || !record.tenant_id || !record.answers) return null;
-      return record;
+      return { record, outer_tenant_id: cleanTenantId(row && row.tenant_id), created_at: row && row.created_at || null };
     }).filter(Boolean);
   } catch (error) {
     console.error("client onboarding audit fallback list error:", error.message);
@@ -5991,10 +6021,10 @@ async function fetchSetupReviewDeletedTenantIds() {
   async function collectFromTurns(turns) {
     (turns || []).map(normalizeTurnRow).forEach(function (turn) {
       const record = parseAnyClientOnboardingTurn(turn);
-      if (record && record.setup_deleted === true) {
-        const tenantId = cleanTenantId(record.tenant_id);
-        if (tenantId) deleted.add(tenantId);
-      }
+      if (!record || record.setup_deleted !== true) return;
+      const assessment = inspectClientOnboardingScope(turn, record, record.tenant_id);
+      if (!assessment.ok) return registerClientOnboardingScopeConflict(turn, assessment);
+      if (assessment.tenant_id) deleted.add(assessment.tenant_id);
     });
   }
   if (!SUPABASE_ENABLED) return deleted;
@@ -6224,9 +6254,12 @@ async function listRecentClientOnboardingRecords(limit) {
   }
   function collect(turn) {
     const fallbackRecord = parseAnyClientOnboardingTurn(turn);
-    const tenantId = cleanTenantId(fallbackRecord && fallbackRecord.tenant_id) || cleanTenantId(turn && turn.tenantId);
+    if (!fallbackRecord) return;
+    const assessment = inspectClientOnboardingScope(turn, fallbackRecord, fallbackRecord.tenant_id);
+    if (!assessment.ok) return registerClientOnboardingScopeConflict(turn, assessment);
+    const tenantId = assessment.tenant_id;
     if (!tenantId || seen.has(tenantId)) return;
-    const record = parseClientOnboardingTurn(turn, tenantId) || fallbackRecord;
+    const record = parseClientOnboardingTurn(turn, tenantId);
     collectRecord(record, tenantId);
   }
   if (SUPABASE_ENABLED) {
@@ -6234,8 +6267,17 @@ async function listRecentClientOnboardingRecords(limit) {
       allTenants: true
     });
     (rows || []).map(normalizeTurnRow).forEach(collect);
-    (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (record) {
-      collectRecord(record, record.tenant_id);
+    (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (envelope) {
+      const record = envelope.record;
+      const turn = {
+        tenantId: envelope.outer_tenant_id,
+        userId: clientOnboardingRecordId(record && record.tenant_id),
+        ts: envelope.created_at,
+        _id: null
+      };
+      const assessment = inspectClientOnboardingScope(turn, record, record && record.tenant_id);
+      if (!assessment.ok) return registerClientOnboardingScopeConflict(turn, assessment);
+      collectRecord(record, assessment.tenant_id);
     });
   } else {
     conversationLogs.slice().reverse().filter(isClientOnboardingTurn).forEach(collect);
@@ -6299,6 +6341,7 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
       });
     }
   }
+  assertClientOnboardingRecordScope(record, tenantId);
   const rec = {
     ts: record.updated_at,
     userId: clientOnboardingRecordId(tenantId),
@@ -6329,6 +6372,7 @@ async function persistClientOnboarding(answers, status, auth, tenantId) {
 
 async function appendClientOnboardingRecord(record, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  assertClientOnboardingRecordScope(record, tenantId);
   const rec = {
     ts: record.updated_at || new Date().toISOString(),
     userId: clientOnboardingRecordId(tenantId),
@@ -8222,16 +8266,8 @@ function adminAuthOk(req, minRole = "viewer") {
 }
 
 function customerTenantForAuth(auth) {
-  if (!auth || !auth.ok) return "";
-  const tenantId = auth.version === 2 ? cleanTenantId(auth.tenant_id) : DEFAULT_TENANT_ID;
-  // RAV predates the registered multi-tenant accounts. Production credentials,
-  // webhooks and conversation rows live under the registered bootstrap tenant,
-  // while legacy dashboard sessions still carry DEFAULT_TENANT_ID. Resolve the
-  // alias at the panel boundary so OAuth, messages and UI all use one owner.
-  if (tenantId === DEFAULT_TENANT_ID && CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID) {
-    return CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID;
-  }
-  return tenantId;
+  if (!auth || !auth.ok || auth.version !== 2 || auth.session_version !== 2) return "";
+  return cleanTenantId(auth.tenant_id);
 }
 
 function customerChannelTenantForAuth(auth) {
@@ -8240,7 +8276,7 @@ function customerChannelTenantForAuth(auth) {
 
 function customerPanelAuthOk(req, minRole = "viewer") {
   const auth = dashboardAuth(req);
-  if (auth.version !== 2) return adminAuthOk(req, minRole);
+  if (auth.version !== 2 || auth.session_version !== 2) return false;
   const required = DASHBOARD_ROLES[cleanDashboardRole(minRole)] || DASHBOARD_ROLES.viewer;
   const actual = DASHBOARD_ROLES[auth.role] || 0;
   const tenantId = customerTenantForAuth(auth);
@@ -11296,7 +11332,12 @@ app.get("/admin/customer-setups", async (req, res) => {
     setups.sort(function (a, b) {
       return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
     });
-    res.json({ ok: true, statuses: SETUP_REVIEW_STATUSES, setups });
+    res.json({
+      ok: true,
+      statuses: SETUP_REVIEW_STATUSES,
+      setups,
+      scope_conflicts: listClientOnboardingScopeConflicts()
+    });
   } catch (error) {
     console.error("customer setups list error:", error.message);
     res.status(503).json({ ok: false, error: "setup_review_unavailable" });

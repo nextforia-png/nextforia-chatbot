@@ -145,6 +145,7 @@ const {
   AppointmentCalendarError,
   AppendOnlyAppointmentCalendarStore,
   GoogleCalendarProvider,
+  MicrosoftCalendarProvider,
   InMemoryAppointmentCalendarStore,
   createAppointmentCalendarConnectionService,
   createCalendarOAuthState,
@@ -307,7 +308,7 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v328-whatsapp-coexistence-pending";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v332-whatsapp-coexistence-pending";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -466,6 +467,8 @@ const ELEVENLABS_PHONE_AUTO_ASSIGN_ENABLED = process.env.ELEVENLABS_PHONE_AUTO_A
 const ELEVENLABS_PHONE_NUMBER_TENANT_MAP = parsePhoneNumberTenantMap(process.env);
 const GOOGLE_CALENDAR_CLIENT_ID = String(process.env.GOOGLE_CALENDAR_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || "").trim();
 const GOOGLE_CALENDAR_CLIENT_SECRET = String(process.env.GOOGLE_CALENDAR_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || "").trim();
+const MICROSOFT_CALENDAR_CLIENT_ID = String(process.env.MICROSOFT_CALENDAR_CLIENT_ID || "").trim();
+const MICROSOFT_CALENDAR_CLIENT_SECRET = String(process.env.MICROSOFT_CALENDAR_CLIENT_SECRET || "").trim();
 const APPOINTMENT_CALENDAR_TENANT_MAP = parseAppointmentCalendarTenantMap(process.env);
 const appointmentRegistry = new AppointmentRegistry();
 const WA_TOKEN = process.env.WA_TOKEN;
@@ -517,6 +520,9 @@ const CHANNEL_CONNECTION_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_
   : "";
 const APPOINTMENT_CALENDAR_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
   ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/appointment-calendar/google/callback"
+  : "";
+const MICROSOFT_APPOINTMENT_CALENDAR_CALLBACK_URL = (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL)
+  ? (CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL) + "/admin/appointment-calendar/microsoft/callback"
   : "";
 const ALLOW_UNSIGNED_WEBHOOKS = process.env.ALLOW_UNSIGNED_WEBHOOKS === "1" && process.env.NODE_ENV !== "production";
 const MESSENGER_GRAPH_BASE_URL = configuredHttpsOrigin(process.env.MESSENGER_GRAPH_BASE_URL, "https://graph.facebook.com", ["graph.facebook.com"]);
@@ -1036,7 +1042,7 @@ function parseAppendOnlyAppointmentCalendarTurn(turn) {
     const record = payload && payload.record;
     const tenantId = cleanTenantId(record && record.tenant_id);
     if (!tenantId) return null;
-    return Object.assign({}, record, { tenant_id: tenantId, provider: "google" });
+    return Object.assign({}, record, { tenant_id: tenantId, provider: record.provider || "google" });
   } catch (_) {
     return null;
   }
@@ -1078,15 +1084,24 @@ const appendOnlyAppointmentCalendarStore = SUPABASE_ENABLED && process.env.NODE_
     })
   : null;
 const appointmentCalendarStore = appendOnlyAppointmentCalendarStore || new InMemoryAppointmentCalendarStore();
-const appointmentCalendarProvider = new GoogleCalendarProvider({
+const googleAppointmentCalendarProvider = new GoogleCalendarProvider({
   clientId: GOOGLE_CALENDAR_CLIENT_ID,
   clientSecret: GOOGLE_CALENDAR_CLIENT_SECRET,
   redirectUri: APPOINTMENT_CALENDAR_CALLBACK_URL,
   axiosClient: axios
 });
+const microsoftAppointmentCalendarProvider = new MicrosoftCalendarProvider({
+  clientId: MICROSOFT_CALENDAR_CLIENT_ID,
+  clientSecret: MICROSOFT_CALENDAR_CLIENT_SECRET,
+  redirectUri: MICROSOFT_APPOINTMENT_CALENDAR_CALLBACK_URL,
+  axiosClient: axios
+});
 const appointmentCalendarService = createAppointmentCalendarConnectionService({
   store: appointmentCalendarStore,
-  provider: appointmentCalendarProvider,
+  providers: {
+    google: googleAppointmentCalendarProvider,
+    microsoft: microsoftAppointmentCalendarProvider
+  },
   encryptionKey: DATA_ENCRYPTION_KEY
 });
 const usedAppointmentCalendarOAuthNonces = new Set();
@@ -2951,7 +2966,7 @@ const TOOLS = [
 const APPOINTMENT_TOOLS = [
   {
     name: "check_appointment_availability",
-    description: "Consulta el Google Calendar conectado antes de ofrecer o confirmar un horario. Nunca afirmes que un horario está disponible sin usar esta herramienta.",
+    description: "Consulta el calendario conectado del cliente antes de ofrecer o confirmar un horario. Nunca afirmes que un horario está disponible sin usar esta herramienta.",
     input_schema: {
       type: "object",
       properties: {
@@ -2963,7 +2978,7 @@ const APPOINTMENT_TOOLS = [
   },
   {
     name: "book_appointment",
-    description: "Crea la cita en Nextfor y la sincroniza con Google Calendar. Úsala solo después de comprobar disponibilidad, recopilar los datos obligatorios y recibir confirmación explícita del cliente.",
+    description: "Crea la cita en Nextfor y la sincroniza con el calendario conectado. Úsala solo después de comprobar disponibilidad, recopilar los datos obligatorios y recibir confirmación explícita del cliente.",
     input_schema: {
       type: "object",
       properties: {
@@ -6703,7 +6718,11 @@ function appointmentIntegrationOptions(channels, calendarConnection, record, ten
       tenantId || record && record.tenant_id,
       ELEVENLABS_PHONE_NUMBER_TENANT_MAP
     ),
-    googleCalendarOAuthConfigured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured()),
+    googleCalendarOAuthConfigured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured("google")),
+    microsoftCalendarOAuthConfigured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured("microsoft")),
+    calendarOAuthProviders: appointmentCalendarService
+      ? appointmentCalendarService.providerAvailability()
+      : {},
     calendarTenantMap: APPOINTMENT_CALENDAR_TENANT_MAP,
     calendarConnected: !!(calendarConnection && calendarConnection.status === "connected"),
     calendarConnection: calendarConnection || null,
@@ -8603,10 +8622,13 @@ function channelConnectionOAuthRedirectUrlForRequest(req, channel) {
   return callbackUrl.endsWith("/") ? callbackUrl : callbackUrl + "/";
 }
 
-function appointmentCalendarCallbackUrlForRequest(req) {
+function appointmentCalendarCallbackUrlForRequest(req, providerId) {
+  const provider = providerId === "microsoft" ? "microsoft" : "google";
   const base = channelConnectionCallbackUrlForRequest(req);
-  if (base) return base.replace("/admin/channel-connections/meta/callback", "/admin/appointment-calendar/google/callback");
-  return APPOINTMENT_CALENDAR_CALLBACK_URL;
+  if (base) return base.replace("/admin/channel-connections/meta/callback", "/admin/appointment-calendar/" + provider + "/callback");
+  return provider === "microsoft"
+    ? MICROSOFT_APPOINTMENT_CALENDAR_CALLBACK_URL
+    : APPOINTMENT_CALENDAR_CALLBACK_URL;
 }
 
 function externalIntegrationCallbackPage(res, options) {
@@ -12431,17 +12453,19 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
         }
       }
       appointmentCalendar = Object.assign({
-        id: "google-calendar",
-        provider: "google",
-        name: "Google Calendar",
-        description: "Conecta el calendario donde Nextfor debe revisar disponibilidad y registrar citas.",
-        authorization_available: appointmentCalendarService.providerConfigured()
+        id: (calendarConnection && calendarConnection.provider || "google") + "-calendar",
+        name: calendarConnection && calendarConnection.provider === "microsoft" ? "Microsoft Outlook" : "Google Calendar",
+        description: "Nextfor revisa disponibilidad y crea un calendario separado llamado Citas NextforIA.",
+        authorization_available: appointmentCalendarService.providerConfigured(calendarConnection && calendarConnection.provider || "google")
       }, calendarConnection || {});
     }
     res.json({
       ok: true,
       channels,
       appointment_calendar: appointmentCalendar,
+      appointment_calendar_providers: appointmentCalendar
+        ? appointmentCalendarProvidersForConnection(appointmentCalendar)
+        : [],
       meta_authorization_available: {
         whatsapp: channelConnectionService.providerConfigured("whatsapp"),
         instagram: channelConnectionService.providerConfigured("instagram"),
@@ -12806,10 +12830,42 @@ function appointmentCalendarErrorResponse(res, error) {
     ok: false,
     error: customerCodes.includes(problem.code) ? problem.code : "calendar_connection_failed",
     message: problem.code === "calendar_oauth_not_configured"
-      ? "Aún estamos preparando Google Calendar. Habla con NextforIA."
+      ? "Aún estamos preparando este calendario. Habla con NextforIA."
       : problem.code === "calendar_connection_not_found"
         ? "Todavía no hay un calendario conectado."
         : "No pudimos terminar la conexión del calendario. Intenta de nuevo o habla con NextforIA."
+  });
+}
+
+function appointmentCalendarProvidersForConnection(connection) {
+  const availability = appointmentCalendarService.providerAvailability();
+  const activeProvider = connection && connection.provider || "";
+  return [
+    {
+      id: "google-calendar",
+      provider: "google",
+      name: "Google Calendar",
+      description: "Conecta una cuenta de Google. Nextfor crea Citas NextforIA y respeta la disponibilidad de tu agenda.",
+      authorization_available: availability.google === true
+    },
+    {
+      id: "microsoft-calendar",
+      provider: "microsoft",
+      name: "Microsoft Outlook",
+      description: "Conecta Outlook.com o Microsoft 365. Nextfor crea Citas NextforIA y respeta la disponibilidad de tu agenda.",
+      authorization_available: availability.microsoft === true
+    }
+  ].map(function (item) {
+    const active = item.provider === activeProvider;
+    return Object.assign(item, {
+      active,
+      status: active ? connection.status : "not_connected",
+      account_email: active ? connection.account_email : null,
+      account_label: active ? connection.account_label : null,
+      calendar_summary: active ? connection.calendar_summary : null,
+      connect_available: item.authorization_available,
+      disconnect_available: active && connection.disconnect_available
+    });
   });
 }
 
@@ -12827,9 +12883,9 @@ app.get("/admin/panel/appointment-calendar", async (req, res) => {
     const tenantId = customerTenantForAuth(auth);
     res.json({
       ok: true,
-      provider: "google",
-      authorization_available: appointmentCalendarService.providerConfigured(),
-      connection: await appointmentCalendarService.get(tenantId)
+      authorization_available: appointmentCalendarService.providerAvailability(),
+      connection: await appointmentCalendarService.get(tenantId),
+      providers: appointmentCalendarProvidersForConnection(await appointmentCalendarService.get(tenantId))
     });
   } catch (error) {
     console.error("customer appointment calendar status error:", error.message);
@@ -12837,7 +12893,7 @@ app.get("/admin/panel/appointment-calendar", async (req, res) => {
   }
 });
 
-app.post("/admin/panel/appointment-calendar/google/connect", async (req, res) => {
+app.post("/admin/panel/appointment-calendar/:provider/connect", async (req, res) => {
   if (!customerPanelAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
@@ -12848,20 +12904,23 @@ app.post("/admin/panel/appointment-calendar/google/connect", async (req, res) =>
     return;
   }
   try {
+    const provider = ["google", "microsoft"].includes(req.params.provider) ? req.params.provider : "";
+    if (!provider) throw new AppointmentCalendarError("invalid_calendar_request", 400);
     const tenantId = customerTenantForAuth(auth);
-    const redirectUri = appointmentCalendarCallbackUrlForRequest(req);
+    const redirectUri = appointmentCalendarCallbackUrlForRequest(req, provider);
     const returnPath = req.body && req.body.return_to === "channels"
       ? "/admin/panel?tab=channels"
       : "/admin/panel?tab=appointments";
     const state = createCalendarOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenantId,
+      provider,
       actor_id: auth.user_id || auth.username,
       actor: channelConnectionActor(auth),
       redirect_uri: redirectUri,
       return_path: returnPath,
       return_mode: "popup"
     });
-    const authorizationUrl = await appointmentCalendarService.begin(tenantId, auth, state, { redirectUri });
+    const authorizationUrl = await appointmentCalendarService.begin(tenantId, provider, auth, state, { redirectUri });
     res.json({ ok: true, authorization_url: authorizationUrl });
   } catch (error) {
     console.error("customer appointment calendar connect start error:", error.message);
@@ -12869,7 +12928,7 @@ app.post("/admin/panel/appointment-calendar/google/connect", async (req, res) =>
   }
 });
 
-app.get("/admin/appointment-calendar/google/callback", async (req, res) => {
+app.get("/admin/appointment-calendar/:provider/callback", async (req, res) => {
   function calendarReturnUrl(state, status) {
     const fallback = "/admin/panel?tab=appointments";
     const raw = state && state.return_path || fallback;
@@ -12878,7 +12937,8 @@ app.get("/admin/appointment-calendar/google/callback", async (req, res) => {
     return safePath + separator + "calendar=" + encodeURIComponent(status);
   }
   const state = readCalendarOAuthState(DASHBOARD_SESSION_SECRET, req.query.state);
-  if (!state || usedAppointmentCalendarOAuthNonces.has(state.nonce)) {
+  const callbackProvider = ["google", "microsoft"].includes(req.params.provider) ? req.params.provider : "";
+  if (!state || !callbackProvider || state.provider !== callbackProvider || usedAppointmentCalendarOAuthNonces.has(state.nonce)) {
     res.redirect("/admin/panel?tab=appointments&calendar=error");
     return;
   }
@@ -12896,21 +12956,22 @@ app.get("/admin/appointment-calendar/google/callback", async (req, res) => {
   try {
     await appointmentCalendarService.completeAuthorization({
       tenant_id: state.tenant_id,
+      provider: state.provider,
       actor: state.actor,
-      redirect_uri: state.redirect_uri || appointmentCalendarCallbackUrlForRequest(req),
+      redirect_uri: state.redirect_uri || appointmentCalendarCallbackUrlForRequest(req, state.provider),
       code: req.query.error ? "" : req.query.code
     });
     const returnUrl = calendarReturnUrl(state, "success");
     if (state.return_mode === "popup") {
-      externalIntegrationCallbackPage(res, { provider: "google-calendar", status: "success", returnPath: returnUrl });
+      externalIntegrationCallbackPage(res, { provider: state.provider + "-calendar", status: "success", returnPath: returnUrl });
       return;
     }
     res.redirect(returnUrl);
   } catch (error) {
-    console.error("Google calendar authorization failed:", state.tenant_id, error.internalMessage || error.message);
-    const returnUrl = calendarReturnUrl(state, "error");
+    console.error(state.provider + " calendar authorization failed:", state.tenant_id, error.internalMessage || error.message);
+    const returnUrl = calendarReturnUrl(state, req.query.error === "access_denied" ? "cancelled" : "error");
     if (state.return_mode === "popup") {
-      externalIntegrationCallbackPage(res, { provider: "google-calendar", status: "error", returnPath: returnUrl });
+      externalIntegrationCallbackPage(res, { provider: state.provider + "-calendar", status: "error", returnPath: returnUrl });
       return;
     }
     res.redirect(returnUrl);
@@ -12948,8 +13009,7 @@ app.get("/admin/appointment-calendar-connections", async (req, res) => {
     const tenants = await listSetupReviewTenants();
     res.json({
       ok: true,
-      provider: "google",
-      authorization_available: appointmentCalendarService.providerConfigured(),
+      authorization_available: appointmentCalendarService.providerAvailability(),
       calendars: await appointmentCalendarService.listAll(tenants)
     });
   } catch (error) {
@@ -12970,15 +13030,17 @@ app.post("/admin/appointment-calendar-connections/:tenantId/connect", async (req
     return;
   }
   try {
-    const redirectUri = appointmentCalendarCallbackUrlForRequest(req);
+    const provider = req.body && req.body.provider === "microsoft" ? "microsoft" : "google";
+    const redirectUri = appointmentCalendarCallbackUrlForRequest(req, provider);
     const state = createCalendarOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenant.id,
+      provider,
       actor_id: auth.user_id || auth.username,
       actor: channelConnectionActor(auth),
       redirect_uri: redirectUri,
       return_path: "/admin/super-admin?view=setupReview&tenant_id=" + encodeURIComponent(tenant.id)
     });
-    const authorizationUrl = await appointmentCalendarService.begin(tenant.id, auth, state, { redirectUri });
+    const authorizationUrl = await appointmentCalendarService.begin(tenant.id, provider, auth, state, { redirectUri });
     res.json({ ok: true, authorization_url: authorizationUrl });
   } catch (error) {
     console.error("super admin appointment calendar connect start error:", error.message);
@@ -13356,7 +13418,13 @@ app.get("/ready", async (req, res) => {
     GOOGLE_CALENDAR_CLIENT_ID &&
     GOOGLE_CALENDAR_CLIENT_SECRET &&
     appointmentCalendarService &&
-    appointmentCalendarService.providerConfigured()
+    appointmentCalendarService.providerConfigured("google")
+  );
+  const microsoftCalendarOAuthReady = !!(
+    MICROSOFT_CALENDAR_CLIENT_ID &&
+    MICROSOFT_CALENDAR_CLIENT_SECRET &&
+    appointmentCalendarService &&
+    appointmentCalendarService.providerConfigured("microsoft")
   );
   res.json({
     ok: true,
@@ -13368,6 +13436,7 @@ app.get("/ready", async (req, res) => {
       storage_ready: appointmentStorageReadyNow,
       elevenlabs_ready: elevenLabsAppointmentReady,
       google_calendar_oauth_ready: googleCalendarOAuthReady,
+      microsoft_calendar_oauth_ready: microsoftCalendarOAuthReady,
       diagnostics: {
         elevenlabs_api_key_present: !!ELEVENLABS_API_KEY,
         elevenlabs_template_agent_present: !!ELEVENLABS_APPOINTMENT_TEMPLATE_AGENT_ID,
@@ -13377,7 +13446,10 @@ app.get("/ready", async (req, res) => {
         elevenlabs_webhook_secret_present: !!ELEVENLABS_WEBHOOK_SECRET,
         google_calendar_client_id_present: !!GOOGLE_CALENDAR_CLIENT_ID,
         google_calendar_client_secret_present: !!GOOGLE_CALENDAR_CLIENT_SECRET,
-        google_calendar_provider_configured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured())
+        google_calendar_provider_configured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured("google")),
+        microsoft_calendar_client_id_present: !!MICROSOFT_CALENDAR_CLIENT_ID,
+        microsoft_calendar_client_secret_present: !!MICROSOFT_CALENDAR_CLIENT_SECRET,
+        microsoft_calendar_provider_configured: !!(appointmentCalendarService && appointmentCalendarService.providerConfigured("microsoft"))
       }
     }
   });

@@ -1,6 +1,6 @@
 "use strict";
 
-const EFFECTIVE_DATE = "30 de julio de 2026";
+const EFFECTIVE_DATE = "3 de agosto de 2026";
 const SUPPORT_EMAIL = "nextforia@gmail.com";
 const PUBLIC_ORIGIN = "https://api.nextforia.com";
 
@@ -46,17 +46,17 @@ function layout(title, description, content) {
 function renderGoogleOAuthHomepage() {
   return layout(
     "Nextfor Appointment Bot",
-    "Asistente de Nextfor IA para gestionar disponibilidad, citas y recordatorios con Google Calendar.",
+    "Asistente de Nextfor IA para gestionar disponibilidad, citas y recordatorios con Google Calendar o Microsoft Outlook.",
     `<section class="top"><div class="hero">
       <div class="eyebrow">Integración oficial de Nextfor IA</div>
       <h1>Nextfor Appointment Bot</h1>
-      <p>Nextfor Appointment Bot es una aplicación de gestión de citas para empresas. Su propósito es consultar disponibilidad y crear, reprogramar o cancelar citas autorizadas por el usuario mediante Google Calendar.</p>
+      <p>Nextfor Appointment Bot es una aplicación de gestión de citas para empresas. Su propósito es consultar disponibilidad y crear, reprogramar o cancelar citas autorizadas por el usuario mediante Google Calendar o Microsoft Outlook / Microsoft 365.</p>
       <div class="actions"><a class="button" href="https://nextforia.com/admin/panel">Abrir Customer Panel</a><a class="button secondary" href="/admin/privacy">Cómo protegemos tus datos</a></div>
     </div></section>
     <main><section class="card">
       <h2>Propósito de Nextfor Appointment Bot</h2>
-      <p>Nextfor Appointment Bot permite que los administradores de empresas conecten voluntariamente Google Calendar para consultar espacios disponibles, evitar cruces y sincronizar las citas que sus clientes solicitan.</p>
-      <p lang="en">Nextfor Appointment Bot is a business appointment management application. Its purpose is to check availability and create, reschedule or cancel user-authorized appointments through Google Calendar.</p>
+      <p>Nextfor Appointment Bot permite que los administradores de empresas conecten voluntariamente Google Calendar o Microsoft Outlook para consultar espacios disponibles, evitar cruces y sincronizar las citas que sus clientes solicitan.</p>
+      <p lang="en">Nextfor Appointment Bot is a business appointment management application. Its purpose is to check availability and create, reschedule or cancel user-authorized appointments through Google Calendar or Microsoft Outlook.</p>
       <h2>Qué hace la integración</h2>
       <div class="grid">
         <article class="feature"><strong>Consulta disponibilidad</strong><p>Revisa espacios ocupados para evitar cruces al ofrecer una cita.</p></article>
@@ -66,10 +66,10 @@ function renderGoogleOAuthHomepage() {
       <div class="notice"><strong>Uso limitado de datos de Google</strong><br>Nextfor IA utiliza los datos autorizados de Google Calendar exclusivamente para prestar las funciones de agenda solicitadas. No vendemos estos datos, no los usamos para publicidad y no los utilizamos para entrenar modelos generales de inteligencia artificial.</div>
       <h2>Cómo funciona</h2>
       <ol>
-        <li>Un administrador autenticado del negocio elige conectar Google Calendar.</li>
-        <li>Google muestra los permisos exactos solicitados y el usuario decide si los autoriza.</li>
+        <li>Un administrador autenticado del negocio elige conectar Google Calendar o Microsoft Outlook.</li>
+        <li>Google o Microsoft muestran los permisos exactos solicitados y el usuario decide si los autoriza.</li>
         <li>Nextfor usa esos permisos para consultar disponibilidad y gestionar las citas del negocio.</li>
-        <li>El administrador puede desconectar Google Calendar y eliminar las credenciales almacenadas.</li>
+        <li>El administrador puede desconectar el calendario y eliminar las credenciales almacenadas.</li>
       </ol>
       <div class="legal-nav"><a href="/admin/privacy">Política de Privacidad</a><a href="/admin/terms">Condiciones del Servicio</a><a href="mailto:${SUPPORT_EMAIL}">Soporte</a></div>
     </section></main>`
@@ -97,8 +97,8 @@ function renderPrivacyPolicy() {
         <li><strong>Seguridad y funcionamiento:</strong> dirección IP, registros de acceso, errores, auditoría y métricas técnicas.</li>
       </ul>
 
-      <h2>3. Datos de Google Calendar</h2>
-      <p>Cuando un administrador conecta Google Calendar, Nextfor solicita únicamente permisos relacionados con eventos, disponibilidad y la identificación del calendario autorizado. Utilizamos estos datos para:</p>
+      <h2>3. Datos de calendarios conectados</h2>
+      <p>Cuando un administrador conecta Google Calendar o Microsoft Outlook / Microsoft 365, Nextfor solicita únicamente permisos relacionados con eventos, disponibilidad y la identificación del calendario autorizado. Utilizamos estos datos para:</p>
       <ul>
         <li>comprobar disponibilidad y evitar cruces;</li>
         <li>crear, actualizar y cancelar eventos de citas;</li>
@@ -117,7 +117,7 @@ function renderPrivacyPolicy() {
       <p>Aplicamos cifrado en tránsito, control de acceso por empresa, registros de auditoría y cifrado de credenciales OAuth almacenadas. Ningún sistema es infalible; evaluamos y corregimos riesgos de forma continua.</p>
 
       <h2>7. Conservación y eliminación</h2>
-      <p>Conservamos los datos mientras la cuenta esté activa y durante el tiempo necesario para prestar el servicio, cumplir obligaciones o resolver controversias. Al desconectar Google Calendar desde el Customer Panel, eliminamos las credenciales OAuth almacenadas para esa conexión. El usuario también puede revocar el acceso desde su <a href="https://myaccount.google.com/permissions" rel="noopener noreferrer">Cuenta de Google</a>. Las solicitudes de eliminación de otros datos se atienden teniendo en cuenta obligaciones legales y derechos de terceros.</p>
+      <p>Conservamos los datos mientras la cuenta esté activa y durante el tiempo necesario para prestar el servicio, cumplir obligaciones o resolver controversias. Al desconectar el calendario desde el Customer Panel, eliminamos las credenciales OAuth almacenadas para esa conexión. El usuario también puede revocar el acceso desde su <a href="https://myaccount.google.com/permissions" rel="noopener noreferrer">Cuenta de Google</a> o desde <a href="https://account.live.com/consent/Manage" rel="noopener noreferrer">Aplicaciones y servicios de Microsoft</a>. Las solicitudes de eliminación de otros datos se atienden teniendo en cuenta obligaciones legales y derechos de terceros.</p>
 
       <h2>8. Derechos y controles</h2>
       <p>Según la ley aplicable, puedes solicitar acceso, corrección, actualización, eliminación, portabilidad u oposición, y retirar una autorización cuando proceda. Para ejercer estos derechos escribe a <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a>. Verificaremos tu identidad antes de ejecutar solicitudes sensibles.</p>
@@ -148,8 +148,8 @@ function renderTermsOfService() {
       <h2>2. Cuenta y usuarios</h2>
       <p>El cliente debe proporcionar información correcta, proteger sus credenciales y limitar el acceso a usuarios autorizados. Es responsable de la actividad realizada desde su cuenta y de notificarnos accesos no autorizados.</p>
 
-      <h2>3. Integración con Google Calendar</h2>
-      <p>La conexión es opcional y requiere autorización expresa en Google. Cuando se activa, Nextfor puede consultar disponibilidad y crear, modificar o cancelar eventos según las acciones del cliente y los flujos configurados. El cliente puede desconectarla desde su panel o revocar el acceso en Google.</p>
+      <h2>3. Integración con calendarios</h2>
+      <p>La conexión es opcional y requiere autorización expresa en Google o Microsoft. Cuando se activa, Nextfor puede consultar disponibilidad y crear, modificar o cancelar eventos según las acciones del cliente y los flujos configurados. El cliente puede desconectarla desde su panel o revocar el acceso directamente con el proveedor.</p>
 
       <h2>4. Uso permitido</h2>
       <p>El cliente utilizará el servicio de forma lícita y no intentará vulnerar su seguridad, acceder a otros clientes, enviar contenido ilícito, engañoso o abusivo, ni utilizarlo para decisiones prohibidas o actividades que vulneren derechos de terceros.</p>
@@ -161,7 +161,7 @@ function renderTermsOfService() {
       <p>Las respuestas automatizadas pueden contener errores. Nextfor ofrece controles, pruebas y escalamiento humano, pero el cliente debe revisar los flujos de alto impacto. El servicio no sustituye asesoría médica, legal, financiera ni otras decisiones profesionales reguladas.</p>
 
       <h2>7. Proveedores externos</h2>
-      <p>Google Calendar, Meta, ElevenLabs y otros servicios conectados se rigen también por sus propias condiciones. Nextfor no controla sus interrupciones, cambios o decisiones de cuenta, aunque tomará medidas razonables para mantener y recuperar la integración.</p>
+      <p>Google Calendar, Microsoft Graph / Outlook, Meta, ElevenLabs y otros servicios conectados se rigen también por sus propias condiciones. Nextfor no controla sus interrupciones, cambios o decisiones de cuenta, aunque tomará medidas razonables para mantener y recuperar la integración.</p>
 
       <h2>8. Pagos y cambios</h2>
       <p>Los precios, periodicidad y límites se informan en el plan contratado. Podremos modificar funciones o tarifas con aviso razonable cuando corresponda. La falta de pago puede limitar o suspender el servicio.</p>

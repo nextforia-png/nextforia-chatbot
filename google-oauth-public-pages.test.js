@@ -26,7 +26,8 @@ assert.match(privacy, /Política de Datos de Usuario de los Servicios de API de 
 assert.match(privacy, /Uso Limitado/);
 assert.match(privacy, /credenciales OAuth almacenadas/);
 assert.match(privacy, /no los usamos para entrenar modelos generales de IA/);
-assert.match(terms, /Integración con Google Calendar/);
+assert.match(terms, /Integración con calendarios/);
+assert.match(terms, /Microsoft Graph \/ Outlook/);
 assert.match(terms, /leyes de Colombia/);
 
 console.log("google oauth public pages tests: ok");

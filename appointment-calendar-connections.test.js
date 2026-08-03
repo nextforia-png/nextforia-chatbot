@@ -28,12 +28,19 @@ assert.strictEqual(readCalendarOAuthState(secret, state.slice(0, -1) + (state.en
 assert.strictEqual(readCalendarOAuthState(secret, state, 1000 + 11 * 60 * 1000), null);
 
 const calls = [];
+let appointmentCalendarCreated = false;
 const axiosClient = {
   async post(url, body, options) {
     calls.push(["post", url, body, options && options.headers && options.headers["content-type"]]);
     if (/\/calendar\/v3\/freeBusy$/.test(url)) {
       assert.match(options.headers.Authorization, /^Bearer access-/);
-      return { data: { calendars: { "agenda@derco.example": { busy: [] } } } };
+      assert.deepStrictEqual(body.items.map(function (item) { return item.id; }), ["agenda@derco.example", "nextfor-calendar-1"]);
+      return { data: { calendars: { "agenda@derco.example": { busy: [] }, "nextfor-calendar-1": { busy: [] } } } };
+    }
+    if (/\/calendar\/v3\/calendars$/.test(url)) {
+      assert.strictEqual(body.summary, "Citas NextforIA");
+      appointmentCalendarCreated = true;
+      return { data: { id: "nextfor-calendar-1", summary: "Citas NextforIA", timeZone: "America/Bogota" } };
     }
     if (/\/calendar\/v3\/calendars\//.test(url)) {
       assert.match(options.headers.Authorization, /^Bearer access-/);
@@ -41,14 +48,17 @@ const axiosClient = {
     }
     assert.strictEqual(options.headers["content-type"], "application/x-www-form-urlencoded");
     if (String(body).includes("grant_type=refresh_token")) {
-      return { data: { access_token: "access-refreshed", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events" } };
+      return { data: { access_token: "access-refreshed", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.app.created" } };
     }
-    return { data: { access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendarlist.readonly" } };
+    return { data: { access_token: "access-1", refresh_token: "refresh-1", expires_in: 3600, scope: "https://www.googleapis.com/auth/calendar.app.created https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/calendar.calendarlist.readonly" } };
   },
   async get(url, options) {
     calls.push(["get", url, options && options.headers && options.headers.Authorization]);
     assert.match(options.headers.Authorization, /^Bearer access-/);
-    return { data: { items: [{ id: "agenda@derco.example", summary: "Agenda DERCO", primary: true }] } };
+    return { data: { items: [
+      { id: "agenda@derco.example", summary: "Agenda DERCO", primary: true, timeZone: "America/Bogota" },
+      ...(appointmentCalendarCreated ? [{ id: "nextfor-calendar-1", summary: "Citas NextforIA", timeZone: "America/Bogota" }] : [])
+    ] } };
   },
   async patch(url, body, options) {
     calls.push(["patch", url, body, options && options.headers && options.headers.Authorization]);
@@ -69,7 +79,9 @@ const provider = new GoogleCalendarProvider({
 assert.strictEqual(provider.configured(), true);
 const authUrl = provider.authorizationUrl("signed-state");
 assert.match(authUrl, /accounts\.google\.com/);
-assert.match(authUrl, /calendar\.events/);
+assert.match(authUrl, /calendar\.app\.created/);
+assert.doesNotMatch(authUrl, /calendar\.events/);
+assert.doesNotMatch(authUrl, /include_granted_scopes/);
 assert.match(authUrl, /access_type=offline/);
 
 (async function run() {
@@ -85,14 +97,17 @@ assert.match(authUrl, /access_type=offline/);
   assert.match(beginUrl, /signed-state/);
   let status = await service.get("grupo-derco");
   assert.strictEqual(status.status, "connecting");
+  assert.strictEqual(status.connect_available, true, "An interrupted OAuth attempt must be immediately retryable");
   const connected = await service.completeAuthorization({
     tenant_id: "grupo-derco",
     actor: "admin@derco.example",
     code: "code-1"
   });
   assert.strictEqual(connected.status, "connected");
-  assert.strictEqual(connected.calendar_summary, "Agenda DERCO");
+  assert.strictEqual(connected.calendar_summary, "Citas NextforIA");
   assert.strictEqual(connected.account_email, "agenda@derco.example");
+  assert.strictEqual(connected.calendar_mode, "app_created");
+  assert.deepStrictEqual(connected.availability_calendar_ids, ["agenda@derco.example", "nextfor-calendar-1"]);
   assert.strictEqual(connected.credentials_ciphertext, undefined);
   const stored = await store.get("grupo-derco");
   assert.match(stored.credentials_ciphertext, /^enc:v1:/);
@@ -128,6 +143,7 @@ assert.match(authUrl, /access_type=offline/);
   assert.strictEqual(disconnected.status, "disconnected");
   assert.strictEqual((await store.get("grupo-derco")).credentials_ciphertext, null);
   assert(calls.some(function (call) { return call[0] === "post" && /oauth2/.test(call[1]); }));
+  assert(calls.some(function (call) { return call[0] === "post" && /\/calendar\/v3\/calendars$/.test(call[1]); }));
   assert(calls.some(function (call) { return call[0] === "post" && /\/events$/.test(call[1]); }));
   assert(calls.some(function (call) { return call[0] === "patch" && /\/events\/event-derco-1$/.test(call[1]); }));
   assert(calls.some(function (call) { return call[0] === "delete" && /\/events\/event-derco-1$/.test(call[1]); }));

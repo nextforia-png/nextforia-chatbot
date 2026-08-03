@@ -39,6 +39,8 @@ function calendarProviderLabel(provider) {
   const labels = {
     google: "Google Calendar",
     google_calendar: "Google Calendar",
+    microsoft: "Microsoft Outlook",
+    microsoft_calendar: "Microsoft Outlook",
     outlook: "Outlook Calendar",
     calendly: "Calendly",
     calcom: "Cal.com",
@@ -92,18 +94,27 @@ function buildAppointmentIntegrations(record, tenantId, options) {
     appointment.calls_enabled === "yes" ||
     appointment.phone_calls === true;
   const calendarProvider = cleanText(appointment.calendar_provider || "", 80).toLowerCase();
-  const normalizedProvider = calendarProvider === "google_calendar" ? "google" : calendarProvider;
+  const normalizedProvider = calendarProvider === "google_calendar"
+    ? "google"
+    : ["microsoft_calendar", "outlook"].includes(calendarProvider)
+      ? "microsoft"
+      : calendarProvider;
   const calendarEmail = cleanText(appointment.calendar_email || "", 180).toLowerCase();
   const calendarMap = options.calendarTenantMap || {};
   const calendarConnection = calendarMap[cleanTenant] || null;
   const liveCalendarConnection = options.calendarConnection || null;
-  const calendarOAuthConfigured = !!options.googleCalendarOAuthConfigured;
+  const calendarOAuthProviders = options.calendarOAuthProviders || {
+    google: !!options.googleCalendarOAuthConfigured,
+    microsoft: !!options.microsoftCalendarOAuthConfigured
+  };
+  const selectedOAuthProvider = normalizedProvider || liveCalendarConnection && liveCalendarConnection.provider || "google";
+  const calendarOAuthConfigured = calendarOAuthProviders[selectedOAuthProvider] === true;
   let calendarStatus = "needs_provider";
   if (["none", ""].includes(normalizedProvider)) calendarStatus = "needs_provider";
   else if (options.calendarConnected || liveCalendarConnection && liveCalendarConnection.status === "connected") calendarStatus = "ready";
   else if (calendarConnection && calendarConnection.status === "connected") calendarStatus = "ready";
-  else if (normalizedProvider === "google" && calendarOAuthConfigured) calendarStatus = "needs_customer_connection";
-  else if (normalizedProvider === "google") calendarStatus = "oauth_not_configured";
+  else if (["google", "microsoft"].includes(normalizedProvider) && calendarOAuthConfigured) calendarStatus = "needs_customer_connection";
+  else if (["google", "microsoft"].includes(normalizedProvider)) calendarStatus = "oauth_not_configured";
   else calendarStatus = "manual_connection_required";
 
   const appointmentWhatsappEnabled = appointment.appointment_whatsapp_enabled === true ||

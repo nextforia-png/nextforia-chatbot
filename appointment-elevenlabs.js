@@ -337,7 +337,7 @@ async function createElevenLabsAppointmentTools(tenantId, options) {
     ),
     appointmentWebhookToolConfig(
       "nextfor_book_appointment",
-      "Crea una cita confirmada en Nextfor y Google Calendar después de comprobar disponibilidad y obtener consentimiento.",
+      "Crea una cita confirmada en Nextfor y el calendario conectado después de comprobar disponibilidad y obtener consentimiento.",
       root + "/book?token=" + encodeURIComponent(token),
       Object.assign({}, dateProperties, {
         customer_name: { type: "string", description: "Nombre completo del cliente." },

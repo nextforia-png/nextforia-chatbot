@@ -294,7 +294,7 @@ DASHBOARD_KEY=... EXPECTED_BOT_VERSION=v60 npm run smoke
 También puedes apuntar a staging:
 
 ```bash
-BOT_BASE_URL=https://nextforia-chatbot-staging.onrender.com DASHBOARD_KEY=... npm run smoke
+BOT_BASE_URL=https://nextforia-staging.onrender.com DASHBOARD_KEY=... npm run smoke
 ```
 
 ### Verificación de deploy

@@ -56,7 +56,12 @@ assert(redesigned.includes('<section class="view active" id="panel-orders">'));
 assert(redesigned.includes("Oportunidades de venta"));
 assert(redesigned.includes("4 pasos para quedar listo"));
 assert(redesigned.includes("Personalizar"));
-assert(redesigned.includes('data-order-filter="pending" onclick="setOrderFilter(this)"'));
+for (const filter of ["all", "por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]) {
+  assert(
+    redesigned.includes('data-order-filter="' + filter + '" onclick="setOrderFilter(this)"'),
+    "approved orders filter must render: " + filter
+  );
+}
 assert(redesigned.includes('onclick="dismissPlanRecommendation(this)"'));
 assert(redesigned.includes('id="panelActionToast"'));
 assert(redesigned.includes('if(DEMO_MODE&&PANEL_REDESIGN_ENABLED){fillAccountProfile(demoAccountProfile())'));

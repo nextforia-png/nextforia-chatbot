@@ -61,6 +61,7 @@ const {
   InMemoryCustomerAccessStore,
   SupabaseCustomerAccessStore,
   createCustomerAccessService,
+  createSupabaseIdentityAuthenticator,
   createMemoryEmailSender,
   createResendEmailSender
 } = require("./customer-access-v2");
@@ -899,6 +900,9 @@ const customerAccessStore = CUSTOMER_ACCESS_V2_ENABLED
       ? new InMemoryCustomerAccessStore()
       : new SupabaseCustomerAccessStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
   : null;
+const customerIdentityAuthenticator = CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE
+  ? createSupabaseIdentityAuthenticator({ url: SUPABASE_URL, apiKey: SUPABASE_KEY, axiosClient: axios })
+  : null;
 if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_USERS) {
   try {
     const fixtures = JSON.parse(process.env.CUSTOMER_ACCESS_TEST_USERS);
@@ -958,6 +962,7 @@ const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
       baseUrl: CUSTOMER_PANEL_BASE_URL,
       fallbackBaseUrls: CUSTOMER_PANEL_FALLBACK_BASE_URLS,
       inviteTtlHours: CUSTOMER_INVITE_TTL_HOURS,
+      authenticateIdentity: customerIdentityAuthenticator,
       resolveRegisteredTenantId: registeredTenantIdForCompany
     })
   : null;

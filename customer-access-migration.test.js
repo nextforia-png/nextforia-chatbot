@@ -6,6 +6,8 @@ const path = require("path");
 
 const up = fs.readFileSync(path.join(__dirname, "docs/migrations/20260721_customer_access_v2_up.sql"), "utf8");
 const down = fs.readFileSync(path.join(__dirname, "docs/migrations/20260721_customer_access_v2_down.sql"), "utf8");
+const identityUp = fs.readFileSync(path.join(__dirname, "docs/migrations/20260804_supabase_auth_memberships_up.sql"), "utf8");
+const identityDown = fs.readFileSync(path.join(__dirname, "docs/migrations/20260804_supabase_auth_memberships_down.sql"), "utf8");
 const tables = ["platform_plans", "platform_bots", "tenants", "tenant_users", "tenant_invitations", "tenant_access_audit"];
 const functions = [
   "platform_customer_access_catalogs_v2",
@@ -39,5 +41,17 @@ assert.match(up, /set used_at = now\(\)/i);
 assert.doesNotMatch(up, /jsonb_build_object\([^)]*(token|password|hash)/i);
 assert.match(down, /^\s*--[\s\S]*\bbegin;/i);
 assert.match(down, /\bcommit;\s*$/i);
+
+assert.match(identityUp, /^\s*--[\s\S]*\bbegin;/i);
+assert.match(identityUp, /add column if not exists auth_provider text not null default 'local'/i);
+assert.match(identityUp, /auth_provider = 'supabase'[\s\S]*password_hash is null[\s\S]*password_salt is null/i);
+assert.match(identityUp, /alter column plan_id drop not null/i);
+assert.match(identityUp, /alter column assigned_bot_id drop not null/i);
+assert.doesNotMatch(identityUp, /rav-toys|nextforia\.com|ravtoys\.com/i);
+assert.match(identityDown, /SUPABASE_MEMBERSHIPS_STILL_EXIST/i);
+assert.match(identityDown, /SETUP_PENDING_TENANTS_STILL_EXIST/i);
+assert.match(identityDown, /alter column plan_id set not null/i);
+assert.match(identityDown, /alter column assigned_bot_id set not null/i);
+assert.match(identityDown, /\bcommit;\s*$/i);
 
 console.log("customer-access-migration.test.js: ok");

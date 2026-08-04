@@ -36,13 +36,11 @@ function waitForServer(child, port) {
   });
 }
 
-async function login(base, email, password, identityField) {
-  const body = { password: password };
-  body[identityField || "email"] = email;
+async function login(base, email, password) {
   const response = await fetch(base + "/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: base },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ email: email, password: password })
   });
   assert.strictEqual(response.status, 200);
   return String(response.headers.get("set-cookie") || "").split(";")[0];
@@ -78,10 +76,10 @@ async function login(base, email, password, identityField) {
 
   try {
     await waitForServer(child, port);
-    const adminCookie = await login(base, "admin@legacy.example", "admin-test-password", "username");
-    const agentCookie = await login(base, "agent@legacy.example", "agent-test-password", "username");
-    const viewerCookie = await login(base, "viewer@legacy.example", "viewer-test-password", "username");
-    const superCookie = await login(base, "platform@nextforia.example", "platform-test-password", "username");
+    const adminCookie = await login(base, "admin@legacy.example", "admin-test-password");
+    const agentCookie = await login(base, "agent@legacy.example", "agent-test-password");
+    const viewerCookie = await login(base, "viewer@legacy.example", "viewer-test-password");
+    const superCookie = await login(base, "platform@nextforia.example", "platform-test-password");
     let response = await fetch(base + "/admin/customer-access/catalogs");
     assert.strictEqual(response.status, 401, "anonymous users cannot read platform catalogs");
     response = await fetch(base + "/admin/customer-access/catalogs", { headers: { cookie: adminCookie } });

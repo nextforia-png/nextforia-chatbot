@@ -40,13 +40,11 @@ function waitForServer(child, port) {
   });
 }
 
-async function login(base, email, password, identityField) {
-  const body = { password: password };
-  body[identityField || "email"] = email;
+async function login(base, email, password) {
   const response = await fetch(base + "/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: base },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ email: email, password: password })
   });
   assert.strictEqual(response.status, 200, "login de " + email);
   return String(response.headers.get("set-cookie") || "").split(";")[0];
@@ -125,7 +123,7 @@ function asJson(base, cookie) {
     assert.strictEqual((await asJson(base, viewerCookie)("GET", "/admin/panel/catalogs")).status, 200);
 
     // ─── Super admin: escritura del catálogo ────────────────────────────────
-    const superCookie = await login(base, "platform@nextforia.example", "platform-test-password", "username");
+    const superCookie = await login(base, "platform@nextforia.example", "platform-test-password");
     const superAdmin = asJson(base, superCookie);
 
     const created = await superAdmin("POST", "/admin/catalogs/plans", {

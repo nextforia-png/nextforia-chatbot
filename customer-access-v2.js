@@ -104,38 +104,6 @@ function hashPassword(password, salt) {
   return crypto.scryptSync(String(password || ""), salt, 64).toString("base64url");
 }
 
-function createSupabaseIdentityAuthenticator(options) {
-  options = options || {};
-  const url = String(options.url || "").replace(/\/$/, "");
-  const apiKey = String(options.apiKey || "");
-  const axiosClient = options.axiosClient;
-  return async function authenticateSupabaseIdentity(input) {
-    const email = normalizeEmail(input && input.email);
-    const password = String(input && input.password || "");
-    if (!url || !apiKey || !axiosClient || !validEmail(email) || !password) return null;
-    try {
-      const response = await axiosClient.post(url + "/auth/v1/token?grant_type=password", {
-        email,
-        password
-      }, {
-        headers: { apikey: apiKey, "Content-Type": "application/json" },
-        timeout: 8000,
-        validateStatus: function (status) { return status >= 200 && status < 500; }
-      });
-      if (!response || response.status === 400 || response.status === 401) return null;
-      if (response.status && response.status >= 300) throw new Error("identity_provider_unavailable");
-      const identity = response.data && response.data.user;
-      const identityEmail = normalizeEmail(identity && identity.email);
-      if (!identity || !identity.id || identityEmail !== email) return null;
-      return { user_id: String(identity.id), email: identityEmail };
-    } catch (error) {
-      const status = error && error.response && error.response.status;
-      if (status === 400 || status === 401) return null;
-      throw new CustomerAccessError("customer_access_unavailable", 503);
-    }
-  };
-}
-
 function invitationStatus(invitation, now) {
   if (invitation.revoked_at) return "revoked";
   if (invitation.used_at) return "used";
@@ -341,7 +309,7 @@ class SupabaseCustomerAccessStore {
         }),
         this.axios.get(this.url + "/rest/v1/tenant_users", {
           params: {
-            select: "user_id,tenant_id,email_normalized,status,active,auth_provider,created_at,updated_at",
+            select: "user_id,tenant_id,email_normalized,status,active,created_at,updated_at",
             user_id: "eq." + user.user_id,
             tenant_id: "eq." + cleanIdentifier(user.tenant_id),
             limit: 1
@@ -354,7 +322,6 @@ class SupabaseCustomerAccessStore {
       membership = Array.isArray(membershipResponse.data) ? membershipResponse.data[0] : null;
       if (!tenant || tenant.id !== user.tenant_id) throw new Error("tenant_context_unavailable");
       return Object.assign({}, user, {
-        auth_provider: membership && membership.auth_provider || "local",
         company_name: tenant.company_name,
         plan_id: tenant.plan_id,
         assigned_bot_id: tenant.assigned_bot_id,
@@ -508,11 +475,7 @@ class InMemoryCustomerAccessStore {
     const tenantId = cleanIdentifier(input && input.tenant_id);
     const companyName = String(input && input.company_name || tenantId).trim();
     const password = String(input && input.password || "");
-    const authProvider = cleanIdentifier(input && input.auth_provider) || "local";
-    if (!validEmail(email) || !tenantId || !companyName ||
-        (authProvider === "local" && !password) ||
-        (authProvider === "supabase" && !input.user_id) ||
-        !["local", "supabase"].includes(authProvider)) throw new Error("invalid_test_fixture");
+    if (!validEmail(email) || !tenantId || !companyName || !password) throw new Error("invalid_test_fixture");
     const tenant = this.tenants.find(function (row) { return row.id === tenantId; }) || {
       id: tenantId,
       company_name: companyName,
@@ -525,9 +488,7 @@ class InMemoryCustomerAccessStore {
     if (!this.tenants.some(function (row) { return row.id === tenantId; })) this.tenants.push(tenant);
     const suppliedSalt = String(input.password_salt || "");
     const suppliedHash = String(input.password_hash || "");
-    const salt = authProvider === "local"
-      ? (suppliedSalt ? Buffer.from(suppliedSalt, "base64url") : crypto.randomBytes(16))
-      : null;
+    const salt = suppliedSalt ? Buffer.from(suppliedSalt, "base64url") : crypto.randomBytes(16);
     const user = {
       user_id: String(input.user_id || crypto.randomUUID()),
       tenant_id: tenantId,
@@ -535,9 +496,8 @@ class InMemoryCustomerAccessStore {
       role: input.role || "admin",
       status: "active",
       active: input.active !== false,
-      auth_provider: authProvider,
-      password_hash: authProvider === "local" ? (suppliedHash || hashPassword(password, salt)) : null,
-      password_salt: authProvider === "local" ? salt.toString("base64url") : null,
+      password_hash: suppliedHash || hashPassword(password, salt),
+      password_salt: salt.toString("base64url"),
       created_at: input.created_at || new Date().toISOString(),
       updated_at: input.updated_at || input.created_at || new Date().toISOString()
     };
@@ -804,9 +764,6 @@ function createCustomerAccessService(options) {
   const resolveRegisteredTenantId = typeof options.resolveRegisteredTenantId === "function"
     ? options.resolveRegisteredTenantId
     : function () { return ""; };
-  const authenticateIdentity = typeof options.authenticateIdentity === "function"
-    ? options.authenticateIdentity
-    : null;
   if (store && typeof store.setNow === "function") store.setNow(now);
 
   async function inspectInvitation(tenantId, token) {
@@ -829,25 +786,13 @@ function createCustomerAccessService(options) {
     let user;
     try { user = await store.activeUserByEmail(normalized); }
     catch (error) { throw mapStoreError(error); }
-    if (!user || !user.tenant_id || !user.active) return null;
-    const authProvider = cleanIdentifier(user.auth_provider) || "local";
-    if (authProvider === "supabase") {
-      if (!authenticateIdentity || user.password_hash || user.password_salt) return null;
-      let identity;
-      try { identity = await authenticateIdentity({ email: normalized, password: String(password) }); }
-      catch (error) { throw mapStoreError(error); }
-      if (!identity ||
-          String(identity.user_id || "") !== String(user.user_id || "") ||
-          normalizeEmail(identity.email) !== normalized) return null;
-    } else {
-      if (authProvider !== "local" || !user.password_hash || !user.password_salt) return null;
-      let candidate;
-      try { candidate = hashPassword(password, Buffer.from(user.password_salt, "base64url")); }
-      catch (_) { return null; }
-      const stored = Buffer.from(String(user.password_hash));
-      const supplied = Buffer.from(String(candidate));
-      if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
-    }
+    if (!user || !user.password_hash || !user.password_salt || !user.tenant_id || !user.active) return null;
+    let candidate;
+    try { candidate = hashPassword(password, Buffer.from(user.password_salt, "base64url")); }
+    catch (_) { return null; }
+    const stored = Buffer.from(String(user.password_hash));
+    const supplied = Buffer.from(String(candidate));
+    if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
     return {
       user_id: user.user_id,
       email: normalized,
@@ -859,7 +804,6 @@ function createCustomerAccessService(options) {
       plan_id: user.plan_id || null,
       assigned_bot_id: user.assigned_bot_id || null,
       tenant_status: user.tenant_status || null,
-      auth_provider: authProvider,
       created_at: user.created_at || null,
       updated_at: user.updated_at || null
     };
@@ -875,9 +819,6 @@ function createCustomerAccessService(options) {
         String(authenticated.user_id) !== userId ||
         String(authenticated.tenant_id) !== tenantId) {
       throw new CustomerAccessError("invalid_current_password", 401);
-    }
-    if (authenticated.auth_provider === "supabase") {
-      throw new CustomerAccessError("identity_password_managed", 409);
     }
     const password = validatePassword(
       input && input.password,
@@ -1148,7 +1089,6 @@ module.exports = {
   CustomerAccessError,
   InMemoryCustomerAccessStore,
   SupabaseCustomerAccessStore,
-  createSupabaseIdentityAuthenticator,
   createCustomerAccessService,
   createMemoryEmailSender,
   createResendEmailSender,

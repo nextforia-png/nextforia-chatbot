@@ -6,7 +6,6 @@ const {
   InMemoryCustomerAccessStore,
   SupabaseCustomerAccessStore,
   createCustomerAccessService,
-  createSupabaseIdentityAuthenticator,
   createMemoryEmailSender,
   createResendEmailSender,
   hashInvitationToken
@@ -167,43 +166,6 @@ async function expectError(promise, code, status) {
     password: "ChangedPassword2026"
   }), "invalid_invitation", 403);
   assert.strictEqual(await service.authenticate("admin@empresa.example", "wrong-password"), null);
-
-  const supabaseIdentityId = "b1e62906-65c6-4a4a-ac86-571b377451c5";
-  const identityStore = new InMemoryCustomerAccessStore();
-  identityStore.seedActiveUser({
-    user_id: supabaseIdentityId,
-    tenant_id: "empresa-auth-oficial",
-    company_name: "Empresa Auth Oficial",
-    email: "auth@empresa.example",
-    auth_provider: "supabase",
-    plan_id: null,
-    assigned_bot_id: null
-  });
-  const identityService = createCustomerAccessService({
-    store: identityStore,
-    emailSender: createMemoryEmailSender(),
-    baseUrl: "https://customer-panel.staging.example",
-    authenticateIdentity: async function (input) {
-      if (input.password !== "SupabaseOnly2026") return null;
-      return { user_id: supabaseIdentityId, email: input.email };
-    }
-  });
-  const identityUser = await identityService.authenticate("AUTH@EMPRESA.EXAMPLE", "SupabaseOnly2026");
-  assert(identityUser);
-  assert.strictEqual(identityUser.user_id, supabaseIdentityId);
-  assert.strictEqual(identityUser.tenant_id, "empresa-auth-oficial");
-  assert.strictEqual(identityStore.users[0].password_hash, null);
-  assert.strictEqual(identityStore.users[0].password_salt, null);
-  assert.strictEqual(await identityService.authenticate("auth@empresa.example", "wrong-password"), null);
-  await expectError(identityService.changePassword({
-    user_id: supabaseIdentityId,
-    email: "auth@empresa.example",
-    tenant_id: "empresa-auth-oficial"
-  }, {
-    current_password: "SupabaseOnly2026",
-    password: "ChangedPassword2026",
-    password_confirmation: "ChangedPassword2026"
-  }), "identity_password_managed", 409);
   const outboxBeforePublicSignup = email.outbox.length;
   const publicUser = await service.createPublicSignup({
     company_name: "Empresa Pública",
@@ -277,10 +239,6 @@ async function expectError(promise, code, status) {
         return { data: [{ user_id: "user-a", tenant_id: "tenant-a", email_normalized: "admin@tenant-a.example", role: "admin", active: true, password_hash: "hash", password_salt: "salt" }] };
       },
       get: async function (url, config) {
-        if (url.endsWith("/rest/v1/tenant_users")) {
-          assert.strictEqual(config.params.user_id, "eq.user-a");
-          return { data: [{ user_id: "user-a", tenant_id: "tenant-a", email_normalized: "admin@tenant-a.example", status: "active", active: true, auth_provider: "supabase" }] };
-        }
         assert(url.endsWith("/rest/v1/tenants"));
         assert.strictEqual(config.params.id, "eq.tenant-a");
         return { data: [{ id: "tenant-a", company_name: "Tenant A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente", status: "live" }] };
@@ -291,31 +249,6 @@ async function expectError(promise, code, status) {
   assert.strictEqual(persistedContext.company_name, "Tenant A");
   assert.strictEqual(persistedContext.plan_id, "nextfor-aura");
   assert.strictEqual(persistedContext.assigned_bot_id, "atencion-cliente");
-  assert.strictEqual(persistedContext.auth_provider, "supabase");
-
-  let identityRequest;
-  const authenticateSupabaseIdentity = createSupabaseIdentityAuthenticator({
-    url: "https://official-project.supabase.co",
-    apiKey: "public-or-service-api-key",
-    axiosClient: {
-      post: async function (url, payload, config) {
-        identityRequest = { url: url, payload: payload, headers: config.headers };
-        return {
-          status: 200,
-          data: {
-            access_token: "must-not-be-returned-or-stored",
-            refresh_token: "must-not-be-returned-or-stored",
-            user: { id: supabaseIdentityId, email: "auth@empresa.example" }
-          }
-        };
-      }
-    }
-  });
-  const verifiedIdentity = await authenticateSupabaseIdentity({ email: "AUTH@EMPRESA.EXAMPLE", password: "SupabaseOnly2026" });
-  assert.deepStrictEqual(verifiedIdentity, { user_id: supabaseIdentityId, email: "auth@empresa.example" });
-  assert.strictEqual(JSON.stringify(verifiedIdentity).includes("must-not-be-returned-or-stored"), false);
-  assert(identityRequest.url.endsWith("/auth/v1/token?grant_type=password"));
-  assert.strictEqual(identityRequest.headers.Authorization, undefined, "auth request must not send a service-role bearer token");
 
   const failedStore = new InMemoryCustomerAccessStore();
   const failedService = createCustomerAccessService({

@@ -96,7 +96,10 @@ module.exports = function renderCustomerPanel(res, options) {
   const demoMode = !!options.demoMode;
   // Presentation-only gate. Staging can exercise the approved visual system
   // without changing the legacy production shell or any connector/auth logic.
-  const panelRedesignEnabled = process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED === "true";
+  const panelRedesignFlag = String(process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED || "").trim().toLowerCase();
+  const panelRedesignEnabled = panelRedesignFlag
+    ? panelRedesignFlag === "true"
+    : process.env.RENDER_SERVICE_NAME === "nextforia-chatbot-staging";
   const panelContext = customerPanelContext(options);
   const botVersion = options.botVersion || "dev";
   const paymentGateRequired = !!options.paymentGateRequired;

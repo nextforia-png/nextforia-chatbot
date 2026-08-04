@@ -51,7 +51,7 @@ function signedSessionCookie(secret, user) {
     exp: Date.now() + 60 * 60 * 1000
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-  return "rav_dashboard_session=" + encodeURIComponent(payload + "." + signature);
+  return "nextforia_dashboard_session=" + encodeURIComponent(payload + "." + signature);
 }
 
 async function requestJson(base, pathName, cookie, options) {

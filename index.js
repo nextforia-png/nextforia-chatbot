@@ -307,10 +307,11 @@ app.get("/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService()));
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
-const BOT_VERSION = "v329-whatsapp-embedded-token-exchange";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v335-auth-tenant-isolation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
-const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
+const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
+const LEGACY_DASHBOARD_SESSION_COOKIES = Object.freeze(["rav_dashboard_session"]);
 const DASHBOARD_ROLES = { viewer: 1, agent: 2, admin: 3, super_admin: 4 };
 const DASHBOARD_ROLE_LABELS = {
   viewer: "Viewer",
@@ -664,6 +665,11 @@ const loginRateLimiter = createRateLimiter({
   }
 });
 app.use("/admin", adminRateLimiter);
+app.use("/admin", function preventAuthenticatedPageCaching(req, res, next) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  next();
+});
 app.use(["/signature", "/admin/signature/client", "/admin/signature/client-api"], function protectSignatureCaching(req, res, next) {
   res.setHeader("cache-control", "no-store, max-age=0");
   res.setHeader("pragma", "no-cache");
@@ -674,8 +680,18 @@ app.use("/signature/api", signatureRateLimiter);
 app.use("/admin/signature/client-api", signatureRateLimiter);
 app.use("/admin", async function revalidateCustomerSession(req, res, next) {
   if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
+  const requestCookies = parseCookies(req.get("cookie"));
+  const hadDashboardCookie = [DASHBOARD_SESSION_COOKIE].concat(LEGACY_DASHBOARD_SESSION_COOKIES).some(function (name) {
+    return Object.prototype.hasOwnProperty.call(requestCookies, name);
+  });
   const session = readDashboardSession(req);
-  if (!session || session.version !== 2) return next();
+  if (!session) {
+    req.dashboardSessionChecked = true;
+    req.dashboardVerifiedSession = null;
+    if (hadDashboardCookie) clearDashboardSessionCookie(req, res);
+    return next();
+  }
+  if (session.version !== 2) return next();
   req.dashboardSessionChecked = true;
   if (session.fallback_access) {
     try {
@@ -5579,28 +5595,59 @@ function readDashboardSession(req) {
   }
 }
 
-function dashboardCookieOptions(req, maxAgeSeconds) {
+function dashboardCookieDomain(req) {
+  const hostname = String(req.get("host") || "").split(":")[0].trim().toLowerCase();
+  return hostname === "nextforia.com" || hostname.endsWith(".nextforia.com") ? ".nextforia.com" : "";
+}
+
+function dashboardCookieHeader(req, name, value, maxAgeSeconds, domain) {
   const secure = req.secure || req.get("x-forwarded-proto") === "https" || process.env.NODE_ENV === "production";
   return [
-    DASHBOARD_SESSION_COOKIE,
+    name,
     "=",
-    maxAgeSeconds > 0 ? "" : "",
+    value || "",
     "; Path=/admin",
     "; HttpOnly",
     "; SameSite=Strict",
     secure ? "; Secure" : "",
     "; Priority=High",
+    domain ? "; Domain=" + domain : "",
+    maxAgeSeconds > 0 ? "" : "; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     "; Max-Age=" + Math.max(0, maxAgeSeconds)
   ].join("");
 }
 
+function dashboardSessionClearHeaders(req) {
+  const domain = dashboardCookieDomain(req);
+  const names = [DASHBOARD_SESSION_COOKIE].concat(LEGACY_DASHBOARD_SESSION_COOKIES);
+  const headers = [];
+  names.forEach(function (name) {
+    headers.push(dashboardCookieHeader(req, name, "", 0, ""));
+    if (domain) headers.push(dashboardCookieHeader(req, name, "", 0, domain));
+  });
+  return headers;
+}
+
 function setDashboardSessionCookie(req, res, user) {
   const token = createDashboardSession(user);
-  res.setHeader("Set-Cookie", DASHBOARD_SESSION_COOKIE + "=" + encodeURIComponent(token) + dashboardCookieOptions(req, DASHBOARD_SESSION_TTL_HOURS * 60 * 60).replace(DASHBOARD_SESSION_COOKIE + "=", ""));
+  const domain = dashboardCookieDomain(req);
+  const headers = [dashboardCookieHeader(
+    req,
+    DASHBOARD_SESSION_COOKIE,
+    encodeURIComponent(token),
+    DASHBOARD_SESSION_TTL_HOURS * 60 * 60,
+    domain
+  )];
+  LEGACY_DASHBOARD_SESSION_COOKIES.forEach(function (name) {
+    headers.push(dashboardCookieHeader(req, name, "", 0, ""));
+    if (domain) headers.push(dashboardCookieHeader(req, name, "", 0, domain));
+  });
+  if (domain) headers.push(dashboardCookieHeader(req, DASHBOARD_SESSION_COOKIE, "", 0, ""));
+  res.setHeader("Set-Cookie", headers);
 }
 
 function clearDashboardSessionCookie(req, res) {
-  res.setHeader("Set-Cookie", dashboardCookieOptions(req, 0));
+  res.setHeader("Set-Cookie", dashboardSessionClearHeaders(req));
 }
 
 function normalizeDashboardUsername(username) {
@@ -7923,6 +7970,20 @@ async function dashboardUserFromCredentials(username, password, options) {
   const cleanUser = String(username || "").trim();
   const normalizedUser = normalizeDashboardUsername(cleanUser);
   const cleanPass = String(password || "");
+  if (CUSTOMER_ACCESS_V2_ENABLED && options && options.customerV2 === true) {
+    if (!customerAccessService || !validEmailIdentity(normalizedUser)) return null;
+    let customerAccessUser = null;
+    try {
+      customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
+    } catch (_) {
+      return null;
+    }
+    if (!customerAccessUser && CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE) {
+      customerAccessUser = await authenticatePublicCustomerAccessUser(normalizedUser, cleanPass);
+    }
+    if (!customerAccessUser || !customerAccessCreatedAfterReset(customerAccessUser)) return null;
+    return customerAccessUser;
+  }
   const environmentUser = DASHBOARD_USERS.find(user => (
     normalizeDashboardUsername(user.username) === normalizedUser ||
     (user.email && user.email === normalizedUser)
@@ -7930,18 +7991,6 @@ async function dashboardUserFromCredentials(username, password, options) {
   if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
   const platformUser = await dashboardPlatformUserFromCredentials(normalizedUser, cleanPass);
   if (platformUser) return platformUser;
-  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
-    let customerAccessUser = null;
-    try {
-      customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
-    } catch (error) {
-      customerAccessUser = null;
-    }
-    if (customerAccessUser && !customerAccessCreatedAfterReset(customerAccessUser)) return null;
-    if (customerAccessUser) return customerAccessUser;
-    const fallbackUser = await authenticatePublicCustomerAccessUser(normalizedUser, cleanPass);
-    if (fallbackUser) return fallbackUser;
-  }
   if (!LEGACY_CUSTOMER_PANEL_USERS_ENABLED) return null;
   const customerUser = await loadDashboardCustomerUser(false);
   if (!customerUser || customerUser.username !== normalizedUser) return null;
@@ -9667,6 +9716,7 @@ function buildCustomerPanelDemoSnapshot() {
 }
 
 app.post("/admin/login", loginRateLimiter, async (req, res) => {
+  clearDashboardSessionCookie(req, res);
   const email = String(req.body && req.body.email || "").trim();
   const username = String(req.body && req.body.username || "").trim();
   const identity = email || username;
@@ -9712,6 +9762,7 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
 
 app.post("/admin/logout", (req, res) => {
   clearDashboardSessionCookie(req, res);
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   res.json({ ok: true });
 });
 
@@ -9738,6 +9789,23 @@ app.get("/admin/session", async (req, res) => {
       method: auth.method
     }
   });
+});
+
+function customerLoginTarget(value) {
+  const target = String(value || "");
+  const allowedPrefixes = [
+    "/admin/panel",
+    "/admin/client-onboarding",
+    "/admin/integrations/shopify/connect",
+    "/admin/integrations/woocommerce/connect"
+  ];
+  return allowedPrefixes.some(function (prefix) {
+    return target === prefix || target.startsWith(prefix + "?");
+  }) ? target : "/admin/panel?tab=summary";
+}
+
+app.get("/admin/login", (req, res) => {
+  renderCustomerLogin(res, { targetPath: customerLoginTarget(req.query.next) });
 });
 
 app.get("/admin/customer-access/catalogs", async (req, res) => {
@@ -14047,15 +14115,17 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
 
 app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
+  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  const loginTarget = "/admin/panel?tab=" + requestedTab;
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/panel?tab=" + requestedTab });
+    if (CUSTOMER_ACCESS_V2_ENABLED) res.redirect("/admin/login?next=" + encodeURIComponent(loginTarget));
     else renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
   const panelTenantId = customerTenantForAuth(auth);
   if (!panelTenantId || !canAccessTenant(auth, panelTenantId)) {
-    res.status(403).send("Acceso restringido al tenant de este panel.");
+    clearDashboardSessionCookie(req, res);
+    res.redirect("/admin/login?next=" + encodeURIComponent(loginTarget));
     return;
   }
   if (auth.method === "key") {
@@ -14285,7 +14355,7 @@ function canOpsWrite(){return DASHBOARD_ROLE==="agent"||DASHBOARD_ROLE==="admin"
 function canAdmin(){return DASHBOARD_ROLE==="admin"||DASHBOARD_ROLE==="super_admin";}
 function roleLabel(role){return role==="super_admin"?"Super admin":(role==="admin"?"Admin":(role==="agent"?"Agent":"Viewer"));}
 function initRoleBadge(){var el=document.getElementById("roleBadge");if(el)el.textContent=(DASHBOARD_USER||"Panel")+" · "+roleLabel(DASHBOARD_ROLE);var ev=document.getElementById("evalBtn");if(ev&&!canAdmin()){ev.style.opacity=".45";ev.title="Solo admin";}}
-function logoutDashboard(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
+function logoutDashboard(){try{["rav_dashboard_key","rav_dashboard_tab","rav_logo","nextfor-integration-result"].forEach(function(key){localStorage.removeItem(key);});}catch(e){}try{["nextforia_tenant_id","tenant_id","rav_tenant_id"].forEach(function(key){sessionStorage.removeItem(key);});}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
 function initTabs(){var tab="summary";try{tab=new URL(location.href).searchParams.get("tab")||localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab==="human"?"human":"summary");}

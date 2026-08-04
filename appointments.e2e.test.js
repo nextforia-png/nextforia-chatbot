@@ -200,8 +200,9 @@ function elevenLabsSignature(body, secret, timestamp) {
     assert.strictEqual(response.status, 401, "another tenant must not access DERCO data");
     response = await fetch(base + "/admin/panel/data", { headers: { cookie: otherCookie } });
     assert.strictEqual(response.status, 401, "another tenant must not access the default tenant data");
-    response = await fetch(base + "/admin/panel", { headers: { cookie: otherCookie } });
-    assert.strictEqual(response.status, 403, "another tenant must not access the default tenant panel");
+    response = await fetch(base + "/admin/panel", { headers: { cookie: otherCookie }, redirect: "manual" });
+    assert.strictEqual(response.status, 302, "another tenant must be sent to login instead of seeing the default tenant panel");
+    assert.match(String(response.headers.get("location") || ""), /^\/admin\/login\?/);
 
     console.log("appointments e2e tests: ok");
   } finally {

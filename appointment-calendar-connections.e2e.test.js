@@ -37,11 +37,13 @@ function waitForServer(child, port) {
   });
 }
 
-async function login(base, email, password) {
+async function login(base, email, password, identityField) {
+  const body = { password };
+  body[identityField || "email"] = email;
   const response = await fetch(base + "/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: base },
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify(body)
   });
   assert.strictEqual(response.status, 200);
   return String(response.headers.get("set-cookie") || "").split(";")[0];
@@ -117,7 +119,7 @@ async function login(base, email, password) {
     await waitForServer(child, port);
     const serviceCookie = await login(base, "admin@service.example", password);
     const appointmentCookie = await login(base, "admin@appointments.example", password);
-    const superCookie = await login(base, "owner@nextforia.example", "OwnerPassword2026");
+    const superCookie = await login(base, "owner@nextforia.example", "OwnerPassword2026", "username");
 
     let response = await fetch(base + "/admin/panel/appointment-calendar", { headers: { cookie: serviceCookie } });
     assert.strictEqual(response.status, 404);

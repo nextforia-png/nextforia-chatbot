@@ -309,7 +309,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v334-nextforia-chatbot-brand";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v335-staging-panel-redesign";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -14185,7 +14185,7 @@ app.get("/admin/panel-demo", (req, res) => {
   const auth = { username: "demo", name: "Demo RAV Toys", role: "admin", method: "demo" };
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
   renderCustomerPanel(res, {
     auth,
     capabilities,

@@ -48,6 +48,17 @@ assert.strictEqual(draft.payload.conversation_config.agent.language, "es");
 assert.match(draft.payload.conversation_config.agent.first_message, /Luciana/);
 assert.match(draft.payload.conversation_config.agent.prompt.prompt, /APPOINTMENT BOT/);
 assert.doesNotMatch(JSON.stringify(draft.payload), /CUSTOMER-SERVICE-ONLY-SECRET/);
+const nonDuplicatedIdentity = buildElevenLabsAppointmentAgentPayload({
+  tenant_id: "nextforia",
+  appointment_configuration: Object.assign({}, appointmentConfiguration, {
+    business_name: "NextforIA",
+    assistant_name: "Nextfor de NextforIA"
+  })
+}, "nextforia", { agentTenantMap: { agent_nextfor: "nextforia" } });
+assert.strictEqual(
+  nonDuplicatedIdentity.payload.conversation_config.agent.first_message,
+  "Hola, soy Nextfor de NextforIA. Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?"
+);
 
 const phoneMap = parsePhoneNumberTenantMap({
   ELEVENLABS_PHONE_NUMBER_TENANT_MAP: JSON.stringify({ phone_123: "clinica-a" })

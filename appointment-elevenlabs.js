@@ -282,7 +282,22 @@ async function resolveElevenLabsPhoneNumber(record, tenantId, options) {
 function appointmentFirstMessage(configuration) {
   const assistant = cleanText(configuration && configuration.assistant_name, 80) || "Nextfor";
   const business = cleanText(configuration && configuration.business_name, 120) || "tu negocio";
-  return "Hola, soy " + assistant + " de " + business + ". Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?";
+  const identity = assistant.toLowerCase().includes(business.toLowerCase())
+    ? assistant
+    : assistant + " de " + business;
+  return "Hola, soy " + identity + ". Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?";
+}
+
+function appointmentToolPrompt() {
+  return [
+    "REGLAS OBLIGATORIAS DE HERRAMIENTAS:",
+    "- Antes de ofrecer o confirmar un horario, usa la herramienta de disponibilidad.",
+    "- Solo confirma una reserva cuando la herramienta de agendamiento responda ok=true.",
+    "- Para cancelar o reprogramar, identifica una sola cita, confirma la intención del cliente y usa la herramienta correspondiente.",
+    "- Solo confirma una cancelación o reprogramación cuando la herramienta responda ok=true.",
+    "- Si una herramienta falla o devuelve varias coincidencias, no inventes el resultado: solicita el dato faltante o deriva a una persona.",
+    "- Nunca reveles identificadores internos, tokens, errores técnicos ni datos de otros clientes."
+  ].join("\n");
 }
 
 function appointmentToolPrompt() {

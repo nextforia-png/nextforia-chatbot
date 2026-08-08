@@ -76,6 +76,20 @@ function internalError(error) {
   return cleanText(message, 800);
 }
 
+function metaErrorTelemetry(error) {
+  const data = error && error.response && error.response.data;
+  const meta = data && data.error && typeof data.error === "object" ? data.error : {};
+  return {
+    meta_code: Number.isFinite(Number(meta.code)) ? Number(meta.code) : null,
+    meta_subcode: Number.isFinite(Number(meta.error_subcode)) ? Number(meta.error_subcode) : null,
+    meta_type: cleanText(meta.type, 120) || null,
+    meta_transient: meta.is_transient === true,
+    meta_trace_id: cleanText(meta.fbtrace_id, 160) || null,
+    meta_message: cleanText(meta.message || internalError(error), 500)
+      .replace(/(access[_ -]?token|bearer)\s*[:=]?\s*[^\s,;]+/gi, "$1 [redacted]")
+  };
+}
+
 function customerActivationError(value) {
   const message = cleanText(value, 800).toLowerCase();
   if (!message) return null;
@@ -778,6 +792,7 @@ class MetaChannelProvider {
   }
 
   async activate(channel, candidate) {
+    let activationStage = "subscribe";
     try {
       if (channel === "whatsapp") {
         await this.subscribe(channel, candidate);
@@ -789,6 +804,7 @@ class MetaChannelProvider {
         // below before the connection is accepted.
         let registrationError = null;
         try {
+          activationStage = "register";
           await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
             method: "POST",
             data: {
@@ -799,6 +815,7 @@ class MetaChannelProvider {
         } catch (error) {
           registrationError = error;
         }
+        activationStage = "verify_phone";
         const verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
           params: {
             fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type"
@@ -807,7 +824,10 @@ class MetaChannelProvider {
         const registrationReady =
           String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
           String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
-        if (registrationError && !registrationReady) throw registrationError;
+        if (registrationError && !registrationReady) {
+          activationStage = "register";
+          throw registrationError;
+        }
         if (!registrationReady) {
           // Meta can finish Embedded Signup for an existing WhatsApp Business
           // App number before the coexistence bridge reports CLOUD_API. Keep
@@ -849,7 +869,10 @@ class MetaChannelProvider {
       }
       return candidate;
     } catch (error) {
-      throw new ChannelConnectionError("asset_activation_failed", 422, internalError(error));
+      const problem = new ChannelConnectionError("asset_activation_failed", 422, internalError(error));
+      problem.activationStage = activationStage;
+      problem.meta = metaErrorTelemetry(error);
+      throw problem;
     }
   }
 

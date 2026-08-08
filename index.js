@@ -311,7 +311,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v335-whatsapp-runtime-activation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v336-whatsapp-activation-diagnostics";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -12751,7 +12751,14 @@ app.post("/admin/panel/channel-connections/whatsapp/activate", async (req, res) 
   } catch (error) {
     log("warn", "whatsapp_customer_activation_failed", {
       tenant_id: tenantId,
-      code: error instanceof ChannelConnectionError ? error.code : "channel_connection_failed"
+      code: error instanceof ChannelConnectionError ? error.code : "channel_connection_failed",
+      stage: cleanRuntimeText(error && error.activationStage, 80) || null,
+      meta_code: error && error.meta && error.meta.meta_code,
+      meta_subcode: error && error.meta && error.meta.meta_subcode,
+      meta_type: error && error.meta && error.meta.meta_type,
+      meta_transient: error && error.meta && error.meta.meta_transient === true,
+      meta_trace_id: error && error.meta && error.meta.meta_trace_id,
+      meta_message: cleanRuntimeText(error && error.meta && error.meta.meta_message, 500) || null
     });
     channelConnectionErrorResponse(res, error);
   }

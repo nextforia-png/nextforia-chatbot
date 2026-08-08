@@ -282,7 +282,10 @@ async function resolveElevenLabsPhoneNumber(record, tenantId, options) {
 function appointmentFirstMessage(configuration) {
   const assistant = cleanText(configuration && configuration.assistant_name, 80) || "Nextfor";
   const business = cleanText(configuration && configuration.business_name, 120) || "tu negocio";
-  return "Hola, soy " + assistant + " de " + business + ". Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?";
+  const identity = assistant.toLowerCase().includes(business.toLowerCase())
+    ? assistant
+    : assistant + " de " + business;
+  return "Hola, soy " + identity + ". Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?";
 }
 
 function appointmentToolPrompt() {

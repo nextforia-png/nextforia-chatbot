@@ -315,7 +315,6 @@ function appointmentWebhookToolConfig(name, description, url, properties, requir
         url,
         method: "POST",
         path_params_schema: {},
-        query_params_schema: { properties: {}, required: [] },
         request_body_schema: { type: "object", description, properties, required },
         request_headers: {}
       }

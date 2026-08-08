@@ -122,6 +122,7 @@ assert.throws(function () {
         if (/\/v1\/convai\/tools$/.test(url)) {
           toolCreates += 1;
           assert.match(payload.tool_config.api_schema.url, /api\.nextforia\.com\/webhooks\/elevenlabs\/appointments\/clinica-a/);
+          assert.strictEqual(payload.tool_config.api_schema.query_params_schema, undefined);
           return { status: 200, data: { id: "tool_nextfor_" + toolCreates } };
         }
         assert.match(url, /\/v1\/convai\/agents\/create$/);

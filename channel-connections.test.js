@@ -102,9 +102,11 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(embeddedCandidate.phone_number_id, "phone-embedded");
   assert.strictEqual(embeddedCandidate.access_token, "embedded-access-token");
+  assert.strictEqual(embeddedCandidate.coexistence, false);
   const embeddedCandidateFromV3Event = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
-    business_id: "business-embedded"
+    business_id: "business-embedded",
+    onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
   });
   assert.strictEqual(embeddedCandidateFromV3Event.phone_number_id, "phone-embedded");
   assert.strictEqual(embeddedCandidateFromV3Event.coexistence, true);
@@ -271,6 +273,7 @@ function expectCode(promise, code) {
   assert(portfolioRequests.some(function (url) { return url.endsWith("/business-nextfor/owned_pages"); }));
 
   const activationRequests = [];
+  let standardPhoneRegistered = false;
   const activationMeta = new MetaChannelProvider({
     appId: "123456789",
     appSecret: "meta-app-secret",
@@ -279,12 +282,21 @@ function expectCode(promise, code) {
     redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
     axiosClient: async function (request) {
       activationRequests.push(request);
+      if (request.url.endsWith("/phone-rav/register")) standardPhoneRegistered = true;
       return {
         data: request.url.endsWith("/ig-rav")
           ? { id: "ig-rav", username: "ravtoys", name: "RAV Toys" }
           : request.url.endsWith("/phone-rav")
             ? {
                 id: "phone-rav",
+                display_phone_number: "+57 301 587 2708",
+                code_verification_status: "VERIFIED",
+                platform_type: standardPhoneRegistered ? "CLOUD_API" : "NOT_APPLICABLE",
+                is_on_biz_app: false
+              }
+            : request.url.endsWith("/phone-coexistence")
+              ? {
+                id: "phone-coexistence",
                 display_phone_number: "+57 301 587 2708",
                 code_verification_status: "VERIFIED",
                 platform_type: "CLOUD_API",
@@ -329,28 +341,46 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(activatedWhatsApp.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(activationRequests[1].url.endsWith("/phone-rav/register"));
-  assert.strictEqual(activationRequests[1].method, "POST");
-  assert.strictEqual(activationRequests[1].data.messaging_product, "whatsapp");
-  assert.strictEqual(activationRequests[1].data.pin, "246810");
+  assert(activationRequests[1].url.endsWith("/phone-rav"));
+  assert(activationRequests[2].url.endsWith("/phone-rav/register"));
+  assert.strictEqual(activationRequests[2].method, "POST");
+  assert.strictEqual(activationRequests[2].data.messaging_product, "whatsapp");
+  assert.strictEqual(activationRequests[2].data.pin, "246810");
   assert(!activationRequests.some(function (request) {
     return request.url.endsWith("/phone-rav") && request.method === "POST";
   }));
   assert(!JSON.stringify(activationRequests).includes("meta-app-secret"));
-  assert(activationRequests[2].url.endsWith("/phone-rav"));
+  assert(activationRequests[3].url.endsWith("/phone-rav"));
 
   activationRequests.length = 0;
-  const activatedCoexistence = await activationMeta.activate("whatsapp", {
+  standardPhoneRegistered = false;
+  const standardAwaitingPin = await activationMeta.activate("whatsapp", {
     whatsapp_business_account_id: "waba-rav",
     phone_number_id: "phone-rav",
     account_label: "+57 301 587 2708",
     access_token: "whatsapp-access-token",
+    // Simulates a record written by the previous build, which incorrectly
+    // labelled every Embedded Signup result as Coexistence.
+    coexistence: true
+  });
+  assert.strictEqual(standardAwaitingPin.coexistence, false);
+  assert.strictEqual(standardAwaitingPin.activation_pending, true);
+  assert.strictEqual(standardAwaitingPin.registration_pin_required, true);
+  assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
+
+  activationRequests.length = 0;
+  const activatedCoexistence = await activationMeta.activate("whatsapp", {
+    whatsapp_business_account_id: "waba-rav",
+    phone_number_id: "phone-coexistence",
+    account_label: "+57 301 587 2708",
+    access_token: "whatsapp-access-token",
     coexistence: true,
+    coexistence_event_confirmed: true,
     registration_pin: "135790"
   });
   assert.strictEqual(activatedCoexistence.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(activationRequests[1].url.endsWith("/phone-rav"));
+  assert(activationRequests[1].url.endsWith("/phone-coexistence"));
   assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
   assert(!JSON.stringify(activationRequests).includes("135790"));
 
@@ -380,7 +410,8 @@ function expectCode(promise, code) {
     phone_number_id: "phone-pending",
     account_label: "+57 310 6534553",
     access_token: "pending-business-token",
-    coexistence: true
+    coexistence: true,
+    coexistence_event_confirmed: true
   });
   assert.strictEqual(pendingActivationCandidate.activation_pending, true);
   assert.strictEqual(pendingActivationCandidate.account_label, "+57 310 6534553");
@@ -702,7 +733,8 @@ function expectCode(promise, code) {
     whatsapp_business_account_id: "waba-repair",
     phone_number_id: "phone-repair",
     access_token: "repair-token",
-    coexistence: true
+    coexistence: true,
+    coexistence_event_confirmed: true
   });
   const repairedConnection = await repairService.repairSubscription(
     "tenant-repair",
@@ -730,7 +762,8 @@ function expectCode(promise, code) {
           whatsapp_business_account_id: "waba-smb",
           phone_number_id: "phone-smb",
           access_token: "embedded-business-token",
-          coexistence: true
+          coexistence: true,
+          coexistence_event_confirmed: true
         };
       },
       activate: async function (channel, candidate) {
@@ -768,7 +801,8 @@ function expectCode(promise, code) {
           whatsapp_business_account_id: "waba-pending",
           phone_number_id: "phone-pending",
           access_token: "pending-business-token",
-          coexistence: true
+          coexistence: true,
+          coexistence_event_confirmed: true
         };
       },
       activate: async function (_, candidate) {
@@ -841,7 +875,8 @@ function expectCode(promise, code) {
           whatsapp_business_account_id: "waba-single-flight",
           phone_number_id: "phone-single-flight",
           access_token: "single-flight-token",
-          coexistence: true
+          coexistence: true,
+          coexistence_event_confirmed: true
         };
       },
       activate: async function (_, candidate) {
@@ -895,7 +930,8 @@ function expectCode(promise, code) {
           whatsapp_business_account_id: "waba-failure",
           phone_number_id: "phone-failure",
           access_token: "failure-token",
-          coexistence: true
+          coexistence: true,
+          coexistence_event_confirmed: true
         };
       },
       activate: async function (_, candidate) {
@@ -955,7 +991,8 @@ function expectCode(promise, code) {
           whatsapp_business_account_id: "waba-rate-limited",
           phone_number_id: "phone-rate-limited",
           access_token: "rate-limited-token",
-          coexistence: true
+          coexistence: true,
+          coexistence_event_confirmed: true
         };
       },
       activate: async function (_, candidate) {

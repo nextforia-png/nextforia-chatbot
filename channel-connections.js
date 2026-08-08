@@ -170,6 +170,7 @@ function emptyConnection(tenantId, channel) {
     pending_assets: [],
     credentials_ciphertext: null,
     credential_source: null,
+    registration_pin_required: false,
     protected_legacy: false
   };
 }
@@ -189,11 +190,8 @@ function publicConnection(record, options) {
   }
   const allowProtectedReconnect = !!(options && options.allowProtectedReconnect);
   const reconnectAllowed = !safe.protected_legacy || allowProtectedReconnect;
-  // Coexistence numbers are already registered in the WhatsApp Business App.
-  // A previous build incorrectly called /register for these records and may
-  // have stored Meta error 133016. That cooldown must not block the supported
-  // Embedded Signup verification flow, which never calls /register.
-  const coexistencePending = safe.channel === "whatsapp" && safe.webhook_status === "pending_activation";
+  const coexistencePending = safe.channel === "whatsapp" &&
+    safe.webhook_status === "pending_activation" && safe.coexistence_confirmed === true;
   const activationRetryAt = safe.channel === "whatsapp" && !coexistencePending
     ? whatsappActivationRetryAt(safe, options && options.now)
     : null;
@@ -212,12 +210,15 @@ function publicConnection(record, options) {
   safe.activation_message = safe.activation_rate_limited
     ? "Meta bloqueó intentos anteriores. Nextfor no volverá a registrar el número automáticamente; la siguiente activación solo se enviará cuando elijas un PIN de seis dígitos."
     : safe.activation_error || (safe.activation_available
-    ? safe.webhook_status === "pending_activation"
+    ? safe.registration_pin_required
+      ? "Meta verificó el número. Crea un PIN de seis dígitos aquí para terminar la activación."
+      : safe.webhook_status === "pending_activation"
       ? "Meta aceptó el número. Nextfor está terminando y verificando la conexión automáticamente."
       : "La activación de WhatsApp necesita atención. Puedes reintentarla sin conectar otra cuenta."
     : null);
   delete safe.credentials_ciphertext;
   delete safe.credential_source;
+  delete safe.coexistence_confirmed;
   safe.pending_assets = safe.status === "connecting"
     ? (Array.isArray(safe.pending_assets) ? safe.pending_assets : []).map(function (asset) {
         return {
@@ -839,8 +840,23 @@ class MetaChannelProvider {
         // registered. Standard Cloud API numbers still use /register with a
         // request-scoped PIN.
         const registrationPin = cleanWhatsAppRegistrationPin(candidate.registration_pin);
+        activationStage = "verify_phone";
+        let verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
+          params: {
+            fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,is_on_biz_app"
+          }
+        });
+        const coexistenceEventConfirmed = candidate.coexistence_event_confirmed === true;
+        const effectiveCoexistence = coexistenceEventConfirmed || verified.data && verified.data.is_on_biz_app === true;
+        candidate.coexistence = effectiveCoexistence;
+        candidate.coexistence_event_confirmed = coexistenceEventConfirmed;
+        let registrationReady = effectiveCoexistence
+          ? verified.data && verified.data.is_on_biz_app === true &&
+            String(verified.data.platform_type || "").toUpperCase() === "CLOUD_API"
+          : String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
+            String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
         let registrationError = null;
-        if (!candidate.coexistence && registrationPin) {
+        if (!effectiveCoexistence && !registrationReady && registrationPin) {
           try {
             activationStage = "register";
             await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
@@ -850,21 +866,18 @@ class MetaChannelProvider {
                 pin: registrationPin
               }
             });
+            activationStage = "verify_phone";
+            verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
+              params: {
+                fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,is_on_biz_app"
+              }
+            });
+            registrationReady = String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
+              String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
           } catch (error) {
             registrationError = error;
           }
         }
-        activationStage = "verify_phone";
-        const verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
-          params: {
-            fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,is_on_biz_app"
-          }
-        });
-        const registrationReady = candidate.coexistence
-          ? verified.data && verified.data.is_on_biz_app === true &&
-            String(verified.data.platform_type || "").toUpperCase() === "CLOUD_API"
-          : String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
-            String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
         if (registrationError && !registrationReady) {
           activationStage = "register";
           throw registrationError;
@@ -875,11 +888,11 @@ class MetaChannelProvider {
           // the exact tenant-scoped asset and encrypted token so verification
           // can finish automatically after Meta's review instead of forcing
           // the customer through OAuth again.
-          if (candidate.coexistence ||
+          if (effectiveCoexistence ||
               String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED") {
             let accountReviewStatus = null;
             let wabaLookupError = null;
-            if (candidate.coexistence && candidate.whatsapp_business_account_id) {
+            if (candidate.whatsapp_business_account_id) {
               try {
                 const waba = await this.graph(
                   encodeURIComponent(candidate.whatsapp_business_account_id),
@@ -891,7 +904,7 @@ class MetaChannelProvider {
                 wabaLookupError = metaErrorTelemetry(error);
               }
             }
-            this.logger("info", "whatsapp_coexistence_pending_state", {
+            this.logger("info", "whatsapp_activation_pending_state", {
               phone_number_suffix: String(candidate.phone_number_id || "").slice(-8) || null,
               waba_suffix: String(candidate.whatsapp_business_account_id || "").slice(-8) || null,
               code_verification_status: cleanText(verified.data && verified.data.code_verification_status, 80) || null,
@@ -904,7 +917,8 @@ class MetaChannelProvider {
               waba_lookup_error_message: wabaLookupError && wabaLookupError.meta_message
             });
             candidate.activation_pending = true;
-            candidate.activation_error = candidate.coexistence
+            candidate.registration_pin_required = !effectiveCoexistence && !registrationPin;
+            candidate.activation_error = effectiveCoexistence
               ? "Meta is still completing WhatsApp Business App onboarding"
               : registrationPin
                 ? "WhatsApp number is awaiting Cloud API activation"
@@ -926,6 +940,7 @@ class MetaChannelProvider {
           verified.data && (verified.data.display_phone_number || verified.data.verified_name) || candidate.account_label,
           240
         );
+        candidate.registration_pin_required = false;
         delete candidate.registration_pin;
       } else {
         await this.subscribe(channel, candidate);
@@ -1029,6 +1044,10 @@ class MetaChannelProvider {
         );
       }
       const phoneNumberId = cleanText(phone.id, 240);
+      const coexistenceEventConfirmed = session && (
+        session.coexistence === true ||
+        session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+      );
       return {
         id: "wa:" + phoneNumberId,
         account_id: phoneNumberId,
@@ -1037,7 +1056,8 @@ class MetaChannelProvider {
         whatsapp_business_account_id: wabaId,
         phone_number_id: phoneNumberId,
         access_token: accessToken,
-        coexistence: true
+        coexistence: coexistenceEventConfirmed,
+        coexistence_event_confirmed: coexistenceEventConfirmed
       };
     } catch (error) {
       if (error instanceof ChannelConnectionError) throw error;
@@ -1435,6 +1455,8 @@ function createChannelConnectionService(options) {
       page_id: activated.page_id || null,
       instagram_user_id: activated.instagram_user_id || null,
       webhook_status: activationPending ? "pending_activation" : "subscribed",
+      registration_pin_required: activationPending && activated.registration_pin_required === true,
+      coexistence_confirmed: activated.coexistence_event_confirmed === true,
       last_verified_at: connectedAt,
       last_error: null,
       last_error_at: null,
@@ -1449,6 +1471,7 @@ function createChannelConnectionService(options) {
         access_token: activated.access_token,
         login_type: activated.login_type || null,
         coexistence: activated.coexistence === true,
+        coexistence_event_confirmed: activated.coexistence_event_confirmed === true,
         meta_business_id: activated.meta_business_id || null,
         whatsapp_business_account_id: activated.whatsapp_business_account_id || null,
         phone_number_id: activated.phone_number_id || null,
@@ -1476,15 +1499,7 @@ function createChannelConnectionService(options) {
     if (!credential || !provider || typeof provider.activate !== "function") {
       throw new ChannelConnectionError("existing_asset_credentials_required", 409);
     }
-    const coexistence = credential.coexistence === true || record.webhook_status === "pending_activation";
     const registrationPin = cleanWhatsAppRegistrationPin(registrationPinValue);
-    if (!coexistence && !registrationPin) {
-      throw new ChannelConnectionError(
-        "whatsapp_registration_pin_required",
-        400,
-        "A valid six-digit WhatsApp two-step verification PIN is required"
-      );
-    }
     const candidate = Object.assign({}, credential, {
       id: "wa:" + cleanText(record.phone_number_id || record.account_id, 240),
       account_id: cleanText(record.account_id || record.phone_number_id, 240),
@@ -1495,13 +1510,14 @@ function createChannelConnectionService(options) {
         240
       ),
       phone_number_id: cleanText(record.phone_number_id || credential.phone_number_id, 240),
-      coexistence
+      coexistence: credential.coexistence_event_confirmed === true,
+      coexistence_event_confirmed: credential.coexistence_event_confirmed === true
     });
     if (!candidate.whatsapp_business_account_id || !candidate.phone_number_id || !candidate.access_token) {
       throw new ChannelConnectionError("existing_asset_credentials_required", 409);
     }
     const activationKey = tenantId + ":" + candidate.phone_number_id;
-    if (!coexistence && whatsappActivationBlocked.has(activationKey)) {
+    if (registrationPin && whatsappActivationBlocked.has(activationKey)) {
       throw new ChannelConnectionError(
         "whatsapp_activation_rate_limited",
         429,
@@ -1516,7 +1532,7 @@ function createChannelConnectionService(options) {
       );
     }
     whatsappActivationInFlight.add(activationKey);
-    if (!coexistence) candidate.registration_pin = registrationPin;
+    if (registrationPin) candidate.registration_pin = registrationPin;
     try {
       const activated = await provider.activate("whatsapp", candidate);
       whatsappActivationBlocked.delete(activationKey);
@@ -1532,6 +1548,8 @@ function createChannelConnectionService(options) {
         whatsapp_business_account_id: activated.whatsapp_business_account_id || record.whatsapp_business_account_id,
         phone_number_id: activated.phone_number_id || record.phone_number_id,
         webhook_status: activationPending ? "pending_activation" : "subscribed",
+        registration_pin_required: activationPending && activated.registration_pin_required === true,
+        coexistence_confirmed: activated.coexistence_event_confirmed === true,
         last_verified_at: checkedAt,
         last_error: null,
         last_error_at: null,
@@ -1540,7 +1558,17 @@ function createChannelConnectionService(options) {
         disconnected_by: null,
         updated_at: checkedAt,
         pending_assets: [],
-        credentials_ciphertext: record.credentials_ciphertext,
+        credentials_ciphertext: encryptedCredential({
+          access_token: activated.access_token,
+          login_type: activated.login_type || null,
+          coexistence: activated.coexistence === true,
+          coexistence_event_confirmed: activated.coexistence_event_confirmed === true,
+          meta_business_id: activated.meta_business_id || record.meta_business_id || null,
+          whatsapp_business_account_id: activated.whatsapp_business_account_id || record.whatsapp_business_account_id || null,
+          phone_number_id: activated.phone_number_id || record.phone_number_id || null,
+          page_id: null,
+          instagram_user_id: null
+        }),
         credential_source: record.credential_source || "oauth",
         protected_legacy: false
       }, {
@@ -1554,7 +1582,8 @@ function createChannelConnectionService(options) {
       return publicConnection(row, { superAdmin: true });
     } catch (error) {
       let problem = error;
-      if (!coexistence && isWhatsAppRegistrationRateLimit(error) && error.code !== "whatsapp_activation_rate_limited") {
+      if (error && error.activationStage === "register" && isWhatsAppRegistrationRateLimit(error) &&
+          error.code !== "whatsapp_activation_rate_limited") {
         problem = new ChannelConnectionError("whatsapp_activation_rate_limited", 429, internalError(error));
         problem.activationStage = error.activationStage;
         problem.meta = error.meta;

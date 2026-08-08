@@ -683,7 +683,7 @@ const passwordRecoveryRateLimiter = createRateLimiter({
 });
 app.use("/admin", function applyAdminRateLimit(req, res, next) {
   // A customer must always be able to end the session, even after a burst of panel requests.
-  if (req.method === "POST" && req.path === "/logout") return next();
+  if (req.path === "/logout") return next();
   return adminRateLimiter(req, res, next);
 });
 app.use("/admin", function preventAuthenticatedPageCaching(req, res, next) {
@@ -704,7 +704,7 @@ app.use("/admin", async function revalidateCustomerSession(req, res, next) {
   if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
   // Logging out must remain available even when the membership store is slow or unavailable.
   // The state-change middleware below still enforces the same-origin requirement.
-  if (req.method === "POST" && req.path === "/logout") return next();
+  if (req.path === "/logout") return next();
   const requestCookies = parseCookies(req.get("cookie"));
   const hadCustomerCookie = [DASHBOARD_SESSION_COOKIE].concat(LEGACY_DASHBOARD_SESSION_COOKIES).some(function (name) {
     return Object.prototype.hasOwnProperty.call(requestCookies, name);
@@ -9927,6 +9927,12 @@ app.post("/admin/logout", (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+app.get("/admin/logout", (req, res) => {
+  clearDashboardSessionCookie(req, res);
+  res.setHeader("Clear-Site-Data", '"cache", "storage"');
+  res.redirect(302, "/admin/login?logged_out=1");
 });
 
 function customerLoginTarget(value) {

@@ -244,7 +244,7 @@ button{cursor:pointer}
 .navItem{height:46px;border:0;border-radius:14px;background:transparent;color:#AAB8D0;padding:0 16px;display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:12px;text-align:left;font-weight:800;font-size:15px}
 .navItem:hover{background:rgba(255,255,255,.06);color:#fff}
 .navItem.active{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff;box-shadow:0 10px 22px rgba(18,168,244,.22)}
-.navItem.logoutItem{color:#DDE8F8}
+.navItem.logoutItem{color:#DDE8F8;text-decoration:none}
 .navItem.logoutItem:hover{background:rgba(239,78,78,.12);color:#fff}
 .navIcon{font-size:22px;line-height:1;opacity:.92;display:inline-flex;align-items:center;justify-content:center}
 .navIcon svg{width:20px;height:20px;display:block}
@@ -649,7 +649,7 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
   .topbar{display:none}
 .mobileTop{display:flex;position:sticky;top:0;z-index:8;background:linear-gradient(135deg,var(--navy-950),var(--navy-800));border-bottom:1px solid rgba(255,255,255,.08);padding:12px 16px;align-items:center;justify-content:space-between;gap:12px;color:#fff}
 .mobileTopActions{display:flex;align-items:center;gap:10px}
-.mobileLogout{height:34px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(255,255,255,.08);color:#fff;padding:0 12px;font-size:12px;font-weight:900}
+.mobileLogout{height:34px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(255,255,255,.08);color:#fff;padding:0 12px;font-size:12px;font-weight:900;display:inline-flex;align-items:center;text-decoration:none}
 .mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
   .mobileBrand .ravLogo{width:42px;height:42px;border-radius:13px;font-size:17px}
   .mobileBrand h1{font-family:var(--font-display);font-size:18px;line-height:1.08;font-weight:800;letter-spacing:-.03em;color:#fff}
@@ -1167,7 +1167,7 @@ ${customerBotConfiguration.styles}
 <div class="app">
   <header class="mobileTop">
     <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1><span id="mobileBrandBusinessName">${escapeHtml(panelContext.businessName)}</span></h1><p>con <span>Nextfor IA</span></p></div></div>
-    <div class="mobileTopActions"><button class="mobileLogout" type="button" onclick="logoutCustomerPanel()">Salir</button><div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
+    <div class="mobileTopActions"><a class="mobileLogout" href="/admin/logout" onclick="clearCustomerPanelStorage()">Salir</a><div class="mobileAvatar">${escapeHtml(panelContext.avatarInitials)}</div></div>
   </header>
   <div class="mobileBotSwitch" aria-label="Tus bots">
     ${mobileSupportBotButton}
@@ -1197,7 +1197,7 @@ ${customerBotConfiguration.styles}
       ${paymentGateRequired ? "" : `<button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>`}
       ${paymentGateRequired ? "" : notificationsNav}
       ${auth.role === "super_admin" ? `<a class="navItem" href="/admin/super-admin?view=channels"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Volver a Super Admin</span></a>` : ""}
-      <button class="navItem logoutItem" id="nav-logout" type="button" onclick="logoutCustomerPanel()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></button>
+      <a class="navItem logoutItem" id="nav-logout" href="/admin/logout" onclick="clearCustomerPanelStorage()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></a>
       <div class="whatsappCard">
         <div class="botsActive"><span class="statusDot"></span><span>${activeBotCount} ${activeBotCount === 1 ? "bot activo" : "bots activos"}</span></div>
         <strong><span class="statusDot" id="channelStatusDot"></span><span id="channelStatusTitle">${panelContext.v2 ? "Bot conectado" : "Bot de atención conectado"}</span></strong>
@@ -2146,19 +2146,8 @@ function markSetupDirty(){if(!state.setup||!state.setup.can_edit)return;state.se
 function setSetupBusy(busy,action){var save=document.getElementById("saveSetupBtn"),publish=document.getElementById("publishSetupBtn"),back=document.getElementById("setupBackBtn");if(save){save.disabled=busy;save.textContent=busy&&action==="save"?"Guardando…":"Guardar avance";}if(publish){publish.disabled=busy;if(busy&&action==="publish")publish.textContent="Activando…";}if(back)back.disabled=busy;if(!busy)renderSetupWizard();}
 function saveBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),save=document.getElementById("saveSetupBtn"),feedback="";setSetupBusy(true,"save");text("setupMessage","Guardando tu avance…");api("/admin/bot-setup",{method:"PUT",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setupDirty=false;fillSetupForm();feedback="✓ Avance guardado. El bot activo todavía no cambió.";}).catch(function(error){feedback="No se pudo guardar: "+error.message;}).finally(function(){setSetupBusy(false,"save");text("setupMessage",feedback||"Completa la información a tu ritmo.");if(feedback.indexOf("✓")===0&&save){save.textContent="Avance guardado ✓";setTimeout(function(){save.textContent="Guardar avance";},2000);}});}
 function publishBotSetup(){if(!state.setup||!state.setup.can_edit)return;var answers=collectSetupAnswers(),feedback="";setSetupBusy(true,"publish");text("setupMessage","Validando y personalizando tu bot…");api("/admin/bot-setup/publish",{method:"POST",body:JSON.stringify({answers:answers})}).then(function(result){state.setup.current=result.setup;state.setup.published={status:"published",completion:result.setup.completion,updated_at:result.setup.updated_at,published_at:result.setup.published_at};state.setupDirty=false;state.setupActivated=true;fillSetupForm();feedback="✓ Configuración activa. Se aplicará a los mensajes nuevos.";}).catch(function(error){var detail=error.body&&error.body.completion!=null?" Vas en "+error.body.completion+"%.":"";feedback=(error.body&&error.body.message||"No se pudo activar la configuración.")+detail;}).finally(function(){setSetupBusy(false,"publish");text("setupMessage",feedback||"Revisa la configuración e intenta nuevamente.");});}
-var customerPanelLogoutInProgress=false;
-function logoutCustomerPanel(){
-  if(customerPanelLogoutInProgress)return false;
-  customerPanelLogoutInProgress=true;
-  document.querySelectorAll("#nav-logout,.mobileLogout").forEach(function(button){button.disabled=true;button.setAttribute("aria-busy","true");});
+function clearCustomerPanelStorage(){
   try{["rav_dashboard_key","rav_dashboard_tab","rav_logo","nextfor-integration-result","nextforia_tenant_id","tenant_id","rav_tenant_id"].forEach(function(key){localStorage.removeItem(key);sessionStorage.removeItem(key);});}catch(e){}
-  var form=document.createElement("form");
-  form.method="POST";
-  form.action="/admin/logout?redirect=1";
-  form.hidden=true;
-  document.body.appendChild(form);
-  form.submit();
-  return false;
 }
 function restorePanelLayoutFromHistory(){
   var tab=state.tab;

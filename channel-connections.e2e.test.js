@@ -127,6 +127,7 @@ async function login(base, body) {
     assert(panel.includes('if(config.onboarding_mode==="coexistence")extras.featureType="whatsapp_business_app_onboarding"'));
     assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
     assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
+    assert(panel.includes('else if(item.activation_available){actions+=\'<button class="primaryBtn" type="button" onclick="verifyWhatsAppConnection(this)">Revisar estado</button>\'+whatsappModeActions(true)'));
     assert(panel.includes('payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));

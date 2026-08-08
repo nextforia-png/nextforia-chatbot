@@ -34,6 +34,7 @@ const {
 } = require("./customer-appointments");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
+const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
   renderGoogleOAuthHomepage,
@@ -311,10 +312,11 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v337-whatsapp-activation-cooldown";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v338-customer-access-membership-auth";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
-const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
+const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
+const LEGACY_DASHBOARD_SESSION_COOKIES = Object.freeze(["rav_dashboard_session"]);
 const DASHBOARD_ROLES = { viewer: 1, agent: 2, admin: 3, super_admin: 4 };
 const DASHBOARD_ROLE_LABELS = {
   viewer: "Viewer",
@@ -432,7 +434,7 @@ const CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_C
 const CUSTOMER_ACCESS_RESET_CUTOFF_ISO = Date.parse(CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO) > Date.parse(CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO)
   ? CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO
   : CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO;
-const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-ready-clean-2026-07-28";
+const CUSTOMER_ACCESS_SESSION_RESET_VERSION = "customer-access-membership-only-2026-08-08";
 const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
   && SUPABASE_ENABLED
@@ -672,7 +674,20 @@ const loginRateLimiter = createRateLimiter({
     return String(req.ip || req.socket && req.socket.remoteAddress || "unknown") + ":" + username;
   }
 });
+const passwordRecoveryRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: function (req) {
+    return String(req.ip || req.socket && req.socket.remoteAddress || "unknown");
+  }
+});
 app.use("/admin", adminRateLimiter);
+app.use("/admin", function preventAuthenticatedPageCaching(req, res, next) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+  next();
+});
 app.use(["/signature", "/admin/signature/client", "/admin/signature/client-api"], function protectSignatureCaching(req, res, next) {
   res.setHeader("cache-control", "no-store, max-age=0");
   res.setHeader("pragma", "no-cache");
@@ -683,25 +698,19 @@ app.use("/signature/api", signatureRateLimiter);
 app.use("/admin/signature/client-api", signatureRateLimiter);
 app.use("/admin", async function revalidateCustomerSession(req, res, next) {
   if (!CUSTOMER_ACCESS_V2_ENABLED) return next();
+  const requestCookies = parseCookies(req.get("cookie"));
+  const hadCustomerCookie = [DASHBOARD_SESSION_COOKIE].concat(LEGACY_DASHBOARD_SESSION_COOKIES).some(function (name) {
+    return Object.prototype.hasOwnProperty.call(requestCookies, name);
+  });
   const session = readDashboardSession(req);
-  if (!session || session.version !== 2) return next();
-  req.dashboardSessionChecked = true;
-  if (session.fallback_access) {
-    try {
-      const activeUser = await validatePublicCustomerAccessSession(session);
-      if (activeUser) {
-        req.dashboardVerifiedSession = Object.assign({}, session, activeUser, { ok: true, version: 2, session_version: 2, method: "session" });
-      } else {
-        clearDashboardSessionCookie(req, res);
-        req.dashboardVerifiedSession = null;
-      }
-      return next();
-    } catch (_) {
-      clearDashboardSessionCookie(req, res);
-      req.dashboardVerifiedSession = null;
-      return next();
-    }
+  if (!session) {
+    req.dashboardSessionChecked = true;
+    req.dashboardVerifiedSession = null;
+    if (hadCustomerCookie) clearDashboardSessionCookie(req, res);
+    return next();
   }
+  if (session.version !== 2) return next();
+  req.dashboardSessionChecked = true;
   try {
     const activeUser = await customerAccessService.validateSession(session);
     if (activeUser && !customerAccessCreatedAfterReset(activeUser)) {
@@ -5669,7 +5678,7 @@ function createDashboardSession(user) {
       n: normalizeDashboardUsername(user.email),
       r: cleanDashboardRole(user.role),
       t: cleanTenantId(user.tenant_id),
-      fb: !!user.fallback_access,
+      mv: Number(user.membership_version || 1),
       exp: Date.now() + DASHBOARD_SESSION_TTL_HOURS * 60 * 60 * 1000
     })).toString("base64url");
     return payloadV2 + "." + signDashboardPayload(payloadV2);
@@ -5713,7 +5722,7 @@ function readDashboardSession(req) {
         name: email,
         role: cleanDashboardRole(session.r),
         tenant_id: tenantId,
-        fallback_access: !!session.fb,
+        membership_version: Number(session.mv || 0),
         method: "session"
       };
     }
@@ -5733,28 +5742,60 @@ function readDashboardSession(req) {
   }
 }
 
-function dashboardCookieOptions(req, maxAgeSeconds) {
+function dashboardCookieDomain(req) {
+  const hostname = String(req.get("host") || "").split(":")[0].trim().toLowerCase();
+  return hostname === "nextforia.com" || hostname.endsWith(".nextforia.com") ? ".nextforia.com" : "";
+}
+
+function dashboardCookieHeader(req, name, value, maxAgeSeconds, domain, pathValue) {
   const secure = req.secure || req.get("x-forwarded-proto") === "https" || process.env.NODE_ENV === "production";
   return [
-    DASHBOARD_SESSION_COOKIE,
+    name,
     "=",
-    maxAgeSeconds > 0 ? "" : "",
-    "; Path=/admin",
+    value || "",
+    "; Path=" + (pathValue || "/admin"),
     "; HttpOnly",
     "; SameSite=Strict",
     secure ? "; Secure" : "",
     "; Priority=High",
+    domain ? "; Domain=" + domain : "",
+    maxAgeSeconds > 0 ? "" : "; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     "; Max-Age=" + Math.max(0, maxAgeSeconds)
   ].join("");
 }
 
+function dashboardSessionClearHeaders(req) {
+  const domain = dashboardCookieDomain(req);
+  const headers = [];
+  [DASHBOARD_SESSION_COOKIE].concat(LEGACY_DASHBOARD_SESSION_COOKIES).forEach(function (name) {
+    ["/admin", "/"].forEach(function (cookiePath) {
+      headers.push(dashboardCookieHeader(req, name, "", 0, "", cookiePath));
+      if (domain) headers.push(dashboardCookieHeader(req, name, "", 0, domain, cookiePath));
+    });
+  });
+  return headers;
+}
+
 function setDashboardSessionCookie(req, res, user) {
   const token = createDashboardSession(user);
-  res.setHeader("Set-Cookie", DASHBOARD_SESSION_COOKIE + "=" + encodeURIComponent(token) + dashboardCookieOptions(req, DASHBOARD_SESSION_TTL_HOURS * 60 * 60).replace(DASHBOARD_SESSION_COOKIE + "=", ""));
+  const domain = dashboardCookieDomain(req);
+  const headers = [dashboardCookieHeader(req, DASHBOARD_SESSION_COOKIE, encodeURIComponent(token), DASHBOARD_SESSION_TTL_HOURS * 60 * 60, domain, "/admin")];
+  LEGACY_DASHBOARD_SESSION_COOKIES.forEach(function (name) {
+    ["/admin", "/"].forEach(function (cookiePath) {
+      headers.push(dashboardCookieHeader(req, name, "", 0, "", cookiePath));
+      if (domain) headers.push(dashboardCookieHeader(req, name, "", 0, domain, cookiePath));
+    });
+  });
+  if (domain) {
+    ["/admin", "/"].forEach(function (cookiePath) {
+      headers.push(dashboardCookieHeader(req, DASHBOARD_SESSION_COOKIE, "", 0, "", cookiePath));
+    });
+  }
+  res.setHeader("Set-Cookie", headers);
 }
 
 function clearDashboardSessionCookie(req, res) {
-  res.setHeader("Set-Cookie", dashboardCookieOptions(req, 0));
+  res.setHeader("Set-Cookie", dashboardSessionClearHeaders(req));
 }
 
 function normalizeDashboardUsername(username) {
@@ -8084,6 +8125,14 @@ async function dashboardUserFromCredentials(username, password, options) {
   const cleanUser = String(username || "").trim();
   const normalizedUser = normalizeDashboardUsername(cleanUser);
   const cleanPass = String(password || "");
+  if (CUSTOMER_ACCESS_V2_ENABLED && options && options.customerV2 === true) {
+    if (!customerAccessService || !validEmailIdentity(normalizedUser)) return null;
+    let customerAccessUser = null;
+    try { customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass); }
+    catch (_) { return null; }
+    if (!customerAccessUser || !customerAccessCreatedAfterReset(customerAccessUser)) return null;
+    return customerAccessUser;
+  }
   const environmentUser = DASHBOARD_USERS.find(user => (
     normalizeDashboardUsername(user.username) === normalizedUser ||
     (user.email && user.email === normalizedUser)
@@ -8091,18 +8140,6 @@ async function dashboardUserFromCredentials(username, password, options) {
   if (environmentUser && (environmentUser.role === "super_admin" || LEGACY_CUSTOMER_PANEL_USERS_ENABLED)) return environmentUser;
   const platformUser = await dashboardPlatformUserFromCredentials(normalizedUser, cleanPass);
   if (platformUser) return platformUser;
-  if (CUSTOMER_ACCESS_V2_ENABLED && customerAccessService && options && options.customerV2 === true && validEmailIdentity(normalizedUser)) {
-    let customerAccessUser = null;
-    try {
-      customerAccessUser = await customerAccessService.authenticate(normalizedUser, cleanPass);
-    } catch (error) {
-      customerAccessUser = null;
-    }
-    if (customerAccessUser && !customerAccessCreatedAfterReset(customerAccessUser)) return null;
-    if (customerAccessUser) return customerAccessUser;
-    const fallbackUser = await authenticatePublicCustomerAccessUser(normalizedUser, cleanPass);
-    if (fallbackUser) return fallbackUser;
-  }
   if (!LEGACY_CUSTOMER_PANEL_USERS_ENABLED) return null;
   const customerUser = await loadDashboardCustomerUser(false);
   if (!customerUser || customerUser.username !== normalizedUser) return null;
@@ -8484,8 +8521,7 @@ function canAccessTenant(auth, tenantId) {
   if (!auth || !auth.ok) return false;
   if (auth.role === "super_admin") return true;
   const scopedTenant = cleanTenantId(auth.tenant_id);
-  // Existing single-tenant users predate tenant_id and belong to the default tenant.
-  return scopedTenant ? scopedTenant === cleanTenantId(tenantId) : cleanTenantId(tenantId) === DEFAULT_TENANT_ID;
+  return !!scopedTenant && scopedTenant === cleanTenantId(tenantId);
 }
 
 function adminAuthOk(req, minRole = "viewer") {
@@ -9326,7 +9362,8 @@ function summarizeCustomerPanelChannel(conversations, stats) {
 }
 
 function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turnLimit) {
-  const panelTenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
+  const panelTenantId = customerTenantForAuth(auth);
+  if (!panelTenantId) throw new Error("customer_tenant_membership_required");
   const panelStateTenantId = canonicalRuntimeTenantId(panelTenantId);
   const instagramProfiles = instagramProfilesFromTurns(rawTurns);
   const memoriesByCustomer = customerMemoriesFromTurns(rawTurns);
@@ -9831,6 +9868,7 @@ function buildCustomerPanelDemoSnapshot() {
 }
 
 app.post("/admin/login", loginRateLimiter, async (req, res) => {
+  clearDashboardSessionCookie(req, res);
   const email = String(req.body && req.body.email || "").trim();
   const username = String(req.body && req.body.username || "").trim();
   const identity = email || username;
@@ -9876,7 +9914,51 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
 
 app.post("/admin/logout", (req, res) => {
   clearDashboardSessionCookie(req, res);
+  res.setHeader("Clear-Site-Data", '"cache", "storage"');
   res.json({ ok: true });
+});
+
+function customerLoginTarget(value) {
+  const target = String(value || "");
+  const allowedPrefixes = ["/admin/panel", "/admin/client-onboarding"];
+  return allowedPrefixes.some(function (prefix) {
+    return target === prefix || target.startsWith(prefix + "?");
+  }) ? target : "/admin/panel?tab=summary";
+}
+
+app.get("/admin/login", (req, res) => {
+  renderCustomerLogin(res, { targetPath: customerLoginTarget(req.query.next) });
+});
+
+app.get("/admin/forgot-password", (req, res) => {
+  renderForgotPassword(res);
+});
+
+app.post("/admin/password-recovery", passwordRecoveryRateLimiter, async (req, res) => {
+  if (customerAccessService && customerAccessService.requestPasswordRecovery) {
+    await customerAccessService.requestPasswordRecovery(req.body && req.body.email).catch(function () {});
+  }
+  res.status(202).json({ ok: true, message: "If the account exists, recovery instructions will be sent." });
+});
+
+app.get("/admin/reset-password", (req, res) => {
+  renderResetPassword(res, req.query.token);
+});
+
+app.post("/admin/password-recovery/complete", passwordRecoveryRateLimiter, async (req, res) => {
+  if (!customerAccessService || !customerAccessService.completePasswordRecovery) {
+    res.status(503).json({ ok: false, error: "customer_access_unavailable" });
+    return;
+  }
+  try {
+    await customerAccessService.completePasswordRecovery(req.body || {});
+    clearDashboardSessionCookie(req, res);
+    res.setHeader("Clear-Site-Data", '"cache", "storage"');
+    res.json({ ok: true });
+  } catch (error) {
+    const problem = error instanceof CustomerAccessError ? error : new CustomerAccessError("customer_access_unavailable", 503);
+    res.status(problem.status || 400).json({ ok: false, error: problem.code });
+  }
 });
 
 app.get("/admin/session", async (req, res) => {
@@ -10418,12 +10500,8 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
       }, defaults));
     } catch (signupError) {
       if (!customerAccessSchemaUnavailable(signupError)) throw signupError;
-      console.error("public signup compatibility store enabled: customer access schema unavailable");
-      user = await persistPublicCustomerAccessUser(Object.assign({}, req.body, {
-        contact_phone: contactPhone,
-        plan_id: defaults.plan_id,
-        assigned_bot_id: defaults.assigned_bot_id
-      }));
+      console.error("public signup blocked: official customer access schema unavailable");
+      throw new CustomerAccessError("customer_access_unavailable", 503);
     }
     let onboardingDraft = null;
     try {
@@ -12064,11 +12142,8 @@ app.post("/admin/panel/account-password", async (req, res) => {
     return;
   }
   try {
-    if (auth.fallback_access) {
-      await changePublicCustomerAccessPassword(auth, req.body || {});
-    } else {
-      await customerAccessService.changePassword(auth, req.body || {});
-    }
+    await customerAccessService.changePassword(auth, req.body || {});
+    clearDashboardSessionCookie(req, res);
     res.json({ ok: true });
   } catch (error) {
     const code = error instanceof CustomerAccessError ? error.code : "customer_access_unavailable";
@@ -14341,15 +14416,17 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
 
 app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
+  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  const loginTarget = "/admin/panel?tab=" + requestedTab;
   if (!auth.ok) {
-    const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
-    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/panel?tab=" + requestedTab });
+    if (CUSTOMER_ACCESS_V2_ENABLED) res.redirect("/admin/login?next=" + encodeURIComponent(loginTarget));
     else renderAdminLogin(res, "/admin/panel?tab=" + requestedTab);
     return;
   }
   const panelTenantId = customerTenantForAuth(auth);
   if (!panelTenantId || !canAccessTenant(auth, panelTenantId)) {
-    res.status(403).send("Acceso restringido al tenant de este panel.");
+    clearDashboardSessionCookie(req, res);
+    res.redirect("/admin/login?next=" + encodeURIComponent(loginTarget));
     return;
   }
   if (auth.method === "key") {

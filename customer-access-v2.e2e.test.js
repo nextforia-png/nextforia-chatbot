@@ -36,11 +36,11 @@ function waitForServer(child, port) {
   });
 }
 
-async function login(base, email, password) {
+async function login(base, username, password) {
   const response = await fetch(base + "/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: base },
-    body: JSON.stringify({ email: email, password: password })
+    body: JSON.stringify({ username: username, password: password })
   });
   assert.strictEqual(response.status, 200);
   return String(response.headers.get("set-cookie") || "").split(";")[0];

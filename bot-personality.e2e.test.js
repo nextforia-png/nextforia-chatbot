@@ -42,16 +42,17 @@ function waitForServer(child, port) {
 function signedSessionCookie(secret, user) {
   const payload = Buffer.from(JSON.stringify({
     v: 2,
-    rst: "customer-access-ready-clean-2026-07-28",
+    rst: "customer-access-membership-only-2026-08-08",
     uid: user.user_id,
     e: user.email,
     n: user.email,
     r: user.role,
     t: user.tenant_id,
+    mv: Number(user.session_version || 1),
     exp: Date.now() + 60 * 60 * 1000
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-  return "rav_dashboard_session=" + encodeURIComponent(payload + "." + signature);
+  return "nextforia_dashboard_session=" + encodeURIComponent(payload + "." + signature);
 }
 
 async function requestJson(base, pathName, cookie, options) {

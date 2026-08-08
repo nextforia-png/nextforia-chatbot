@@ -200,15 +200,53 @@ async function expectError(promise, code, status) {
     user_id: user.user_id,
     email: "ADMIN@EMPRESA.EXAMPLE",
     role: "admin",
-    tenant_id: created.tenant.id
+    tenant_id: created.tenant.id,
+    membership_version: 2
   });
   assert(validSession);
   assert.strictEqual(validSession.company_name, "Empresa A");
   assert.strictEqual(validSession.plan_id, "nextfor-aura");
   assert.strictEqual(validSession.assigned_bot_id, "atencion-cliente");
-  assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: "otro-tenant" }), null);
+  const recoveryOutboxBefore = email.outbox.length;
+  assert.deepStrictEqual(await service.requestPasswordRecovery("missing@empresa.example"), { accepted: true });
+  assert.strictEqual(email.outbox.length, recoveryOutboxBefore, "unknown emails must receive the same API result without a delivery");
+  assert.deepStrictEqual(await service.requestPasswordRecovery(user.email), { accepted: true });
+  const recoveryEmail = email.outbox[email.outbox.length - 1];
+  assert.strictEqual(recoveryEmail.type, "password_recovery");
+  const recoveryToken = new URL(recoveryEmail.recovery_url).searchParams.get("token");
+  assert(recoveryToken);
+  await service.completePasswordRecovery({
+    token: recoveryToken,
+    password: "RecoveredPassword2026",
+    password_confirmation: "RecoveredPassword2026"
+  });
+  assert.strictEqual(await service.authenticate(user.email, "ChangedPassword2026"), null, "the previous password must stop working");
+  const recoveredUser = await service.authenticate(user.email, "RecoveredPassword2026");
+  assert(recoveredUser);
+  assert.strictEqual(await service.validateSession({
+    user_id: user.user_id,
+    email: user.email,
+    role: "admin",
+    tenant_id: user.tenant_id,
+    membership_version: 2
+  }), null, "password recovery must revoke existing Customer Panel sessions immediately");
+  await expectError(service.completePasswordRecovery({
+    token: recoveryToken,
+    password: "AnotherPassword2026",
+    password_confirmation: "AnotherPassword2026"
+  }), "invalid_recovery", 403);
+  await service.requestPasswordRecovery(user.email);
+  const expiredRecoveryEmail = email.outbox[email.outbox.length - 1];
+  const expiredRecoveryToken = new URL(expiredRecoveryEmail.recovery_url).searchParams.get("token");
+  store.passwordRecoveries[store.passwordRecoveries.length - 1].expires_at = "2020-01-01T00:00:00.000Z";
+  await expectError(service.completePasswordRecovery({
+    token: expiredRecoveryToken,
+    password: "ExpiredLinkPassword2026",
+    password_confirmation: "ExpiredLinkPassword2026"
+  }), "invalid_recovery", 403);
+  assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: "otro-tenant", membership_version: 2 }), null);
   store.users.find(function (row) { return row.user_id === user.user_id; }).active = false;
-  assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: created.tenant.id }), null);
+  assert.strictEqual(await service.validateSession({ user_id: user.user_id, email: user.email, role: "admin", tenant_id: created.tenant.id, membership_version: 2 }), null);
   store.users.find(function (row) { return row.user_id === user.user_id; }).active = true;
 
   const revoked = await service.createInvitation({ company_name: "Empresa C", admin_email: "c@empresa.example", plan_id: "nextfor-uno", assigned_bot_id: "atencion-cliente" }, { user_id: "platform-user-1" });
@@ -233,12 +271,11 @@ async function expectError(promise, code, status) {
     url: "https://staging-project.supabase.co",
     headers: { Authorization: "Bearer staging-service-role" },
     axiosClient: {
-      post: async function (url, payload) {
-        assert(url.endsWith("/rpc/platform_active_tenant_user_by_email_v2"));
-        assert.strictEqual(payload.p_email, "admin@tenant-a.example");
-        return { data: [{ user_id: "user-a", tenant_id: "tenant-a", email_normalized: "admin@tenant-a.example", role: "admin", active: true, password_hash: "hash", password_salt: "salt" }] };
-      },
       get: async function (url, config) {
+        if (url.endsWith("/rest/v1/tenant_users")) {
+          assert.strictEqual(config.params.email_normalized, "eq.admin@tenant-a.example");
+          return { data: [{ user_id: "user-a", tenant_id: "tenant-a", email_normalized: "admin@tenant-a.example", role: "admin", status: "active", active: true, auth_provider: "local", session_version: 1, password_hash: "hash", password_salt: "salt" }] };
+        }
         assert(url.endsWith("/rest/v1/tenants"));
         assert.strictEqual(config.params.id, "eq.tenant-a");
         return { data: [{ id: "tenant-a", company_name: "Tenant A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente", status: "live" }] };

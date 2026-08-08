@@ -201,7 +201,8 @@ function elevenLabsSignature(body, secret, timestamp) {
     response = await fetch(base + "/admin/panel/data", { headers: { cookie: otherCookie } });
     assert.strictEqual(response.status, 401, "another tenant must not access the default tenant data");
     response = await fetch(base + "/admin/panel", { headers: { cookie: otherCookie } });
-    assert.strictEqual(response.status, 403, "another tenant must not access the default tenant panel");
+    assert.strictEqual(response.status, 200, "another tenant must be redirected to the Customer Panel login");
+    assert((await response.text()).includes("Ingresa a tu panel"));
 
     console.log("appointments e2e tests: ok");
   } finally {

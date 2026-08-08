@@ -36,11 +36,11 @@ function waitForServer(child, port) {
   });
 }
 
-async function login(base, email, password) {
+async function login(base, email, password, platform) {
   const response = await fetch(base + "/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: base },
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify(platform ? { username: email, password } : { email, password })
   });
   assert.strictEqual(response.status, 200);
   return String(response.headers.get("set-cookie") || "").split(";")[0];
@@ -233,7 +233,7 @@ function bothBotAnswers(company, email) {
     const cookieB = await login(base, fixtures[1].email, password);
     const cookieC = await login(base, fixtures[2].email, password);
     const cookieD = await login(base, fixtures[3].email, password);
-    const superAdminCookie = await login(base, "owner@nextforia.example", "SuperAdminPassword2026");
+    const superAdminCookie = await login(base, "platform-owner", "SuperAdminPassword2026", true);
 
     let response = await fetch(base + "/admin/panel?tab=summary", {
       headers: { cookie: cookieA },

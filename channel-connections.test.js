@@ -1002,7 +1002,7 @@ function expectCode(promise, code) {
   const rateLimitedPublic = (await rateLimitedService.listTenant("tenant-rate-limited"))
     .find(function (row) { return row.channel === "whatsapp"; });
   assert.strictEqual(rateLimitedPublic.activation_rate_limited, true);
-  assert.strictEqual(rateLimitedPublic.activation_available, true);
+  assert.strictEqual(rateLimitedPublic.activation_available, false);
   assert.strictEqual(rateLimitedPublic.reconnect_available, false);
   assert.strictEqual(rateLimitedPublic.activation_retry_at, "2026-08-11T12:16:09.938Z");
   assert(rateLimitedPublic.activation_message.includes("no volverá a registrar"));

@@ -195,6 +195,7 @@ function publicConnection(record, options) {
   safe.activation_rate_limited = !!activationRetryAt;
   safe.activation_retry_at = activationRetryAt;
   safe.activation_available = safe.channel === "whatsapp" &&
+    !safe.activation_rate_limited &&
     !safe.protected_legacy &&
     !!safe.credentials_ciphertext &&
     !!(safe.phone_number_id && safe.whatsapp_business_account_id) &&

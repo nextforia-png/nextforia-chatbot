@@ -128,6 +128,7 @@ async function login(base, body) {
     assert(panel.includes("JSON.stringify({pin:pin})"));
     assert(panel.includes("if(!/^\\d{6}$/.test(pin))"));
     assert(!panel.includes("if(!/^d{6}$/.test(pin))"));
+    assert(panel.indexOf("if(item.activation_rate_limited)") < panel.indexOf("else if(item.activation_available)"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));

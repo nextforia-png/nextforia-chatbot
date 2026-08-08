@@ -862,6 +862,91 @@ function expectCode(promise, code) {
   assert(!Object.prototype.hasOwnProperty.call(failedPublic, "last_error"));
   assert(!JSON.stringify(failedPublic).includes("failure-token"));
 
+  const rateLimitedStore = new InMemoryChannelConnectionStore();
+  let rateLimitedNow = new Date("2026-08-08T12:16:09.938Z");
+  let rateLimitedActivationCalls = 0;
+  let triggerRateLimit = false;
+  const rateLimitedService = createChannelConnectionService({
+    store: rateLimitedStore,
+    provider: {
+      configured: function () { return true; },
+      prepareEmbeddedWhatsApp: async function () {
+        return {
+          id: "wa:phone-rate-limited",
+          account_id: "phone-rate-limited",
+          account_label: "+57 310 6534553",
+          whatsapp_business_account_id: "waba-rate-limited",
+          phone_number_id: "phone-rate-limited",
+          access_token: "rate-limited-token",
+          coexistence: true
+        };
+      },
+      activate: async function (_, candidate) {
+        rateLimitedActivationCalls++;
+        if (triggerRateLimit) {
+          const problem = new ChannelConnectionError(
+            "asset_activation_failed",
+            422,
+            "(#133016) Registration or Deregistration failed because there were too many attempts for this phone number in a short period of time"
+          );
+          problem.activationStage = "register";
+          problem.meta = { meta_code: 133016, meta_message: problem.internalMessage };
+          throw problem;
+        }
+        return Object.assign({}, candidate, {
+          activation_pending: rateLimitedActivationCalls === 1,
+          activation_error: "WhatsApp number is awaiting Cloud API activation"
+        });
+      }
+    },
+    encryptionKey,
+    now: function () { return rateLimitedNow; }
+  });
+  await rateLimitedService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-rate-limited",
+    actor: "owner@rate-limited.example",
+    code: "rate-limited-code",
+    session: { waba_id: "waba-rate-limited", phone_number_id: "phone-rate-limited" }
+  });
+  triggerRateLimit = true;
+  await expectCode(
+    rateLimitedService.activateWhatsApp("tenant-rate-limited", "owner@rate-limited.example"),
+    "whatsapp_activation_rate_limited"
+  );
+  const callsAtRateLimit = rateLimitedActivationCalls;
+  const rateLimitedPublic = (await rateLimitedService.listTenant("tenant-rate-limited"))
+    .find(function (row) { return row.channel === "whatsapp"; });
+  assert.strictEqual(rateLimitedPublic.activation_rate_limited, true);
+  assert.strictEqual(rateLimitedPublic.activation_available, false);
+  assert.strictEqual(rateLimitedPublic.reconnect_available, false);
+  assert.strictEqual(rateLimitedPublic.activation_retry_at, "2026-08-11T12:16:09.938Z");
+  assert(rateLimitedPublic.activation_message.includes("72 horas"));
+  await expectCode(
+    rateLimitedService.activateWhatsApp("tenant-rate-limited", "owner@rate-limited.example"),
+    "whatsapp_activation_rate_limited"
+  );
+  assert.strictEqual(rateLimitedActivationCalls, callsAtRateLimit);
+  await expectCode(
+    rateLimitedService.completeEmbeddedWhatsApp({
+      tenant_id: "tenant-rate-limited",
+      actor: "owner@rate-limited.example",
+      code: "second-rate-limited-code",
+      session: { waba_id: "waba-rate-limited", phone_number_id: "phone-rate-limited" }
+    }),
+    "whatsapp_activation_rate_limited"
+  );
+  assert.strictEqual(rateLimitedActivationCalls, callsAtRateLimit);
+  const preservedRateLimit = await rateLimitedStore.get("tenant-rate-limited", "whatsapp");
+  assert.strictEqual(preservedRateLimit.last_error_at, "2026-08-08T12:16:09.938Z");
+  rateLimitedNow = new Date("2026-08-11T12:16:10.000Z");
+  triggerRateLimit = false;
+  const recoveredRateLimited = await rateLimitedService.activateWhatsApp(
+    "tenant-rate-limited",
+    "owner@rate-limited.example"
+  );
+  assert.strictEqual(recoveredRateLimited.status, "connected");
+  assert.strictEqual(recoveredRateLimited.activation_rate_limited, false);
+
   const beginUrl = await service.begin("tenant-a", "instagram", "admin@a.example", state);
   assert(beginUrl.startsWith("https://www.facebook.com/"));
   let tenantA = await service.listTenant("tenant-a");

@@ -122,6 +122,7 @@ async function login(base, body) {
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(panel.includes("activateWhatsApp(this)"));
     assert(panel.includes("if(state.whatsappActivating)return"));
+    assert(panel.includes("Espera requerida por Meta"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));

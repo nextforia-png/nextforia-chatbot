@@ -114,6 +114,7 @@ const {
   planFeatures
 } = require("./bot-personality");
 const { resolveLiveBotConfiguration } = require("./live-bot-configuration");
+const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
 const {
   RetargetingEngine,
   REAL_SENDS_ENABLED: RETARGETING_REAL_SENDS_ENABLED,
@@ -313,7 +314,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v344-live-customer-configuration";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v345-tenant-config-required";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -2044,7 +2045,7 @@ function conversationExternalId(value) {
 
 function serviceAreaConfigForSetup(setup, onboarding) {
   const presence = setup && setup.published && setup.published.answers && setup.published.answers.presence || {};
-  const onboardingReady = onboarding && ["submitted", "in_review", "ready"].includes(onboarding.status);
+  const onboardingReady = onboarding && ["submitted", "completed", "in_review", "ready"].includes(onboarding.status);
   const onboardingOperations = onboardingReady && onboarding.answers && onboarding.answers.operations || {};
   return {
     enabled: onboardingOperations.foreign_number_location_check === undefined
@@ -3928,17 +3929,21 @@ async function notifyTeam(text, excludePhone) {
 
 // ─── EXECUTORS ───────────────────────────────────────────────────────────────
 
-async function executeSearchProducts(userId, input) {
+function operationalStateKey(userId, stateId) {
+  return String(stateId || "").trim() || normalizeConversationUserId(userId);
+}
+
+async function executeSearchProducts(userId, input, stateId) {
   const result = await searchShopify(input.query);
   // Guardar productos mostrados al cliente
   if (result.products && result.products.length > 0) {
-    lastSearchResults.set(userId, result.products);
+    lastSearchResults.set(operationalStateKey(userId, stateId), result.products);
   }
   return result;
 }
 
-async function executeSendProductCard(to, input) {
-  const products = lastSearchResults.get(to) || [];
+async function executeSendProductCard(to, input, stateId) {
+  const products = lastSearchResults.get(operationalStateKey(to, stateId)) || [];
   const selected = products.find(function (product) { return product.product_url === String(input && input.product_url || ""); });
   if (!selected) return { sent: false, error: "product_not_in_last_search" };
   const caption = `*${selected.title}*\n${selected.price}\n${selected.product_url}`;
@@ -3988,14 +3993,14 @@ async function executeLookupOrderStatus(userId, input) {
   return result;
 }
 
-async function executeSendRatingRequest(userId) {
+async function executeSendRatingRequest(userId, stateId) {
   await sendText(userId, RATING_REQUEST);
-  pendingRatings.add(userId);
+  pendingRatings.add(operationalStateKey(userId, stateId));
   console.log(`[Rating ${maskedIdentifier(userId)}] Request sent`);
   return { sent: true, next_action: "Espera la respuesta del cliente con un número 1-5. Cuando responda, llama save_rating con el rating y comment opcional." };
 }
 
-async function executeSaveRating(userId, input) {
+async function executeSaveRating(userId, input, stateId) {
   const stars = "⭐".repeat(input.rating) + "☆".repeat(5 - input.rating);
   const summary = [
     "📊 *NUEVA CALIFICACIÓN DE ATENCIÓN*",
@@ -4006,7 +4011,7 @@ async function executeSaveRating(userId, input) {
     `📱 WhatsApp del cliente: +${userId}`
   ].join("\n");
   await notifyTeam(summary, userId);
-  pendingRatings.delete(userId);
+  pendingRatings.delete(operationalStateKey(userId, stateId));
   console.log(`[Rating ${maskedIdentifier(userId)}] Saved: ${input.rating}/5`);
   const lowRating = input.rating <= 3;
   return {
@@ -4018,19 +4023,20 @@ async function executeSaveRating(userId, input) {
   };
 }
 
-async function executeSaveWarrantyField(userId, input) {
-  if (!checkouts.has(userId)) checkouts.set(userId, { products: [], data: {} });
-  const state = checkouts.get(userId);
+async function executeSaveWarrantyField(userId, input, stateId) {
+  const key = operationalStateKey(userId, stateId);
+  if (!checkouts.has(key)) checkouts.set(key, { products: [], data: {} });
+  const state = checkouts.get(key);
   if (!state.warranty) state.warranty = {};
   state.warranty[input.field] = input.value;
-  checkouts.set(userId, state);
+  checkouts.set(key, state);
   const missing = WARRANTY_FIELDS.filter(f => !state.warranty[f]);
   console.log(`[Warranty ${maskedIdentifier(userId)}] Saved field ${input.field}. Missing: ${missing.join(",") || "none"}`);
   return { saved: input.field, value: input.value, missing_fields: missing };
 }
 
-async function executeNotifyWarrantyTeam(userId) {
-  const state = checkouts.get(userId);
+async function executeNotifyWarrantyTeam(userId, stateId) {
+  const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.warranty) {
     return { error: "No hay datos de garantía. Usa save_warranty_field primero." };
   }
@@ -4056,8 +4062,9 @@ async function executeNotifyWarrantyTeam(userId) {
   return { notified: true, next_action: "ACCION OBLIGATORIA INMEDIATA: 1) Dile al cliente algo como '¡Listo! Ya pasé tu caso a nuestra asesora Eliana 🌴 Te escribirá pronto para ayudarte 💛'. 2) Llama request_human_handoff(reason='garantia'). NO termines el turno sin estos dos pasos." };
 }
 
-async function executeSelectProductForPurchase(userId, input) {
-  const products = lastSearchResults.get(userId) || [];
+async function executeSelectProductForPurchase(userId, input, stateId) {
+  const key = operationalStateKey(userId, stateId);
+  const products = lastSearchResults.get(key) || [];
   const chosen = products.find(p => p.product_url === input.product_url);
   if (chosen && !chosen.price_amount) chosen.price_amount = parseInt(String(chosen.price || "").replace(/[^0-9]/g, ""), 10) || 0;
   if (!chosen) {
@@ -4066,8 +4073,8 @@ async function executeSelectProductForPurchase(userId, input) {
       available_urls: products.map(p => p.product_url)
     };
   }
-  if (!checkouts.has(userId)) checkouts.set(userId, { products: [], data: {} });
-  const state = checkouts.get(userId);
+  if (!checkouts.has(key)) checkouts.set(key, { products: [], data: {} });
+  const state = checkouts.get(key);
   if (!state.products) state.products = [];
   // Si ya está en el carrito, no duplicar
   const existing = state.products.find(p => p.product_url === chosen.product_url);
@@ -4082,7 +4089,7 @@ async function executeSelectProductForPurchase(userId, input) {
     };
   }
   state.products.push(chosen);
-  checkouts.set(userId, state);
+  checkouts.set(key, state);
   const total = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Added product. Cart now: ${state.products.length} items, total ${total}`);
   return {
@@ -4112,17 +4119,17 @@ async function alertTeam(kind, detail) {
 }
 
 // ─── Inyección del carrito como fuente de verdad (v38) ───
-function cartContextFor(userId) {
+function cartContextFor(userId, stateId) {
   try {
-    const co = checkouts.get(userId);
+    const co = checkouts.get(operationalStateKey(userId, stateId));
     if (!co || !co.products || !co.products.length) return "";
     const lines = co.products.map(function (p) { return "• " + (p.title || "Producto") + (p.price ? " — $" + p.price : ""); }).join("\n");
     return "🛒 CARRITO ACTUAL DE ESTE CLIENTE (FUENTE DE VERDAD, confirmado en el sistema — ignora cualquier duda del historial):\n" + lines + "\n\nEl cliente YA tiene estos productos seleccionados. REGLAS OBLIGATORIAS:\n- Si el cliente dice \"déjalo así\", \"solo eso\", \"con eso\", \"nada más\", \"ya\", \"listo\", \"eso es todo\", \"así está bien\" o similar: NO te despidas ni digas que no hay nada elegido. PROCEDE de inmediato y de forma PROACTIVA a cerrar el pedido (pide o confirma los datos de envío que falten para finalizar la compra).\n- NUNCA digas que no tienes registro del producto: lo tienes listado aquí arriba.\n- Si el cliente pide tomar el pedido, hazlo con estos productos sin volver a preguntar qué quiere.";
   } catch (e) { return ""; }
 }
 
-async function executeViewCurrentPurchase(userId) {
-  const state = checkouts.get(userId);
+async function executeViewCurrentPurchase(userId, stateId) {
+  const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { empty: true, message: "El cliente aún no ha seleccionado productos." };
   }
@@ -4134,15 +4141,16 @@ async function executeViewCurrentPurchase(userId) {
   };
 }
 
-async function executeRemoveProductFromPurchase(userId, input) {
-  const state = checkouts.get(userId);
+async function executeRemoveProductFromPurchase(userId, input, stateId) {
+  const key = operationalStateKey(userId, stateId);
+  const state = checkouts.get(key);
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay productos en el carrito." };
   }
   const idx = state.products.findIndex(p => p.product_url === input.product_url);
   if (idx === -1) return { error: "Ese producto no está en el carrito." };
   const removed = state.products.splice(idx, 1)[0];
-  checkouts.set(userId, state);
+  checkouts.set(key, state);
   const total = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Removed product. Cart now: ${state.products.length} items`);
   return {
@@ -4153,9 +4161,10 @@ async function executeRemoveProductFromPurchase(userId, input) {
   };
 }
 
-async function executeSaveCheckoutField(userId, input) {
-  if (!checkouts.has(userId)) checkouts.set(userId, { data: {} });
-  const state = checkouts.get(userId);
+async function executeSaveCheckoutField(userId, input, stateId) {
+  const key = operationalStateKey(userId, stateId);
+  if (!checkouts.has(key)) checkouts.set(key, { data: {} });
+  const state = checkouts.get(key);
   if (!state.data) state.data = {};
   if (!state.products || state.products.length === 0) {
     return {
@@ -4163,7 +4172,7 @@ async function executeSaveCheckoutField(userId, input) {
     };
   }
   state.data[input.field] = input.value;
-  checkouts.set(userId, state);
+  checkouts.set(key, state);
   const missing = CHECKOUT_FIELDS.filter(f => !state.data[f]);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Saved field ${input.field}. Missing: ${missing.join(",") || "none"}`);
   return {
@@ -4174,8 +4183,8 @@ async function executeSaveCheckoutField(userId, input) {
   };
 }
 
-async function executeSendPaymentLink(userId, input) {
-  const state = checkouts.get(userId);
+async function executeSendPaymentLink(userId, input, stateId) {
+  const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay productos en el carrito. Llama select_product_for_purchase primero." };
   }
@@ -4215,8 +4224,8 @@ async function executeSendPaymentLink(userId, input) {
   return { sent: true, method: input.method, amount, automated: isAutomated, next_action };
 }
 
-async function executeNotifyTeam(userId) {
-  const state = checkouts.get(userId);
+async function executeNotifyTeam(userId, stateId) {
+  const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay checkout completo para notificar." };
   }
@@ -4259,10 +4268,11 @@ async function executeNotifyTeam(userId) {
 
 async function executeHumanHandoff(userId, input, runtime) {
   const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
+  const stateKey = tenantConversationStateKey(userId, tenantId);
   addHumanHandoff(userId, tenantId);
   const reason = input.reason || "solicitud_cliente";
   await recordRetargetingSignal(userId, "handoff", "handoff:" + Date.now(), "system");
-  const state = checkouts.get(userId);
+  const state = checkouts.get(stateKey);
   let notif = `🚨 *Handoff a humano*\nCanal: ${channelLabel(userId)}\nCliente: ${channelContactLabel(userId)}\nMotivo: ${reason}\n\n`;
   if (state?.products && state.products.length > 0 && reason !== "venta_cerrada") {
     if (state.products.length === 1) {
@@ -4436,7 +4446,6 @@ async function handleConversation(userId, userMessage, conversationMeta) {
 
   if (!conversations.has(stateKey) || newSession) conversations.set(stateKey, []);
   const history = conversations.get(stateKey);
-  const activeBotSetup = await loadBotSetup(false);
   // Each inbound turn re-reads the tenant record so a saved configuration applies
   // to the very next response, including when another instance handled the save.
   const activeClientOnboarding = await loadClientOnboarding(true, tenantId);
@@ -4457,21 +4466,28 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   });
   const usesCustomerServiceBot = liveBotConfiguration.active;
   const botPersonalityPrompt = usesCustomerServiceBot ? liveBotConfiguration.personality_prompt : "";
-  const tenantConfigurationPrompts = [
-    usesCustomerServiceBot && liveBotConfiguration.customer_service_configuration
+  const runtimePolicy = resolveTenantRuntimePolicy({
+    customer_service_prompt: usesCustomerServiceBot && liveBotConfiguration.customer_service_configuration
       ? liveBotConfiguration.customer_service_configuration.system_prompt
       : "",
-    usesAppointmentBot ? appointmentConfiguration.system_prompt : "",
-    usesAppointmentBot ? APPOINTMENT_OPERATIONAL_PROMPT : ""
-  ].filter(Boolean);
-  const configuredTenantBot = tenantConfigurationPrompts.length > 0;
-  const legacyRavFallbackAllowed = isRavTenantId(tenantId) && !liveBotConfiguration.contracted && !usesAppointmentBot;
-  const conversationSystemPrompt = configuredTenantBot
-    ? "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad."
-    : legacyRavFallbackAllowed
-      ? SYSTEM_PROMPT
-      : "Eres un asistente temporal de Nextfor IA para este negocio. No uses nombres, catálogo, políticas, productos ni datos de ningún otro cliente. La configuración comercial de este tenant todavía no está aprobada: limita tu ayuda a respuestas generales, explica que el equipo está terminando la configuración y deriva a una persona cuando la solicitud dependa de información del negocio.";
-  let conversationTools = legacyRavFallbackAllowed && !configuredTenantBot
+    appointment_prompt: usesAppointmentBot ? appointmentConfiguration.system_prompt : "",
+    appointment_operational_prompt: usesAppointmentBot ? APPOINTMENT_OPERATIONAL_PROMPT : "",
+    business_tools_profile: isRavTenantId(tenantId) ? "rav" : ""
+  });
+  const tenantConfigurationPrompts = runtimePolicy.prompts;
+  if (!runtimePolicy.ready) {
+    turnTools.push("tenant_configuration_required");
+    log("error", "tenant_bot_response_blocked", {
+      tenant_id: tenantId,
+      channel: conversationRuntime.channel,
+      reason: runtimePolicy.block_reason
+    });
+    recordTurn(userId, userMessage, "", "blocked", conversationRuntime);
+    return;
+  }
+  const conversationSystemPrompt = "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad.";
+  const ravOperationalToolsAllowed = runtimePolicy.business_tools_profile === "rav";
+  let conversationTools = ravOperationalToolsAllowed
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
   if (usesAppointmentBot) {
@@ -4479,7 +4495,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       if (tool && !conversationTools.some(function (current) { return current.name === tool.name; })) conversationTools.push(tool);
     });
   }
-  const serviceAreaConfig = serviceAreaConfigForSetup(activeBotSetup, activeClientOnboarding);
+  const serviceAreaConfig = serviceAreaConfigForSetup(null, activeClientOnboarding);
   const phoneCheck = conversationChannel(userId) === "whatsapp"
     ? serviceAreaCheckForPhone(conversationExternalId(userId), serviceAreaConfig)
     : null;
@@ -4522,7 +4538,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   let customerMemory = await loadCustomerMemory(userId, tenantId);
   customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
     userMessage,
-    checkout: checkouts.get(userId),
+    checkout: checkouts.get(stateKey),
     now: new Date().toISOString()
   }, tenantId);
   history.push({ role: "user", content: userMessage });
@@ -4531,14 +4547,11 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     userMessage,
     history,
     memory: customerMemory,
-    checkout: checkouts.get(userId),
+    checkout: checkouts.get(stateKey),
     limits: ADAPTIVE_TOKEN_LIMITS
   });
   let memoryContext = buildCustomerMemoryContext(customerMemory, { newSession });
   let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
-  let publishedSetupPrompt = legacyRavFallbackAllowed && !configuredTenantBot && activeBotSetup.published && activeBotSetup.published.derived
-    ? activeBotSetup.published.derived.system_prompt
-    : "";
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
   console.log(`[AI budget ${maskedIdentifier(userId)}] tier=${adaptiveBudget.tier} max_tokens=${adaptiveBudget.maxTokens} history=${adaptiveBudget.historyMessages} reasons=${adaptiveBudget.reasons.join(",") || "none"}`);
 
@@ -4555,11 +4568,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         { type: "text", text: conversationSystemPrompt, cache_control: { type: "ephemeral" } },
         ...tenantConfigurationPrompts.map(function (prompt) { return { type: "text", text: prompt, cache_control: { type: "ephemeral" } }; }),
         ...(botPersonalityPrompt ? [{ type: "text", text: botPersonalityPrompt, cache_control: { type: "ephemeral" } }] : []),
-        ...(publishedSetupPrompt ? [{ type: "text", text: publishedSetupPrompt, cache_control: { type: "ephemeral" } }] : []),
         ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
         ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
-        ...(pendingRatings.has(userId) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
-        ...(cartContextFor(userId) ? [{ type: "text", text: cartContextFor(userId) }] : []),
+        ...(pendingRatings.has(stateKey) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
+        ...(cartContextFor(userId, stateKey) ? [{ type: "text", text: cartContextFor(userId, stateKey) }] : []),
         ...(memoryContext ? [{ type: "text", text: memoryContext }] : [])
       ],
           tools: conversationTools.map((t, i) => i === conversationTools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t),
@@ -4597,7 +4609,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                   console.log(`[Cap ${maskedIdentifier(userId)}] Blocking second search_products in same turn. Reusing previous results.`);
                   result = lastSearchResultsThisTurn || { products: [], note: "Ya buscaste este turno. Usa los resultados anteriores y respóndele al cliente, no busques otra vez." };
                 } else {
-                  result = await executeSearchProducts(userId, toolUse.input);
+                  result = await executeSearchProducts(userId, toolUse.input, stateKey);
                   console.log(`Product search processed: ${result.products?.length || 0} found`);
                   searchedThisTurn = true;
                   lastSearchResultsThisTurn = result;
@@ -4606,7 +4618,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 }
                 break;
               case "send_product_card":
-                result = await executeSendProductCard(userId, toolUse.input);
+                result = await executeSendProductCard(userId, toolUse.input, stateKey);
                 break;
               case "send_store_location":
                 result = await executeSendStoreLocation(userId);
@@ -4624,20 +4636,20 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 result = await executeLookupOrderStatus(userId, toolUse.input);
                 break;
               case "send_rating_request":
-                result = await executeSendRatingRequest(userId);
+                result = await executeSendRatingRequest(userId, stateKey);
                 break;
               case "save_rating":
               turnRating = (toolUse.input && (toolUse.input.rating ?? toolUse.input.stars ?? toolUse.input.score)) ?? true;  // (Tarea 1)
-                result = await executeSaveRating(userId, toolUse.input);
+                result = await executeSaveRating(userId, toolUse.input, stateKey);
                 break;
               case "save_warranty_field":
-                result = await executeSaveWarrantyField(userId, toolUse.input);
+                result = await executeSaveWarrantyField(userId, toolUse.input, stateKey);
                 break;
               case "notify_warranty_team":
-                result = await executeNotifyWarrantyTeam(userId);
+                result = await executeNotifyWarrantyTeam(userId, stateKey);
                 break;
               case "select_product_for_purchase":
-                result = await executeSelectProductForPurchase(userId, toolUse.input);
+                result = await executeSelectProductForPurchase(userId, toolUse.input, stateKey);
                 if (result && (result.added || result.already_in_cart)) {
                   await createRetargetingJobForCustomer(userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
                     source_at: conversationMeta.source_at || new Date().toISOString(),
@@ -4647,19 +4659,19 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 }
                 break;
               case "view_current_purchase":
-                result = await executeViewCurrentPurchase(userId);
+                result = await executeViewCurrentPurchase(userId, stateKey);
                 break;
               case "remove_product_from_purchase":
-                result = await executeRemoveProductFromPurchase(userId, toolUse.input);
+                result = await executeRemoveProductFromPurchase(userId, toolUse.input, stateKey);
                 break;
               case "save_checkout_field":
-                result = await executeSaveCheckoutField(userId, toolUse.input);
+                result = await executeSaveCheckoutField(userId, toolUse.input, stateKey);
                 break;
               case "send_payment_link":
-                result = await executeSendPaymentLink(userId, toolUse.input);
+                result = await executeSendPaymentLink(userId, toolUse.input, stateKey);
                 break;
               case "notify_sale_team":
-                result = await executeNotifyTeam(userId);
+                result = await executeNotifyTeam(userId, stateKey);
                 break;
               case "request_human_handoff":
               turnHandoff = true;  // (Tarea 1)
@@ -4686,7 +4698,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
             userMessage,
             toolName: toolUse.name,
             toolResult: result,
-            checkout: checkouts.get(userId),
+            checkout: checkouts.get(stateKey),
             now: new Date().toISOString()
           }, tenantId);
           toolResults.push({
@@ -4701,7 +4713,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
           userMessage,
           history: workingHistory,
           memory: customerMemory,
-          checkout: checkouts.get(userId),
+          checkout: checkouts.get(stateKey),
           limits: ADAPTIVE_TOKEN_LIMITS
         });
 
@@ -13838,7 +13850,8 @@ app.post("/admin/reset-checkout/:userId", (req, res) => {
   }
   const userId = normalizeConversationUserId(req.params.userId);
   if (!userId) return res.status(400).json({ ok: false, error: "missing_user_id" });
-  const had = checkouts.delete(userId);
+  const tenantId = customerTenantForAuth(dashboardAuth(req)) || DEFAULT_TENANT_ID;
+  const had = checkouts.delete(tenantConversationStateKey(userId, tenantId));
   res.json({ ok: true, userId, hadCheckout: had });
 });
 

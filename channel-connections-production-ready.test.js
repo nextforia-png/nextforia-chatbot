@@ -86,6 +86,13 @@ function postSignedWebhook(base, route, secret, body) {
   assert.match(source, /ambiguous_instagram_destination_ids/);
   assert.match(source, /instagram_asset_tenant_conflict/);
   assert.match(source, /pending_activation/);
+  assert.match(source, /tenant_bot_response_blocked/);
+  assert.match(source, /resolveTenantRuntimePolicy/);
+  assert.doesNotMatch(source, /legacyRavFallbackAllowed/);
+  assert.match(source, /executeSearchProducts\(userId, toolUse\.input, stateKey\)/);
+  assert.match(source, /checkout: checkouts\.get\(stateKey\)/);
+  assert.match(source, /pendingRatings\.has\(stateKey\)/);
+  assert.match(source, /checkouts\.delete\(tenantConversationStateKey\(userId, tenantId\)\)/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -153,7 +160,7 @@ function postSignedWebhook(base, route, secret, body) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v343-whatsapp-existing-number-guard"));
+    assert((await response.text()).includes("NextforIA Chatbot v345-tenant-config-required"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

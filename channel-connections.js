@@ -512,6 +512,7 @@ class MetaChannelProvider {
     this.instagramApiOrigin = String(options.instagramApiOrigin || "https://api.instagram.com").replace(/\/$/, "");
     this.instagramGraphOrigin = String(options.instagramGraphOrigin || "https://graph.instagram.com").replace(/\/$/, "");
     this.axios = options.axiosClient;
+    this.logger = typeof options.logger === "function" ? options.logger : function () {};
   }
 
   configured(channel) {
@@ -876,6 +877,32 @@ class MetaChannelProvider {
           // the customer through OAuth again.
           if (candidate.coexistence ||
               String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED") {
+            let accountReviewStatus = null;
+            let wabaLookupError = null;
+            if (candidate.coexistence && candidate.whatsapp_business_account_id) {
+              try {
+                const waba = await this.graph(
+                  encodeURIComponent(candidate.whatsapp_business_account_id),
+                  candidate.access_token,
+                  { params: { fields: "id,account_review_status" } }
+                );
+                accountReviewStatus = cleanText(waba.data && waba.data.account_review_status, 80) || null;
+              } catch (error) {
+                wabaLookupError = metaErrorTelemetry(error);
+              }
+            }
+            this.logger("info", "whatsapp_coexistence_pending_state", {
+              phone_number_suffix: String(candidate.phone_number_id || "").slice(-8) || null,
+              waba_suffix: String(candidate.whatsapp_business_account_id || "").slice(-8) || null,
+              code_verification_status: cleanText(verified.data && verified.data.code_verification_status, 80) || null,
+              platform_type: cleanText(verified.data && verified.data.platform_type, 80) || null,
+              is_on_biz_app: verified.data && typeof verified.data.is_on_biz_app === "boolean"
+                ? verified.data.is_on_biz_app
+                : null,
+              account_review_status: accountReviewStatus,
+              waba_lookup_error_code: wabaLookupError && wabaLookupError.meta_code,
+              waba_lookup_error_message: wabaLookupError && wabaLookupError.meta_message
+            });
             candidate.activation_pending = true;
             candidate.activation_error = candidate.coexistence
               ? "Meta is still completing WhatsApp Business App onboarding"

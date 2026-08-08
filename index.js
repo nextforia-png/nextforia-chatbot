@@ -1031,7 +1031,8 @@ const channelConnectionProvider = CHANNEL_CONNECTIONS_V1_VISIBLE
       whatsappConfigId: META_WHATSAPP_CONFIG_ID,
       graphVersion: META_GRAPH_VERSION,
       redirectUri: CHANNEL_CONNECTION_CALLBACK_URL,
-      axiosClient: axios
+      axiosClient: axios,
+      logger: log
     })
   : null;
 // Startup must never infer channel ownership from environment credentials or

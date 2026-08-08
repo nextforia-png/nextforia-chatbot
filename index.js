@@ -12609,6 +12609,8 @@ function channelConnectionErrorResponse(res, error) {
     "channel_asset_already_assigned",
     "asset_activation_failed",
     "whatsapp_activation_rate_limited",
+    "whatsapp_registration_pin_required",
+    "whatsapp_activation_in_progress",
     "existing_asset_credentials_required"
   ];
   res.status(problem.status || 503).json({
@@ -12623,7 +12625,11 @@ function channelConnectionErrorResponse(res, error) {
         : problem.code === "existing_asset_credentials_required"
           ? "La autorización guardada no está completa. Vuelve a conectar WhatsApp con Meta."
         : problem.code === "whatsapp_activation_rate_limited"
-          ? "Meta bloqueó temporalmente nuevos registros por demasiados intentos. Nextfor esperará 72 horas desde el último intento antes de habilitarlo de nuevo."
+          ? "Meta bloqueó temporalmente nuevos registros. Nextfor no hará reintentos automáticos; usa el PIN real cuando Meta confirme el desbloqueo."
+        : problem.code === "whatsapp_registration_pin_required"
+          ? "Ingresa el PIN actual de seis dígitos de la verificación en dos pasos de WhatsApp."
+        : problem.code === "whatsapp_activation_in_progress"
+          ? "Ya hay una activación de este número en curso. Espera el resultado antes de volver a enviarla."
         : problem.code === "asset_activation_failed"
           ? "Meta no pudo activar todavía este número en Cloud API. Puedes reintentar sin elegir otra cuenta."
         : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."
@@ -12818,7 +12824,9 @@ app.post("/admin/panel/channel-connections/whatsapp/activate", async (req, res) 
   const tenantId = customerChannelTenantForAuth(auth);
   try {
     log("info", "whatsapp_customer_activation_started", { tenant_id: tenantId });
-    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth);
+    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth, {
+      pin: req.body && req.body.pin
+    });
     invalidateChannelRuntimeCache();
     log("info", "whatsapp_customer_activation_result", {
       tenant_id: tenantId,
@@ -13054,7 +13062,9 @@ app.post("/admin/channel-connections/:tenantId/whatsapp/activate", async (req, r
   }
   const tenantId = channelConnectionTenantId(req.params.tenantId);
   try {
-    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth);
+    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth, {
+      pin: req.body && req.body.pin
+    });
     invalidateChannelRuntimeCache();
     res.json({ ok: true, connection });
   } catch (error) {

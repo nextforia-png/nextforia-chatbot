@@ -111,7 +111,8 @@ async function createElevenLabsAppointmentAgentFromTemplate(record, tenantId, op
   conversationConfig.agent.first_message = appointmentFirstMessage(configuration);
   conversationConfig.agent.language = "es";
   conversationConfig.agent.prompt = conversationConfig.agent.prompt || {};
-  conversationConfig.agent.prompt.prompt = cleanText(configuration.system_prompt, 200000);
+  conversationConfig.agent.prompt.prompt = cleanText(configuration.system_prompt, 200000) +
+    "\n\n" + appointmentToolPrompt();
   const cleanTenant = cleanTenantId(tenantId || record && record.tenant_id);
   delete conversationConfig.agent.prompt.knowledge_base;
   delete conversationConfig.agent.prompt.tools;
@@ -129,7 +130,16 @@ async function createElevenLabsAppointmentAgentFromTemplate(record, tenantId, op
     tags: Array.from(new Set([].concat(template.tags || [], ["nextfor", "appointments", cleanTenant]).filter(Boolean))),
     conversation_config: conversationConfig
   };
-  payload.platform_settings = {
+  const sourcePlatformSettings = template.platform_settings && typeof template.platform_settings === "object"
+    ? template.platform_settings
+    : {};
+  const templatePlatformSettings = {};
+  ["privacy", "call_limits", "guardrails", "safety", "summary_language", "overrides", "workspace_overrides"].forEach(function (key) {
+    if (sourcePlatformSettings[key] !== undefined) {
+      templatePlatformSettings[key] = JSON.parse(JSON.stringify(sourcePlatformSettings[key]));
+    }
+  });
+  payload.platform_settings = Object.assign({}, templatePlatformSettings, {
     data_collection: {
       appointment_status: { type: "string", description: "Estado final: booked, requested, failed, cancelled, rescheduled o not_requested." },
       appointment_datetime: { type: "string", description: "Fecha y hora confirmada en ISO 8601 con zona horaria." },
@@ -140,7 +150,7 @@ async function createElevenLabsAppointmentAgentFromTemplate(record, tenantId, op
       consultation_reason: { type: "string", description: "Servicio o motivo de la cita." },
       data_processing_consent: { type: "string", description: "authorized si aceptó, denied si rechazó, unclear si no fue explícito." }
     }
-  };
+  });
   const created = await http.post("https://api.elevenlabs.io/v1/convai/agents/create", payload, {
     headers,
     timeout: options.timeoutMs || 15000
@@ -275,6 +285,18 @@ function appointmentFirstMessage(configuration) {
   return "Hola, soy " + assistant + " de " + business + ". Puedo ayudarte a agendar, confirmar o reprogramar tu cita. ¿Qué necesitas?";
 }
 
+function appointmentToolPrompt() {
+  return [
+    "REGLAS OBLIGATORIAS DE HERRAMIENTAS:",
+    "- Antes de ofrecer o confirmar un horario, usa la herramienta de disponibilidad.",
+    "- Solo confirma una reserva cuando la herramienta de agendamiento responda ok=true.",
+    "- Para cancelar o reprogramar, identifica una sola cita, confirma la intención del cliente y usa la herramienta correspondiente.",
+    "- Solo confirma una cancelación o reprogramación cuando la herramienta responda ok=true.",
+    "- Si una herramienta falla o devuelve varias coincidencias, no inventes el resultado: solicita el dato faltante o deriva a una persona.",
+    "- Nunca reveles identificadores internos, tokens, errores técnicos ni datos de otros clientes."
+  ].join("\n");
+}
+
 function appointmentToolToken(tenantId, secret) {
   const cleanTenant = cleanTenantId(tenantId);
   const key = cleanText(secret, 4096);
@@ -299,6 +321,23 @@ function appointmentWebhookToolConfig(name, description, url, properties, requir
       }
     }
   };
+}
+
+function appointmentToolName(base, tenantId) {
+  const suffix = crypto.createHash("sha256").update(cleanTenantId(tenantId)).digest("hex").slice(0, 10);
+  return cleanText(base, 48) + "_" + suffix;
+}
+
+function existingAppointmentToolId(rows, definition) {
+  const expected = definition && definition.tool_config || {};
+  const expectedUrl = expected.api_schema && expected.api_schema.url;
+  const match = (rows || []).find(function (row) {
+    const config = row && row.tool_config || {};
+    return config.name === expected.name &&
+      config.type === expected.type &&
+      config.api_schema && config.api_schema.url === expectedUrl;
+  });
+  return cleanText(match && match.id, 160);
 }
 
 async function createElevenLabsAppointmentTools(tenantId, options) {
@@ -329,14 +368,14 @@ async function createElevenLabsAppointmentTools(tenantId, options) {
   };
   const definitions = [
     appointmentWebhookToolConfig(
-      "nextfor_check_appointment_availability",
+      appointmentToolName("nextfor_check_appointment_availability", cleanTenant),
       "Consulta el calendario real del cliente Nextfor antes de ofrecer o confirmar un horario.",
       root + "/availability?token=" + encodeURIComponent(token),
       dateProperties,
       ["starts_at", "duration_minutes"]
     ),
     appointmentWebhookToolConfig(
-      "nextfor_book_appointment",
+      appointmentToolName("nextfor_book_appointment", cleanTenant),
       "Crea una cita confirmada en Nextfor y el calendario conectado después de comprobar disponibilidad y obtener consentimiento.",
       root + "/book?token=" + encodeURIComponent(token),
       Object.assign({}, dateProperties, {
@@ -347,10 +386,59 @@ async function createElevenLabsAppointmentTools(tenantId, options) {
         data_processing_consent: { type: "boolean", description: "True solo si el cliente autorizó tratamiento de datos." }
       }),
       ["starts_at", "duration_minutes", "customer_name", "consultation_reason", "data_processing_consent"]
+    ),
+    appointmentWebhookToolConfig(
+      appointmentToolName("nextfor_cancel_appointment", cleanTenant),
+      "Cancela una cita existente en Nextfor y en el calendario conectado solo después de que el cliente confirme la cancelación.",
+      root + "/cancel?token=" + encodeURIComponent(token),
+      {
+        appointment_id: { type: "string", description: "Identificador de la cita si está disponible." },
+        customer_phone: { type: "string", description: "Teléfono del cliente con código de país para identificar la cita." },
+        customer_email: { type: "string", description: "Correo del cliente para identificar la cita." },
+        current_starts_at: { type: "string", description: "Fecha y hora actual de la cita en ISO 8601 con zona horaria." },
+        reason: { type: "string", description: "Motivo de cancelación indicado por el cliente." },
+        cancellation_confirmed: { type: "boolean", description: "True solo cuando el cliente confirmó que desea cancelar." }
+      },
+      ["cancellation_confirmed"]
+    ),
+    appointmentWebhookToolConfig(
+      appointmentToolName("nextfor_reschedule_appointment", cleanTenant),
+      "Reprograma una cita existente en Nextfor y en el calendario conectado después de verificar el nuevo horario y confirmar el cambio.",
+      root + "/reschedule?token=" + encodeURIComponent(token),
+      {
+        appointment_id: { type: "string", description: "Identificador de la cita si está disponible." },
+        customer_phone: { type: "string", description: "Teléfono del cliente con código de país para identificar la cita." },
+        customer_email: { type: "string", description: "Correo del cliente para identificar la cita." },
+        current_starts_at: { type: "string", description: "Fecha y hora actual de la cita en ISO 8601 con zona horaria." },
+        new_starts_at: { type: "string", description: "Nueva fecha y hora solicitada en ISO 8601 con zona horaria." },
+        duration_minutes: { type: "integer", description: "Duración de la cita en minutos." },
+        reason: { type: "string", description: "Motivo del cambio si fue indicado." },
+        reschedule_confirmed: { type: "boolean", description: "True solo cuando el cliente confirmó el nuevo horario." }
+      },
+      ["new_starts_at", "duration_minutes", "reschedule_confirmed"]
     )
   ];
+  let existingTools = [];
+  if (typeof http.get === "function") {
+    try {
+      const response = await http.get("https://api.elevenlabs.io/v1/convai/tools", {
+        headers: { "Content-Type": "application/json", "xi-api-key": options.apiKey },
+        timeout: options.timeoutMs || 15000
+      });
+      existingTools = Array.isArray(response && response.data)
+        ? response.data
+        : Array.isArray(response && response.data && response.data.tools)
+          ? response.data.tools
+          : [];
+    } catch (_) {}
+  }
   const ids = [];
   for (const definition of definitions) {
+    const existingId = existingAppointmentToolId(existingTools, definition);
+    if (existingId) {
+      ids.push(existingId);
+      continue;
+    }
     const response = await http.post("https://api.elevenlabs.io/v1/convai/tools", definition, {
       headers: { "Content-Type": "application/json", "xi-api-key": options.apiKey },
       timeout: options.timeoutMs || 15000
@@ -401,7 +489,7 @@ function buildElevenLabsAppointmentAgentPayload(record, tenantId, options) {
       agent: {
         first_message: appointmentFirstMessage(configuration),
         language: "es",
-        prompt: { prompt }
+        prompt: { prompt: prompt + "\n\n" + appointmentToolPrompt() }
       }
     }
   };
@@ -474,6 +562,19 @@ async function applyElevenLabsAppointmentAgent(record, tenantId, options) {
     error.status = 503;
     error.draft = draft;
     throw error;
+  }
+  if (options.toolSecret && options.toolBaseUrl) {
+    draft.payload.conversation_config.agent.prompt.tool_ids = await createElevenLabsAppointmentTools(
+      draft.tenant_id,
+      {
+        apiKey: options.apiKey,
+        toolSecret: options.toolSecret,
+        baseUrl: options.toolBaseUrl,
+        httpClient: http,
+        timeoutMs: options.timeoutMs
+      }
+    );
+    delete draft.payload.conversation_config.agent.prompt.tools;
   }
   const response = await http.patch(draft.endpoint, draft.payload, {
     headers: {

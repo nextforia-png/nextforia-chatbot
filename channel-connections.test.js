@@ -370,6 +370,53 @@ function expectCode(promise, code) {
   assert.strictEqual(pendingActivationCandidate.activation_pending, true);
   assert.strictEqual(pendingActivationCandidate.account_label, "+57 310 6534553");
 
+  const failedRegistrationMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    whatsappConfigId: "wa-config-123",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      if (request.url.endsWith("/phone-failed/register")) {
+        const error = new Error("Request failed with status code 400");
+        error.response = { data: { error: {
+          message: "Registration PIN is invalid",
+          type: "OAuthException",
+          code: 100,
+          error_subcode: 2388003,
+          fbtrace_id: "trace-safe"
+        } } };
+        throw error;
+      }
+      if (request.url.endsWith("/phone-failed")) {
+        return { data: {
+          id: "phone-failed",
+          code_verification_status: "VERIFIED",
+          platform_type: "WHATSAPP_BUSINESS_APP"
+        } };
+      }
+      return { data: { success: true } };
+    }
+  });
+  let failedRegistrationError = null;
+  try {
+    await failedRegistrationMeta.activate("whatsapp", {
+      whatsapp_business_account_id: "waba-failed",
+      phone_number_id: "phone-failed",
+      access_token: "never-log-this-token",
+      coexistence: true
+    });
+  } catch (error) {
+    failedRegistrationError = error;
+  }
+  assert.strictEqual(failedRegistrationError && failedRegistrationError.code, "asset_activation_failed");
+  assert.strictEqual(failedRegistrationError && failedRegistrationError.activationStage, "register");
+  assert.strictEqual(failedRegistrationError && failedRegistrationError.meta.meta_code, 100);
+  assert.strictEqual(failedRegistrationError && failedRegistrationError.meta.meta_subcode, 2388003);
+  assert.strictEqual(failedRegistrationError && failedRegistrationError.meta.meta_type, "OAuthException");
+  assert.strictEqual(failedRegistrationError && failedRegistrationError.meta.meta_message, "Registration PIN is invalid");
+  assert(!JSON.stringify(failedRegistrationError.meta).includes("never-log-this-token"));
+
   const currentWhatsAppSubscriptionShape = new MetaChannelProvider({
     appId: "123456789",
     appSecret: "meta-app-secret",

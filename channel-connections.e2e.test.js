@@ -120,6 +120,8 @@ async function login(base, body) {
     assert(panel.includes('id="commerceConnectorCards"'));
     assert(panel.includes("Activar WhatsApp"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
+    assert(panel.includes("activateWhatsApp(this)"));
+    assert(panel.includes("if(state.whatsappActivating)return"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));

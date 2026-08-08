@@ -312,7 +312,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v340-customer-panel-one-click-logout";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v341-whatsapp-explicit-onboarding";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -12746,6 +12746,13 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   const channel = cleanChannel(req.params.channel);
   const tenantId = customerChannelTenantForAuth(auth);
   try {
+    const whatsappOnboardingMode = channel === "whatsapp"
+      ? cleanRuntimeText(req.body && req.body.onboarding_mode, 40).toLowerCase()
+      : "";
+    if (channel === "whatsapp" && !["coexistence", "cloud_api"].includes(whatsappOnboardingMode)) {
+      res.status(400).json({ ok: false, error: "whatsapp_onboarding_mode_required" });
+      return;
+    }
     const redirectUri = channelConnectionOAuthRedirectUrlForRequest(req, channel);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
       tenant_id: tenantId,
@@ -12754,7 +12761,8 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
       actor: channelConnectionActor(auth),
       redirect_uri: redirectUri,
       return_path: "/admin/panel?tab=channels",
-      return_mode: "popup"
+      return_mode: "popup",
+      whatsapp_onboarding_mode: whatsappOnboardingMode
     });
     const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state, {
       redirectUri
@@ -12766,7 +12774,8 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
           app_id: META_APP_ID,
           configuration_id: META_WHATSAPP_CONFIG_ID,
           graph_version: META_GRAPH_VERSION,
-          oauth_state: state
+          oauth_state: state,
+          onboarding_mode: whatsappOnboardingMode
         }
       });
       return;
@@ -12805,12 +12814,15 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
     usedChannelOAuthNonces.delete(usedChannelOAuthNonces.values().next().value);
   }
   try {
+    const embeddedSession = Object.assign({}, req.body && req.body.session || {}, {
+      onboarding_mode: state.whatsapp_onboarding_mode
+    });
     const result = await channelConnectionService.completeEmbeddedWhatsApp({
       tenant_id: tenantId,
       actor: auth,
       redirect_uri: state.redirect_uri || channelConnectionCallbackUrlForRequest(req),
       code: req.body && req.body.code,
-      session: req.body && req.body.session
+      session: embeddedSession
     });
     invalidateChannelRuntimeCache();
     log("info", "whatsapp_customer_activation_result", {
@@ -12825,7 +12837,31 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
   }
 });
 
-app.post("/admin/panel/channel-connections/whatsapp/activate", async (req, res) => {
+app.get("/admin/panel/channel-connections/whatsapp/status", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  try {
+    res.json({
+      ok: true,
+      status: await channelConnectionService.inspectWhatsApp(customerChannelTenantForAuth(auth))
+    });
+  } catch (error) {
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/whatsapp/verify", async (req, res) => {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
     return;
@@ -12841,31 +12877,44 @@ app.post("/admin/panel/channel-connections/whatsapp/activate", async (req, res) 
   }
   const tenantId = customerChannelTenantForAuth(auth);
   try {
-    log("info", "whatsapp_customer_activation_started", { tenant_id: tenantId });
-    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth, {
-      pin: req.body && req.body.pin
-    });
+    const connection = await channelConnectionService.verify(tenantId, "whatsapp", auth);
     invalidateChannelRuntimeCache();
-    log("info", "whatsapp_customer_activation_result", {
+    log("info", "whatsapp_customer_verification_result", {
       tenant_id: tenantId,
       status: connection.status,
       webhook_status: connection.webhook_status
     });
     res.json({ ok: true, connection });
   } catch (error) {
-    log("warn", "whatsapp_customer_activation_failed", {
+    log("warn", "whatsapp_customer_verification_failed", {
       tenant_id: tenantId,
-      code: error instanceof ChannelConnectionError ? error.code : "channel_connection_failed",
-      stage: cleanRuntimeText(error && error.activationStage, 80) || null,
-      meta_code: error && error.meta && error.meta.meta_code,
-      meta_subcode: error && error.meta && error.meta.meta_subcode,
-      meta_type: error && error.meta && error.meta.meta_type,
-      meta_transient: error && error.meta && error.meta.meta_transient === true,
-      meta_trace_id: error && error.meta && error.meta.meta_trace_id,
-      meta_message: cleanRuntimeText(error && error.meta && error.meta.meta_message, 500) || null
+      code: error instanceof ChannelConnectionError ? error.code : "channel_connection_failed"
     });
     channelConnectionErrorResponse(res, error);
   }
+});
+
+app.post("/admin/panel/channel-connections/whatsapp/activate", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!await customerChannelConnectionsVisibleForPanelAuth(dashboardAuth(req))) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  // Retired endpoint kept only so stale browser bundles fail safely. Embedded
+  // Signup now performs at most one registration during the explicit cloud_api
+  // route; subsequent customer checks use /verify and never call /register.
+  res.status(410).json({
+    ok: false,
+    error: "whatsapp_activation_retired",
+    message: "Vuelve a conectar WhatsApp y elige el tipo de número. Revisar estado no vuelve a registrarlo."
+  });
 });
 
 app.get("/admin/channel-connections/meta/callback", async (req, res) => {

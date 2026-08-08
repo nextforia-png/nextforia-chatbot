@@ -604,10 +604,17 @@ function expectCode(promise, code) {
           account_id: candidate.phone_number_id,
           account_label: "+57 301 587 2708"
         });
+      },
+      verify: async function () {
+        return {
+          ok: false,
+          pending: true,
+          error: "WhatsApp number has not completed Cloud API registration"
+        };
       }
     },
     encryptionKey,
-    now: function () { return new Date("2026-07-26T11:00:00.000Z"); }
+    now: function () { return new Date("2026-08-08T20:00:00.000Z"); }
   });
   const adopted = await adoptedService.adoptExisting("tenant-rav", "whatsapp", "system:environment", {
     id: "wa:phone-existing",
@@ -623,6 +630,23 @@ function expectCode(promise, code) {
   assert(!JSON.stringify(adopted).includes("system-user-token"));
   const adoptedStored = await adoptedStore.get("tenant-rav", "whatsapp");
   assert.strictEqual(adoptedStored.credential_source, "oauth");
+  await adoptedStore.upsert({
+    tenant_id: "tenant-rav",
+    channel: "whatsapp",
+    status: "needs_attention",
+    webhook_status: "needs_attention",
+    last_error: "(#133016) Registration or Deregistration failed because there were too many attempts",
+    last_error_at: "2026-08-08T19:30:00.000Z"
+  });
+  const safelyCheckedRateLimit = await adoptedService.verify(
+    "tenant-rav",
+    "whatsapp",
+    "owner@rav.example"
+  );
+  assert.strictEqual(safelyCheckedRateLimit.status, "connecting");
+  assert.strictEqual(safelyCheckedRateLimit.webhook_status, "pending_activation");
+  assert.strictEqual(safelyCheckedRateLimit.activation_rate_limited, true);
+  assert(safelyCheckedRateLimit.last_error.includes("133016"));
   assert(adoptedStored.credentials_ciphertext.startsWith("enc:v1:"));
   assert(!adoptedStored.credentials_ciphertext.includes("system-user-token"));
 

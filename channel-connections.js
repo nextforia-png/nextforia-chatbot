@@ -824,18 +824,14 @@ class MetaChannelProvider {
       if (channel === "whatsapp") {
         await this.subscribe(channel, candidate);
         // Embedded Signup authorizes the exact tenant-scoped phone asset but
-        // does not reveal its two-step-verification PIN. When the customer
-        // explicitly supplies six digits, set that value through Meta's
-        // supported phone-number endpoint before using it for /register. The
-        // PIN remains request-scoped and is never persisted or logged.
+        // does not reveal its two-step-verification PIN. Meta creates two-step
+        // verification and registers a new Cloud API phone in the same
+        // /register call, so changing the PIN before registration would fail
+        // with 133010 (account not registered). The PIN remains request-scoped
+        // and is never persisted or logged.
         const registrationPin = cleanWhatsAppRegistrationPin(candidate.registration_pin);
         let registrationError = null;
         if (registrationPin) {
-          activationStage = "set_pin";
-          await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
-            method: "POST",
-            data: { pin: registrationPin }
-          });
           try {
             activationStage = "register";
             await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {

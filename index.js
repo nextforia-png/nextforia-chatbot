@@ -309,7 +309,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v334-nextforia-chatbot-brand";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v335-whatsapp-runtime-activation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -1116,6 +1116,10 @@ const channelRuntimeCache = {
   by_messenger_page_id: new Map(),
   by_tenant_channel: new Map()
 };
+
+function invalidateChannelRuntimeCache() {
+  channelRuntimeCache.loaded_at = 0;
+}
 
 function cleanRuntimeText(value, max) {
   return String(value || "").trim().slice(0, max || 4096);
@@ -12390,7 +12394,9 @@ function channelConnectionErrorResponse(res, error) {
     "invalid_asset_selection",
     "connection_not_found",
     "legacy_connection_protected",
-    "channel_asset_already_assigned"
+    "channel_asset_already_assigned",
+    "asset_activation_failed",
+    "existing_asset_credentials_required"
   ];
   res.status(problem.status || 503).json({
     ok: false,
@@ -12401,6 +12407,10 @@ function channelConnectionErrorResponse(res, error) {
         ? "No se puede cambiar esta conexión desde aquí."
         : problem.code === "channel_asset_already_assigned"
           ? "Esta cuenta ya está conectada a otra empresa. Desconéctala allí antes de asignarla de nuevo."
+        : problem.code === "existing_asset_credentials_required"
+          ? "La autorización guardada no está completa. Vuelve a conectar WhatsApp con Meta."
+        : problem.code === "asset_activation_failed"
+          ? "Meta no pudo activar todavía este número en Cloud API. Puedes reintentar sin elegir otra cuenta."
         : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."
   });
 }
@@ -12434,6 +12444,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
       if (Number.isFinite(verifiedAt) && Date.now() - verifiedAt < 2 * 60 * 1000) continue;
       try {
         await channelConnectionService.verify(tenantId, connection.channel, auth);
+        invalidateChannelRuntimeCache();
       } catch (error) {
         console.error("customer channel verify error:", connection.channel, error.message);
       }
@@ -12562,9 +12573,49 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
       code: req.body && req.body.code,
       session: req.body && req.body.session
     });
+    invalidateChannelRuntimeCache();
+    log("info", "whatsapp_customer_activation_result", {
+      tenant_id: tenantId,
+      status: result.connection && result.connection.status,
+      webhook_status: result.connection && result.connection.webhook_status
+    });
     res.json({ ok: true, connection: result.connection });
   } catch (error) {
     console.error("WhatsApp Embedded Signup failed:", error.internalMessage || error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/panel/channel-connections/whatsapp/activate", async (req, res) => {
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  if (!await customerChannelConnectionsVisibleForPanelAuth(auth)) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  const tenantId = customerChannelTenantForAuth(auth);
+  try {
+    log("info", "whatsapp_customer_activation_started", { tenant_id: tenantId });
+    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth);
+    invalidateChannelRuntimeCache();
+    log("info", "whatsapp_customer_activation_result", {
+      tenant_id: tenantId,
+      status: connection.status,
+      webhook_status: connection.webhook_status
+    });
+    res.json({ ok: true, connection });
+  } catch (error) {
+    log("warn", "whatsapp_customer_activation_failed", {
+      tenant_id: tenantId,
+      code: error instanceof ChannelConnectionError ? error.code : "channel_connection_failed"
+    });
     channelConnectionErrorResponse(res, error);
   }
 });
@@ -12653,6 +12704,7 @@ app.post("/admin/panel/channel-connections/:channel/select", async (req, res) =>
       req.body && req.body.asset_id,
       auth
     );
+    invalidateChannelRuntimeCache();
     res.json({ ok: true, message: "Connected successfully.", connection });
   } catch (error) {
     console.error("customer channel asset selection error:", error.message);
@@ -12680,6 +12732,7 @@ app.post("/admin/panel/channel-connections/:channel/disconnect", async (req, res
       req.params.channel,
       auth
     );
+    invalidateChannelRuntimeCache();
     res.json({ ok: true, message: "Canal desconectado.", connection });
   } catch (error) {
     console.error("customer channel disconnect error:", error.message);
@@ -12763,6 +12816,27 @@ app.post("/admin/channel-connections/:tenantId/:channel/verify", async (req, res
     });
   } catch (error) {
     console.error("super admin channel verify error:", error.message);
+    channelConnectionErrorResponse(res, error);
+  }
+});
+
+app.post("/admin/channel-connections/:tenantId/whatsapp/activate", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    res.status(404).json({ ok: false, error: "channel_connections_disabled" });
+    return;
+  }
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const tenantId = channelConnectionTenantId(req.params.tenantId);
+  try {
+    const connection = await channelConnectionService.activateWhatsApp(tenantId, auth);
+    invalidateChannelRuntimeCache();
+    res.json({ ok: true, connection });
+  } catch (error) {
+    console.error("super admin WhatsApp activation error:", error.message);
     channelConnectionErrorResponse(res, error);
   }
 });

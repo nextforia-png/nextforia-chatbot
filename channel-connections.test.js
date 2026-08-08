@@ -336,8 +336,9 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(activatedCoexistence.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
-  assert(activationRequests[1].url.endsWith("/phone-rav"));
+  assert(activationRequests[1].url.endsWith("/phone-rav/register"));
+  assert.strictEqual(activationRequests[1].method, "POST");
+  assert(activationRequests[2].url.endsWith("/phone-rav"));
 
   const pendingActivationMeta = new MetaChannelProvider({
     appId: "123456789",
@@ -691,10 +692,7 @@ function expectCode(promise, code) {
   assert(embeddedStored.credentials_ciphertext.startsWith("enc:v1:"));
 
   const pendingEmbeddedStore = new InMemoryChannelConnectionStore();
-  const pendingVerificationResults = [
-    { ok: false, account_label: "+57 310 6534553", error: "WhatsApp number has not completed Cloud API registration" },
-    { ok: true, account_label: "+57 310 6534553" }
-  ];
+  let pendingActivationCalls = 0;
   const pendingEmbeddedService = createChannelConnectionService({
     store: pendingEmbeddedStore,
     provider: {
@@ -711,13 +709,13 @@ function expectCode(promise, code) {
         };
       },
       activate: async function (_, candidate) {
-        return Object.assign({}, candidate, {
-          activation_pending: true,
-          activation_error: "WhatsApp number is awaiting Cloud API activation"
-        });
-      },
-      verify: async function () {
-        return pendingVerificationResults.shift();
+        pendingActivationCalls++;
+        return pendingActivationCalls < 3
+          ? Object.assign({}, candidate, {
+              activation_pending: true,
+              activation_error: "WhatsApp number is awaiting Cloud API activation"
+            })
+          : Object.assign({}, candidate, { activation_pending: false });
       }
     },
     encryptionKey,
@@ -731,6 +729,8 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(pendingEmbedded.status, "connecting");
   assert.strictEqual(pendingEmbedded.connection.webhook_status, "pending_activation");
+  assert.strictEqual(pendingEmbedded.connection.activation_available, true);
+  assert.strictEqual(pendingEmbedded.connection.reconnect_available, true);
   assert.strictEqual(pendingEmbedded.connection.account_label, "+57 310 6534553");
   const pendingEmbeddedStored = await pendingEmbeddedStore.get("nextforia-d4cd6d", "whatsapp");
   assert(pendingEmbeddedStored.credentials_ciphertext.startsWith("enc:v1:"));
@@ -739,9 +739,81 @@ function expectCode(promise, code) {
   assert.strictEqual(stillPending.status, "connecting");
   assert.strictEqual(stillPending.webhook_status, "pending_activation");
   assert.strictEqual(stillPending.last_error, null);
-  const activatedAfterReview = await pendingEmbeddedService.verify("nextforia-d4cd6d", "whatsapp", "system:auto-verify");
+  const activatedAfterReview = await pendingEmbeddedService.activateWhatsApp(
+    "nextforia-d4cd6d",
+    "santiago@nextforia.com"
+  );
   assert.strictEqual(activatedAfterReview.status, "connected");
   assert.strictEqual(activatedAfterReview.webhook_status, "subscribed");
+  assert.strictEqual(activatedAfterReview.activation_available, false);
+  assert.strictEqual(pendingActivationCalls, 3);
+  const activatedStored = await pendingEmbeddedStore.get("nextforia-d4cd6d", "whatsapp");
+  assert(activatedStored.credentials_ciphertext.startsWith("enc:v1:"));
+  assert(!JSON.stringify(activatedAfterReview).includes("pending-business-token"));
+  await expectCode(
+    pendingEmbeddedService.activateWhatsApp("different-tenant", "other@example.com"),
+    "connection_not_found"
+  );
+
+  const failedActivationStore = new InMemoryChannelConnectionStore();
+  let failStoredActivation = false;
+  const failedActivationService = createChannelConnectionService({
+    store: failedActivationStore,
+    provider: {
+      configured: function () { return true; },
+      prepareEmbeddedWhatsApp: async function () {
+        return {
+          id: "wa:phone-failure",
+          account_id: "phone-failure",
+          account_label: "+57 300 000 0000",
+          whatsapp_business_account_id: "waba-failure",
+          phone_number_id: "phone-failure",
+          access_token: "failure-token",
+          coexistence: true
+        };
+      },
+      activate: async function (_, candidate) {
+        if (failStoredActivation) {
+          throw new ChannelConnectionError(
+            "asset_activation_failed",
+            422,
+            "OAuth access token expired"
+          );
+        }
+        return Object.assign({}, candidate, {
+          activation_pending: true,
+          activation_error: "WhatsApp number is awaiting Cloud API activation"
+        });
+      }
+    },
+    encryptionKey,
+    now: function () { return new Date("2026-08-03T21:10:00.000Z"); }
+  });
+  await failedActivationService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-failure",
+    actor: "owner@failure.example",
+    code: "failure-code",
+    session: { waba_id: "waba-failure", phone_number_id: "phone-failure" }
+  });
+  failStoredActivation = true;
+  await expectCode(
+    failedActivationService.activateWhatsApp("tenant-failure", "owner@failure.example"),
+    "asset_activation_failed"
+  );
+  const failedStored = await failedActivationStore.get("tenant-failure", "whatsapp");
+  assert.strictEqual(failedStored.status, "needs_attention");
+  assert.strictEqual(failedStored.last_error, "OAuth access token expired");
+  assert(failedStored.last_error_at);
+  assert(failedStored.credentials_ciphertext.startsWith("enc:v1:"));
+  const failedPublic = (await failedActivationService.listTenant("tenant-failure"))
+    .find(function (row) { return row.channel === "whatsapp"; });
+  assert.strictEqual(failedPublic.activation_available, true);
+  assert.strictEqual(
+    failedPublic.activation_error,
+    "La autorización de Meta venció o fue revocada. Vuelve a autorizar WhatsApp."
+  );
+  assert(!Object.prototype.hasOwnProperty.call(failedPublic, "last_error"));
+  assert(!JSON.stringify(failedPublic).includes("failure-token"));
 
   const beginUrl = await service.begin("tenant-a", "instagram", "admin@a.example", state);
   assert(beginUrl.startsWith("https://www.facebook.com/"));

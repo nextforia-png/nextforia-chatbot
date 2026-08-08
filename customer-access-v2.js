@@ -382,10 +382,11 @@ class SupabaseCustomerAccessStore {
         identity = created.data && (created.data.user || created.data);
       }
       if (!identity || !identity.id) throw new Error("recovery_identity_unavailable");
-      await this.axios.post(this.url + "/auth/v1/recover", {
+      const recoveryUrl = new URL(this.url + "/auth/v1/recover");
+      recoveryUrl.searchParams.set("redirect_to", String(redirectTo || ""));
+      await this.axios.post(recoveryUrl.toString(), {
         email: normalized
       }, {
-        params: { redirect_to: redirectTo },
         headers: { apikey: this.headers.apikey, "Content-Type": "application/json" },
         timeout: 8000
       });

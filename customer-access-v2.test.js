@@ -287,6 +287,31 @@ async function expectError(promise, code, status) {
   assert.strictEqual(persistedContext.plan_id, "nextfor-aura");
   assert.strictEqual(persistedContext.assigned_bot_id, "atencion-cliente");
 
+  let recoveryRequest;
+  const supabaseRecoveryStore = new SupabaseCustomerAccessStore({
+    url: "https://staging-project.supabase.co",
+    headers: { apikey: "staging-service-role", Authorization: "Bearer staging-service-role" },
+    axiosClient: {
+      get: async function (url) {
+        assert.strictEqual(url, "https://staging-project.supabase.co/auth/v1/admin/users");
+        return { data: { users: [{ id: "auth-user-a", email: "admin@tenant-a.example" }] } };
+      },
+      post: async function (url, payload, config) {
+        recoveryRequest = { url: url, payload: payload, config: config };
+        return { data: {} };
+      }
+    }
+  });
+  await supabaseRecoveryStore.requestProviderPasswordRecovery(
+    "ADMIN@TENANT-A.EXAMPLE",
+    "https://nextforia.com/admin/reset-password"
+  );
+  const recoveryRequestUrl = new URL(recoveryRequest.url);
+  assert.strictEqual(recoveryRequestUrl.origin + recoveryRequestUrl.pathname, "https://staging-project.supabase.co/auth/v1/recover");
+  assert.strictEqual(recoveryRequestUrl.searchParams.get("redirect_to"), "https://nextforia.com/admin/reset-password");
+  assert.deepStrictEqual(recoveryRequest.payload, { email: "admin@tenant-a.example" });
+  assert.strictEqual(recoveryRequest.config.params, undefined, "redirect_to must stay in the final request URL");
+
   const failedStore = new InMemoryCustomerAccessStore();
   const failedService = createCustomerAccessService({
     store: failedStore,

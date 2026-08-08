@@ -45,25 +45,28 @@ async function login(base, body, expectedStatus) {
     body: JSON.stringify(body)
   });
   assert.strictEqual(response.status, expectedStatus || 200);
+  const setCookie = String(response.headers.get("set-cookie") || "");
+  const matches = Array.from(setCookie.matchAll(/nextforia_dashboard_session=([^;,]+)/g));
   return {
     body: await response.json(),
-    cookie: String(response.headers.get("set-cookie") || "").split(";")[0]
+    cookie: matches.length ? "nextforia_dashboard_session=" + matches[matches.length - 1][1] : ""
   };
 }
 
 function signedSessionCookie(secret, user) {
   const payload = Buffer.from(JSON.stringify({
     v: 2,
-    rst: "customer-access-ready-clean-2026-07-28",
+    rst: "customer-access-membership-only-2026-08-08",
     uid: user.user_id,
     e: user.email,
     n: user.email,
     r: "admin",
     t: user.tenant_id,
+    mv: Number(user.session_version || 1),
     exp: Date.now() + 60 * 60 * 1000
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-  return "rav_dashboard_session=" + encodeURIComponent(payload + "." + signature);
+  return "nextforia_dashboard_session=" + encodeURIComponent(payload + "." + signature);
 }
 
 (async function run() {
@@ -100,7 +103,7 @@ function signedSessionCookie(secret, user) {
       CUSTOMER_PUBLIC_SIGNUP_ENABLED: "1",
       CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T01:00:00.000Z",
       CUSTOMER_ACCESS_TEST_MODE: "1",
-      CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE: "1",
+      CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE: "0",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_ACCESS_TEST_INVITATIONS: JSON.stringify([
         { tenant_id: "setup-tenant", company_name: "Empresa Setup", email: "invited@example.com", token: validInviteToken },
@@ -115,7 +118,27 @@ function signedSessionCookie(secret, user) {
 
   try {
     await waitForServer(child, port);
-    let response = await fetch(base + "/admin/create-account?business=Cl%C3%ADnica%20Demo");
+    let response = await fetch(base + "/admin/panel?tab=appointments&view=agenda", { redirect: "manual" });
+    assert.strictEqual(response.status, 302);
+    assert.match(String(response.headers.get("location") || ""), /^\/admin\/login\?next=/);
+    response = await fetch(base + "/admin/login");
+    assert.strictEqual(response.status, 200);
+    assert((await response.text()).includes("¿Olvidaste tu contraseña?"));
+    response = await fetch(base + "/admin/forgot-password");
+    assert.strictEqual(response.status, 200);
+    assert((await response.text()).includes("Recupera tu acceso"));
+    const recoveryResponses = [];
+    for (const recoveryEmail of ["admin@a.example", "missing@example.com"]) {
+      response = await fetch(base + "/admin/password-recovery", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: base },
+        body: JSON.stringify({ email: recoveryEmail })
+      });
+      recoveryResponses.push({ status: response.status, body: await response.json() });
+    }
+    assert.deepStrictEqual(recoveryResponses[0], recoveryResponses[1], "password recovery must not reveal whether an email exists");
+
+    response = await fetch(base + "/admin/create-account?business=Cl%C3%ADnica%20Demo");
     assert.strictEqual(response.status, 200);
     const publicSignupHtml = await response.text();
     assert(publicSignupHtml.includes("Crea tu cuenta"));
@@ -163,8 +186,10 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(publicSignup.lead.contact_phone, "+57 311 222 3333");
     assert.strictEqual(publicSignup.lead.onboarding_draft_saved, true);
     assert.strictEqual(publicSignup.redirect, "/admin/client-onboarding");
-    const publicCookie = String(response.headers.get("set-cookie") || "").split(";")[0];
-    assert.match(publicCookie, /^rav_dashboard_session=/);
+    const publicSetCookie = String(response.headers.get("set-cookie") || "");
+    const publicMatches = Array.from(publicSetCookie.matchAll(/nextforia_dashboard_session=([^;,]+)/g));
+    const publicCookie = publicMatches.length ? "nextforia_dashboard_session=" + publicMatches[publicMatches.length - 1][1] : "";
+    assert.match(publicCookie, /^nextforia_dashboard_session=/);
 
     response = await fetch(base + "/admin/client-onboarding/data", {
       headers: { cookie: publicCookie }
@@ -336,11 +361,11 @@ function signedSessionCookie(secret, user) {
     const userB = await login(base, { email: "admin@b.example", password: fixturePassword });
     assert.strictEqual(userA.body.user.tenant_id, "tenant-a");
     assert.strictEqual(userB.body.user.tenant_id, "tenant-b");
-    assert.match(userA.cookie, /^rav_dashboard_session=/);
+    assert.match(userA.cookie, /^nextforia_dashboard_session=/);
 
     const master = await login(base, { key: "customer-panel-v2-key" });
     response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: master.cookie } });
-    assert.strictEqual(response.status, 403, "Super Admin must not inherit the configured default tenant");
+    assert.strictEqual(response.status, 200, "Super Admin must land on the Customer Panel login after redirect");
     assert(!(await response.text()).includes("RAV Toys"));
     response = await fetch(base + "/admin/panel/data", { headers: { cookie: master.cookie } });
     assert.strictEqual(response.status, 401, "customer data requires a verified tenant membership");
@@ -452,7 +477,7 @@ function signedSessionCookie(secret, user) {
     const tokenParts = cookieValue.split(".");
     const forgedPayload = JSON.parse(Buffer.from(tokenParts[0], "base64url").toString("utf8"));
     forgedPayload.t = "tenant-b";
-    const forgedCookie = "rav_dashboard_session=" + encodeURIComponent(Buffer.from(JSON.stringify(forgedPayload)).toString("base64url") + "." + tokenParts[1]);
+    const forgedCookie = "nextforia_dashboard_session=" + encodeURIComponent(Buffer.from(JSON.stringify(forgedPayload)).toString("base64url") + "." + tokenParts[1]);
     response = await fetch(base + "/admin/session", { headers: { cookie: forgedCookie } });
     assert.strictEqual(response.status, 401, "tampering with the signed tenant invalidates the session");
 

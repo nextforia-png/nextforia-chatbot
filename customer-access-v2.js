@@ -292,44 +292,236 @@ class SupabaseCustomerAccessStore {
   }
 
   async activeUserByEmail(email) {
-    const rows = await this.rpc("platform_active_tenant_user_by_email_v2", { p_email: normalizeEmail(email) });
-    const user = rows[0] || null;
-    if (!user || !user.tenant_id) return user;
-    let membership = null;
+    const normalized = normalizeEmail(email);
     try {
-      const [tenantResponse, membershipResponse] = await Promise.all([
-        this.axios.get(this.url + "/rest/v1/tenants", {
+      const membershipResponse = await this.axios.get(this.url + "/rest/v1/tenant_users", {
         params: {
-          select: "id,company_name,plan_id,assigned_bot_id,status",
-          id: "eq." + cleanIdentifier(user.tenant_id),
-          limit: 1
+          select: "user_id,auth_user_id,tenant_id,email_normalized,role,status,active,auth_provider,session_version,password_hash,password_salt,created_at,updated_at",
+          email_normalized: "eq." + normalized,
+          status: "eq.active",
+          active: "eq.true",
+          limit: 2
         },
         headers: this.headers,
         timeout: 8000
-        }),
-        this.axios.get(this.url + "/rest/v1/tenant_users", {
+      });
+      const memberships = Array.isArray(membershipResponse.data) ? membershipResponse.data : [];
+      // Multiple active memberships for one email are ambiguous and must fail closed.
+      if (memberships.length !== 1) return null;
+      const user = memberships[0];
+      const tenantResponse = await this.axios.get(this.url + "/rest/v1/tenants", {
           params: {
-            select: "user_id,tenant_id,email_normalized,status,active,created_at,updated_at",
-            user_id: "eq." + user.user_id,
-            tenant_id: "eq." + cleanIdentifier(user.tenant_id),
+            select: "id,company_name,plan_id,assigned_bot_id,status",
+            id: "eq." + cleanIdentifier(user.tenant_id),
             limit: 1
           },
           headers: this.headers,
           timeout: 8000
-        }).catch(function () { return { data: [] }; })
-      ]);
+        });
       const tenant = Array.isArray(tenantResponse.data) ? tenantResponse.data[0] : null;
-      membership = Array.isArray(membershipResponse.data) ? membershipResponse.data[0] : null;
       if (!tenant || tenant.id !== user.tenant_id) throw new Error("tenant_context_unavailable");
       return Object.assign({}, user, {
         company_name: tenant.company_name,
         plan_id: tenant.plan_id,
         assigned_bot_id: tenant.assigned_bot_id,
         tenant_status: tenant.status,
-        created_at: membership && membership.created_at || user.created_at || null,
-        updated_at: membership && membership.updated_at || user.updated_at || null
+        created_at: user.created_at || null,
+        updated_at: user.updated_at || null
       });
     } catch (error) {
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
+  async authenticateSupabase(email, password, expectedUserId) {
+    try {
+      const response = await this.axios.post(this.url + "/auth/v1/token?grant_type=password", {
+        email: normalizeEmail(email),
+        password: String(password || "")
+      }, {
+        headers: { apikey: this.headers.apikey, "Content-Type": "application/json" },
+        timeout: 8000
+      });
+      const identity = response.data && response.data.user;
+      const accessToken = String(response.data && response.data.access_token || "");
+      if (!identity || String(identity.id) !== String(expectedUserId || "")) return false;
+      // The Customer Panel uses its own HttpOnly session. Revoke the temporary
+      // Supabase session created only to verify the password.
+      if (accessToken) {
+        await this.axios.post(this.url + "/auth/v1/logout?scope=local", null, {
+          headers: { apikey: this.headers.apikey, Authorization: "Bearer " + accessToken },
+          timeout: 8000
+        }).catch(function () {});
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async requestProviderPasswordRecovery(email, redirectTo) {
+    const normalized = normalizeEmail(email);
+    try {
+      let identity = null;
+      for (let page = 1; page <= 20 && !identity; page += 1) {
+        const response = await this.axios.get(this.url + "/auth/v1/admin/users", {
+          params: { page: page, per_page: 1000 },
+          headers: this.headers,
+          timeout: 8000
+        });
+        const rows = Array.isArray(response.data) ? response.data : response.data && response.data.users || [];
+        identity = rows.find(function (row) { return normalizeEmail(row.email) === normalized; }) || null;
+        if (rows.length < 1000) break;
+      }
+      if (!identity) {
+        const created = await this.axios.post(this.url + "/auth/v1/admin/users", {
+          email: normalized,
+          password: crypto.randomBytes(48).toString("base64url"),
+          email_confirm: true
+        }, { headers: this.headers, timeout: 8000 });
+        identity = created.data && (created.data.user || created.data);
+      }
+      if (!identity || !identity.id) throw new Error("recovery_identity_unavailable");
+      await this.axios.post(this.url + "/auth/v1/recover", {
+        email: normalized
+      }, {
+        params: { redirect_to: redirectTo },
+        headers: { apikey: this.headers.apikey, "Content-Type": "application/json" },
+        timeout: 8000
+      });
+      return true;
+    } catch (error) {
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
+  async completeProviderPasswordRecovery(accessToken, password) {
+    try {
+      const authHeaders = { apikey: this.headers.apikey, Authorization: "Bearer " + accessToken, "Content-Type": "application/json" };
+      const identityResponse = await this.axios.get(this.url + "/auth/v1/user", { headers: authHeaders, timeout: 8000 });
+      const identity = identityResponse.data;
+      if (!identity || !identity.id || !validEmail(identity.email)) throw new CustomerAccessError("invalid_recovery", 403);
+      const user = await this.activeUserByEmail(identity.email);
+      if (!user || !user.active) throw new CustomerAccessError("invalid_recovery", 403);
+      await this.axios.put(this.url + "/auth/v1/user", { password: password }, { headers: authHeaders, timeout: 8000 });
+      const nextVersion = Number(user.session_version || 1) + 1;
+      const membershipResponse = await this.axios.patch(this.url + "/rest/v1/tenant_users", {
+        auth_provider: "supabase",
+        auth_user_id: identity.id,
+        password_hash: null,
+        password_salt: null,
+        session_version: nextVersion,
+        updated_at: new Date().toISOString()
+      }, {
+        params: {
+          user_id: "eq." + cleanIdentifier(user.user_id),
+          tenant_id: "eq." + cleanIdentifier(user.tenant_id),
+          session_version: "eq." + Number(user.session_version || 1),
+          active: "eq.true"
+        },
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      if (!Array.isArray(membershipResponse.data) || membershipResponse.data.length !== 1) {
+        throw new CustomerAccessError("recovery_conflict", 409);
+      }
+      await this.axios.post(this.url + "/auth/v1/logout?scope=global", null, { headers: authHeaders, timeout: 8000 }).catch(function () {});
+      return { email: normalizeEmail(identity.email), tenant_id: user.tenant_id };
+    } catch (error) {
+      if (error instanceof CustomerAccessError) throw error;
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
+  async createPasswordRecovery(input) {
+    try {
+      const response = await this.axios.post(this.url + "/rest/v1/tenant_password_recovery_tokens", {
+        token_hash: input.token_hash,
+        user_id: input.user_id,
+        tenant_id: input.tenant_id,
+        email_normalized: normalizeEmail(input.email),
+        expires_at: input.expires_at
+      }, {
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      return Array.isArray(response.data) ? response.data[0] : null;
+    } catch (error) {
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
+  async consumePasswordRecovery(tokenHash) {
+    const now = new Date().toISOString();
+    try {
+      const response = await this.axios.patch(this.url + "/rest/v1/tenant_password_recovery_tokens", {
+        used_at: now
+      }, {
+        params: { token_hash: "eq." + tokenHash, used_at: "is.null", expires_at: "gt." + now },
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      const rows = Array.isArray(response.data) ? response.data : [];
+      return rows.length === 1 ? rows[0] : null;
+    } catch (error) {
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
+  async invalidateMembershipSessions(user, nextVersion) {
+    try {
+      const response = await this.axios.patch(this.url + "/rest/v1/tenant_users", {
+        session_version: nextVersion,
+        updated_at: new Date().toISOString()
+      }, {
+        params: {
+          user_id: "eq." + cleanIdentifier(user.user_id),
+          tenant_id: "eq." + cleanIdentifier(user.tenant_id),
+          session_version: "eq." + Number(user.session_version || 1),
+          active: "eq.true"
+        },
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (rows.length !== 1) throw new CustomerAccessError("recovery_conflict", 409);
+      return rows[0];
+    } catch (error) {
+      if (error instanceof CustomerAccessError) throw error;
+      throw mapStoreError(error && error.response && error.response.data || error);
+    }
+  }
+
+  async resetPassword(user, password) {
+    if (String(user.auth_provider || "local") === "supabase") {
+      try {
+        await this.axios.put(this.url + "/auth/v1/admin/users/" + encodeURIComponent(user.auth_user_id || user.user_id), {
+          password: password
+        }, { headers: this.headers, timeout: 8000 });
+        return true;
+      } catch (error) {
+        throw mapStoreError(error && error.response && error.response.data || error);
+      }
+    }
+    const salt = crypto.randomBytes(16);
+    try {
+      const response = await this.axios.patch(this.url + "/rest/v1/tenant_users", {
+        password_hash: hashPassword(password, salt),
+        password_salt: salt.toString("base64url"),
+        updated_at: new Date().toISOString()
+      }, {
+        params: {
+          user_id: "eq." + cleanIdentifier(user.user_id),
+          tenant_id: "eq." + cleanIdentifier(user.tenant_id),
+          active: "eq.true"
+        },
+        headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+        timeout: 8000
+      });
+      if (!Array.isArray(response.data) || response.data.length !== 1) throw new CustomerAccessError("invalid_recovery", 403);
+      return true;
+    } catch (error) {
+      if (error instanceof CustomerAccessError) throw error;
       throw mapStoreError(error && error.response && error.response.data || error);
     }
   }
@@ -462,6 +654,7 @@ class InMemoryCustomerAccessStore {
     this.tenants = [];
     this.users = [];
     this.invitations = [];
+    this.passwordRecoveries = [];
     this.audit = [];
     this.now = typeof options.now === "function" ? options.now : function () { return new Date(); };
   }
@@ -496,6 +689,8 @@ class InMemoryCustomerAccessStore {
       role: input.role || "admin",
       status: "active",
       active: input.active !== false,
+      auth_provider: input.auth_provider || "local",
+      session_version: Number(input.session_version || 1),
       password_hash: suppliedHash || hashPassword(password, salt),
       password_salt: salt.toString("base64url"),
       created_at: input.created_at || new Date().toISOString(),
@@ -657,8 +852,9 @@ class InMemoryCustomerAccessStore {
 
   async activeUserByEmail(email) {
     const normalized = normalizeEmail(email);
-    const row = this.users.find(function (item) { return item.email_normalized === normalized && item.active && item.status === "active"; });
-    if (!row) return null;
+    const rows = this.users.filter(function (item) { return item.email_normalized === normalized && item.active && item.status === "active"; });
+    if (rows.length !== 1) return null;
+    const row = rows[0];
     const tenant = this.tenants.find(function (item) { return item.id === row.tenant_id; });
     return Object.assign({}, row, {
       company_name: tenant ? tenant.company_name : null,
@@ -666,6 +862,64 @@ class InMemoryCustomerAccessStore {
       assigned_bot_id: tenant ? tenant.assigned_bot_id : null,
       tenant_status: tenant ? tenant.status : null
     });
+  }
+
+  async authenticateSupabase(email, password, expectedUserId) {
+    const row = this.users.find(function (item) {
+      return item.email_normalized === normalizeEmail(email) && item.user_id === expectedUserId;
+    });
+    if (!row) return false;
+    const salt = Buffer.from(String(row.password_salt || ""), "base64url");
+    return !!row.password_hash && hashPassword(password, salt) === row.password_hash;
+  }
+
+  async createPasswordRecovery(input) {
+    const row = {
+      id: crypto.randomUUID(),
+      token_hash: input.token_hash,
+      user_id: input.user_id,
+      tenant_id: input.tenant_id,
+      email_normalized: normalizeEmail(input.email),
+      expires_at: input.expires_at,
+      used_at: null,
+      created_at: this.now().toISOString()
+    };
+    this.passwordRecoveries.push(row);
+    return Object.assign({}, row);
+  }
+
+  async consumePasswordRecovery(tokenHash) {
+    const now = this.now();
+    const row = this.passwordRecoveries.find(function (item) {
+      return item.token_hash === tokenHash && !item.used_at && new Date(item.expires_at) > now;
+    });
+    if (!row) return null;
+    row.used_at = now.toISOString();
+    return Object.assign({}, row);
+  }
+
+  async invalidateMembershipSessions(user, nextVersion) {
+    const row = this.users.find(function (item) {
+      return item.user_id === user.user_id && item.tenant_id === user.tenant_id && item.active;
+    });
+    if (!row || Number(row.session_version || 1) !== Number(user.session_version || 1)) {
+      throw new CustomerAccessError("recovery_conflict", 409);
+    }
+    row.session_version = Number(nextVersion);
+    row.updated_at = this.now().toISOString();
+    return Object.assign({}, row);
+  }
+
+  async resetPassword(user, password) {
+    const row = this.users.find(function (item) {
+      return item.user_id === user.user_id && item.tenant_id === user.tenant_id && item.active;
+    });
+    if (!row) throw new CustomerAccessError("invalid_recovery", 403);
+    const salt = crypto.randomBytes(16);
+    row.password_hash = hashPassword(password, salt);
+    row.password_salt = salt.toString("base64url");
+    row.updated_at = this.now().toISOString();
+    return true;
   }
 
   async updatePassword(input) {
@@ -732,6 +986,20 @@ function createResendEmailSender(options) {
         timeout: 8000
       });
       return { id: response.data && response.data.id || null };
+    },
+    async sendPasswordRecovery(message) {
+      const response = await axiosClient.post("https://api.resend.com/emails", {
+        from: from,
+        to: [message.to],
+        reply_to: replyTo || undefined,
+        subject: "Recupera tu acceso a Nextfor IA",
+        text: "Recibimos una solicitud para cambiar tu contraseña. Usa este enlace privado: " + message.recovery_url + "\n\nEl enlace vence el " + message.expires_at + ". Si no solicitaste este cambio, ignora este mensaje.",
+        html: "<p>Recibimos una solicitud para cambiar tu contraseña.</p><p><a href=\"" + escapeHtml(message.recovery_url) + "\">Crear una nueva contraseña</a></p><p>Este enlace es privado, de un solo uso y vence el " + escapeHtml(message.expires_at) + ".</p><p>Si no solicitaste este cambio, ignora este mensaje.</p>"
+      }, {
+        headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+        timeout: 8000
+      });
+      return { id: response.data && response.data.id || null };
     }
   };
 }
@@ -748,6 +1016,10 @@ function createMemoryEmailSender() {
     outbox: outbox,
     async sendInvitation(message) {
       outbox.push(Object.assign({}, message));
+      return { id: "test-email-" + outbox.length };
+    },
+    async sendPasswordRecovery(message) {
+      outbox.push(Object.assign({ type: "password_recovery" }, message));
       return { id: "test-email-" + outbox.length };
     }
   };
@@ -786,13 +1058,19 @@ function createCustomerAccessService(options) {
     let user;
     try { user = await store.activeUserByEmail(normalized); }
     catch (error) { throw mapStoreError(error); }
-    if (!user || !user.password_hash || !user.password_salt || !user.tenant_id || !user.active) return null;
-    let candidate;
-    try { candidate = hashPassword(password, Buffer.from(user.password_salt, "base64url")); }
-    catch (_) { return null; }
-    const stored = Buffer.from(String(user.password_hash));
-    const supplied = Buffer.from(String(candidate));
-    if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
+    if (!user || !user.tenant_id || !user.active) return null;
+    const provider = String(user.auth_provider || "local");
+    if (provider === "supabase") {
+      if (!store.authenticateSupabase || !await store.authenticateSupabase(normalized, password, user.auth_user_id || user.user_id)) return null;
+    } else {
+      if (!user.password_hash || !user.password_salt) return null;
+      let candidate;
+      try { candidate = hashPassword(password, Buffer.from(user.password_salt, "base64url")); }
+      catch (_) { return null; }
+      const stored = Buffer.from(String(user.password_hash));
+      const supplied = Buffer.from(String(candidate));
+      if (stored.length !== supplied.length || !crypto.timingSafeEqual(stored, supplied)) return null;
+    }
     return {
       user_id: user.user_id,
       email: normalized,
@@ -804,9 +1082,75 @@ function createCustomerAccessService(options) {
       plan_id: user.plan_id || null,
       assigned_bot_id: user.assigned_bot_id || null,
       tenant_status: user.tenant_status || null,
+      auth_provider: provider,
+      membership_version: Number(user.session_version || 1),
       created_at: user.created_at || null,
       updated_at: user.updated_at || null
     };
+  }
+
+  async function requestPasswordRecovery(email) {
+    const normalized = normalizeEmail(email);
+    // Always return the same public response, whether the account exists or not.
+    if (!validEmail(normalized)) return { accepted: true };
+    let user = null;
+    try { user = await store.activeUserByEmail(normalized); }
+    catch (_) { return { accepted: true }; }
+    if (!user || !user.active || !user.user_id || !user.tenant_id) return { accepted: true };
+    if (store && typeof store.requestProviderPasswordRecovery === "function") {
+      try {
+        await store.requestProviderPasswordRecovery(normalized, baseUrl + "/admin/reset-password");
+      } catch (_) {}
+      return { accepted: true };
+    }
+    const token = crypto.randomBytes(32).toString("base64url");
+    const expiresAt = new Date(now().getTime() + 30 * 60 * 1000).toISOString();
+    try {
+      await store.createPasswordRecovery({
+        token_hash: hashInvitationToken(token),
+        user_id: user.user_id,
+        tenant_id: user.tenant_id,
+        email: normalized,
+        expires_at: expiresAt
+      });
+      await emailSender.sendPasswordRecovery({
+        to: normalized,
+        recovery_url: baseUrl + "/admin/reset-password?token=" + encodeURIComponent(token),
+        expires_at: expiresAt
+      });
+    } catch (_) {
+      // Do not disclose delivery, schema or account state to the requester.
+    }
+    return { accepted: true };
+  }
+
+  async function completePasswordRecovery(input) {
+    const password = validatePassword(input && input.password, input && input.password_confirmation);
+    const accessToken = String(input && input.access_token || "");
+    if (accessToken) {
+      if (!store || typeof store.completeProviderPasswordRecovery !== "function") {
+        throw new CustomerAccessError("invalid_recovery", 403);
+      }
+      const completed = await store.completeProviderPasswordRecovery(accessToken, password);
+      return { ok: true, email: completed.email, tenant_id: completed.tenant_id };
+    }
+    const token = String(input && input.token || "");
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new CustomerAccessError("invalid_recovery", 403);
+    let recovery;
+    try { recovery = await store.consumePasswordRecovery(hashInvitationToken(token)); }
+    catch (error) { throw mapStoreError(error); }
+    if (!recovery) throw new CustomerAccessError("invalid_recovery", 403);
+    let user;
+    try { user = await store.activeUserByEmail(recovery.email_normalized); }
+    catch (error) { throw mapStoreError(error); }
+    if (!user || String(user.user_id) !== String(recovery.user_id) || String(user.tenant_id) !== String(recovery.tenant_id)) {
+      throw new CustomerAccessError("invalid_recovery", 403);
+    }
+    // Invalidate every Customer Panel session before changing the credential.
+    const nextVersion = Number(user.session_version || 1) + 1;
+    await store.invalidateMembershipSessions(user, nextVersion);
+    await store.resetPassword(user, password);
+    return { ok: true, email: recovery.email_normalized, tenant_id: recovery.tenant_id };
   }
 
   async function changePassword(session, input) {
@@ -827,18 +1171,13 @@ function createCustomerAccessService(options) {
     if (password === String(input && input.current_password || "")) {
       throw new CustomerAccessError("password_reuse", 400);
     }
-    if (!store || typeof store.updatePassword !== "function") {
+    if (!store || typeof store.resetPassword !== "function" || typeof store.invalidateMembershipSessions !== "function") {
       throw new CustomerAccessError("customer_access_unavailable", 503);
     }
-    const salt = crypto.randomBytes(16);
     try {
-      await store.updatePassword({
-        user_id: userId,
-        tenant_id: tenantId,
-        email,
-        password_hash: hashPassword(password, salt),
-        password_salt: salt.toString("base64url")
-      });
+      const user = await store.activeUserByEmail(email);
+      await store.invalidateMembershipSessions(user, Number(user.session_version || 1) + 1);
+      await store.resetPassword(user, password);
     } catch (error) {
       throw mapStoreError(error);
     }
@@ -1041,6 +1380,8 @@ function createCustomerAccessService(options) {
 
     authenticate: authenticateCustomer,
     changePassword,
+    requestPasswordRecovery,
+    completePasswordRecovery,
 
     async validateSession(session) {
       const email = normalizeEmail(session && session.email);
@@ -1052,6 +1393,7 @@ function createCustomerAccessService(options) {
       catch (error) { throw mapStoreError(error); }
       if (!user || !user.active || String(user.user_id) !== userId || String(user.tenant_id) !== tenantId) return null;
       if ((user.role || "admin") !== (session.role || "admin")) return null;
+      if (Number(user.session_version || 1) !== Number(session.membership_version || 0)) return null;
       return {
         user_id: String(user.user_id),
         email,
@@ -1063,6 +1405,8 @@ function createCustomerAccessService(options) {
         plan_id: user.plan_id || null,
         assigned_bot_id: user.assigned_bot_id || null,
         tenant_status: user.tenant_status || null,
+        auth_provider: user.auth_provider || "local",
+        membership_version: Number(user.session_version || 1),
         created_at: user.created_at || null,
         updated_at: user.updated_at || null
       };

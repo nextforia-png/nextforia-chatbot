@@ -24,6 +24,8 @@ assert.doesNotMatch(page.html, /id="username"/);
 assert.doesNotMatch(page.html, /Crear una cuenta nueva/);
 assert.match(page.html, /Crea tu cuenta/);
 assert.match(page.html, /\/admin\/create-account/);
+assert.match(page.html, /¿Olvidaste tu contraseña\?/);
+assert.match(page.html, /\/admin\/forgot-password/);
 assert.match(page.html, /\/admin\/panel\?tab=summary/);
 
 const escapedTarget = render({ targetPath: "</script><script>alert(1)</script>" });

@@ -300,7 +300,7 @@ async function login(base, body) {
 
     response = await fetch(base + "/admin/channel-connections/meta/callback?state=altered&code=fake");
     assert.strictEqual(response.status, 200);
-    assert(response.url.includes("connection=error"));
+    assert(response.url.includes("/admin/login"), "an invalid unauthenticated callback must end at login");
 
     response = await fetch(base + "/admin/channel-connections", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 401);

@@ -1,0 +1,26 @@
+"use strict";
+
+const { safeInlineJson } = require("./security");
+
+const STYLE = `
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+:root{--navy:#071832;--cyan:#00A0F0;--line:#DFE6F0;--muted:#647289;--bg:#F4F7FB;--body:"Plus Jakarta Sans",sans-serif;--display:"Sora",sans-serif}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:var(--bg);font-family:var(--body);color:var(--navy);display:grid;place-items:center;padding:24px}.card{width:min(460px,100%);background:#fff;border:1px solid var(--line);border-radius:22px;padding:38px;box-shadow:0 28px 60px -38px rgba(7,24,50,.45)}h1{font:700 27px/1.2 var(--display);margin:0 0 12px}p{color:var(--muted);font-size:14px;line-height:1.6}label{display:block;font-size:13px;font-weight:800;margin:20px 0 8px}input{width:100%;height:52px;border:1.5px solid #C6D1E0;border-radius:12px;padding:0 15px;font:500 15px var(--body)}button{width:100%;height:52px;border:0;border-radius:12px;background:var(--cyan);color:#fff;font:800 14px var(--display);margin-top:22px;cursor:pointer}button:disabled{opacity:.55}.message{min-height:22px;margin-top:14px;font-size:13px;text-align:center}.back{text-align:center;margin-top:18px}.back a{color:#0788C7;font-weight:700;text-decoration:none}`;
+
+function page(title, body, script) {
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Nextfor IA</title><style>${STYLE}</style></head><body><main class="card">${body}</main><script>${script}</script></body></html>`;
+}
+
+function renderForgotPassword(res) {
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(page("Recuperar contraseña", `<h1>Recupera tu acceso</h1><p>Escribe el correo de tu cuenta. Si existe un acceso activo, enviaremos un enlace privado.</p><form id="form"><label for="email">Correo electrónico</label><input id="email" type="email" autocomplete="email" required><button id="submit" type="submit">Enviar enlace</button><div class="message" id="message" role="status"></div></form><p class="back"><a href="/admin/login">Volver al login</a></p>`,
+    `var f=document.getElementById("form"),b=document.getElementById("submit"),m=document.getElementById("message");f.addEventListener("submit",function(e){e.preventDefault();b.disabled=true;m.textContent="";fetch("/admin/password-recovery",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value.trim()})}).finally(function(){m.textContent="Si la cuenta existe, recibirás un correo con los siguientes pasos.";b.disabled=false;});});`));
+}
+
+function renderResetPassword(res, token) {
+  const safeToken = safeInlineJson(String(token || ""));
+  res.status(200).setHeader("content-type", "text/html; charset=utf-8");
+  res.send(page("Nueva contraseña", `<h1>Crea una nueva contraseña</h1><p>Usa al menos 12 caracteres, una letra y un número.</p><form id="form"><label for="password">Nueva contraseña</label><input id="password" type="password" autocomplete="new-password" required><label for="confirmation">Confirmar contraseña</label><input id="confirmation" type="password" autocomplete="new-password" required><button id="submit" type="submit">Guardar contraseña</button><div class="message" id="message" role="alert"></div></form><p class="back"><a href="/admin/login">Volver al login</a></p>`,
+    `var token=${safeToken},hash=new URLSearchParams(location.hash.slice(1)),accessToken=hash.get("access_token")||"",f=document.getElementById("form"),b=document.getElementById("submit"),m=document.getElementById("message");if(location.hash)history.replaceState(null,"",location.pathname+location.search);f.addEventListener("submit",function(e){e.preventDefault();b.disabled=true;m.textContent="";fetch("/admin/password-recovery/complete",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token:token,access_token:accessToken,password:document.getElementById("password").value,password_confirmation:document.getElementById("confirmation").value})}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||"invalid_recovery");return j;});}).then(function(){accessToken="";m.textContent="Contraseña actualizada. Ya puedes iniciar sesión.";f.reset();setTimeout(function(){location.href="/admin/login";},1200);}).catch(function(e){m.textContent=e.message==="weak_password"?"Usa al menos 12 caracteres, una letra y un número.":"El enlace no es válido, ya fue usado o venció.";b.disabled=false;});});`));
+}
+
+module.exports = { renderForgotPassword, renderResetPassword };

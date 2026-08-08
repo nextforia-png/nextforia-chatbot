@@ -312,7 +312,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v339-customer-panel-logout";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v340-customer-panel-one-click-logout";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -9922,6 +9922,10 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
 app.post("/admin/logout", (req, res) => {
   clearDashboardSessionCookie(req, res);
   res.setHeader("Clear-Site-Data", '"cache", "storage"');
+  if (req.query.redirect === "1") {
+    res.redirect(303, "/admin/login?logged_out=1");
+    return;
+  }
   res.json({ ok: true });
 });
 

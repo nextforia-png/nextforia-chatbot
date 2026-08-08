@@ -78,12 +78,21 @@ function signedSessionCookie(secret) {
 
   try {
     await waitForServer(child, port);
-    const response = await fetch(base + "/admin/logout", {
+    let response = await fetch(base + "/admin/logout", {
       method: "POST",
       headers: { origin: base, cookie: signedSessionCookie(sessionSecret) }
     });
     assert.strictEqual(response.status, 200, "logout must not depend on membership-store availability");
     assert.deepStrictEqual(await response.json(), { ok: true });
+    assert.match(String(response.headers.get("set-cookie") || ""), /nextforia_dashboard_session=.*Max-Age=0/);
+
+    response = await fetch(base + "/admin/logout?redirect=1", {
+      method: "POST",
+      redirect: "manual",
+      headers: { origin: base, cookie: signedSessionCookie(sessionSecret) }
+    });
+    assert.strictEqual(response.status, 303, "browser logout must complete in one server navigation");
+    assert.strictEqual(response.headers.get("location"), "/admin/login?logged_out=1");
     assert.match(String(response.headers.get("set-cookie") || ""), /nextforia_dashboard_session=.*Max-Age=0/);
     console.log("customer panel logout e2e tests passed");
   } finally {

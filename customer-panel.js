@@ -2152,7 +2152,12 @@ function logoutCustomerPanel(){
   customerPanelLogoutInProgress=true;
   document.querySelectorAll("#nav-logout,.mobileLogout").forEach(function(button){button.disabled=true;button.setAttribute("aria-busy","true");});
   try{["rav_dashboard_key","rav_dashboard_tab","rav_logo","nextfor-integration-result","nextforia_tenant_id","tenant_id","rav_tenant_id"].forEach(function(key){localStorage.removeItem(key);sessionStorage.removeItem(key);});}catch(e){}
-  fetch("/admin/logout",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{accept:"application/json"}}).catch(function(){}).finally(function(){location.replace("/admin/login?logged_out=1");});
+  var form=document.createElement("form");
+  form.method="POST";
+  form.action="/admin/logout?redirect=1";
+  form.hidden=true;
+  document.body.appendChild(form);
+  form.submit();
   return false;
 }
 function restorePanelLayoutFromHistory(){

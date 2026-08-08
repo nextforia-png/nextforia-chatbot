@@ -216,8 +216,8 @@ function publicConnection(record, options) {
     ? "Meta limitó temporalmente registros anteriores. Nextfor no repetirá llamadas hasta que Meta vuelva a permitir la activación."
     : safe.activation_error || (safe.activation_available
     ? safe.webhook_status === "pending_activation"
-      ? "Meta aceptó el número. Nextfor está terminando y verificando la conexión automáticamente."
-      : "La activación de WhatsApp necesita atención. Puedes reintentarla sin conectar otra cuenta."
+      ? "Meta todavía no confirmó la activación. Revisar estado no vuelve a registrar el número."
+      : "La activación de WhatsApp necesita atención. Revisa el estado o vuelve a autorizar con el tipo de número correcto."
     : null);
   // The PIN is an implementation detail generated and encrypted by Nextfor.
   // Customers complete onboarding entirely through Embedded Signup.
@@ -1928,13 +1928,12 @@ function createChannelConnectionService(options) {
         }
       }
       const checkedAt = iso(now());
-      const activationStillPending = clean.channel === "whatsapp" &&
-        record.status === "connecting" &&
-        record.webhook_status === "pending_activation" &&
-        !result.ok &&
+      const activationStillPending = clean.channel === "whatsapp" && !result.ok &&
         (result.pending === true ||
          result.error === "WhatsApp number has not completed Cloud API registration" ||
          result.error === "Meta is still completing WhatsApp Business App onboarding");
+      const preserveRegistrationCooldown = activationStillPending &&
+        !!whatsappActivationRetryAt(record, now());
       const row = await store.upsert({
         tenant_id: clean.tenantId,
         channel: clean.channel,
@@ -1942,8 +1941,16 @@ function createChannelConnectionService(options) {
         account_label: result.account_label || record.account_label,
         webhook_status: result.ok ? "subscribed" : activationStillPending ? "pending_activation" : "needs_attention",
         last_verified_at: checkedAt,
-        last_error: result.ok || activationStillPending ? null : result.error,
-        last_error_at: result.ok || activationStillPending ? null : checkedAt,
+        last_error: result.ok
+          ? null
+          : preserveRegistrationCooldown
+            ? record.last_error
+            : activationStillPending ? null : result.error,
+        last_error_at: result.ok
+          ? null
+          : preserveRegistrationCooldown
+            ? record.last_error_at
+            : activationStillPending ? null : checkedAt,
         connected_at: result.ok ? (record.connected_at || checkedAt) : record.connected_at,
         updated_at: checkedAt
       }, {

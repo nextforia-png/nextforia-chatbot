@@ -127,7 +127,7 @@ function customerActivationError(value) {
     return "Meta no concedió todos los permisos de WhatsApp necesarios. Vuelve a autorizar la cuenta."
   }
   if (/pin|two.step|two factor|2fa/.test(message)) {
-    return "Meta no pudo establecer el nuevo PIN de seguridad del número. Elige seis dígitos y vuelve a intentarlo."
+    return "Meta no pudo establecer la verificación segura del número. Vuelve a autorizar WhatsApp desde este panel."
   }
   if (/already|registered|another business|otro negocio|portfolio|portafolio/.test(message)) {
     return "Meta indica que el número ya está registrado o pertenece a otro portafolio empresarial."
@@ -208,14 +208,15 @@ function publicConnection(record, options) {
     ? customerActivationError(safe.last_error)
     : null;
   safe.activation_message = safe.activation_rate_limited
-    ? "Meta bloqueó intentos anteriores. Nextfor no volverá a registrar el número automáticamente; la siguiente activación solo se enviará cuando elijas un PIN de seis dígitos."
+    ? "Meta limitó temporalmente registros anteriores. Nextfor no repetirá llamadas hasta que Meta vuelva a permitir la activación."
     : safe.activation_error || (safe.activation_available
-    ? safe.registration_pin_required
-      ? "Meta verificó el número. Crea un PIN de seis dígitos aquí para terminar la activación."
-      : safe.webhook_status === "pending_activation"
+    ? safe.webhook_status === "pending_activation"
       ? "Meta aceptó el número. Nextfor está terminando y verificando la conexión automáticamente."
       : "La activación de WhatsApp necesita atención. Puedes reintentarla sin conectar otra cuenta."
     : null);
+  // The PIN is an implementation detail generated and encrypted by Nextfor.
+  // Customers complete onboarding entirely through Embedded Signup.
+  safe.registration_pin_required = false;
   delete safe.credentials_ciphertext;
   delete safe.credential_source;
   delete safe.coexistence_confirmed;
@@ -833,13 +834,12 @@ class MetaChannelProvider {
     let activationStage = "subscribe";
     try {
       if (channel === "whatsapp") {
-        await this.subscribe(channel, candidate);
         // WhatsApp Business App onboarding (Coexistence) is a custom Embedded
         // Signup flow. Meta's integration guide explicitly requires partners
         // to skip /register because the Business App number is already
         // registered. Standard Cloud API numbers still use /register with a
         // request-scoped PIN.
-        const registrationPin = cleanWhatsAppRegistrationPin(candidate.registration_pin);
+        let registrationPin = cleanWhatsAppRegistrationPin(candidate.registration_pin);
         activationStage = "verify_phone";
         let verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
           params: {
@@ -856,7 +856,13 @@ class MetaChannelProvider {
           : String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
             String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
         let registrationError = null;
-        if (!effectiveCoexistence && !registrationReady && registrationPin) {
+        if (!effectiveCoexistence && !registrationReady && candidate.registration_submitted !== true) {
+          // Meta requires a six-digit two-step verification PIN when a standard
+          // Embedded Signup number is first registered. Generate it server-side
+          // and keep it only in the encrypted tenant credential, as mature BSP
+          // integrations do, so the customer never needs a second form.
+          if (!registrationPin) registrationPin = String(crypto.randomInt(100000, 1000000));
+          candidate.registration_pin = registrationPin;
           try {
             activationStage = "register";
             await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
@@ -865,6 +871,11 @@ class MetaChannelProvider {
                 messaging_product: "whatsapp",
                 pin: registrationPin
               }
+            });
+            candidate.registration_submitted = true;
+            this.logger("info", "whatsapp_phone_registration_succeeded", {
+              phone_number_suffix: String(candidate.phone_number_id || "").slice(-8) || null,
+              waba_suffix: String(candidate.whatsapp_business_account_id || "").slice(-8) || null
             });
             activationStage = "verify_phone";
             verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
@@ -878,6 +889,11 @@ class MetaChannelProvider {
             registrationError = error;
           }
         }
+        // WABA subscription is the only webhook operation required for the
+        // shared Nextfor callback. Do it after registration, matching Meta's
+        // Embedded Signup sequence, and also for Coexistence numbers.
+        activationStage = "subscribe";
+        await this.subscribe(channel, candidate);
         if (registrationError && !registrationReady) {
           activationStage = "register";
           throw registrationError;
@@ -917,17 +933,14 @@ class MetaChannelProvider {
               waba_lookup_error_message: wabaLookupError && wabaLookupError.meta_message
             });
             candidate.activation_pending = true;
-            candidate.registration_pin_required = !effectiveCoexistence && !registrationPin;
+            candidate.registration_pin_required = false;
             candidate.activation_error = effectiveCoexistence
               ? "Meta is still completing WhatsApp Business App onboarding"
-              : registrationPin
-                ? "WhatsApp number is awaiting Cloud API activation"
-                : "WhatsApp registration requires a customer-selected six-digit security PIN";
+              : "WhatsApp number is awaiting Cloud API activation";
             candidate.account_label = cleanText(
               verified.data && (verified.data.display_phone_number || verified.data.verified_name) || candidate.account_label,
               240
             );
-            delete candidate.registration_pin;
             return candidate;
           }
           throw new ChannelConnectionError(
@@ -941,7 +954,6 @@ class MetaChannelProvider {
           240
         );
         candidate.registration_pin_required = false;
-        delete candidate.registration_pin;
       } else {
         await this.subscribe(channel, candidate);
         const targetId = channel === "instagram" ? candidate.instagram_user_id : candidate.page_id;
@@ -1472,6 +1484,10 @@ function createChannelConnectionService(options) {
         login_type: activated.login_type || null,
         coexistence: activated.coexistence === true,
         coexistence_event_confirmed: activated.coexistence_event_confirmed === true,
+        registration_pin: activated.coexistence === true
+          ? null
+          : cleanWhatsAppRegistrationPin(activated.registration_pin) || null,
+        registration_submitted: activated.registration_submitted === true,
         meta_business_id: activated.meta_business_id || null,
         whatsapp_business_account_id: activated.whatsapp_business_account_id || null,
         phone_number_id: activated.phone_number_id || null,
@@ -1513,6 +1529,7 @@ function createChannelConnectionService(options) {
       coexistence: credential.coexistence_event_confirmed === true,
       coexistence_event_confirmed: credential.coexistence_event_confirmed === true
     });
+    if (!cleanWhatsAppRegistrationPin(candidate.registration_pin)) delete candidate.registration_pin;
     if (!candidate.whatsapp_business_account_id || !candidate.phone_number_id || !candidate.access_token) {
       throw new ChannelConnectionError("existing_asset_credentials_required", 409);
     }
@@ -1563,6 +1580,10 @@ function createChannelConnectionService(options) {
           login_type: activated.login_type || null,
           coexistence: activated.coexistence === true,
           coexistence_event_confirmed: activated.coexistence_event_confirmed === true,
+          registration_pin: activated.coexistence === true
+            ? null
+            : cleanWhatsAppRegistrationPin(activated.registration_pin) || null,
+          registration_submitted: activated.registration_submitted === true,
           meta_business_id: activated.meta_business_id || record.meta_business_id || null,
           whatsapp_business_account_id: activated.whatsapp_business_account_id || record.whatsapp_business_account_id || null,
           phone_number_id: activated.phone_number_id || record.phone_number_id || null,

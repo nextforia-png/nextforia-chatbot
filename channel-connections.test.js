@@ -340,21 +340,21 @@ function expectCode(promise, code) {
     registration_pin: "246810"
   });
   assert.strictEqual(activatedWhatsApp.account_label, "+57 301 587 2708");
-  assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(activationRequests[1].url.endsWith("/phone-rav"));
-  assert(activationRequests[2].url.endsWith("/phone-rav/register"));
-  assert.strictEqual(activationRequests[2].method, "POST");
-  assert.strictEqual(activationRequests[2].data.messaging_product, "whatsapp");
-  assert.strictEqual(activationRequests[2].data.pin, "246810");
+  assert(activationRequests[0].url.endsWith("/phone-rav"));
+  assert(activationRequests[1].url.endsWith("/phone-rav/register"));
+  assert.strictEqual(activationRequests[1].method, "POST");
+  assert.strictEqual(activationRequests[1].data.messaging_product, "whatsapp");
+  assert.strictEqual(activationRequests[1].data.pin, "246810");
   assert(!activationRequests.some(function (request) {
     return request.url.endsWith("/phone-rav") && request.method === "POST";
   }));
   assert(!JSON.stringify(activationRequests).includes("meta-app-secret"));
-  assert(activationRequests[3].url.endsWith("/phone-rav"));
+  assert(activationRequests[2].url.endsWith("/phone-rav"));
+  assert(activationRequests[3].url.endsWith("/waba-rav/subscribed_apps"));
 
   activationRequests.length = 0;
   standardPhoneRegistered = false;
-  const standardAwaitingPin = await activationMeta.activate("whatsapp", {
+  const autoActivatedLegacyStandard = await activationMeta.activate("whatsapp", {
     whatsapp_business_account_id: "waba-rav",
     phone_number_id: "phone-rav",
     account_label: "+57 301 587 2708",
@@ -363,10 +363,14 @@ function expectCode(promise, code) {
     // labelled every Embedded Signup result as Coexistence.
     coexistence: true
   });
-  assert.strictEqual(standardAwaitingPin.coexistence, false);
-  assert.strictEqual(standardAwaitingPin.activation_pending, true);
-  assert.strictEqual(standardAwaitingPin.registration_pin_required, true);
-  assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
+  assert.strictEqual(autoActivatedLegacyStandard.coexistence, false);
+  assert.strictEqual(autoActivatedLegacyStandard.activation_pending, undefined);
+  assert.strictEqual(autoActivatedLegacyStandard.registration_pin_required, false);
+  assert.strictEqual(autoActivatedLegacyStandard.registration_submitted, true);
+  assert(/^[0-9]{6}$/.test(autoActivatedLegacyStandard.registration_pin));
+  const generatedPinRequest = activationRequests.find(function (request) { return request.url.endsWith("/register"); });
+  assert(generatedPinRequest);
+  assert.strictEqual(generatedPinRequest.data.pin, autoActivatedLegacyStandard.registration_pin);
 
   activationRequests.length = 0;
   const activatedCoexistence = await activationMeta.activate("whatsapp", {
@@ -379,8 +383,8 @@ function expectCode(promise, code) {
     registration_pin: "135790"
   });
   assert.strictEqual(activatedCoexistence.account_label, "+57 301 587 2708");
-  assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(activationRequests[1].url.endsWith("/phone-coexistence"));
+  assert(activationRequests[0].url.endsWith("/phone-coexistence"));
+  assert(activationRequests[1].url.endsWith("/waba-rav/subscribed_apps"));
   assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
   assert(!JSON.stringify(activationRequests).includes("135790"));
 

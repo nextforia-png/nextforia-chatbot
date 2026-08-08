@@ -125,10 +125,9 @@ async function login(base, body) {
     assert(panel.includes('extras:{version:"v3",setup:{},featureType:"whatsapp_business_app_onboarding"}'));
     assert(panel.includes('payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
-    assert(panel.includes("item.registration_pin_required"));
     assert(panel.includes("scheduleWhatsAppActivationCheck"));
-    assert(panel.includes('id="whatsappRegistrationPin"'));
-    assert(panel.includes("JSON.stringify({pin:pin})"));
+    assert(!panel.includes('id="whatsappRegistrationPin"'));
+    assert(!panel.includes("JSON.stringify({pin:pin})"));
     assert(panel.indexOf("if(item.activation_rate_limited)") < panel.indexOf("else if(item.activation_available)"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));

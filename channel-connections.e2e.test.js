@@ -118,11 +118,14 @@ async function login(base, body) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Activar WhatsApp"));
+    assert(panel.includes("Confirmar PIN y activar"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(panel.includes("activateWhatsApp(this)"));
     assert(panel.includes("if(state.whatsappActivating)return"));
-    assert(panel.includes("Espera requerida por Meta"));
+    assert(panel.includes("Confirmar PIN y activar"));
+    assert(panel.includes('id="whatsappRegistrationPin"'));
+    assert(panel.includes('type="password"'));
+    assert(panel.includes("JSON.stringify({pin:pin})"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));

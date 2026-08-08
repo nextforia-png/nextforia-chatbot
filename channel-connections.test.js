@@ -315,14 +315,15 @@ function expectCode(promise, code) {
     whatsapp_business_account_id: "waba-rav",
     phone_number_id: "phone-rav",
     account_label: "+57 301 587 2708",
-    access_token: "whatsapp-access-token"
+    access_token: "whatsapp-access-token",
+    registration_pin: "246810"
   });
   assert.strictEqual(activatedWhatsApp.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
   assert(activationRequests[1].url.endsWith("/phone-rav/register"));
   assert.strictEqual(activationRequests[1].method, "POST");
   assert.strictEqual(activationRequests[1].data.messaging_product, "whatsapp");
-  assert.match(activationRequests[1].data.pin, /^\d{6}$/);
+  assert.strictEqual(activationRequests[1].data.pin, "246810");
   assert(!JSON.stringify(activationRequests).includes("meta-app-secret"));
   assert(activationRequests[2].url.endsWith("/phone-rav"));
 
@@ -332,7 +333,8 @@ function expectCode(promise, code) {
     phone_number_id: "phone-rav",
     account_label: "+57 301 587 2708",
     access_token: "whatsapp-access-token",
-    coexistence: true
+    coexistence: true,
+    registration_pin: "135790"
   });
   assert.strictEqual(activatedCoexistence.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
@@ -404,7 +406,8 @@ function expectCode(promise, code) {
       whatsapp_business_account_id: "waba-failed",
       phone_number_id: "phone-failed",
       access_token: "never-log-this-token",
-      coexistence: true
+      coexistence: true,
+      registration_pin: "112233"
     });
   } catch (error) {
     failedRegistrationError = error;
@@ -757,12 +760,18 @@ function expectCode(promise, code) {
       },
       activate: async function (_, candidate) {
         pendingActivationCalls++;
-        return pendingActivationCalls < 3
+        return pendingActivationCalls < 2
           ? Object.assign({}, candidate, {
               activation_pending: true,
               activation_error: "WhatsApp number is awaiting Cloud API activation"
             })
           : Object.assign({}, candidate, { activation_pending: false });
+      },
+      verify: async function () {
+        return {
+          ok: false,
+          error: "WhatsApp number has not completed Cloud API registration"
+        };
       }
     },
     encryptionKey,
@@ -788,19 +797,88 @@ function expectCode(promise, code) {
   assert.strictEqual(stillPending.last_error, null);
   const activatedAfterReview = await pendingEmbeddedService.activateWhatsApp(
     "nextforia-d4cd6d",
-    "santiago@nextforia.com"
+    "santiago@nextforia.com",
+    { pin: "123456" }
   );
   assert.strictEqual(activatedAfterReview.status, "connected");
   assert.strictEqual(activatedAfterReview.webhook_status, "subscribed");
   assert.strictEqual(activatedAfterReview.activation_available, false);
-  assert.strictEqual(pendingActivationCalls, 3);
+  assert.strictEqual(pendingActivationCalls, 2);
   const activatedStored = await pendingEmbeddedStore.get("nextforia-d4cd6d", "whatsapp");
   assert(activatedStored.credentials_ciphertext.startsWith("enc:v1:"));
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(activatedStored, "registration_pin"), false);
+  assert(!JSON.stringify(pendingEmbeddedStore.audit).includes("123456"));
   assert(!JSON.stringify(activatedAfterReview).includes("pending-business-token"));
+  await expectCode(
+    pendingEmbeddedService.activateWhatsApp(
+      "nextforia-d4cd6d",
+      "santiago@nextforia.com",
+      { pin: "12345" }
+    ),
+    "whatsapp_registration_pin_required"
+  );
   await expectCode(
     pendingEmbeddedService.activateWhatsApp("different-tenant", "other@example.com"),
     "connection_not_found"
   );
+
+  const singleFlightStore = new InMemoryChannelConnectionStore();
+  let releaseSingleFlight;
+  const singleFlightGate = new Promise(function (resolve) { releaseSingleFlight = resolve; });
+  let singleFlightRegistrations = 0;
+  const singleFlightService = createChannelConnectionService({
+    store: singleFlightStore,
+    provider: {
+      configured: function () { return true; },
+      prepareEmbeddedWhatsApp: async function () {
+        return {
+          id: "wa:phone-single-flight",
+          account_id: "phone-single-flight",
+          account_label: "+57 310 000 0001",
+          whatsapp_business_account_id: "waba-single-flight",
+          phone_number_id: "phone-single-flight",
+          access_token: "single-flight-token",
+          coexistence: true
+        };
+      },
+      activate: async function (_, candidate) {
+        if (!candidate.registration_pin) {
+          return Object.assign({}, candidate, {
+            activation_pending: true,
+            activation_error: "WhatsApp registration requires the existing two-step verification PIN"
+          });
+        }
+        singleFlightRegistrations++;
+        await singleFlightGate;
+        return Object.assign({}, candidate, { activation_pending: false });
+      }
+    },
+    encryptionKey
+  });
+  await singleFlightService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-single-flight",
+    actor: "owner@single-flight.example",
+    code: "single-flight-code",
+    session: { waba_id: "waba-single-flight", phone_number_id: "phone-single-flight" }
+  });
+  const firstSingleFlight = singleFlightService.activateWhatsApp(
+    "tenant-single-flight",
+    "owner@single-flight.example",
+    { pin: "654321" }
+  );
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  await expectCode(
+    singleFlightService.activateWhatsApp(
+      "tenant-single-flight",
+      "owner@single-flight.example",
+      { pin: "654321" }
+    ),
+    "whatsapp_activation_in_progress"
+  );
+  assert.strictEqual(singleFlightRegistrations, 1);
+  releaseSingleFlight();
+  await firstSingleFlight;
+  assert(!JSON.stringify(singleFlightStore.audit).includes("654321"));
 
   const failedActivationStore = new InMemoryChannelConnectionStore();
   let failStoredActivation = false;
@@ -844,7 +922,7 @@ function expectCode(promise, code) {
   });
   failStoredActivation = true;
   await expectCode(
-    failedActivationService.activateWhatsApp("tenant-failure", "owner@failure.example"),
+    failedActivationService.activateWhatsApp("tenant-failure", "owner@failure.example", { pin: "123456" }),
     "asset_activation_failed"
   );
   const failedStored = await failedActivationStore.get("tenant-failure", "whatsapp");
@@ -883,7 +961,7 @@ function expectCode(promise, code) {
       },
       activate: async function (_, candidate) {
         rateLimitedActivationCalls++;
-        if (triggerRateLimit) {
+        if (triggerRateLimit && candidate.registration_pin) {
           const problem = new ChannelConnectionError(
             "asset_activation_failed",
             422,
@@ -910,39 +988,38 @@ function expectCode(promise, code) {
   });
   triggerRateLimit = true;
   await expectCode(
-    rateLimitedService.activateWhatsApp("tenant-rate-limited", "owner@rate-limited.example"),
+    rateLimitedService.activateWhatsApp("tenant-rate-limited", "owner@rate-limited.example", { pin: "123456" }),
     "whatsapp_activation_rate_limited"
   );
   const callsAtRateLimit = rateLimitedActivationCalls;
   const rateLimitedPublic = (await rateLimitedService.listTenant("tenant-rate-limited"))
     .find(function (row) { return row.channel === "whatsapp"; });
   assert.strictEqual(rateLimitedPublic.activation_rate_limited, true);
-  assert.strictEqual(rateLimitedPublic.activation_available, false);
+  assert.strictEqual(rateLimitedPublic.activation_available, true);
   assert.strictEqual(rateLimitedPublic.reconnect_available, false);
   assert.strictEqual(rateLimitedPublic.activation_retry_at, "2026-08-11T12:16:09.938Z");
-  assert(rateLimitedPublic.activation_message.includes("72 horas"));
+  assert(rateLimitedPublic.activation_message.includes("no volverá a registrar"));
   await expectCode(
-    rateLimitedService.activateWhatsApp("tenant-rate-limited", "owner@rate-limited.example"),
+    rateLimitedService.activateWhatsApp("tenant-rate-limited", "owner@rate-limited.example", { pin: "123456" }),
     "whatsapp_activation_rate_limited"
   );
   assert.strictEqual(rateLimitedActivationCalls, callsAtRateLimit);
-  await expectCode(
-    rateLimitedService.completeEmbeddedWhatsApp({
-      tenant_id: "tenant-rate-limited",
-      actor: "owner@rate-limited.example",
-      code: "second-rate-limited-code",
-      session: { waba_id: "waba-rate-limited", phone_number_id: "phone-rate-limited" }
-    }),
-    "whatsapp_activation_rate_limited"
-  );
-  assert.strictEqual(rateLimitedActivationCalls, callsAtRateLimit);
+  const safeReauthorization = await rateLimitedService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-rate-limited",
+    actor: "owner@rate-limited.example",
+    code: "second-rate-limited-code",
+    session: { waba_id: "waba-rate-limited", phone_number_id: "phone-rate-limited" }
+  });
+  assert.strictEqual(safeReauthorization.connection.status, "connected");
+  assert.strictEqual(rateLimitedActivationCalls, callsAtRateLimit + 1);
   const preservedRateLimit = await rateLimitedStore.get("tenant-rate-limited", "whatsapp");
-  assert.strictEqual(preservedRateLimit.last_error_at, "2026-08-08T12:16:09.938Z");
+  assert.strictEqual(preservedRateLimit.last_error_at, null);
   rateLimitedNow = new Date("2026-08-11T12:16:10.000Z");
   triggerRateLimit = false;
   const recoveredRateLimited = await rateLimitedService.activateWhatsApp(
     "tenant-rate-limited",
-    "owner@rate-limited.example"
+    "owner@rate-limited.example",
+    { pin: "123456" }
   );
   assert.strictEqual(recoveredRateLimited.status, "connected");
   assert.strictEqual(recoveredRateLimited.activation_rate_limited, false);

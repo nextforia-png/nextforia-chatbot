@@ -76,6 +76,27 @@ function internalError(error) {
   return cleanText(message, 800);
 }
 
+function customerActivationError(value) {
+  const message = cleanText(value, 800).toLowerCase();
+  if (!message) return null;
+  if (/token|oauth|session.*expir|authorization|autorizaci/.test(message)) {
+    return "La autorización de Meta venció o fue revocada. Vuelve a autorizar WhatsApp."
+  }
+  if (/permission|permiso|insufficient scope/.test(message)) {
+    return "Meta no concedió todos los permisos de WhatsApp necesarios. Vuelve a autorizar la cuenta."
+  }
+  if (/pin|two.step|two factor|2fa/.test(message)) {
+    return "Meta rechazó el PIN de registro del número. Revisa la verificación en dos pasos de WhatsApp."
+  }
+  if (/already|registered|another business|otro negocio|portfolio|portafolio/.test(message)) {
+    return "Meta indica que el número ya está registrado o pertenece a otro portafolio empresarial."
+  }
+  if (/cloud api|registration|register|activat/.test(message)) {
+    return "Meta todavía no completó el registro de este número en Cloud API. Puedes reintentar aquí."
+  }
+  return "Meta rechazó la activación del número. Puedes reintentar o volver a autorizar la cuenta."
+}
+
 function mapStoreError(error) {
   if (error instanceof ChannelConnectionError) return error;
   const status = error && error.response && error.response.status;
@@ -127,6 +148,17 @@ function publicConnection(record, options) {
   }
   const allowProtectedReconnect = !!(options && options.allowProtectedReconnect);
   const reconnectAllowed = !safe.protected_legacy || allowProtectedReconnect;
+  safe.activation_available = safe.channel === "whatsapp" &&
+    !safe.protected_legacy &&
+    !!safe.credentials_ciphertext &&
+    !!(safe.phone_number_id && safe.whatsapp_business_account_id) &&
+    (safe.status === "connecting" || safe.status === "needs_attention");
+  safe.activation_error = safe.activation_available ? customerActivationError(safe.last_error) : null;
+  safe.activation_message = safe.activation_error || (safe.activation_available
+    ? safe.webhook_status === "pending_activation"
+      ? "Meta aceptó el número. Falta terminar su activación en Cloud API."
+      : "La activación de WhatsApp necesita atención. Puedes reintentarla sin conectar otra cuenta."
+    : null);
   delete safe.credentials_ciphertext;
   delete safe.credential_source;
   safe.pending_assets = safe.status === "connecting"
@@ -749,10 +781,14 @@ class MetaChannelProvider {
     try {
       if (channel === "whatsapp") {
         await this.subscribe(channel, candidate);
-        // Existing WhatsApp Business App numbers use Meta's coexistence flow.
-        // Meta rejects /register for these SMB assets because Embedded Signup
-        // already performs the phone verification and Cloud API bridge.
-        if (!candidate.coexistence) {
+        // Meta's Embedded Signup completes authorization and phone ownership,
+        // but the selected number is not usable by Cloud API until the app
+        // explicitly registers it. This is also required for coexistence with
+        // the WhatsApp Business App. The endpoint is safe to retry; if Meta
+        // reports an idempotency-style error, the exact phone is verified
+        // below before the connection is accepted.
+        let registrationError = null;
+        try {
           await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
             method: "POST",
             data: {
@@ -760,6 +796,8 @@ class MetaChannelProvider {
               pin: this.whatsappRegistrationPin(candidate.phone_number_id)
             }
           });
+        } catch (error) {
+          registrationError = error;
         }
         const verified = await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
           params: {
@@ -769,14 +807,14 @@ class MetaChannelProvider {
         const registrationReady =
           String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED" &&
           String(verified.data && verified.data.platform_type || "").toUpperCase() === "CLOUD_API";
+        if (registrationError && !registrationReady) throw registrationError;
         if (!registrationReady) {
           // Meta can finish Embedded Signup for an existing WhatsApp Business
           // App number before the coexistence bridge reports CLOUD_API. Keep
           // the exact tenant-scoped asset and encrypted token so verification
           // can finish automatically after Meta's review instead of forcing
           // the customer through OAuth again.
-          if (candidate.coexistence &&
-              String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED") {
+          if (String(verified.data && verified.data.code_verification_status || "").toUpperCase() === "VERIFIED") {
             candidate.activation_pending = true;
             candidate.activation_error = "WhatsApp number is awaiting Cloud API activation";
             candidate.account_label = cleanText(
@@ -1270,6 +1308,7 @@ function createChannelConnectionService(options) {
       credentials_ciphertext: encryptedCredential({
         access_token: activated.access_token,
         login_type: activated.login_type || null,
+        coexistence: activated.coexistence === true,
         meta_business_id: activated.meta_business_id || null,
         whatsapp_business_account_id: activated.whatsapp_business_account_id || null,
         phone_number_id: activated.phone_number_id || null,
@@ -1287,6 +1326,71 @@ function createChannelConnectionService(options) {
         reason: activationPending ? cleanText(activated.activation_error, 240) : null
       }
     });
+  }
+
+  async function activateStoredWhatsApp(tenantId, actor) {
+    const record = await store.get(tenantId, "whatsapp");
+    if (!record) throw new ChannelConnectionError("connection_not_found", 404);
+    if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+    const credential = credentialPayload(record);
+    if (!credential || !provider || typeof provider.activate !== "function") {
+      throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+    }
+    const candidate = Object.assign({}, credential, {
+      id: "wa:" + cleanText(record.phone_number_id || record.account_id, 240),
+      account_id: cleanText(record.account_id || record.phone_number_id, 240),
+      account_label: cleanText(record.account_label, 240),
+      meta_business_id: cleanText(record.meta_business_id || credential.meta_business_id, 240) || null,
+      whatsapp_business_account_id: cleanText(
+        record.whatsapp_business_account_id || credential.whatsapp_business_account_id,
+        240
+      ),
+      phone_number_id: cleanText(record.phone_number_id || credential.phone_number_id, 240),
+      coexistence: credential.coexistence === true || record.webhook_status === "pending_activation"
+    });
+    if (!candidate.whatsapp_business_account_id || !candidate.phone_number_id || !candidate.access_token) {
+      throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+    }
+    try {
+      const activated = await provider.activate("whatsapp", candidate);
+      const checkedAt = iso(now());
+      const activationPending = activated.activation_pending === true;
+      const row = await store.upsert({
+        tenant_id: tenantId,
+        channel: "whatsapp",
+        status: activationPending ? "connecting" : "connected",
+        account_id: activated.account_id || record.account_id,
+        account_label: activated.account_label || record.account_label,
+        meta_business_id: activated.meta_business_id || record.meta_business_id,
+        whatsapp_business_account_id: activated.whatsapp_business_account_id || record.whatsapp_business_account_id,
+        phone_number_id: activated.phone_number_id || record.phone_number_id,
+        webhook_status: activationPending ? "pending_activation" : "subscribed",
+        last_verified_at: checkedAt,
+        last_error: null,
+        last_error_at: null,
+        connected_at: activationPending ? null : (record.connected_at || checkedAt),
+        disconnected_at: null,
+        disconnected_by: null,
+        updated_at: checkedAt,
+        pending_assets: [],
+        credentials_ciphertext: record.credentials_ciphertext,
+        credential_source: record.credential_source || "oauth",
+        protected_legacy: false
+      }, {
+        action: activationPending ? "activation_pending" : "activated",
+        actor: actorLabel(actor),
+        details: {
+          account_id: activated.account_id || record.account_id,
+          reason: activationPending ? cleanText(activated.activation_error, 240) : null
+        }
+      });
+      return publicConnection(row, { superAdmin: true });
+    } catch (error) {
+      await markFailure(tenantId, "whatsapp", actor, error);
+      throw error instanceof ChannelConnectionError
+        ? error
+        : new ChannelConnectionError("asset_activation_failed", 422, internalError(error));
+    }
   }
 
   return {
@@ -1493,6 +1597,10 @@ function createChannelConnectionService(options) {
       const record = await storedOrLegacy(clean.tenantId, clean.channel);
       if (!record) throw new ChannelConnectionError("connection_not_found", 404);
       if (record.protected_legacy) return publicConnection(record, { superAdmin: true });
+      if (clean.channel === "whatsapp" && record.status === "connecting" &&
+          record.webhook_status === "pending_activation") {
+        return activateStoredWhatsApp(clean.tenantId, actor);
+      }
       const credential = credentialPayload(record);
       let result = await provider.verify(clean.channel, credential);
       if (!result.ok && result.error === "Meta webhook subscription is missing" &&
@@ -1527,6 +1635,11 @@ function createChannelConnectionService(options) {
         details: result.ok || activationStillPending ? {} : { error: result.error }
       });
       return publicConnection(row, { superAdmin: true });
+    },
+
+    async activateWhatsApp(tenantId, actor) {
+      const clean = assertTenantChannel(tenantId, "whatsapp");
+      return activateStoredWhatsApp(clean.tenantId, actor);
     },
 
     async repairSubscription(tenantId, channel, actor) {

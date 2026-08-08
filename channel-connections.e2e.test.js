@@ -118,6 +118,8 @@ async function login(base, body) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
+    assert(panel.includes("Activar WhatsApp"));
+    assert(panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
@@ -231,6 +233,14 @@ async function login(base, body) {
     assert.strictEqual(body.embedded_signup.graph_version, "v23.0");
     assert(body.embedded_signup.oauth_state);
     assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/activate", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: JSON.stringify({ tenant_id: "rav-customer-account" })
+    });
+    assert.strictEqual(response.status, 404, "a customer cannot activate another tenant through the request body");
+    assert.strictEqual((await response.json()).error, "connection_not_found");
 
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/complete", {
       method: "POST",

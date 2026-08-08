@@ -118,15 +118,19 @@ async function login(base, body) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Revisar conexión"));
-    assert(panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
-    assert(panel.includes("activateWhatsApp(this,false)"));
+    assert(panel.includes("Revisar estado"));
+    assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
+    assert(!panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
+    assert(!panel.includes("activateWhatsApp("));
     assert(panel.includes("if(state.whatsappActivating)return"));
-    assert(panel.includes('extras:{version:"v3",setup:{},featureType:"whatsapp_business_app_onboarding"}'));
+    assert(panel.includes('var extras={setup:{},sessionInfoVersion:"3"}'));
+    assert(panel.includes('if(config.onboarding_mode==="coexistence")extras.featureType="whatsapp_business_app_onboarding"'));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
     assert(panel.includes('payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));
-    assert(panel.includes("Nextfor no hará más intentos automáticamente"));
+    assert(panel.includes("Nextfor no envió ninguna solicitud de registro"));
     assert(!panel.includes('id="whatsappRegistrationPin"'));
     assert(!panel.includes("JSON.stringify({pin:pin})"));
     assert(panel.indexOf("if(item.activation_rate_limited)") < panel.indexOf("else if(item.activation_available)"));
@@ -236,11 +240,27 @@ async function login(base, body) {
       },
       body: "{}"
     });
+    assert.strictEqual(response.status, 400, "WhatsApp onboarding must require an explicit number type");
+    assert.strictEqual((await response.json()).error, "whatsapp_onboarding_mode_required");
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://nextforia.com",
+        "x-nextforia-panel-origin": "https://nextforia.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "nextforia.com",
+        cookie: ravCustomer.cookie
+      },
+      body: JSON.stringify({ onboarding_mode: "coexistence" })
+    });
     assert.strictEqual(response.status, 200, "RAV customer must connect its own tenant-scoped WhatsApp account");
     body = await response.json();
     assert.strictEqual(body.embedded_signup.app_id, "123456789");
     assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-config");
     assert.strictEqual(body.embedded_signup.graph_version, "v23.0");
+    assert.strictEqual(body.embedded_signup.onboarding_mode, "coexistence");
     assert(body.embedded_signup.oauth_state);
     assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
 
@@ -249,8 +269,8 @@ async function login(base, body) {
       headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
       body: JSON.stringify({ tenant_id: "rav-customer-account" })
     });
-    assert.strictEqual(response.status, 404, "a customer cannot activate another tenant through the request body");
-    assert.strictEqual((await response.json()).error, "connection_not_found");
+    assert.strictEqual(response.status, 410, "the retired customer endpoint must never retry registration");
+    assert.strictEqual((await response.json()).error, "whatsapp_activation_retired");
 
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/complete", {
       method: "POST",

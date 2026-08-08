@@ -61,6 +61,11 @@ function cleanWhatsAppRegistrationPin(value) {
   return /^\d{6}$/.test(pin) ? pin : "";
 }
 
+function cleanWhatsAppOnboardingMode(value) {
+  const mode = cleanText(value, 40).toLowerCase();
+  return mode === "coexistence" || mode === "cloud_api" ? mode : "";
+}
+
 function iso(value) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
   return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
@@ -263,6 +268,9 @@ function createOAuthState(secret, input, now) {
     redirect_uri: cleanText(input && input.redirect_uri, 500),
     return_path: cleanText(input && input.return_path, 500),
     return_mode: input && input.return_mode === "popup" ? "popup" : "",
+    whatsapp_onboarding_mode: cleanChannel(input && input.channel) === "whatsapp"
+      ? cleanWhatsAppOnboardingMode(input && input.whatsapp_onboarding_mode)
+      : "",
     nonce: crypto.randomBytes(24).toString("base64url"),
     exp: Number(now || Date.now()) + 10 * 60 * 1000
   })).toString("base64url");
@@ -282,6 +290,9 @@ function readOAuthState(secret, token, now) {
     payload.channel = cleanChannel(payload.channel);
     payload.redirect_uri = cleanText(payload.redirect_uri, 500);
     payload.return_mode = payload.return_mode === "popup" ? "popup" : "";
+    payload.whatsapp_onboarding_mode = payload.channel === "whatsapp"
+      ? cleanWhatsAppOnboardingMode(payload.whatsapp_onboarding_mode)
+      : "";
     if (!payload.tenant_id || !payload.channel || !payload.nonce || !payload.actor_id) return null;
     return payload;
   } catch (_) {
@@ -846,8 +857,16 @@ class MetaChannelProvider {
             fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,is_on_biz_app"
           }
         });
+        const onboardingMode = cleanWhatsAppOnboardingMode(candidate.onboarding_mode);
+        const coexistenceRequested = onboardingMode === "coexistence";
         const coexistenceEventConfirmed = candidate.coexistence_event_confirmed === true;
-        const effectiveCoexistence = coexistenceEventConfirmed || verified.data && verified.data.is_on_biz_app === true;
+        // Fail closed for the coexistence route. If Meta returns an ambiguous
+        // FINISH event, never fall through to /register: that endpoint is for
+        // standard Cloud API onboarding and repeated calls rate-limit the
+        // phone. A fresh Cloud API number must explicitly use cloud_api mode.
+        const effectiveCoexistence = coexistenceRequested || coexistenceEventConfirmed ||
+          verified.data && verified.data.is_on_biz_app === true;
+        candidate.onboarding_mode = effectiveCoexistence ? "coexistence" : "cloud_api";
         candidate.coexistence = effectiveCoexistence;
         candidate.coexistence_event_confirmed = coexistenceEventConfirmed;
         let registrationReady = effectiveCoexistence
@@ -1056,9 +1075,18 @@ class MetaChannelProvider {
         );
       }
       const phoneNumberId = cleanText(phone.id, 240);
+      const onboardingMode = cleanWhatsAppOnboardingMode(session && session.onboarding_mode);
+      if (!onboardingMode) {
+        throw new ChannelConnectionError(
+          "invalid_authorization",
+          422,
+          "WhatsApp onboarding mode was not provided by the Customer Panel"
+        );
+      }
       const coexistenceEventConfirmed = session && (
         session.coexistence === true ||
-        session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+        session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
+        session.is_wa_login_user === true
       );
       return {
         id: "wa:" + phoneNumberId,
@@ -1068,7 +1096,8 @@ class MetaChannelProvider {
         whatsapp_business_account_id: wabaId,
         phone_number_id: phoneNumberId,
         access_token: accessToken,
-        coexistence: coexistenceEventConfirmed,
+        onboarding_mode: onboardingMode,
+        coexistence: onboardingMode === "coexistence" || coexistenceEventConfirmed,
         coexistence_event_confirmed: coexistenceEventConfirmed
       };
     } catch (error) {
@@ -1156,6 +1185,60 @@ class MetaChannelProvider {
       };
     } catch (error) {
       return { ok: false, error: internalError(error) };
+    }
+  }
+
+  async inspectWhatsApp(credential) {
+    try {
+      if (!credential || !credential.phone_number_id || !credential.whatsapp_business_account_id ||
+          !credential.access_token) {
+        throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+      }
+      const phone = await this.graph(encodeURIComponent(credential.phone_number_id), credential.access_token, {
+        params: {
+          fields: "id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,is_on_biz_app"
+        }
+      });
+      const subscriptions = await this.graph(
+        encodeURIComponent(credential.whatsapp_business_account_id) + "/subscribed_apps",
+        credential.access_token,
+        {}
+      );
+      let accountReviewStatus = null;
+      try {
+        const waba = await this.graph(
+          encodeURIComponent(credential.whatsapp_business_account_id),
+          credential.access_token,
+          { params: { fields: "id,account_review_status" } }
+        );
+        accountReviewStatus = cleanText(waba.data && waba.data.account_review_status, 80) || null;
+      } catch (_) {}
+      const subscribedApps = subscriptions.data && Array.isArray(subscriptions.data.data)
+        ? subscriptions.data.data
+        : [];
+      const appSubscribed = subscribedApps.some((app) => String(app && (
+        app.id || app.whatsapp_business_api_data && app.whatsapp_business_api_data.id
+      ) || "") === String(this.appId));
+      const data = phone.data || {};
+      const platformType = cleanText(data.platform_type, 80) || null;
+      const verificationStatus = cleanText(data.code_verification_status, 80) || null;
+      const isOnBizApp = data.is_on_biz_app === true;
+      return {
+        ok: true,
+        account_label: cleanText(data.display_phone_number || data.verified_name, 240) || null,
+        code_verification_status: verificationStatus,
+        platform_type: platformType,
+        is_on_biz_app: isOnBizApp,
+        detected_mode: isOnBizApp ? "coexistence" : "cloud_api",
+        app_subscribed: appSubscribed,
+        account_review_status: accountReviewStatus,
+        registration_ready: String(platformType || "").toUpperCase() === "CLOUD_API" &&
+          (isOnBizApp || String(verificationStatus || "").toUpperCase() === "VERIFIED")
+      };
+    } catch (error) {
+      throw error instanceof ChannelConnectionError
+        ? error
+        : new ChannelConnectionError("connection_verification_failed", 422, internalError(error));
     }
   }
 
@@ -1482,6 +1565,8 @@ function createChannelConnectionService(options) {
       credentials_ciphertext: encryptedCredential({
         access_token: activated.access_token,
         login_type: activated.login_type || null,
+        onboarding_mode: cleanWhatsAppOnboardingMode(activated.onboarding_mode) ||
+          (activated.coexistence === true ? "coexistence" : "cloud_api"),
         coexistence: activated.coexistence === true,
         coexistence_event_confirmed: activated.coexistence_event_confirmed === true,
         registration_pin: activated.coexistence === true
@@ -1526,7 +1611,10 @@ function createChannelConnectionService(options) {
         240
       ),
       phone_number_id: cleanText(record.phone_number_id || credential.phone_number_id, 240),
-      coexistence: credential.coexistence_event_confirmed === true,
+      onboarding_mode: cleanWhatsAppOnboardingMode(credential.onboarding_mode) ||
+        (credential.coexistence_event_confirmed === true ? "coexistence" : "cloud_api"),
+      coexistence: cleanWhatsAppOnboardingMode(credential.onboarding_mode) === "coexistence" ||
+        credential.coexistence_event_confirmed === true,
       coexistence_event_confirmed: credential.coexistence_event_confirmed === true
     });
     if (!cleanWhatsAppRegistrationPin(candidate.registration_pin)) delete candidate.registration_pin;
@@ -1578,6 +1666,8 @@ function createChannelConnectionService(options) {
         credentials_ciphertext: encryptedCredential({
           access_token: activated.access_token,
           login_type: activated.login_type || null,
+          onboarding_mode: cleanWhatsAppOnboardingMode(activated.onboarding_mode) ||
+            (activated.coexistence === true ? "coexistence" : "cloud_api"),
           coexistence: activated.coexistence === true,
           coexistence_event_confirmed: activated.coexistence_event_confirmed === true,
           registration_pin: activated.coexistence === true
@@ -1867,6 +1957,24 @@ function createChannelConnectionService(options) {
     async activateWhatsApp(tenantId, actor, options) {
       const clean = assertTenantChannel(tenantId, "whatsapp");
       return activateStoredWhatsApp(clean.tenantId, actor, options && options.pin);
+    },
+
+    async inspectWhatsApp(tenantId) {
+      const clean = assertTenantChannel(tenantId, "whatsapp");
+      const record = await store.get(clean.tenantId, clean.channel);
+      if (!record) throw new ChannelConnectionError("connection_not_found", 404);
+      if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+      const credential = credentialPayload(record);
+      if (!provider || typeof provider.inspectWhatsApp !== "function" || !credential) {
+        throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+      }
+      const status = await provider.inspectWhatsApp(credential);
+      return Object.assign({}, status, {
+        configured_mode: cleanWhatsAppOnboardingMode(credential.onboarding_mode) ||
+          (credential.coexistence_event_confirmed === true ? "coexistence" : null),
+        phone_number_suffix: String(record.phone_number_id || "").slice(-8) || null,
+        waba_suffix: String(record.whatsapp_business_account_id || "").slice(-8) || null
+      });
     },
 
     async repairSubscription(tenantId, channel, actor) {

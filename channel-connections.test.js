@@ -37,13 +37,15 @@ function expectCode(promise, code) {
   assert.strictEqual(readOAuthState(stateSecret, state, 2000).return_mode, "");
   const popupState = createOAuthState(stateSecret, {
     tenant_id: "tenant-a",
-    channel: "instagram",
+    channel: "whatsapp",
     actor_id: "user-a",
     actor: "admin@a.example",
     return_path: "/admin/panel?tab=channels",
-    return_mode: "popup"
+    return_mode: "popup",
+    whatsapp_onboarding_mode: "coexistence"
   }, 1000);
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).return_mode, "popup");
+  assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).whatsapp_onboarding_mode, "coexistence");
   assert.strictEqual(readOAuthState(stateSecret, state.slice(0, -1) + "x", 2000), null);
   assert.strictEqual(readOAuthState(stateSecret, state, 11 * 60 * 1000), null);
 
@@ -96,7 +98,8 @@ function expectCode(promise, code) {
   const embeddedCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
     phone_number_id: "phone-embedded",
-    business_id: "business-embedded"
+    business_id: "business-embedded",
+    onboarding_mode: "cloud_api"
   }, {
     redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback"
   });
@@ -106,6 +109,7 @@ function expectCode(promise, code) {
   const embeddedCandidateFromV3Event = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
     business_id: "business-embedded",
+    onboarding_mode: "coexistence",
     onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
   });
   assert.strictEqual(embeddedCandidateFromV3Event.phone_number_id, "phone-embedded");
@@ -337,6 +341,7 @@ function expectCode(promise, code) {
     phone_number_id: "phone-rav",
     account_label: "+57 301 587 2708",
     access_token: "whatsapp-access-token",
+    onboarding_mode: "cloud_api",
     registration_pin: "246810"
   });
   assert.strictEqual(activatedWhatsApp.account_label, "+57 301 587 2708");
@@ -378,6 +383,7 @@ function expectCode(promise, code) {
     phone_number_id: "phone-coexistence",
     account_label: "+57 301 587 2708",
     access_token: "whatsapp-access-token",
+    onboarding_mode: "coexistence",
     coexistence: true,
     coexistence_event_confirmed: true,
     registration_pin: "135790"
@@ -388,6 +394,7 @@ function expectCode(promise, code) {
   assert(!activationRequests.some(function (request) { return request.url.endsWith("/register"); }));
   assert(!JSON.stringify(activationRequests).includes("135790"));
 
+  const pendingActivationRequests = [];
   const pendingActivationMeta = new MetaChannelProvider({
     appId: "123456789",
     appSecret: "meta-app-secret",
@@ -395,6 +402,8 @@ function expectCode(promise, code) {
     graphVersion: "v25.0",
     redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
     axiosClient: async function (request) {
+      pendingActivationRequests.push(request);
+      assert(!request.url.endsWith("/register"), "coexistence must never call /register");
       if (request.url.endsWith("/phone-pending")) {
         return {
           data: {
@@ -414,11 +423,13 @@ function expectCode(promise, code) {
     phone_number_id: "phone-pending",
     account_label: "+57 310 6534553",
     access_token: "pending-business-token",
+    onboarding_mode: "coexistence",
     coexistence: true,
-    coexistence_event_confirmed: true
+    coexistence_event_confirmed: false
   });
   assert.strictEqual(pendingActivationCandidate.activation_pending, true);
   assert.strictEqual(pendingActivationCandidate.account_label, "+57 310 6534553");
+  assert(!pendingActivationRequests.some(function (request) { return request.url.endsWith("/register"); }));
 
   const failedRegistrationMeta = new MetaChannelProvider({
     appId: "123456789",
@@ -454,6 +465,7 @@ function expectCode(promise, code) {
       whatsapp_business_account_id: "waba-failed",
       phone_number_id: "phone-failed",
       access_token: "never-log-this-token",
+      onboarding_mode: "cloud_api",
       coexistence: false,
       registration_pin: "112233"
     });
@@ -503,6 +515,17 @@ function expectCode(promise, code) {
     access_token: "whatsapp-access-token"
   });
   assert.strictEqual(currentShapeVerification.ok, true);
+
+  const inspectedWhatsApp = await currentWhatsAppSubscriptionShape.inspectWhatsApp({
+    whatsapp_business_account_id: "waba-rav",
+    phone_number_id: "phone-rav",
+    access_token: "whatsapp-access-token"
+  });
+  assert.strictEqual(inspectedWhatsApp.ok, true);
+  assert.strictEqual(inspectedWhatsApp.registration_ready, true);
+  assert.strictEqual(inspectedWhatsApp.app_subscribed, true);
+  assert.strictEqual(inspectedWhatsApp.detected_mode, "cloud_api");
+  assert(!JSON.stringify(inspectedWhatsApp).includes("whatsapp-access-token"));
 
   let verificationResponses = [{ ok: false, error: "Meta token expired" }];
   let subscriptionRepairs = 0;

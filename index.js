@@ -298,6 +298,8 @@ app.use(express.json({
 }));
 app.post("/webhooks/elevenlabs/appointments/:tenantId/availability", receiveElevenLabsAppointmentAvailabilityTool);
 app.post("/webhooks/elevenlabs/appointments/:tenantId/book", receiveElevenLabsAppointmentBookingTool);
+app.post("/webhooks/elevenlabs/appointments/:tenantId/cancel", receiveElevenLabsAppointmentCancellationTool);
+app.post("/webhooks/elevenlabs/appointments/:tenantId/reschedule", receiveElevenLabsAppointmentReschedulingTool);
 app.use("/admin/assets", express.static(path.join(__dirname, "admin-assets"), { maxAge: "1d" }));
 app.get("/google-oauth", (req, res) => res.type("html").send(renderGoogleOAuthHomepage()));
 app.get("/nextfor-appointment-bot", (req, res) => res.type("html").send(renderGoogleOAuthHomepage()));
@@ -5422,6 +5424,138 @@ async function receiveElevenLabsAppointmentBookingTool(req, res) {
   }
 }
 
+function normalizedAppointmentIdentity(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9@.+]/g, "");
+}
+
+async function resolveAppointmentForTool(tenantId, input) {
+  await hydrateAppointmentsForTenant(tenantId);
+  const appointmentId = cleanRuntimeText(input && input.appointment_id, 160);
+  const phone = normalizedAppointmentIdentity(input && input.customer_phone);
+  const email = normalizedAppointmentIdentity(input && input.customer_email);
+  const currentStartsAt = new Date(String(input && input.current_starts_at || ""));
+  const rows = appointmentRegistry.list(tenantId).filter(function (row) {
+    return ["booked", "requested", "rescheduled"].includes(row.status);
+  });
+  if (appointmentId) {
+    const exact = rows.find(function (row) { return row.conversation_id === appointmentId; });
+    if (!exact) {
+      const error = new Error("appointment_not_found");
+      error.status = 404;
+      throw error;
+    }
+    return exact;
+  }
+  if (!phone && !email) {
+    const error = new Error("appointment_reference_required");
+    error.status = 422;
+    throw error;
+  }
+  const matches = rows.filter(function (row) {
+    const sameIdentity = phone && normalizedAppointmentIdentity(row.customer_phone) === phone ||
+      email && normalizedAppointmentIdentity(row.customer_email) === email;
+    if (!sameIdentity) return false;
+    if (!Number.isFinite(currentStartsAt.getTime())) return true;
+    return row.starts_at && Math.abs(new Date(row.starts_at).getTime() - currentStartsAt.getTime()) < 60000;
+  });
+  if (matches.length !== 1) {
+    const error = new Error(matches.length ? "appointment_reference_ambiguous" : "appointment_not_found");
+    error.status = matches.length ? 409 : 404;
+    throw error;
+  }
+  return matches[0];
+}
+
+async function receiveElevenLabsAppointmentCancellationTool(req, res) {
+  try {
+    const context = await validElevenLabsAppointmentToolTenant(req);
+    if (!context) {
+      res.status(401).json({ ok: false, error: "invalid_appointment_tool" });
+      return;
+    }
+    const body = req.body || {};
+    if (body.cancellation_confirmed !== true) {
+      res.status(422).json({ ok: false, error: "appointment_cancellation_confirmation_required" });
+      return;
+    }
+    const current = await resolveAppointmentForTool(context.tenantId, body);
+    const cancelled = await appointmentRegistry.applyPanelAction(
+      context.tenantId,
+      current.conversation_id,
+      "cancel",
+      { actor: "elevenlabs_tool", reason: body.reason, persist: false }
+    );
+    const synced = await applyAppointmentCalendarEffect(cancelled, "cancel", "elevenlabs_tool");
+    await persistAppointment(synced);
+    res.json({
+      ok: synced.calendar_sync_status === "synced",
+      appointment_id: synced.conversation_id,
+      status: synced.status,
+      calendar_sync_status: synced.calendar_sync_status || "pending",
+      error: synced.calendar_sync_status === "synced" ? undefined : synced.calendar_last_error || "calendar_sync_pending"
+    });
+  } catch (error) {
+    res.status(error && error.status || 422).json({ ok: false, error: String(error && (error.code || error.message) || "appointment_cancellation_failed") });
+  }
+}
+
+async function receiveElevenLabsAppointmentReschedulingTool(req, res) {
+  try {
+    const context = await validElevenLabsAppointmentToolTenant(req);
+    if (!context) {
+      res.status(401).json({ ok: false, error: "invalid_appointment_tool" });
+      return;
+    }
+    const body = req.body || {};
+    if (body.reschedule_confirmed !== true) {
+      res.status(422).json({ ok: false, error: "appointment_reschedule_confirmation_required" });
+      return;
+    }
+    const current = await resolveAppointmentForTool(context.tenantId, body);
+    const newStartsAt = new Date(String(body.new_starts_at || ""));
+    const durationMinutes = Math.max(5, Math.min(Number(body.duration_minutes) || current.duration_minutes || 60, 24 * 60));
+    if (!Number.isFinite(newStartsAt.getTime()) || newStartsAt.getTime() <= Date.now()) {
+      res.status(422).json({ ok: false, error: "invalid_appointment_datetime" });
+      return;
+    }
+    const availability = await appointmentCalendarService.checkAvailability(
+      context.tenantId,
+      newStartsAt.toISOString(),
+      durationMinutes,
+      "elevenlabs_tool"
+    );
+    if (!availability.available) {
+      res.status(422).json({ ok: false, error: "appointment_slot_unavailable", busy: availability.busy });
+      return;
+    }
+    const changed = await appointmentRegistry.upsert(Object.assign({}, current, {
+      status: "rescheduled",
+      starts_at: newStartsAt.toISOString(),
+      duration_minutes: durationMinutes,
+      panel_action: "reprogram",
+      panel_action_status: "queued",
+      panel_action_at: new Date().toISOString(),
+      panel_action_by: "elevenlabs_tool",
+      panel_action_reason: cleanRuntimeText(body.reason, 1000),
+      panel_action_message: "Cita reprogramada por solicitud del cliente.",
+      updated_at: new Date().toISOString()
+    }), false);
+    const synced = await applyAppointmentCalendarEffect(changed, "sync", "elevenlabs_tool");
+    await persistAppointment(synced);
+    res.json({
+      ok: synced.calendar_sync_status === "synced",
+      appointment_id: synced.conversation_id,
+      status: synced.status,
+      starts_at: synced.starts_at,
+      duration_minutes: synced.duration_minutes,
+      calendar_sync_status: synced.calendar_sync_status || "pending",
+      error: synced.calendar_sync_status === "synced" ? undefined : synced.calendar_last_error || "calendar_sync_pending"
+    });
+  } catch (error) {
+    res.status(error && error.status || 422).json({ ok: false, error: String(error && (error.code || error.message) || "appointment_reschedule_failed") });
+  }
+}
+
 async function receiveElevenLabsPostCallWebhook(req, res) {
   if (!ELEVENLABS_WEBHOOK_SECRET) {
     res.status(503).json({ ok: false, error: "elevenlabs_webhook_not_configured" });
@@ -7302,6 +7436,7 @@ async function persistSetupReview(tenantId, input, auth) {
                   data: [{ phone_number_id: "phone_test_available", phone_number: "+15550001111", label: "Nextfor test", provider: "twilio" }]
                 };
               }
+              if (/\/v1\/convai\/tools$/.test(url)) return { status: 200, data: { tools: [] } };
               return { status: 200, data: { conversation_config: { agent: { prompt: {} } }, tags: ["template"] } };
             },
             post: async function (url) {
@@ -7325,6 +7460,8 @@ async function persistSetupReview(tenantId, input, auth) {
             apiKey: ELEVENLABS_API_KEY,
             agentId: existingAgentId,
             agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+            toolSecret: ELEVENLABS_APPOINTMENT_TOOL_SECRET,
+            toolBaseUrl: ELEVENLABS_APPOINTMENT_TOOL_BASE_URL,
             writeEnabled: ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED,
             httpClient: elevenLabsHttpClient
           })

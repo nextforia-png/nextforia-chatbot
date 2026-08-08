@@ -11,6 +11,7 @@ const {
   buildElevenLabsAppointmentAgentPayload,
   buildElevenLabsPhoneNumberAssignmentPayload,
   createElevenLabsAppointmentAgentFromTemplate,
+  createElevenLabsAppointmentTools,
   markAppointmentConfigurationElevenLabsApplied,
   markAppointmentConfigurationPhoneApplied,
   parsePhoneNumberTenantMap,
@@ -95,11 +96,16 @@ assert.throws(function () {
     writeEnabled: true,
     httpClient: {
       get: async function (url) {
+        if (/\/v1\/convai\/tools$/.test(url)) return { data: { tools: [] } };
         assert.match(url, /agent_luciana_template$/);
         return {
           data: {
             name: "Luciana",
             tags: ["template"],
+            platform_settings: {
+              privacy: { record_voice: false, retention_days: 30 },
+              widget: { text: "DERCO no debe heredarse" }
+            },
             conversation_config: {
               tts: { voice_id: "voice_luciana" },
               agent: {
@@ -126,12 +132,59 @@ assert.throws(function () {
   });
   assert.strictEqual(cloned.created, true);
   assert.strictEqual(cloned.agent_id, "agent_clinica_a");
-  assert.strictEqual(toolCreates, 2);
+  assert.strictEqual(toolCreates, 4);
   assert.strictEqual(createdPayload.conversation_config.tts.voice_id, "voice_luciana");
-  assert.deepStrictEqual(createdPayload.conversation_config.agent.prompt.tool_ids, ["tool_nextfor_1", "tool_nextfor_2"]);
+  assert.deepStrictEqual(createdPayload.conversation_config.agent.prompt.tool_ids, [
+    "tool_nextfor_1",
+    "tool_nextfor_2",
+    "tool_nextfor_3",
+    "tool_nextfor_4"
+  ]);
   assert.strictEqual(createdPayload.conversation_config.agent.prompt.knowledge_base, undefined);
   assert.match(createdPayload.conversation_config.agent.prompt.prompt, /APPOINTMENT BOT/);
+  assert.match(createdPayload.conversation_config.agent.prompt.prompt, /REGLAS OBLIGATORIAS DE HERRAMIENTAS/);
   assert.strictEqual(createdPayload.conversation_config.agent.first_message.includes("Luciana"), true);
+  assert.deepStrictEqual(createdPayload.platform_settings.privacy, { record_voice: false, retention_days: 30 });
+  assert.strictEqual(createdPayload.platform_settings.widget, undefined);
+  assert.strictEqual(Object.keys(createdPayload.platform_settings.data_collection).includes("appointment_duration_minutes"), true);
+  const reusedIds = await createElevenLabsAppointmentTools("clinica-a", {
+    apiKey: "el-key",
+    toolSecret: "nextfor-appointment-tool-secret-2026-secure",
+    baseUrl: "https://api.nextforia.com",
+    httpClient: {
+      get: async function () {
+        return {
+          data: {
+            tools: createdPayload.conversation_config.agent.prompt.tool_ids.map(function (id, index) {
+              const suffix = require("crypto").createHash("sha256").update("clinica-a").digest("hex").slice(0, 10);
+              const bases = [
+                "nextfor_check_appointment_availability",
+                "nextfor_book_appointment",
+                "nextfor_cancel_appointment",
+                "nextfor_reschedule_appointment"
+              ];
+              const endpoints = ["availability", "book", "cancel", "reschedule"];
+              return {
+                id,
+                tool_config: {
+                  type: "webhook",
+                  name: bases[index] + "_" + suffix,
+                  api_schema: {
+                    url: "https://api.nextforia.com/webhooks/elevenlabs/appointments/clinica-a/" + endpoints[index] +
+                      "?token=" + encodeURIComponent(appointmentToolToken("clinica-a", "nextfor-appointment-tool-secret-2026-secure"))
+                  }
+                }
+              };
+            })
+          }
+        };
+      },
+      post: async function () {
+        throw new Error("duplicate_tool_created");
+      }
+    }
+  });
+  assert.deepStrictEqual(reusedIds, createdPayload.conversation_config.agent.prompt.tool_ids);
   const selectedPhone = await resolveElevenLabsPhoneNumber({
     tenant_id: "clinica-a",
     appointment_configuration: Object.assign({}, appointmentConfiguration, {

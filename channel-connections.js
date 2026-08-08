@@ -5,6 +5,7 @@ const { decryptStoredText, encryptStoredText, safeEqualText } = require("./secur
 
 const SUPPORTED_CHANNELS = ["whatsapp", "instagram", "messenger"];
 const CONNECTION_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
+const WHATSAPP_REGISTRATION_COOLDOWN_MS = 72 * 60 * 60 * 1000;
 const CHANNEL_CATALOG = Object.freeze([
   {
     id: "whatsapp",
@@ -90,9 +91,30 @@ function metaErrorTelemetry(error) {
   };
 }
 
+function isWhatsAppRegistrationRateLimit(value) {
+  const message = cleanText(
+    value && value.meta && value.meta.meta_message || value && value.internalMessage || value,
+    800
+  ).toLowerCase();
+  const metaCode = Number(value && value.meta && value.meta.meta_code);
+  return metaCode === 133016 || /133016|too many attempts.*(?:phone|registration|deregistration)|registration or deregistration failed because there were too many attempts/.test(message);
+}
+
+function whatsappActivationRetryAt(record, referenceTime) {
+  if (!record || !isWhatsAppRegistrationRateLimit(record.last_error)) return null;
+  const failedAt = new Date(record.last_error_at || 0).getTime();
+  if (!Number.isFinite(failedAt) || failedAt <= 0) return null;
+  const retryAt = failedAt + WHATSAPP_REGISTRATION_COOLDOWN_MS;
+  const current = new Date(referenceTime || Date.now()).getTime();
+  return retryAt > current ? new Date(retryAt).toISOString() : null;
+}
+
 function customerActivationError(value) {
   const message = cleanText(value, 800).toLowerCase();
   if (!message) return null;
+  if (isWhatsAppRegistrationRateLimit(message)) {
+    return "Meta bloqueó temporalmente nuevos registros por demasiados intentos. Nextfor no volverá a intentarlo hasta que termine el bloqueo."
+  }
   if (/token|oauth|session.*expir|authorization|autorizaci/.test(message)) {
     return "La autorización de Meta venció o fue revocada. Vuelve a autorizar WhatsApp."
   }
@@ -162,13 +184,21 @@ function publicConnection(record, options) {
   }
   const allowProtectedReconnect = !!(options && options.allowProtectedReconnect);
   const reconnectAllowed = !safe.protected_legacy || allowProtectedReconnect;
+  const activationRetryAt = safe.channel === "whatsapp"
+    ? whatsappActivationRetryAt(safe, options && options.now)
+    : null;
+  safe.activation_rate_limited = !!activationRetryAt;
+  safe.activation_retry_at = activationRetryAt;
   safe.activation_available = safe.channel === "whatsapp" &&
     !safe.protected_legacy &&
+    !safe.activation_rate_limited &&
     !!safe.credentials_ciphertext &&
     !!(safe.phone_number_id && safe.whatsapp_business_account_id) &&
     (safe.status === "connecting" || safe.status === "needs_attention");
-  safe.activation_error = safe.activation_available ? customerActivationError(safe.last_error) : null;
-  safe.activation_message = safe.activation_error || (safe.activation_available
+  safe.activation_error = safe.channel === "whatsapp" ? customerActivationError(safe.last_error) : null;
+  safe.activation_message = safe.activation_rate_limited
+    ? "Meta bloqueó temporalmente nuevos intentos para este número. Nextfor esperará 72 horas desde el último intento antes de habilitarlo de nuevo."
+    : safe.activation_error || (safe.activation_available
     ? safe.webhook_status === "pending_activation"
       ? "Meta aceptó el número. Falta terminar su activación en Cloud API."
       : "La activación de WhatsApp necesita atención. Puedes reintentarla sin conectar otra cuenta."
@@ -186,7 +216,7 @@ function publicConnection(record, options) {
     : [];
   safe.requires_selection = safe.status === "connecting" && safe.pending_assets.length > 1;
   safe.disconnect_available = !safe.protected_legacy && ["connected", "needs_attention", "connecting"].includes(safe.status);
-  safe.reconnect_available = reconnectAllowed && (
+  safe.reconnect_available = reconnectAllowed && !safe.activation_rate_limited && (
     ["connected", "needs_attention", "disconnected"].includes(safe.status)
     || (safe.status === "connecting" && safe.pending_assets.length === 0)
   );
@@ -1284,12 +1314,15 @@ function createChannelConnectionService(options) {
 
   async function markFailure(tenantId, channel, actor, error) {
     const existing = await store.get(tenantId, channel);
+    const preserveRegistrationCooldown = channel === "whatsapp" &&
+      error && error.code === "whatsapp_activation_rate_limited" &&
+      whatsappActivationRetryAt(existing, now());
     return store.upsert(Object.assign(emptyConnection(tenantId, channel), existing || {}, {
       tenant_id: tenantId,
       channel,
       status: "needs_attention",
-      last_error: internalError(error),
-      last_error_at: iso(now()),
+      last_error: preserveRegistrationCooldown ? existing.last_error : internalError(error),
+      last_error_at: preserveRegistrationCooldown ? existing.last_error_at : iso(now()),
       updated_at: iso(now()),
       pending_assets: []
     }), {
@@ -1299,10 +1332,25 @@ function createChannelConnectionService(options) {
     });
   }
 
+  function assertWhatsAppActivationNotCoolingDown(record) {
+    const retryAt = whatsappActivationRetryAt(record, now());
+    if (!retryAt) return;
+    const problem = new ChannelConnectionError(
+      "whatsapp_activation_rate_limited",
+      429,
+      "Meta error 133016: WhatsApp registration is rate limited until " + retryAt
+    );
+    problem.retryAt = retryAt;
+    throw problem;
+  }
+
   async function connectCandidate(tenantId, channel, actor, candidate) {
     // Check before subscribing so an OAuth callback cannot attach the same
     // Instagram/Page/phone asset to two tenants.
     await assertAssetAvailable(tenantId, channel, candidate);
+    if (channel === "whatsapp") {
+      assertWhatsAppActivationNotCoolingDown(await store.get(tenantId, channel));
+    }
     const activated = await provider.activate(channel, candidate);
     const connectedAt = iso(now());
     const activationPending = channel === "whatsapp" && activated.activation_pending === true;
@@ -1355,6 +1403,7 @@ function createChannelConnectionService(options) {
     const record = await store.get(tenantId, "whatsapp");
     if (!record) throw new ChannelConnectionError("connection_not_found", 404);
     if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+    assertWhatsAppActivationNotCoolingDown(record);
     const credential = credentialPayload(record);
     if (!credential || !provider || typeof provider.activate !== "function") {
       throw new ChannelConnectionError("existing_asset_credentials_required", 409);
@@ -1409,10 +1458,17 @@ function createChannelConnectionService(options) {
       });
       return publicConnection(row, { superAdmin: true });
     } catch (error) {
-      await markFailure(tenantId, "whatsapp", actor, error);
-      throw error instanceof ChannelConnectionError
-        ? error
-        : new ChannelConnectionError("asset_activation_failed", 422, internalError(error));
+      let problem = error;
+      if (isWhatsAppRegistrationRateLimit(error) && error.code !== "whatsapp_activation_rate_limited") {
+        problem = new ChannelConnectionError("whatsapp_activation_rate_limited", 429, internalError(error));
+        problem.activationStage = error.activationStage;
+        problem.meta = error.meta;
+        problem.retryAt = new Date(new Date(now()).getTime() + WHATSAPP_REGISTRATION_COOLDOWN_MS).toISOString();
+      }
+      await markFailure(tenantId, "whatsapp", actor, problem);
+      throw problem instanceof ChannelConnectionError
+        ? problem
+        : new ChannelConnectionError("asset_activation_failed", 422, internalError(problem));
     }
   }
 
@@ -1469,7 +1525,8 @@ function createChannelConnectionService(options) {
         return Object.assign({}, definition, publicConnection(
           effective || emptyConnection(cleanTenant, definition.id),
           Object.assign({}, options || {}, {
-            allowProtectedReconnect: allowProtectedLegacyReconnect(cleanTenant, definition.id)
+            allowProtectedReconnect: allowProtectedLegacyReconnect(cleanTenant, definition.id),
+            now: now()
           })
         ));
       });
@@ -1492,7 +1549,7 @@ function createChannelConnectionService(options) {
           }), rows);
           result.push(Object.assign({
             company_name: tenant.company_name || tenant.name || tenantId
-          }, publicConnection(row || emptyConnection(tenantId, channel), { superAdmin: true })));
+          }, publicConnection(row || emptyConnection(tenantId, channel), { superAdmin: true, now: now() })));
         });
       });
       return result.sort(function (left, right) {

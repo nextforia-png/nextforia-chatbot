@@ -309,7 +309,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v336-whatsapp-activation-diagnostics";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v337-whatsapp-activation-cooldown";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "rav_dashboard_session";
@@ -12396,6 +12396,7 @@ function channelConnectionErrorResponse(res, error) {
     "legacy_connection_protected",
     "channel_asset_already_assigned",
     "asset_activation_failed",
+    "whatsapp_activation_rate_limited",
     "existing_asset_credentials_required"
   ];
   res.status(problem.status || 503).json({
@@ -12409,6 +12410,8 @@ function channelConnectionErrorResponse(res, error) {
           ? "Esta cuenta ya está conectada a otra empresa. Desconéctala allí antes de asignarla de nuevo."
         : problem.code === "existing_asset_credentials_required"
           ? "La autorización guardada no está completa. Vuelve a conectar WhatsApp con Meta."
+        : problem.code === "whatsapp_activation_rate_limited"
+          ? "Meta bloqueó temporalmente nuevos registros por demasiados intentos. Nextfor esperará 72 horas desde el último intento antes de habilitarlo de nuevo."
         : problem.code === "asset_activation_failed"
           ? "Meta no pudo activar todavía este número en Cloud API. Puedes reintentar sin elegir otra cuenta."
         : "No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA."

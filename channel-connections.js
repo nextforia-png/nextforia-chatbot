@@ -127,7 +127,7 @@ function customerActivationError(value) {
     return "Meta no concedió todos los permisos de WhatsApp necesarios. Vuelve a autorizar la cuenta."
   }
   if (/pin|two.step|two factor|2fa/.test(message)) {
-    return "Meta rechazó el PIN de registro del número. Revisa la verificación en dos pasos de WhatsApp."
+    return "Meta no pudo establecer el nuevo PIN de seguridad del número. Elige seis dígitos y vuelve a intentarlo."
   }
   if (/already|registered|another business|otro negocio|portfolio|portafolio/.test(message)) {
     return "Meta indica que el número ya está registrado o pertenece a otro portafolio empresarial."
@@ -201,7 +201,7 @@ function publicConnection(record, options) {
     (safe.status === "connecting" || safe.status === "needs_attention");
   safe.activation_error = safe.channel === "whatsapp" ? customerActivationError(safe.last_error) : null;
   safe.activation_message = safe.activation_rate_limited
-    ? "Meta bloqueó intentos anteriores. Nextfor no volverá a registrar el número automáticamente; la siguiente activación solo se enviará con tu PIN real de seis dígitos."
+    ? "Meta bloqueó intentos anteriores. Nextfor no volverá a registrar el número automáticamente; la siguiente activación solo se enviará cuando elijas un PIN de seis dígitos."
     : safe.activation_error || (safe.activation_available
     ? safe.webhook_status === "pending_activation"
       ? "Meta aceptó el número. Falta terminar su activación en Cloud API."
@@ -823,14 +823,19 @@ class MetaChannelProvider {
     try {
       if (channel === "whatsapp") {
         await this.subscribe(channel, candidate);
-        // Embedded Signup authorizes the asset but does not provide the
-        // existing two-step-verification PIN. Never invent or persist that
-        // PIN: Meta requires the customer's current six-digit PIN for
-        // /register. Without it we only subscribe and inspect the asset, then
-        // leave activation pending for an explicit customer action.
+        // Embedded Signup authorizes the exact tenant-scoped phone asset but
+        // does not reveal its two-step-verification PIN. When the customer
+        // explicitly supplies six digits, set that value through Meta's
+        // supported phone-number endpoint before using it for /register. The
+        // PIN remains request-scoped and is never persisted or logged.
         const registrationPin = cleanWhatsAppRegistrationPin(candidate.registration_pin);
         let registrationError = null;
         if (registrationPin) {
+          activationStage = "set_pin";
+          await this.graph(encodeURIComponent(candidate.phone_number_id), candidate.access_token, {
+            method: "POST",
+            data: { pin: registrationPin }
+          });
           try {
             activationStage = "register";
             await this.graph(encodeURIComponent(candidate.phone_number_id) + "/register", candidate.access_token, {
@@ -867,7 +872,7 @@ class MetaChannelProvider {
             candidate.activation_pending = true;
             candidate.activation_error = registrationPin
               ? "WhatsApp number is awaiting Cloud API activation"
-              : "WhatsApp registration requires the existing two-step verification PIN";
+              : "WhatsApp registration requires a customer-selected six-digit security PIN";
             candidate.account_label = cleanText(
               verified.data && (verified.data.display_phone_number || verified.data.verified_name) || candidate.account_label,
               240

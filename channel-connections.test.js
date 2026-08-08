@@ -320,12 +320,15 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(activatedWhatsApp.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(activationRequests[1].url.endsWith("/phone-rav/register"));
+  assert(activationRequests[1].url.endsWith("/phone-rav"));
   assert.strictEqual(activationRequests[1].method, "POST");
-  assert.strictEqual(activationRequests[1].data.messaging_product, "whatsapp");
   assert.strictEqual(activationRequests[1].data.pin, "246810");
+  assert(activationRequests[2].url.endsWith("/phone-rav/register"));
+  assert.strictEqual(activationRequests[2].method, "POST");
+  assert.strictEqual(activationRequests[2].data.messaging_product, "whatsapp");
+  assert.strictEqual(activationRequests[2].data.pin, "246810");
   assert(!JSON.stringify(activationRequests).includes("meta-app-secret"));
-  assert(activationRequests[2].url.endsWith("/phone-rav"));
+  assert(activationRequests[3].url.endsWith("/phone-rav"));
 
   activationRequests.length = 0;
   const activatedCoexistence = await activationMeta.activate("whatsapp", {
@@ -338,9 +341,53 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(activatedCoexistence.account_label, "+57 301 587 2708");
   assert(activationRequests[0].url.endsWith("/waba-rav/subscribed_apps"));
-  assert(activationRequests[1].url.endsWith("/phone-rav/register"));
+  assert(activationRequests[1].url.endsWith("/phone-rav"));
   assert.strictEqual(activationRequests[1].method, "POST");
-  assert(activationRequests[2].url.endsWith("/phone-rav"));
+  assert.strictEqual(activationRequests[1].data.pin, "135790");
+  assert(activationRequests[2].url.endsWith("/phone-rav/register"));
+  assert.strictEqual(activationRequests[2].method, "POST");
+  assert.strictEqual(activationRequests[2].data.pin, "135790");
+  assert(activationRequests[3].url.endsWith("/phone-rav"));
+
+  const failedSetPinMeta = new MetaChannelProvider({
+    appId: "123456789",
+    appSecret: "meta-app-secret",
+    whatsappConfigId: "wa-config-123",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      if (request.url.endsWith("/phone-pin-failed") && request.method === "POST") {
+        const error = new Error("Request failed with status code 400");
+        error.response = { data: { error: {
+          message: "Two-step verification PIN could not be changed",
+          type: "OAuthException",
+          code: 100,
+          error_subcode: 2388003,
+          fbtrace_id: "trace-set-pin-safe"
+        } } };
+        throw error;
+      }
+      return { data: { success: true } };
+    }
+  });
+  let failedSetPinError = null;
+  try {
+    await failedSetPinMeta.activate("whatsapp", {
+      whatsapp_business_account_id: "waba-pin-failed",
+      phone_number_id: "phone-pin-failed",
+      access_token: "never-log-set-pin-token",
+      coexistence: true,
+      registration_pin: "975310"
+    });
+  } catch (error) {
+    failedSetPinError = error;
+  }
+  assert.strictEqual(failedSetPinError && failedSetPinError.code, "asset_activation_failed");
+  assert.strictEqual(failedSetPinError && failedSetPinError.activationStage, "set_pin");
+  assert.strictEqual(failedSetPinError && failedSetPinError.meta.meta_code, 100);
+  assert.strictEqual(failedSetPinError && failedSetPinError.meta.meta_subcode, 2388003);
+  assert(!JSON.stringify(failedSetPinError.meta).includes("never-log-set-pin-token"));
+  assert(!JSON.stringify(failedSetPinError.meta).includes("975310"));
 
   const pendingActivationMeta = new MetaChannelProvider({
     appId: "123456789",

@@ -118,11 +118,11 @@ async function login(base, body) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Confirmar PIN y activar"));
+    assert(panel.includes("Guardar PIN y activar"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(panel.includes("activateWhatsApp(this)"));
     assert(panel.includes("if(state.whatsappActivating)return"));
-    assert(panel.includes("Confirmar PIN y activar"));
+    assert(panel.includes("Guardar PIN y activar"));
     assert(panel.includes('id="whatsappRegistrationPin"'));
     assert(panel.includes('type="password"'));
     assert(panel.includes("JSON.stringify({pin:pin})"));

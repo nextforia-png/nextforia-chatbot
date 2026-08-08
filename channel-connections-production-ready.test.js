@@ -153,7 +153,7 @@ function postSignedWebhook(base, route, secret, body) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v342-whatsapp-pending-state-guard"));
+    assert((await response.text()).includes("NextforIA Chatbot v343-whatsapp-existing-number-guard"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

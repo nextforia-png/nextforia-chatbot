@@ -96,7 +96,7 @@ dentro de este despliegue: requiere una migración empresarial separada.
 
 1. Desplegar el SHA nuevo con ambos flags todavía en `0`.
 2. Confirmar que `/admin/health` devuelve la versión
-   `v348-whatsapp-v4-delivery`.
+   `v349-whatsapp-free-cutover`.
 3. Activar únicamente:
 
    ```text

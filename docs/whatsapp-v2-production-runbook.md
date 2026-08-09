@@ -1,11 +1,11 @@
-# WhatsApp v2/v348: runbook ejecutable de Producción
+# WhatsApp v2/v349: runbook ejecutable de Producción en Render Free
 
 Este procedimiento publica el onboarding autoservicio de WhatsApp incluido en
-`v348-whatsapp-v4-delivery`. El release autorizado es:
+`v349-whatsapp-free-cutover`. El release autorizado es:
 
 ```text
-CODE_SHA: adfe7f50e142a5ddb11a78769f910dd4778d2df7
-BOT_VERSION: v348-whatsapp-v4-delivery
+CODE_SHA: b7b9bd3bc181e7e6874beff5326057b1c7679eaa
+BOT_VERSION: v349-whatsapp-free-cutover
 ```
 
 `CODE_SHA` identifica el código ejecutable aprobado y no cambia cuando este
@@ -21,7 +21,7 @@ La apertura requiere el E2E completo de la sección **Validación E2E**.
 Antes de empezar, registrar en el ticket de cambio:
 
 ```text
-CODE_SHA=adfe7f50e142a5ddb11a78769f910dd4778d2df7
+CODE_SHA=b7b9bd3bc181e7e6874beff5326057b1c7679eaa
 RUNBOOK_COMMIT_SHA=<commit que solo agrega/corrige este documento>
 PREVIOUS_DEPLOY_ID=<deployment actualmente sano>
 PREVIOUS_SHA=<SHA actualmente sano>
@@ -29,8 +29,7 @@ SUPABASE_BACKUP_ID=<backup/PITR confirmado>
 PRODUCTION_SERVICE=<servicio Render de api.nextforia.com>
 PRODUCTION_SERVICE_ID=srv-d7kkqqbeo5us73de2500
 PRODUCTION_PLAN=Free
-REQUIRED_CUTOVER_MODE=paid_maintenance
-PLAN_UPGRADE_APPROVAL=<ticket/aprobación explícita del propietario>
+REQUIRED_CUTOVER_MODE=free_connector_mutation_gate
 E2E_TENANT_ID=<tenant externo de prueba>
 E2E_PHONE_NUMBER_ID=<se completa después de Embedded Signup>
 E2E_WABA_ID=<se completa después de Embedded Signup>
@@ -43,26 +42,23 @@ OUTBOUND_WAMID_SUFFIX=<sufijo capturado inmediatamente en /whatsapp/health>
 
 Roles mínimos:
 
-- un operador de Render que pueda actualizar el plan, activar Maintenance Mode,
-  cambiar variables, desplegar un SHA exacto y revisar logs;
+- un operador de Render que pueda cambiar variables, desplegar un SHA exacto y
+  revisar logs;
 - un operador de Supabase que pueda aplicar migraciones y consultar el esquema;
 - un administrador del tenant E2E y una empresa de Meta externa;
 - un número nuevo, que no esté activo en WhatsApp ni WhatsApp Business App, y
   un método de pago válido en WhatsApp Manager.
 
 El estado conocido de Producción es el servicio
-`srv-d7kkqqbeo5us73de2500`, plan **Free**, con Auto-Deploy **Off**. Maintenance
-Mode no está disponible en ese plan. Por tanto, Producción queda bloqueada hasta
-que el propietario apruebe explícitamente el cambio a un plan pagado. Este
-runbook no ejecuta la compra ni presupone esa autorización.
+`srv-d7kkqqbeo5us73de2500`, plan **Free**, una sola instancia y Auto-Deploy
+**Off**. v349 incorpora `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED`: al ponerlo en
+`0`, todos los connect/select/verify/disconnect y callbacks OAuth quedan
+cerrados, mientras los webhooks y runtimes ya conectados permanecen activos.
+Esta es la barrera gratuita usada durante los tres reemplazos de instancia.
 
-No se autoriza un atajo Suspend/Resume en Free. Render documenta que **Save
-only** no aplica variables hasta el siguiente deploy, que un restart conserva la
-configuración del deploy vigente y que un deploy suspendido responde 409. No hay
-una garantía documentada de que Resume aplique flags guardados sin deploy; usar
-esa suposición podría reabrir la fleet vieja. Si en el futuro se desea un camino
-Free, debe diseñarse y ensayarse primero en un clon con una barrera upstream;
-queda fuera de este release.
+No se usa Upgrade, Maintenance Mode, Suspend ni Resume. Cada cambio de variables
+se aplica con **Save and deploy** y solo se continúa cuando el deployment nuevo
+está `live`, el anterior terminó y el health/log cumplen el gate de la fase.
 
 Referencias de la plataforma: [Maintenance Mode](https://render.com/docs/maintenance-mode),
 [variables y Save only](https://render.com/docs/configure-environment-variables)
@@ -75,7 +71,7 @@ y [secuencia de deploy/restart](https://render.com/docs/deploys).
 2. Un `phone_number_id` o WABA activo/no terminal pertenece a un solo tenant.
 3. `whatsapp_registration_claims` se escribe antes del único intento de
    `POST /{phone_number_id}/register`. Meta no ofrece idempotency key: si el
-   proceso cae después del envío, v348 reconcilia, pero no repite `/register`
+   proceso cae después del envío, v349 reconcilia, pero no repite `/register`
    durante 72 horas.
 4. Un webhook firmado se confirma con HTTP 200 solo después de persistir todos
    sus mensajes/estados en `meta_webhook_events`.
@@ -84,25 +80,22 @@ y [secuencia de deploy/restart](https://render.com/docs/deploys).
 6. El kill switch cierra altas nuevas, pero no apaga el store durable ni borra
    conexiones, claims, inbox o conversaciones.
 
-## 0. Gate de Staging antes de tocar Producción
+## 0. Gate previo antes de tocar Producción
 
-No iniciar la sección 1 hasta adjuntar un E2E real de Staging del mismo
-`CODE_SHA`. Debe usar una empresa Meta externa y un número completamente nuevo,
-y demostrar en una sola ventana de prueba:
+El camino normal exige E2E real de Staging. Si el propietario autoriza
+explícitamente usar Producción como entorno de aceptación, puede omitirse solo
+ese E2E previo, pero no los gates de código ni el E2E final. Deben existir:
 
-- Embedded Signup iniciado y terminado desde el Customer Panel;
-- tenant, WABA y `phone_number_id` correctos, con un solo claim de registro;
-- webhook firmado persistido en `meta_webhook_events` y turno visible una sola
-  vez en el Customer Panel correcto;
-- respuesta real del bot recibida y status Meta `delivered` o `read`;
-- cero ownership ambiguo, cero aparición en un tenant de control y cero errores
-  de inbox/routing/billing durante la ventana.
+- Staging ejecutando el mismo árbol de código con health sano;
+- CI completa, aislamiento de tenants y security scan en verde;
+- configuración Embedded Signup v4 verificada en Meta;
+- un tenant de prueba aislado y un número completamente nuevo reservados para
+  la sección 9;
+- Auto-Deploy de Producción apagado y cero WhatsApp activo/pending.
 
-Adjuntar SHA/deployment de Staging, health, consultas equivalentes a la sección
-9, sufijo del WAMID saliente y log de delivery. Reservar para Producción un
-**segundo** número nuevo distinto; el número ya registrado en Staging no sirve
-para repetir el onboarding nuevo en Producción. Sin esta evidencia, el release
-permanece bloqueado aunque CI, Meta y health estén verdes.
+La publicación no se declara terminada al quedar el proceso `live`: permanece
+en verificación hasta demostrar en Producción el inbound, Customer Panel,
+respuesta y receipt `delivered`/`read` de la sección 9.
 
 ## 1. Validar el artefacto exacto antes de tocar Producción
 
@@ -120,8 +113,8 @@ En un checkout limpio del release:
 
 ```bash
 git fetch origin
-git checkout --detach adfe7f50e142a5ddb11a78769f910dd4778d2df7
-test "$(git rev-parse HEAD)" = "adfe7f50e142a5ddb11a78769f910dd4778d2df7"
+git checkout --detach b7b9bd3bc181e7e6874beff5326057b1c7679eaa
+test "$(git rev-parse HEAD)" = "b7b9bd3bc181e7e6874beff5326057b1c7679eaa"
 git status --short
 pnpm install --frozen-lockfile
 pnpm test
@@ -173,8 +166,8 @@ las credenciales y payloads ya cifrados. Confirmar además en Meta:
   `https://nextforia.com/admin/channel-connections/meta/callback` autorizados.
 
 Inventariar por nombre y presencia —sin imprimir valores— estas pistas antiguas.
-No retirarlas todavía: su eliminación se hace con Maintenance Mode en la sección
-7, después de probar el owner tenant-scoped cifrado. v348 las ignora y emite
+No retirarlas todavía: su eliminación se hace con el gate de mutaciones cerrado
+en la sección 7, después de probar el owner tenant-scoped cifrado. v349 las ignora y emite
 `environment_channel_ownership_hints_ignored`, pero no deben quedar como un
 respaldo aparente:
 
@@ -192,7 +185,7 @@ Si se desconoce qué tenant/phone/WABA corresponde a una pista, registrarla como
 no migrada y detener el retiro; no adoptar, transferir ni desconectar el activo
 automáticamente durante este release.
 
-## 3. Congelar altas y drenar la fleet vieja
+## 3. Congelar mutaciones en la instancia Free
 
 1. Guardar `PREVIOUS_DEPLOY_ID`, `PREVIOUS_SHA`, el conteo de instancias y una
    captura que muestre solo nombres/presencia de variables con todos los valores
@@ -219,24 +212,22 @@ automáticamente durante este release.
    Cualquier conexión, intento no terminal o evento `pending`/`processing`
    obliga a detener el procedimiento y resolverlo antes del corte; no borrar ni
    reasignar filas para hacer pasar el gate.
-3. Verificar `PLAN_UPGRADE_APPROVAL`, actualizar el servicio a un plan pagado,
-   activar Maintenance Mode y comprobar desde Internet que `/webhook` y el
-   Customer Panel reciben HTTP 503. No usar una página custom que responda 200.
-4. Con Maintenance Mode activo, guardar estos flags y elegir **Save and deploy**
-   sobre el SHA actualmente activo:
+3. Confirmar que el servicio sigue con una sola instancia Free y Auto-Deploy
+   Off. Agregar únicamente el gate operativo y desplegar v349:
 
    ```text
-   CHANNEL_CONNECTIONS_V1_ENABLED=0
-   CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=0
+   CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0
    ```
 
-   Esperar a que cada instancia vieja haya terminado.
-   Render mantiene una instancia anterior 60 s antes de enviar `SIGTERM` y puede
-   esperar otros 30 s antes de `SIGKILL`; no asumir drenaje por ver el proceso
-   “live”.
-5. Confirmar en Deploys/Logs que todas las instancias muestran el nuevo deploy
-   cerrado y que no quedan procesos del deployment anterior. Con varias
-   instancias, comparar una por una.
+   No crear todavía `CHANNEL_CONNECTIONS_V1_ENABLED`; conservar su estado
+   ausente/false. Mantener `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED`
+   ausente/false. Esperar que el deployment nuevo esté `live` y que el anterior
+   haya terminado.
+4. Confirmar desde Internet que `/admin/health` sigue `running`, que el bot es
+   v349 y que `customer_setup.meta_oauth_ready=false`. Los webhooks no deben
+   responder 503: los canales existentes continúan activos; únicamente las
+   mutaciones devuelven `channel_connections_maintenance`/Retry-After.
+5. Confirmar en Deploys/Logs que no queda el deployment anterior.
 6. Esperar que no existan trabajos `processing` dos veces, con 30 s entre
    consultas. No borrar filas `pending` o `dead_letter`:
 
@@ -253,8 +244,8 @@ automáticamente durante este release.
 
    Si la tabla aún no existe, esta comprobación se repite después de migrar.
 
-Gate: tráfico público en 503, alta pública en 0, ninguna instancia antigua
-recibiendo solicitudes y cero eventos `processing`.
+Gate: bot v349 `live`, mutaciones cerradas, runtimes/webhooks existentes sanos,
+ninguna instancia antigua recibiendo solicitudes y cero eventos `processing`.
 
 ## 4. Backup y preflight de ownership
 
@@ -316,8 +307,8 @@ Gates:
 
 ## 5. Aplicar y verificar migraciones
 
-Con Maintenance Mode todavía activo y los flags en `0/0`, aplicar en Supabase
-Producción:
+Con `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0` y v349 confirmado `live`, aplicar
+en Supabase Producción:
 
 1. `docs/migrations/20260726_channel_connections_v1_up.sql`, solamente si la
    tabla v1 no existía;
@@ -380,7 +371,7 @@ select has_table_privilege('service_role',
 Todas las relaciones deben existir y todos los booleanos deben ser `true`.
 No ejecutar `select public.meta_webhook_inbox_ready_v1()` desde SQL Editor: la
 función falla correctamente con `SERVICE_ROLE_REQUIRED` fuera de una solicitud
-autenticada como `service_role`. El preflight runtime de v348 es quien prueba esa
+autenticada como `service_role`. El preflight runtime de v349 es quien prueba esa
 RPC con el rol correcto.
 
 Repetir las consultas de ownership incorporando intentos v2; ambas deben dar
@@ -422,46 +413,46 @@ group by asset_id
 having count(distinct tenant_id) > 1;
 ```
 
-## 6. Desplegar v348 con el alta cerrada
+## 6. Verificar v349 con las mutaciones cerradas
 
-Mantener ambos flags en `0` y Maintenance Mode activo. Desplegar manualmente el
-`CODE_SHA` exacto `adfe7f50e142a5ddb11a78769f910dd4778d2df7`.
+Conservar `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0` y desplegar manualmente el
+`CODE_SHA` exacto `b7b9bd3bc181e7e6874beff5326057b1c7679eaa`.
+No crear todavía `CHANNEL_CONNECTIONS_V1_ENABLED` ni encender el store dedicado.
 
 Esperar a que **todas** las instancias terminen el reemplazo. En cada instancia
 deben aparecer:
 
 ```text
-NextforIA Chatbot v348-whatsapp-v4-delivery ... running on port ...
+NextforIA Chatbot v349-whatsapp-free-cutover ... running on port ...
 Meta channel delivery: encrypted tenant connections only
 ```
 
 No deben aparecer `Secure configuration failed` ni un crash loop. Consultar
-desde Render Shell o la red privada mientras Maintenance Mode está activo:
+desde Internet porque la instancia Free no ofrece Render Shell:
 
 ```bash
-curl -fsS "http://127.0.0.1:${PORT}/admin/health"
+curl -fsS "https://api.nextforia.com/admin/health"
 ```
 
 Gate provisional:
 
 ```text
-bot.version == v348-whatsapp-v4-delivery
+bot.version == v349-whatsapp-free-cutover
 status == running
-customer_setup.meta_oauth_ready == false (esperado mientras ambos flags están en 0)
+customer_setup.meta_oauth_ready == false (esperado con mutaciones cerradas)
 ```
 
-`customer_setup.channel_storage_ready` todavía puede ser `false` con el store
-dedicado apagado. `meta_oauth_ready=false` en esta fase confirma que la superficie
-pública de conexión sigue cerrada; su gate cambia a `true` después de encender el
-store dedicado en la sección 7. No desactivar Maintenance Mode ni abrir el alta.
+`customer_setup.channel_storage_ready` todavía puede reflejar el store legacy.
+`meta_oauth_ready=false` confirma que la superficie pública de conexión está
+cerrada. No abrir las mutaciones todavía.
 
 ## 7. Encender el store durable y ejecutar el cutover histórico
 
 Cambiar solo:
 
 ```text
-CHANNEL_CONNECTIONS_V1_ENABLED=0
 CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=1
+CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0
 ```
 
 Desplegar de nuevo el mismo SHA exacto y esperar el reemplazo completo de todas
@@ -481,18 +472,18 @@ Gates de logs:
   `environment_channel_ownership_hints_ignored`: retirarla y redesplegar antes
   de continuar, sin adoptar ni reasignar el activo.
 
-Consultar nuevamente por Render Shell o la red privada:
+Consultar nuevamente desde Internet:
 
 ```bash
-curl -fsS "http://127.0.0.1:${PORT}/admin/health"
+curl -fsS "https://api.nextforia.com/admin/health"
 ```
 
 Gate obligatorio:
 
 ```text
-bot.version == v348-whatsapp-v4-delivery
+bot.version == v349-whatsapp-free-cutover
 customer_setup.channel_storage_ready == true
-customer_setup.meta_oauth_ready == true
+customer_setup.meta_oauth_ready == false
 status == running
 ```
 
@@ -502,7 +493,7 @@ atómicos. No ejecuta una mutación real de begin/claim/disconnect ni demuestra
 por sí solo INSERT/UPDATE del inbox; esas operaciones quedan cubiertas por CI y
 por el E2E real de la sección 9. Un simple HTTP 200 no basta.
 
-Con Maintenance Mode aún activo, validar cada pista ambiental inventariada en la
+Con las mutaciones aún cerradas, validar cada pista ambiental inventariada en la
 sección 2 contra su owner exacto sin seleccionar el ciphertext:
 
 ```sql
@@ -519,7 +510,7 @@ where tenant_id = '<LEGACY_TENANT_ID>'
 Debe existir exactamente una fila y todos los booleanos deben ser `true`; el
 estado debe corresponder al estado real del activo en Meta. Solo entonces retirar
 la pista correspondiente del ambiente usando **Save and deploy**, siempre con
-Maintenance Mode activo, y repetir los gates de health/logs. Si falta la fila,
+las mutaciones cerradas, y repetir los gates de health/logs. Si falta la fila,
 no coincide el owner o no está cifrada, conservar la variable, mantener el alta
 cerrada y detener el release para una migración explícita.
 
@@ -529,12 +520,13 @@ cualquier `dead_letter` y no borrarla.
 
 ## 8. Abrir el alta pública sin exponer fleet incompatible
 
-Antes de abrir, todas las instancias deben ejecutar v348 con el store dedicado
-en `1` y Maintenance Mode sigue activo. Cambiar solo:
+Antes de abrir, la instancia debe ejecutar v349 con el store dedicado en `1` y
+las mutaciones siguen cerradas. Cambiar:
 
 ```text
 CHANNEL_CONNECTIONS_V1_ENABLED=1
 CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=1
+CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=1
 ```
 
 Desplegar otra vez el mismo SHA. Esperar el reemplazo de **todas** las
@@ -555,13 +547,13 @@ El nombre del storage conserva “fallback” por la clase de migración, pero,
 después del cutover exitoso, `primaryAuthoritative=true`: routing y escrituras
 usan la tabla dedicada; no vuelven a inferir ownership del ambiente.
 
-Desactivar Maintenance Mode y verificar desde Internet:
+Verificar desde Internet:
 
 ```bash
 curl -fsS https://api.nextforia.com/admin/health
 ```
 
-Debe mostrar v348, `channel_storage_ready=true`, `meta_oauth_ready=true` y
+Debe mostrar v349, `channel_storage_ready=true`, `meta_oauth_ready=true` y
 `status=running`. Antes de conectar un número, `/whatsapp/health` puede responder
 503 con `status=not_configured`; eso es esperado y no demuestra un fallo del
 store. Tampoco es evidencia de E2E.
@@ -704,7 +696,7 @@ Gates finales:
 
 Si Meta devuelve `131042`, el bot de entrada puede recibir, pero la salida queda
 bloqueada. El gate falla: agregar un método de pago válido, enviar un mensaje
-nuevo y esperar un status `delivered`/`read` más reciente. v348 mantiene
+nuevo y esperar un status `delivered`/`read` más reciente. v349 mantiene
 `webhook_status=outbound_billing_blocked` hasta esa evidencia posterior; no
 limpiar el campo manualmente.
 
@@ -734,21 +726,20 @@ backoff máximo de 30 minutos. No borrarlos para “poner el health verde”.
 
 Este es el rollback preferido ante cualquier anomalía de onboarding:
 
-1. Activar Maintenance Mode y esperar `processing_now=0`.
-2. Cambiar únicamente con Maintenance Mode activo:
+1. Cambiar únicamente:
 
    ```text
-   CHANNEL_CONNECTIONS_V1_ENABLED=0
+   CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0
    CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=1
    ```
 
-3. Redesplegar el mismo SHA v348 y esperar el reemplazo de toda la fleet.
-4. Repetir los gates de store/inbox.
-5. Desactivar Maintenance Mode tras comprobar que el servicio volvió a `live`.
+2. Redesplegar el mismo SHA v349 y esperar el reemplazo de la instancia Free.
+3. Repetir los gates de store/inbox y confirmar que los webhooks existentes
+   siguen respondiendo.
 
 Resultado: el botón de alta queda cerrado; conexiones tenant-scoped existentes,
 webhooks, inbox, reintentos y respuestas siguen usando el store durable. Nunca
-poner `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=0` mientras v348 siga
+poner `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=0` mientras v349 siga
 atendiendo conexiones creadas por v2.
 
 ## Rollback de aplicación
@@ -761,17 +752,18 @@ roll-forward.
 
 Para un SHA compatible:
 
-1. Activar Maintenance Mode y aplicar primero el kill switch.
-2. Aplicar el kill switch (`V1_ENABLED=0`, `DEDICATED_STORE_ENABLED=1`) en v348
-   y esperar que toda la fleet lo use.
+1. Aplicar primero el kill switch
+   (`MUTATIONS_ENABLED=0`, `DEDICATED_STORE_ENABLED=1`) en v349.
+2. Esperar que la instancia Free nueva esté `live` y la anterior haya terminado.
 3. Esperar `processing_now=0` dos veces con 30 s de separación.
-4. Desplegar el SHA compatible conocido manteniendo el store durable en `1`.
-5. Verificar versión, RPCs, ownership, inbox, conexión existente y un mensaje
-   real antes de quitar Maintenance Mode.
+4. Desplegar el SHA compatible conocido manteniendo el store durable en `1` y
+   las mutaciones cerradas.
+5. Verificar versión, RPCs, ownership, inbox y conexión existente antes de
+   decidir si se reabren las mutaciones.
 
-Si un rollback excepcional a código pre-v2 es inevitable, mantener Maintenance
-Mode y tratar WhatsApp como indisponible hasta desplegar de nuevo un consumidor
-compatible. No volver a código que confirme webhooks sin routing tenant-scoped.
+Si un rollback excepcional a código pre-v2 es inevitable, mantener las
+mutaciones cerradas y tratar WhatsApp como indisponible hasta desplegar de nuevo
+un consumidor compatible. No volver a código que confirme webhooks sin routing tenant-scoped.
 El código anterior puede no ver conexiones creadas por v2 y no debe recibir
 webhooks que vaya a confirmar sin routing tenant-scoped.
 
@@ -802,8 +794,8 @@ No cerrar el cambio hasta adjuntar:
 CODE_SHA y deployment ID:
 RUNBOOK_COMMIT_SHA (documental, no release):
 Auto-Deploy de main confirmado Off:
-PLAN_UPGRADE_APPROVAL y plan pagado confirmado:
-Flags finales (V1=1, DEDICATED=1):
+Plan Free y una sola instancia confirmados:
+Flags finales (V1=1, DEDICATED=1, MUTATIONS=1):
 Backup/PITR ID:
 Resultado preflight ownership:
 Resultado migration/RPC:

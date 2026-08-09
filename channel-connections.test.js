@@ -113,6 +113,14 @@ function expectCode(promise, code) {
   assert.strictEqual(embeddedCandidate.phone_number_id, "phone-embedded");
   assert.strictEqual(embeddedCandidate.access_token, "embedded-access-token");
   assert.strictEqual(embeddedCandidate.coexistence, false);
+  const embeddedWabaOnlyCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-embedded",
+    business_id: "business-embedded",
+    onboarding_mode: "cloud_api",
+    onboarding_event: "FINISH_ONLY_WABA"
+  });
+  assert.strictEqual(embeddedWabaOnlyCandidate.phone_number_id, "phone-embedded");
+  assert.strictEqual(embeddedWabaOnlyCandidate.whatsapp_business_account_id, "waba-embedded");
   await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
     business_id: "business-embedded",

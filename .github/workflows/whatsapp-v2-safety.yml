@@ -1,0 +1,75 @@
+name: WhatsApp v2 safety
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - codex/whatsapp-connect-v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whatsapp-v2-safety-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  safety:
+    name: Tests and static safety checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pnpm from packageManager
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run full test suite
+        run: pnpm test
+
+      - name: Run channel tests
+        run: pnpm test:channels
+
+      - name: Run tenant-isolation tests
+        run: pnpm test:tenant-isolation
+
+      - name: Run security scan
+        run: pnpm security:scan
+
+      - name: Check relevant JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            index.js
+            channel-connections.js
+            conversation-turn-context.js
+            customer-panel.js
+            meta-webhook-inbox.js
+            multimodal-agent.js
+            whatsapp-delivery-checkpoint.js
+          )
+          for file in "${files[@]}"; do
+            node --check "$file"
+          done
+
+      - name: Check whitespace errors
+        run: git diff --check origin/main...HEAD

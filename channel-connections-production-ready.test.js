@@ -179,6 +179,7 @@ async function waitForJson(url, predicate, timeoutMs) {
       PHONE_NUMBER_ID: "rav-phone-id",
       META_APP_ID: "channel-production-meta-app",
       META_APP_SECRET: "channel-production-meta-secret-value",
+      META_WHATSAPP_CONFIG_ID: "channel-production-whatsapp-config",
       IG_ACCESS_TOKEN: "channel-production-instagram-env-token",
       IG_USER_ID: "instagram-env-business-id",
       IG_SEND_ID: "instagram-env-business-id",

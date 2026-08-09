@@ -1310,7 +1310,11 @@ channelConnectionBootstrapPromise = (async function () {
     try {
       whatsappCutover = await channelConnectionStore.assertWhatsAppOnboardingReady();
     } catch (error) {
-      whatsappCutover = { ok: false, skipped: false, error: cleanRuntimeText(error && error.message, 300) };
+      whatsappCutover = {
+        ok: false,
+        skipped: false,
+        error: cleanRuntimeText(error && (error.internalMessage || error.message), 300)
+      };
       log("error", "whatsapp_store_cutover_blocked", whatsappCutover);
     }
   }

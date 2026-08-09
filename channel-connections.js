@@ -1607,10 +1607,33 @@ class MigratingChannelConnectionStore {
         const fallbackIsNewer = !primaryPeer ||
           Number.isFinite(fallbackAt) && (!Number.isFinite(primaryAt) || fallbackAt > primaryAt);
         if (!fallbackIsNewer) continue;
-        await self.primary.upsert(Object.assign(emptyConnection(tenantId, channel), row, {
-          tenant_id: tenantId,
-          channel
-        }), null);
+        try {
+          await self.primary.upsert(Object.assign(emptyConnection(tenantId, channel), row, {
+            tenant_id: tenantId,
+            channel
+          }), null);
+        } catch (error) {
+          const mapped = mapStoreError(error);
+          if (mapped.code === "channel_asset_already_assigned") {
+            const phoneSuffix = cleanText(
+              row && (row.onboarding_attempt_phone_number_id || row.phone_number_id),
+              240
+            ).slice(-8) || "none";
+            const wabaSuffix = cleanText(
+              row && (row.onboarding_attempt_waba_id || row.whatsapp_business_account_id),
+              240
+            ).slice(-8) || "none";
+            throw new ChannelConnectionError(
+              "channel_store_unavailable",
+              503,
+              "Cutover backfill conflict tenant=" + tenantId +
+                " channel=" + channel +
+                " phone_suffix=" + phoneSuffix +
+                " waba_suffix=" + wabaSuffix
+            );
+          }
+          throw mapped;
+        }
         primaryByKey.set(key, row);
         backfilled++;
       }

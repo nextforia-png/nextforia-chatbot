@@ -18,8 +18,13 @@ demuestra que el canal funcione.
 ## Configuración Meta obligatoria
 
 - App `Nextfor Chatbot` activa y Tech Provider verificado.
-- Facebook Login for Business Configuration de tipo Embedded Signup, producto
-  **WhatsApp Cloud API** y token de usuario del sistema.
+- Facebook Login for Business Configuration nueva, con el producto **WhatsApp
+  Cloud API** seleccionado; Meta la asigna automáticamente a Embedded Signup v4.
+- El lanzamiento con el SDK usa `config_id`, `response_type: "code"`,
+  `override_default_response_type: true` y `extras: {}`. No usa
+  `sessionInfoVersion`: el valor `"3"` corresponde al protocolo v2.
+- El listener acepta únicamente orígenes HTTPS de `facebook.com` o sus
+  subdominios y procesa explícitamente `FINISH`, `CANCEL` y `ERROR`.
 - Solo estos permisos con Advanced Access:
   `whatsapp_business_management` y `whatsapp_business_messaging`.
 - Callback `https://api.nextforia.com/webhook` con token de verificación de
@@ -27,6 +32,9 @@ demuestra que el canal funcione.
 - Objeto **Whatsapp Business Account** suscrito al menos a `account_update` y
   `messages`.
 - Dominio JavaScript y URI OAuth de `https://nextforia.com` registrados.
+
+Contrato oficial: [versiones de Embedded Signup](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/versions)
+y [guía de implementación](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation/).
 
 El nombre `RAV toys` que Meta muestra como proveedor proviene del portfolio
 comercial verificado que posee la app. No renombrar ni transferir ese portfolio
@@ -88,7 +96,7 @@ dentro de este despliegue: requiere una migración empresarial separada.
 
 1. Desplegar el SHA nuevo con ambos flags todavía en `0`.
 2. Confirmar que `/admin/health` devuelve la versión
-   `v347-whatsapp-self-service`.
+   `v348-whatsapp-v4-delivery`.
 3. Activar únicamente:
 
    ```text

@@ -4,8 +4,10 @@ const assert = require("assert");
 const {
   InMemoryMetaWebhookInboxStore,
   SupabaseMetaWebhookInboxStore,
+  classifyWhatsAppDeliveryError,
   createMetaWebhookInbox,
-  extractWhatsAppMessageEvents
+  extractWhatsAppMessageEvents,
+  whatsappDeliveryFailure
 } = require("./meta-webhook-inbox");
 
 (async function run() {
@@ -20,7 +22,12 @@ const {
         ]
       } }] },
       { changes: [
-        { field: "statuses", value: { metadata: { phone_number_id: "phone-1" }, statuses: [{ id: "status-only" }] } },
+        { field: "messages", value: { metadata: { phone_number_id: "phone-1" }, statuses: [{
+          id: "wamid.outbound-1",
+          status: "delivered",
+          timestamp: "1786200000",
+          recipient_id: "sender-a"
+        }] } },
         { value: {
           metadata: { phone_number_id: "phone-2" },
           messages: [{ id: "wamid.3", from: "sender-b", type: "text", text: { body: "tres" } }]
@@ -29,11 +36,16 @@ const {
     ]
   };
   const events = extractWhatsAppMessageEvents(payload);
-  assert.deepStrictEqual(events.map(function (event) { return event.event_id; }), [
+  assert.deepStrictEqual(events.slice(0, 2).map(function (event) { return event.event_id; }), [
     "whatsapp:wamid.1",
-    "whatsapp:wamid.2",
-    "whatsapp:wamid.3"
+    "whatsapp:wamid.2"
   ]);
+  assert.match(events[2].event_id, /^whatsapp:status:sha256:[a-f0-9]{64}$/);
+  assert.strictEqual(events[2].payload.event_type, "status");
+  assert.strictEqual(events[2].ordering_identity, "sender-a");
+  assert.strictEqual(events[3].event_id, "whatsapp:wamid.3");
+  const repeatedStatus = extractWhatsAppMessageEvents(payload)[2];
+  assert.strictEqual(repeatedStatus.event_id, events[2].event_id, "status retries must be idempotent");
   assert.strictEqual(extractWhatsAppMessageEvents({ object: "page", entry: [] }).length, 0);
 
   let now = new Date("2026-08-08T12:00:00.000Z");
@@ -42,9 +54,9 @@ const {
     event.received_at = new Date(now.getTime() + index).toISOString();
   });
   let result = await store.enqueue(events);
-  assert.deepStrictEqual(result, { accepted: 3, inserted: 3 });
+  assert.deepStrictEqual(result, { accepted: 4, inserted: 4 });
   result = await store.enqueue(events);
-  assert.deepStrictEqual(result, { accepted: 3, inserted: 0 }, "duplicate delivery must be idempotent");
+  assert.deepStrictEqual(result, { accepted: 4, inserted: 0 }, "duplicate delivery must be idempotent");
 
   const first = await store.claim("worker-a", 180);
   assert.strictEqual(first.event_id, "whatsapp:wamid.1");
@@ -60,6 +72,9 @@ const {
   assert.strictEqual(recovered.event_id, "whatsapp:wamid.2", "expired processing lease must survive a crash");
   assert.strictEqual(await store.complete(recovered.event_id, "worker-a", {}), false, "old owner cannot complete");
   assert.strictEqual(await store.complete(recovered.event_id, "worker-c", { tenant_id: "tenant-a" }), true);
+  const orderedStatus = await store.claim("worker-status", 180);
+  assert.strictEqual(orderedStatus.event_id, events[2].event_id, "delivery status must follow earlier events for the recipient");
+  assert.strictEqual(await store.complete(orderedStatus.event_id, "worker-status", { tenant_id: "tenant-a" }), true);
   assert.strictEqual(await store.complete(parallel.event_id, "worker-b", { tenant_id: "tenant-b" }), true);
 
   const retryEvent = extractWhatsAppMessageEvents({
@@ -93,6 +108,70 @@ const {
   assert.strictEqual(retryRow.tenant_id, "tenant-c");
   assert.strictEqual(attempts, 2);
   inbox.stop();
+
+  const leaseStore = new InMemoryMetaWebhookInboxStore();
+  const leaseEvent = extractWhatsAppMessageEvents({
+    object: "whatsapp_business_account",
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: "phone-lease" },
+      messages: [{ id: "wamid.lease", from: "sender-lease", type: "text", text: { body: "lease" } }]
+    } }] }]
+  })[0];
+  await leaseStore.enqueue([leaseEvent]);
+  leaseStore.heartbeat = async function () { return false; };
+  let leaseSideEffects = 0;
+  const leaseInbox = createMetaWebhookInbox({
+    store: leaseStore,
+    owner: "worker-lost-lease",
+    interval_ms: 60000,
+    processEvent: async function () { leaseSideEffects++; }
+  });
+  await assert.rejects(
+    leaseInbox.drain(),
+    function (error) { return error && error.leaseLost === true && /meta_webhook_lease_lost/.test(error.message); }
+  );
+  assert.strictEqual(leaseSideEffects, 0, "a worker without a confirmed lease must not run side effects");
+  leaseInbox.stop();
+
+  assert.strictEqual(classifyWhatsAppDeliveryError({ code: "ECONNRESET" }).retryable, true);
+  assert.strictEqual(classifyWhatsAppDeliveryError({ response: { status: 429, data: { error: { code: 4 } } } }).retryable, true);
+  assert.strictEqual(classifyWhatsAppDeliveryError({ response: { status: 400, data: { error: { code: 131042 } } } }).retryable, true,
+    "payment/eligibility can recover after the tenant fixes Meta billing");
+  assert.strictEqual(classifyWhatsAppDeliveryError({ response: { status: 401, data: { error: { code: 190 } } } }).permanent, true);
+  const definitiveDelivery = whatsappDeliveryFailure({ response: { status: 401, data: { error: { code: 190 } } } });
+  assert.strictEqual(definitiveDelivery.whatsappDeliveryFailure, true);
+  assert.strictEqual(definitiveDelivery.permanent, true);
+
+  const paymentStore = new InMemoryMetaWebhookInboxStore({ clock: function () { return now; } });
+  const paymentEvent = extractWhatsAppMessageEvents({
+    object: "whatsapp_business_account",
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: "phone-payment" },
+      messages: [{ id: "wamid.payment", from: "sender-payment", type: "text", text: { body: "payment" } }]
+    } }] }]
+  })[0];
+  await paymentStore.enqueue([paymentEvent]);
+  paymentStore.rows.get(paymentEvent.event_id).attempts = 48;
+  const paymentInbox = createMetaWebhookInbox({
+    store: paymentStore,
+    owner: "worker-payment",
+    interval_ms: 60000,
+    processEvent: async function () {
+      throw whatsappDeliveryFailure({ response: { status: 400, data: { error: { code: 131042 } } } });
+    }
+  });
+  await paymentInbox.drain();
+  const paymentRow = paymentStore.rows.get(paymentEvent.event_id);
+  assert.strictEqual(paymentRow.attempts, 49);
+  assert.strictEqual(paymentRow.status, "pending", "Meta billing failures must remain recoverable beyond the old 48-attempt limit");
+  paymentInbox.stop();
+
+  const migrationSource = require("fs").readFileSync(
+    require("path").join(__dirname, "docs/migrations/20260808_whatsapp_onboarding_v2_up.sql"),
+    "utf8"
+  );
+  assert.match(migrationSource, /attempts >= 160 or received_at <= v_now - interval '72 hours'/);
+  assert.match(migrationSource, /candidate\.attempts < 160/);
 
   const httpCalls = [];
   let claimedPayload = null;

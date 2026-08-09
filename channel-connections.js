@@ -6,6 +6,8 @@ const { decryptStoredText, encryptStoredText, safeEqualText } = require("./secur
 const SUPPORTED_CHANNELS = ["whatsapp", "instagram", "messenger"];
 const CONNECTION_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
 const WHATSAPP_REGISTRATION_COOLDOWN_MS = 72 * 60 * 60 * 1000;
+const WHATSAPP_OUTBOUND_BILLING_BLOCKED = "outbound_billing_blocked";
+const WHATSAPP_OUTBOUND_BILLING_ERROR = "Meta bloqueó las respuestas de WhatsApp (131042): agrega un método de pago válido en WhatsApp Manager.";
 const CHANNEL_CATALOG = Object.freeze([
   {
     id: "whatsapp",
@@ -69,6 +71,29 @@ function cleanWhatsAppOnboardingMode(value) {
 function iso(value) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
   return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
+function whatsappStatusOccurredAt(status, fallback) {
+  const supplied = status && status.timestamp;
+  const seconds = Number(supplied);
+  if (Number.isFinite(seconds) && seconds > 0) return iso(seconds * 1000);
+  const parsed = Date.parse(String(supplied || ""));
+  return Number.isFinite(parsed) ? iso(parsed) : iso(fallback);
+}
+
+function whatsappStatusErrorCodes(status) {
+  return (Array.isArray(status && status.errors) ? status.errors : []).reduce(function (codes, error) {
+    [error && error.code, error && error.error_subcode].forEach(function (value) {
+      const number = Number(value);
+      if (Number.isFinite(number)) codes.add(number);
+    });
+    return codes;
+  }, new Set());
+}
+
+function whatsappOutboundBillingBlocked(record) {
+  return !!(record && record.channel === "whatsapp" &&
+    record.status === "connected" && record.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED);
 }
 
 function actorLabel(actor) {
@@ -198,6 +223,7 @@ function emptyConnection(tenantId, channel) {
     last_verified_at: null,
     last_error: null,
     last_error_at: null,
+    whatsapp_outbound_billing_status_at: null,
     connected_at: null,
     disconnected_at: null,
     connected_by: null,
@@ -237,6 +263,7 @@ function whatsappAttemptRecordIsActive(record) {
 function publicConnection(record, options) {
   const safe = Object.assign(emptyConnection(record && record.tenant_id, record && record.channel), record || {});
   const hasStoredCredentials = !!safe.credentials_ciphertext;
+  const outboundBillingBlocked = whatsappOutboundBillingBlocked(safe);
   // A disconnected row is kept for audit history, but its previous asset must
   // never look assigned in the Customer Panel or participate in routing.
   if (["not_connected", "disconnected"].includes(safe.status)) {
@@ -279,17 +306,24 @@ function publicConnection(record, options) {
     : null;
   safe.activation_rate_limited = !!activationRetryAt;
   safe.activation_retry_at = activationRetryAt;
+  safe.outbound_billing_blocked = outboundBillingBlocked;
+  if (outboundBillingBlocked) safe.status = "needs_attention";
   safe.activation_available = safe.channel === "whatsapp" &&
+    !outboundBillingBlocked &&
     !safe.activation_rate_limited &&
     !safe.protected_legacy &&
     !!safe.credentials_ciphertext &&
     !!(safe.phone_number_id && safe.whatsapp_business_account_id) &&
     (safe.status === "connecting" || safe.status === "needs_attention");
   const ignoreObsoleteRegistrationError = coexistencePending && isWhatsAppRegistrationRateLimit(safe.last_error);
-  safe.activation_error = safe.channel === "whatsapp" && !ignoreObsoleteRegistrationError
+  safe.activation_error = outboundBillingBlocked
+    ? "Falta un método de pago válido para enviar respuestas por WhatsApp."
+    : safe.channel === "whatsapp" && !ignoreObsoleteRegistrationError
     ? customerActivationError(safe.last_error)
     : null;
-  safe.activation_message = safe.activation_rate_limited
+  safe.activation_message = outboundBillingBlocked
+    ? "WhatsApp recibe mensajes, pero Meta bloqueó las respuestas del bot porque falta un método de pago válido. Agrégalo en WhatsApp Manager y envía una prueba nueva; Nextfor confirmará la recuperación cuando Meta entregue la respuesta."
+    : safe.activation_rate_limited
     ? "Meta limitó temporalmente registros anteriores. Nextfor no repetirá llamadas hasta que Meta vuelva a permitir la activación."
     : safe.activation_error || (safe.activation_available
     ? safe.webhook_status === "pending_activation"
@@ -453,6 +487,90 @@ class InMemoryChannelConnectionStore {
       });
     }
     return this.get(tenantId, channel);
+  }
+
+  async markWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const cleanPhone = cleanText(phoneNumberId, 240);
+    const row = this.rows.find(function (item) {
+      return item.tenant_id === cleanTenant && item.channel === "whatsapp";
+    });
+    const occurredAt = iso(fields && fields.occurred_at);
+    const connectedAt = Date.parse(row && row.connected_at || "");
+    const failureAt = Date.parse(occurredAt);
+    const watermarkAt = Date.parse(row && (row.whatsapp_outbound_billing_status_at ||
+      (row.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED ? row.last_error_at : "")) || "");
+    const failurePrecedesWatermark = Number.isFinite(watermarkAt) && Number.isFinite(failureAt) &&
+      failureAt < watermarkAt;
+    const duplicateBlockedFailure = row && row.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED &&
+      Number.isFinite(watermarkAt) && Number.isFinite(failureAt) && failureAt === watermarkAt;
+    if (!row || row.status !== "connected" || cleanText(row.phone_number_id, 240) !== cleanPhone ||
+        Number.isFinite(connectedAt) && Number.isFinite(failureAt) && connectedAt > failureAt ||
+        failurePrecedesWatermark || duplicateBlockedFailure) {
+      return { updated: false, row: row ? await this.get(cleanTenant, "whatsapp") : null };
+    }
+    Object.assign(row, {
+      webhook_status: WHATSAPP_OUTBOUND_BILLING_BLOCKED,
+      last_error: WHATSAPP_OUTBOUND_BILLING_ERROR,
+      last_error_at: occurredAt,
+      whatsapp_outbound_billing_status_at: occurredAt,
+      updated_at: iso(fields && fields.updated_at)
+    });
+    if (event) {
+      this.audit.push({
+        id: crypto.randomUUID(),
+        tenant_id: cleanTenant,
+        channel: "whatsapp",
+        action: event.action,
+        actor: event.actor,
+        details: event.details || {},
+        created_at: row.updated_at
+      });
+    }
+    return { updated: true, row: await this.get(cleanTenant, "whatsapp") };
+  }
+
+  async clearWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const cleanPhone = cleanText(phoneNumberId, 240);
+    const row = this.rows.find(function (item) {
+      return item.tenant_id === cleanTenant && item.channel === "whatsapp";
+    });
+    const occurredAt = iso(fields && fields.occurred_at);
+    const deliveredAt = Date.parse(occurredAt);
+    const connectedAt = Date.parse(row && row.connected_at || "");
+    const watermarkAt = Date.parse(row && (row.whatsapp_outbound_billing_status_at ||
+      (row.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED ? row.last_error_at : "")) || "");
+    if (!row || row.status !== "connected" || cleanText(row.phone_number_id, 240) !== cleanPhone ||
+        !Number.isFinite(deliveredAt) ||
+        Number.isFinite(connectedAt) && connectedAt > deliveredAt ||
+        Number.isFinite(watermarkAt) && deliveredAt <= watermarkAt) {
+      return { updated: false, row: row ? await this.get(cleanTenant, "whatsapp") : null };
+    }
+    const wasBlocked = row.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED;
+    const update = {
+      last_verified_at: occurredAt,
+      whatsapp_outbound_billing_status_at: occurredAt,
+      updated_at: iso(fields && fields.updated_at)
+    };
+    if (wasBlocked) Object.assign(update, {
+      webhook_status: "subscribed",
+      last_error: null,
+      last_error_at: null
+    });
+    Object.assign(row, update);
+    if (event && wasBlocked) {
+      this.audit.push({
+        id: crypto.randomUUID(),
+        tenant_id: cleanTenant,
+        channel: "whatsapp",
+        action: event.action,
+        actor: event.actor,
+        details: event.details || {},
+        created_at: row.updated_at
+      });
+    }
+    return { updated: true, row: await this.get(cleanTenant, "whatsapp") };
   }
 
   async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
@@ -983,6 +1101,114 @@ class SupabaseChannelConnectionStore {
     }
   }
 
+  async markWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const cleanPhone = cleanText(phoneNumberId, 240);
+    try {
+      const occurredAt = iso(fields && fields.occurred_at);
+      const failureAt = Date.parse(occurredAt);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const current = await this.get(cleanTenant, "whatsapp");
+        const connectedAt = Date.parse(current && current.connected_at || "");
+        const watermarkAt = Date.parse(current && (current.whatsapp_outbound_billing_status_at ||
+          (current.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED ? current.last_error_at : "")) || "");
+        const failurePrecedesWatermark = Number.isFinite(watermarkAt) && Number.isFinite(failureAt) &&
+          failureAt < watermarkAt;
+        const duplicateBlockedFailure = current && current.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED &&
+          Number.isFinite(watermarkAt) && Number.isFinite(failureAt) && failureAt === watermarkAt;
+        if (!current || current.status !== "connected" || cleanText(current.phone_number_id, 240) !== cleanPhone ||
+            Number.isFinite(connectedAt) && Number.isFinite(failureAt) && connectedAt > failureAt ||
+            failurePrecedesWatermark || duplicateBlockedFailure) {
+          return { updated: false, row: current };
+        }
+        const response = await this.axios.patch(
+          this.url + "/rest/v1/tenant_channel_connections",
+          {
+            webhook_status: WHATSAPP_OUTBOUND_BILLING_BLOCKED,
+            last_error: WHATSAPP_OUTBOUND_BILLING_ERROR,
+            last_error_at: occurredAt,
+            whatsapp_outbound_billing_status_at: occurredAt,
+            updated_at: iso(fields && fields.updated_at)
+          },
+          {
+            params: {
+              tenant_id: "eq." + cleanTenant,
+              channel: "eq.whatsapp",
+              phone_number_id: "eq." + cleanPhone,
+              status: "eq.connected",
+              updated_at: current.updated_at ? "eq." + current.updated_at : "is.null"
+            },
+            headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+            timeout: 8000
+          }
+        );
+        const rows = Array.isArray(response.data) ? response.data : [];
+        if (rows.length) {
+          if (event) await this.writeAudit(cleanTenant, "whatsapp", event);
+          return { updated: true, row: rows[0] };
+        }
+      }
+      throw new ChannelConnectionError("channel_store_unavailable", 503, "WhatsApp billing state CAS contention");
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
+  async clearWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const cleanPhone = cleanText(phoneNumberId, 240);
+    try {
+      const occurredAt = iso(fields && fields.occurred_at);
+      const deliveredAt = Date.parse(occurredAt);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const current = await this.get(cleanTenant, "whatsapp");
+        const connectedAt = Date.parse(current && current.connected_at || "");
+        const watermarkAt = Date.parse(current && (current.whatsapp_outbound_billing_status_at ||
+          (current.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED ? current.last_error_at : "")) || "");
+        if (!current || current.status !== "connected" || cleanText(current.phone_number_id, 240) !== cleanPhone ||
+            !Number.isFinite(deliveredAt) ||
+            Number.isFinite(connectedAt) && connectedAt > deliveredAt ||
+            Number.isFinite(watermarkAt) && deliveredAt <= watermarkAt) {
+          return { updated: false, row: current };
+        }
+        const wasBlocked = current.webhook_status === WHATSAPP_OUTBOUND_BILLING_BLOCKED;
+        const update = {
+          last_verified_at: occurredAt,
+          whatsapp_outbound_billing_status_at: occurredAt,
+          updated_at: iso(fields && fields.updated_at)
+        };
+        if (wasBlocked) Object.assign(update, {
+          webhook_status: "subscribed",
+          last_error: null,
+          last_error_at: null
+        });
+        const response = await this.axios.patch(
+          this.url + "/rest/v1/tenant_channel_connections",
+          update,
+          {
+            params: {
+              tenant_id: "eq." + cleanTenant,
+              channel: "eq.whatsapp",
+              phone_number_id: "eq." + cleanPhone,
+              status: "eq.connected",
+              updated_at: current.updated_at ? "eq." + current.updated_at : "is.null"
+            },
+            headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+            timeout: 8000
+          }
+        );
+        const rows = Array.isArray(response.data) ? response.data : [];
+        if (rows.length) {
+          if (event && wasBlocked) await this.writeAudit(cleanTenant, "whatsapp", event);
+          return { updated: true, row: rows[0] };
+        }
+      }
+      throw new ChannelConnectionError("channel_store_unavailable", 503, "WhatsApp billing recovery CAS contention");
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
   async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
     const cleanTenant = cleanTenantId(tenantId);
     const cleanAttempt = cleanText(attemptId, 100);
@@ -1434,6 +1660,20 @@ class MigratingChannelConnectionStore {
   async upsert(input, event) {
     const current = await this.get(input && input.tenant_id, input && input.channel);
     return this.primary.upsert(Object.assign({}, current || {}, input || {}), event);
+  }
+
+  async markWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event) {
+    if (!this.primaryAuthoritative || typeof this.primary.markWhatsAppOutboundBillingBlocked !== "function") {
+      throw new ChannelConnectionError("channel_store_unavailable", 503, "Durable WhatsApp billing state is unavailable");
+    }
+    return this.primary.markWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event);
+  }
+
+  async clearWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event) {
+    if (!this.primaryAuthoritative || typeof this.primary.clearWhatsAppOutboundBillingBlocked !== "function") {
+      throw new ChannelConnectionError("channel_store_unavailable", 503, "Durable WhatsApp billing recovery state is unavailable");
+    }
+    return this.primary.clearWhatsAppOutboundBillingBlocked(tenantId, phoneNumberId, fields, event);
   }
 
   async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
@@ -2412,6 +2652,51 @@ function createChannelConnectionService(options) {
     });
   }
 
+  async function recordWhatsAppDeliveryStatus(tenantId, phoneNumberId, status, actor) {
+    const clean = assertTenantChannel(tenantId, "whatsapp");
+    const cleanPhone = cleanText(phoneNumberId, 240);
+    if (!cleanPhone) throw new ChannelConnectionError("invalid_channel_request", 400, "WhatsApp phone is missing");
+    const state = cleanText(status && status.status, 80).toLowerCase();
+    const occurredAt = whatsappStatusOccurredAt(status, now());
+    const errorCodes = whatsappStatusErrorCodes(status);
+    const event = {
+      actor: actorLabel(actor || "system:meta-webhook"),
+      details: {
+        status: state || "unknown",
+        phone_number_suffix: cleanPhone.slice(-8),
+        message_id_suffix: cleanText(status && status.id, 500).slice(-16),
+        occurred_at: occurredAt,
+        meta_code: errorCodes.has(131042) ? 131042 : null
+      }
+    };
+    let transition = null;
+    if (state === "failed" && errorCodes.has(131042)) {
+      if (typeof store.markWhatsAppOutboundBillingBlocked !== "function") {
+        throw new ChannelConnectionError("channel_store_unavailable", 503, "Durable WhatsApp billing state is unavailable");
+      }
+      event.action = "whatsapp_outbound_billing_blocked";
+      transition = await store.markWhatsAppOutboundBillingBlocked(clean.tenantId, cleanPhone, {
+        occurred_at: occurredAt,
+        updated_at: iso(now())
+      }, event);
+    } else if (["delivered", "read"].includes(state)) {
+      if (typeof store.clearWhatsAppOutboundBillingBlocked !== "function") {
+        throw new ChannelConnectionError("channel_store_unavailable", 503, "Durable WhatsApp billing recovery state is unavailable");
+      }
+      event.action = "whatsapp_outbound_billing_recovered";
+      transition = await store.clearWhatsAppOutboundBillingBlocked(clean.tenantId, cleanPhone, {
+        occurred_at: occurredAt,
+        updated_at: iso(now())
+      }, event);
+    }
+    const row = transition && transition.row || await store.get(clean.tenantId, "whatsapp");
+    return {
+      updated: !!(transition && transition.updated),
+      outbound_billing_blocked: whatsappOutboundBillingBlocked(row),
+      connection: row ? publicConnection(row, { superAdmin: true }) : null
+    };
+  }
+
   async function connectCandidate(tenantId, channel, actor, candidate) {
     if (channel === "whatsapp") {
       throw new ChannelConnectionError(
@@ -2824,6 +3109,8 @@ function createChannelConnectionService(options) {
       return !!(provider && provider.configured(cleanChannel(channel)));
     },
 
+    recordWhatsAppDeliveryStatus,
+
     async adoptExisting(tenantId, channel, actor, candidate) {
       const clean = assertTenantChannel(tenantId, channel);
       if (clean.channel === "whatsapp") {
@@ -3141,6 +3428,12 @@ function createChannelConnectionService(options) {
         } catch (error) {
           result = { ok: false, error: internalError(error) };
         }
+      }
+      if (clean.channel === "whatsapp" && whatsappOutboundBillingBlocked(record)) {
+        // A read-only Graph check cannot prove that outbound billing works.
+        // Preserve the block until Meta delivers or reads a newer message.
+        const current = await store.get(clean.tenantId, "whatsapp");
+        return publicConnection(current || record, { superAdmin: true });
       }
       const checkedAt = iso(now());
       const activationStillPending = clean.channel === "whatsapp" && !result.ok &&

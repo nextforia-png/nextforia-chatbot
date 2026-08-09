@@ -7,11 +7,13 @@ const {
   ChannelConnectionError,
   InMemoryChannelConnectionStore,
   MetaChannelProvider,
+  SupabaseChannelConnectionStore,
   createChannelConnectionService,
   createLegacyConnections,
   createOAuthState,
   readOAuthState
 } = require("./channel-connections");
+const { encryptStoredText } = require("./security");
 
 function expectCode(promise, code) {
   return promise.then(function () {
@@ -721,6 +723,216 @@ function expectCode(promise, code) {
   assert.strictEqual(failedMessenger.status, "needs_attention");
   assert.strictEqual(failedMessenger.last_error, "OAuth code invalid");
   assert(!JSON.stringify(all).includes("secret-page-token"));
+
+  const billingStore = new InMemoryChannelConnectionStore();
+  const billingCredential = encryptStoredText(JSON.stringify({
+    access_token: "billing-test-token",
+    phone_number_id: "phone-b",
+    whatsapp_business_account_id: "waba-b"
+  }), encryptionKey);
+  await billingStore.upsert({
+    tenant_id: "tenant-a",
+    channel: "whatsapp",
+    status: "connected",
+    webhook_status: "subscribed",
+    phone_number_id: "phone-a",
+    whatsapp_business_account_id: "waba-a",
+    connected_at: "2026-08-08T12:00:00.000Z",
+    last_verified_at: "2026-08-08T12:30:00.000Z",
+    updated_at: "2026-08-08T12:30:00.000Z",
+    credentials_ciphertext: billingCredential
+  });
+  await billingStore.upsert({
+    tenant_id: "tenant-b",
+    channel: "whatsapp",
+    status: "connected",
+    webhook_status: "subscribed",
+    phone_number_id: "phone-b",
+    whatsapp_business_account_id: "waba-b",
+    connected_at: "2026-08-08T12:00:00.000Z",
+    last_verified_at: "2026-08-08T12:30:00.000Z",
+    updated_at: "2026-08-08T12:30:00.000Z",
+    credentials_ciphertext: billingCredential
+  });
+  const billingService = createChannelConnectionService({
+    store: billingStore,
+    provider: {
+      configured: function () { return true; },
+      verify: async function () { return { ok: true, account_label: "+57 310 000 0000" }; }
+    },
+    encryptionKey,
+    now: function () { return new Date("2026-08-08T14:00:00.000Z"); }
+  });
+  const failedBilling = await billingService.recordWhatsAppDeliveryStatus("tenant-b", "phone-b", {
+    id: "wamid.billing-failed",
+    status: "failed",
+    timestamp: String(Date.parse("2026-08-08T13:00:00.000Z") / 1000),
+    errors: [{ code: 131042 }]
+  }, "system:meta-webhook");
+  assert.strictEqual(failedBilling.updated, true);
+  assert.strictEqual(failedBilling.outbound_billing_blocked, true);
+  assert.strictEqual(failedBilling.connection.status, "needs_attention");
+  assert.strictEqual(failedBilling.connection.outbound_billing_blocked, true);
+  assert.match(failedBilling.connection.activation_message, /método de pago válido/i);
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).status, "connected",
+    "durable routing remains connected so inbound webhooks keep reaching the tenant");
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).webhook_status, "outbound_billing_blocked");
+  assert.strictEqual(
+    (await billingStore.get("tenant-b", "whatsapp")).whatsapp_outbound_billing_status_at,
+    "2026-08-08T13:00:00.000Z",
+    "the failure timestamp is the durable billing-status watermark"
+  );
+  assert.strictEqual((await billingStore.get("tenant-a", "whatsapp")).webhook_status, "subscribed",
+    "tenant B billing failures must never affect tenant A");
+
+  const readOnlyCheck = await billingService.verify("tenant-b", "whatsapp", "owner@tenant-b.example");
+  assert.strictEqual(readOnlyCheck.status, "needs_attention", "read-only Meta verification cannot clear billing");
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).webhook_status, "outbound_billing_blocked");
+
+  await billingService.recordWhatsAppDeliveryStatus("tenant-b", "phone-b", {
+    id: "wamid.old-delivery",
+    status: "delivered",
+    timestamp: String(Date.parse("2026-08-08T12:59:59.000Z") / 1000)
+  }, "system:meta-webhook");
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).webhook_status, "outbound_billing_blocked",
+    "out-of-order delivery evidence older than the failure cannot recover the connection");
+
+  await billingService.recordWhatsAppDeliveryStatus("tenant-a", "phone-b", {
+    id: "wamid.wrong-tenant",
+    status: "delivered",
+    timestamp: String(Date.parse("2026-08-08T13:05:00.000Z") / 1000)
+  }, "system:meta-webhook");
+  assert.strictEqual((await billingStore.get("tenant-a", "whatsapp")).webhook_status, "subscribed");
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).webhook_status, "outbound_billing_blocked");
+
+  const recoveredBilling = await billingService.recordWhatsAppDeliveryStatus("tenant-b", "phone-b", {
+    id: "wamid.new-delivery",
+    status: "delivered",
+    timestamp: String(Date.parse("2026-08-08T13:05:00.000Z") / 1000)
+  }, "system:meta-webhook");
+  assert.strictEqual(recoveredBilling.updated, true);
+  assert.strictEqual(recoveredBilling.outbound_billing_blocked, false);
+  assert.strictEqual(recoveredBilling.connection.status, "connected");
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).webhook_status, "subscribed");
+  assert.strictEqual(
+    (await billingStore.get("tenant-b", "whatsapp")).whatsapp_outbound_billing_status_at,
+    "2026-08-08T13:05:00.000Z"
+  );
+  const lateBillingFailure = await billingService.recordWhatsAppDeliveryStatus("tenant-b", "phone-b", {
+    id: "wamid.late-billing-failed",
+    status: "failed",
+    timestamp: String(Date.parse("2026-08-08T13:00:00.000Z") / 1000),
+    errors: [{ code: 131042 }]
+  }, "system:meta-webhook");
+  assert.strictEqual(lateBillingFailure.updated, false,
+    "a late failure at or below the durable watermark must be ignored");
+  assert.strictEqual(lateBillingFailure.outbound_billing_blocked, false);
+  assert.strictEqual((await billingStore.get("tenant-b", "whatsapp")).webhook_status, "subscribed");
+  assert.strictEqual(
+    (await billingStore.get("tenant-b", "whatsapp")).whatsapp_outbound_billing_status_at,
+    "2026-08-08T13:05:00.000Z"
+  );
+  const equalTimestampDelivery = await billingService.recordWhatsAppDeliveryStatus("tenant-a", "phone-a", {
+    id: "wamid.equal-time-delivery",
+    status: "delivered",
+    timestamp: String(Date.parse("2026-08-08T13:10:00.000Z") / 1000)
+  }, "system:meta-webhook");
+  assert.strictEqual(equalTimestampDelivery.updated, true);
+  assert.strictEqual(equalTimestampDelivery.outbound_billing_blocked, false);
+  const equalTimestampFailure = await billingService.recordWhatsAppDeliveryStatus("tenant-a", "phone-a", {
+    id: "wamid.equal-time-failure",
+    status: "failed",
+    timestamp: String(Date.parse("2026-08-08T13:10:00.000Z") / 1000),
+    errors: [{ code: 131042 }]
+  }, "system:meta-webhook");
+  assert.strictEqual(equalTimestampFailure.updated, true,
+    "a 131042 failure must win when it has the same Meta timestamp as delivered evidence");
+  assert.strictEqual(equalTimestampFailure.outbound_billing_blocked, true);
+  assert.strictEqual((await billingStore.get("tenant-a", "whatsapp")).webhook_status,
+    "outbound_billing_blocked");
+  assert.strictEqual(
+    (await billingStore.get("tenant-a", "whatsapp")).whatsapp_outbound_billing_status_at,
+    "2026-08-08T13:10:00.000Z"
+  );
+  assert(billingStore.audit.some(function (event) { return event.action === "whatsapp_outbound_billing_blocked"; }));
+  assert(billingStore.audit.some(function (event) { return event.action === "whatsapp_outbound_billing_recovered"; }));
+
+  let casCurrent = {
+    tenant_id: "tenant-cas",
+    channel: "whatsapp",
+    status: "connected",
+    webhook_status: "subscribed",
+    phone_number_id: "phone-cas",
+    connected_at: "2026-08-08T12:00:00.000Z",
+    updated_at: "2026-08-08T12:30:00.000Z"
+  };
+  let casPatchCalls = 0;
+  const casAxios = {
+    get: async function () { return { data: [Object.assign({}, casCurrent)] }; },
+    patch: async function (_, body, options) {
+      casPatchCalls++;
+      if (casPatchCalls === 1) {
+        casCurrent.updated_at = "2026-08-08T12:45:00.000Z";
+        return { data: [] };
+      }
+      assert.strictEqual(options.params.updated_at, "eq." + casCurrent.updated_at);
+      casCurrent = Object.assign({}, casCurrent, body);
+      return { data: [Object.assign({}, casCurrent)] };
+    },
+    post: async function () { return { data: null }; }
+  };
+  const casStore = new SupabaseChannelConnectionStore({
+    url: "https://supabase.example",
+    headers: { apikey: "test" },
+    axiosClient: casAxios
+  });
+  const casResult = await casStore.markWhatsAppOutboundBillingBlocked("tenant-cas", "phone-cas", {
+    occurred_at: "2026-08-08T13:00:00.000Z",
+    updated_at: "2026-08-08T14:00:00.000Z"
+  }, { action: "whatsapp_outbound_billing_blocked", actor: "test" });
+  assert.strictEqual(casResult.updated, true);
+  assert.strictEqual(casPatchCalls, 2, "a bounded CAS retry must survive one concurrent row update");
+  assert.strictEqual(casCurrent.whatsapp_outbound_billing_status_at, "2026-08-08T13:00:00.000Z");
+  const casRecovery = await casStore.clearWhatsAppOutboundBillingBlocked("tenant-cas", "phone-cas", {
+    occurred_at: "2026-08-08T13:05:00.000Z",
+    updated_at: "2026-08-08T14:05:00.000Z"
+  }, { action: "whatsapp_outbound_billing_recovered", actor: "test" });
+  assert.strictEqual(casRecovery.updated, true);
+  assert.strictEqual(casCurrent.webhook_status, "subscribed");
+  assert.strictEqual(casCurrent.whatsapp_outbound_billing_status_at, "2026-08-08T13:05:00.000Z");
+  const casPatchCallsBeforeLateFailure = casPatchCalls;
+  const casLateFailure = await casStore.markWhatsAppOutboundBillingBlocked("tenant-cas", "phone-cas", {
+    occurred_at: "2026-08-08T13:00:00.000Z",
+    updated_at: "2026-08-08T14:10:00.000Z"
+  }, { action: "whatsapp_outbound_billing_blocked", actor: "test" });
+  assert.strictEqual(casLateFailure.updated, false);
+  assert.strictEqual(casPatchCalls, casPatchCallsBeforeLateFailure,
+    "the Supabase adapter must reject a stale failure before issuing a CAS write");
+  assert.strictEqual(casCurrent.webhook_status, "subscribed");
+  assert.strictEqual(casCurrent.whatsapp_outbound_billing_status_at, "2026-08-08T13:05:00.000Z");
+  const casEqualDelivery = await casStore.clearWhatsAppOutboundBillingBlocked("tenant-cas", "phone-cas", {
+    occurred_at: "2026-08-08T13:15:00.000Z",
+    updated_at: "2026-08-08T14:15:00.000Z"
+  }, { action: "whatsapp_outbound_billing_recovered", actor: "test" });
+  assert.strictEqual(casEqualDelivery.updated, true);
+  assert.strictEqual(casCurrent.webhook_status, "subscribed");
+  assert.strictEqual(casCurrent.whatsapp_outbound_billing_status_at, "2026-08-08T13:15:00.000Z");
+  const casEqualFailure = await casStore.markWhatsAppOutboundBillingBlocked("tenant-cas", "phone-cas", {
+    occurred_at: "2026-08-08T13:15:00.000Z",
+    updated_at: "2026-08-08T14:15:01.000Z"
+  }, { action: "whatsapp_outbound_billing_blocked", actor: "test" });
+  assert.strictEqual(casEqualFailure.updated, true,
+    "the Supabase CAS must let a same-timestamp 131042 failure win over delivered");
+  assert.strictEqual(casCurrent.webhook_status, "outbound_billing_blocked");
+  assert.strictEqual(casCurrent.whatsapp_outbound_billing_status_at, "2026-08-08T13:15:00.000Z");
+  const casPatchCallsBeforeDuplicateFailure = casPatchCalls;
+  const casDuplicateFailure = await casStore.markWhatsAppOutboundBillingBlocked("tenant-cas", "phone-cas", {
+    occurred_at: "2026-08-08T13:15:00.000Z",
+    updated_at: "2026-08-08T14:15:02.000Z"
+  }, { action: "whatsapp_outbound_billing_blocked", actor: "test" });
+  assert.strictEqual(casDuplicateFailure.updated, false,
+    "the same failure is idempotent once the connection is already blocked");
+  assert.strictEqual(casPatchCalls, casPatchCallsBeforeDuplicateFailure);
 
   const appendRows = [];
   const appendOnlyStore = new AppendOnlyChannelConnectionStore({

@@ -115,6 +115,7 @@ const {
 } = require("./bot-personality");
 const { resolveLiveBotConfiguration } = require("./live-bot-configuration");
 const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
+const conversationTurnContext = require("./conversation-turn-context");
 const {
   RetargetingEngine,
   REAL_SENDS_ENABLED: RETARGETING_REAL_SENDS_ENABLED,
@@ -182,9 +183,15 @@ const {
 const { runStartupProtectionDiagnostics } = require("./startup-protection");
 const {
   SupabaseMetaWebhookInboxStore,
+  classifyWhatsAppDeliveryError,
   createMetaWebhookInbox,
-  extractWhatsAppMessageEvents
+  extractWhatsAppMessageEvents,
+  whatsappDeliveryFailure
 } = require("./meta-webhook-inbox");
+const {
+  resumeWhatsAppPendingReply,
+  whatsappDeliveryCheckpointDecision
+} = require("./whatsapp-delivery-checkpoint");
 const {
   buildServiceAreaContext,
   buildServiceAreaQuestion,
@@ -320,7 +327,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v347-whatsapp-self-service";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v348-whatsapp-v4-delivery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -769,7 +776,6 @@ const pendingRatings = new Set();
 let lastCreditAlert = 0;  // timestamp del último aviso de saldo bajo (anti-spam)
 const searchCache = new Map();  // {query: {result, ts}} — evita búsquedas duplicadas en <5min
 const zeroResultAlerts = new Map();  // {query: timestamp} — anti-spam de alertas de 0 resultados
-let turnZeroSearchActive = false;  // (v33.4) true cuando la búsqueda del turno dio 0 resultados — activa el blindaje en sendText
 
 // Contador persistente (v33) — vive en memoria, se reinicia cuando Render duerme
 const botStats = {
@@ -795,6 +801,7 @@ const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
 const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
+const processedWhatsAppStatusEventIds = new Set();
 const recentManagedInstagramOutbound = new Map();
 const inboundMessageWindows = new Map();
 const instagramRuntimeState = {
@@ -863,12 +870,27 @@ const whatsappRuntimeState = {
   webhook_requests: 0,
   inbound_messages: 0,
   outbound_messages: 0,
+  status_events: 0,
+  message_statuses: { sent: 0, delivered: 0, read: 0, failed: 0 },
   last_webhook_at: null,
   last_inbound_at: null,
   last_outbound_at: null,
+  last_outbound_message_id_suffix: null,
+  last_status_at: null,
+  last_status: null,
+  last_status_tenant_id: null,
+  last_status_message_id_suffix: null,
+  last_status_recipient_suffix: null,
+  last_status_error_code: null,
   last_error_at: null,
   last_error_stage: null,
   last_error_code: null,
+  last_error_subcode: null,
+  last_error_type: null,
+  last_error_message: null,
+  retryable_outbound_failures: 0,
+  permanent_outbound_failures: 0,
+  outbound_billing_blocked: false,
   last_webhook_object: null,
   last_signature_present: null,
   last_signature_format_valid: null,
@@ -908,10 +930,6 @@ let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
 const retargetingAppendLocks = new Map();
-let turnTools = [];        // tools usadas en el turno actual
-let turnZeroQueries = [];  // búsquedas con 0 resultados en el turno
-let turnHandoff = false;   // si el turno derivó a humano (Eliana)
-let turnRating = null;     // rating capturado en el turno
 
 // ─── Persistencia en Supabase (v37) ───────────────────────────────────
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
@@ -1916,6 +1934,10 @@ async function outboundRuntimeForConversation(userId, options) {
     page_id: cleanRuntimeText(options && (options.pageId || options.page_id), 240),
     accessToken: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
     access_token: cleanRuntimeText(options && (options.accessToken || options.access_token), 4096),
+    sourceEventId: cleanRuntimeText(options && (options.sourceEventId || options.source_event_id), 500),
+    source_event_id: cleanRuntimeText(options && (options.sourceEventId || options.source_event_id), 500),
+    requirePersistence: options && (options.requirePersistence === true || options.require_persistence === true),
+    require_persistence: options && (options.requirePersistence === true || options.require_persistence === true),
     source: options && options.source || "options"
   };
   const suppliedDestination = channel === "whatsapp"
@@ -1925,11 +1947,21 @@ async function outboundRuntimeForConversation(userId, options) {
     const byTenant = await resolveChannelRuntimeForTenant(supplied.tenantId, channel);
     if (!byTenant && channel === "whatsapp" && supplied.source === "signed_webhook_pending_claim") {
       const pending = await resolveUniquePendingWhatsAppRuntime(suppliedDestination, supplied.tenantId);
-      return pending ? rememberConversationRuntime(userId, pending) : null;
+      return pending ? rememberConversationRuntime(userId, Object.assign({}, pending, {
+        sourceEventId: supplied.sourceEventId,
+        source_event_id: supplied.source_event_id,
+        requirePersistence: supplied.requirePersistence,
+        require_persistence: supplied.require_persistence
+      })) : null;
     }
     if (!byTenant) return null;
     if (suppliedDestination && !runtimeMatchesDestination(byTenant, channel, suppliedDestination)) return null;
-    return rememberConversationRuntime(userId, byTenant);
+    return rememberConversationRuntime(userId, Object.assign({}, byTenant, {
+      sourceEventId: supplied.sourceEventId,
+      source_event_id: supplied.source_event_id,
+      requirePersistence: supplied.requirePersistence,
+      require_persistence: supplied.require_persistence
+    }));
   }
   if (suppliedDestination) {
     const byDestination = await resolveActiveRuntimeForDestination(channel, suppliedDestination);
@@ -1942,7 +1974,12 @@ async function outboundRuntimeForConversation(userId, options) {
       channel
     );
     if (current && runtimeMatchesDestination(current, channel, runtimeDestinationId(remembered, channel))) {
-      return rememberConversationRuntime(userId, current);
+      return rememberConversationRuntime(userId, Object.assign({}, current, {
+        sourceEventId: remembered.sourceEventId || remembered.source_event_id,
+        source_event_id: remembered.sourceEventId || remembered.source_event_id,
+        requirePersistence: remembered.requirePersistence === true || remembered.require_persistence === true,
+        require_persistence: remembered.requirePersistence === true || remembered.require_persistence === true
+      }));
     }
   }
   return null;
@@ -2416,6 +2453,8 @@ const retargetingStore = {
       if (existing.some(function (row) { return row.id === event.id; })) return event;
       const rec = {
         ts: event.created_at,
+        tenantId,
+        channel: "whatsapp",
         userId: retargetingRecordId(tenantId),
         userMessage: "",
         botReply: "[RetargetingEvent] " + JSON.stringify(event),
@@ -2966,6 +3005,9 @@ function rememberConversationTurn(rec) {
 function recordTurn(userId, userMessage, botReply, status, meta) {
   const requirePersistence = meta && (meta.requirePersistence === true || meta.require_persistence === true);
   try {
+    const turn = conversationTurnContext.isActive()
+      ? conversationTurnContext.snapshot()
+      : { tools: [], zeroResultQueries: [], handoff: false, rating: null, zeroSearchActive: false };
     const cleanUserId = normalizeConversationUserId(userId) || userId;
     const explicitTenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id));
     const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
@@ -2982,12 +3024,12 @@ function recordTurn(userId, userMessage, botReply, status, meta) {
       channel: conversationChannel(cleanUserId),
       userId: cleanUserId,
       userMessage: String(userMessage || "").slice(0, 500),
-      botReply: String(botReply || "").slice(0, 1000),
-      tools: turnTools.slice(),
-      zeroResultQueries: turnZeroQueries.slice(),
-      handoff: turnHandoff,
-      rating: turnRating,
-      numTools: turnTools.length,
+      botReply: String(botReply || "").slice(0, status === "outbound_pending" ? 4096 : 1000),
+      tools: turn.tools,
+      zeroResultQueries: turn.zeroResultQueries,
+      handoff: turn.handoff,
+      rating: turn.rating,
+      numTools: turn.tools.length,
       status: status || "ok",
       sourceEventId: cleanRuntimeText(meta && (meta.sourceEventId || meta.source_event_id), 500) || null
     };
@@ -3053,6 +3095,9 @@ async function persistWhatsAppInboundReceipt(userId, message, runtime) {
   const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
   if (!sourceEventId || !tenantId) throw new Error("whatsapp_inbound_receipt_identity_missing");
   const existing = await supabaseFetchSourceEventStrict(tenantId, "whatsapp", sourceEventId);
+  if (existing && existing.status === "outbound_pending" && existing.botReply) {
+    return { already_processed: false, pending_reply: existing, tenant_id: tenantId };
+  }
   if (existing && existing.status !== "inbound_received") {
     return { already_processed: true, tenant_id: tenantId };
   }
@@ -3078,14 +3123,43 @@ async function persistWhatsAppInboundReceipt(userId, message, runtime) {
   return { already_processed: false, tenant_id: tenantId };
 }
 
+async function persistWhatsAppPendingReplyResult(receipt, runtime, status) {
+  const rec = {
+    ts: new Date().toISOString(),
+    tenantId: cleanTenantId(receipt && receipt.tenantId || runtime && (runtime.tenantId || runtime.tenant_id)),
+    phoneNumberId: cleanRuntimeText(
+      receipt && receipt.phoneNumberId || runtime && (runtime.phoneNumberId || runtime.phone_number_id),
+      240
+    ) || null,
+    channel: "whatsapp",
+    userId: normalizeConversationUserId(receipt && receipt.userId),
+    userMessage: String(receipt && receipt.userMessage || "").slice(0, 500),
+    botReply: String(receipt && receipt.botReply || "").slice(0, 4096),
+    tools: Array.isArray(receipt && receipt.tools) ? receipt.tools.slice() : [],
+    zeroResultQueries: Array.isArray(receipt && receipt.zeroResultQueries) ? receipt.zeroResultQueries.slice() : [],
+    handoff: receipt && receipt.handoff === true,
+    rating: receipt && receipt.rating,
+    numTools: Number(receipt && receipt.numTools) || 0,
+    status,
+    sourceEventId: cleanRuntimeText(receipt && receipt.sourceEventId, 500),
+    eval: receipt && receipt.eval
+  };
+  if (!rec.tenantId || !rec.userId || !rec.sourceEventId) {
+    throw new Error("whatsapp_pending_reply_identity_missing");
+  }
+  await supabaseInsertStrict(rec);
+  rememberConversationTurn(rec);
+  return rec;
+}
+
 async function recordHumanPausedInbound(userId, message, runtime) {
-  trackIncomingMessage(userId);
-  turnZeroSearchActive = false;
-  turnTools = ["human_handoff_active"];
-  turnZeroQueries = [];
-  turnHandoff = true;
-  turnRating = null;
-  await recordTurn(userId, describeInboundMessage(message), "", "ok", runtime);
+  return conversationTurnContext.run({
+    tools: ["human_handoff_active"],
+    handoff: true
+  }, async function () {
+    trackIncomingMessage(userId);
+    await recordTurn(userId, describeInboundMessage(message), "", "ok", runtime);
+  });
 }
 
 async function humanControlActiveFor(userId, tenantId) {
@@ -4112,22 +4186,25 @@ async function sendText(to, text, options) {
   //     un problema/técnico/despiste/lío. Si aparece, reemplazamos TODO el mensaje por una
   //     respuesta de buen servicio que reconoce que no tenemos eso y ofrece otras opciones.
   // (B) LINK DE CATÁLOGO VACÍO — solo cuando la búsqueda del turno dio 0 resultados.
+  const turnContextActive = conversationTurnContext.isActive();
+  const zeroSearchActive = turnContextActive && conversationTurnContext.get("zeroSearchActive");
   if (typeof text === "string") {
     const excusePattern = /t[eé]cnic|despist|inconvenient|se me complic|un (peque[nñ]o )?l[ií]o|dificultad(es)?|no (puedo|logro) (mostrar|cargar|acceder|ver el cat)|(?<!sin |ning[uú]n |no hay )problem/i;
     if (excusePattern.test(text)) {
       log("warn", "blocked_technical_excuse", { to, original: text.slice(0, 140) });
       text = "En este momento no tengo ese exacto en el catálogo, pero con muchísimo gusto te ayudo a encontrar algo perfecto 💛 Cuéntame: ¿qué edad tiene tu peque y qué tipo de juguete le gusta? Así te muestro las mejores opciones que sí tenemos ✨";
-      turnZeroSearchActive = false;
-    } else if (turnZeroSearchActive) {
+      if (turnContextActive) conversationTurnContext.set("zeroSearchActive", false);
+    } else if (zeroSearchActive) {
       const emptyCatalogLink = /https?:\/\/[^\s]*ravtoys\.com\/search\?q=[^\s]*/i;
       if (emptyCatalogLink.test(text)) {
         log("warn", "blocked_empty_catalog_link", { to, original: text.slice(0, 140) });
         text = "En este momento no tengo eso exacto, pero con gusto te ayudo a encontrar algo ideal 💛 Cuéntame qué edad tiene tu peque y qué tipo de juguete busca, y te muestro las mejores opciones que tenemos ✨";
-        turnZeroSearchActive = false;
+        conversationTurnContext.set("zeroSearchActive", false);
       }
     }
   }
   const recipient = parseChannelRecipient(to);
+  let deliveryRuntime = options || (recipient.channel === "whatsapp" ? cachedConversationRuntime(to, null) : null);
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
@@ -4171,16 +4248,20 @@ async function sendText(to, text, options) {
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
+    deliveryRuntime = runtime || deliveryRuntime;
     const phoneNumberId = runtime && runtime.phoneNumberId;
     const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
-    await axios.post(
+    const response = await axios.post(
       `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneNumberId}/messages`,
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
     whatsappRuntimeState.outbound_messages++;
     whatsappRuntimeState.last_outbound_at = new Date().toISOString();
+    whatsappRuntimeState.last_outbound_message_id_suffix = String(
+      response && response.data && response.data.messages && response.data.messages[0] && response.data.messages[0].id || ""
+    ).slice(-16) || null;
     console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
     return true;
   } catch (err) {
@@ -4203,9 +4284,25 @@ async function sendText(to, text, options) {
     }
     if (recipient.channel === "whatsapp") {
       const metaError = err.response?.data?.error || {};
+      const classification = classifyWhatsAppDeliveryError(err);
       whatsappRuntimeState.last_error_at = new Date().toISOString();
       whatsappRuntimeState.last_error_stage = "send_text";
       whatsappRuntimeState.last_error_code = metaError.code || null;
+      whatsappRuntimeState.last_error_subcode = metaError.error_subcode || null;
+      whatsappRuntimeState.last_error_type = metaError.type || err.code || null;
+      whatsappRuntimeState.last_error_message = String(metaError.message || err.message || "whatsapp_send_failed")
+        .replace(/(?:EA[A-Za-z0-9]{20,}|EAA[A-Za-z0-9]{20,})/g, "[redacted]")
+        .slice(0, 300);
+      if (classification.retryable) whatsappRuntimeState.retryable_outbound_failures++;
+      else whatsappRuntimeState.permanent_outbound_failures++;
+      const durableInbound = deliveryRuntime && (
+        deliveryRuntime.requirePersistence === true || deliveryRuntime.require_persistence === true
+      );
+      if (durableInbound) {
+        const deliveryError = whatsappDeliveryFailure(err);
+        deliveryError.outbound_text = String(text || "").slice(0, 4096);
+        throw deliveryError;
+      }
     }
     console.error(`${channelLabel(to)} text error:`, err.response?.data?.error || err.message);
     return false;
@@ -4285,6 +4382,7 @@ async function sendTemplate(to, templateName, params, options) {
 
 async function sendImage(to, imageUrl, caption, options) {
   const recipient = parseChannelRecipient(to);
+  let deliveryRuntime = options || (recipient.channel === "whatsapp" ? cachedConversationRuntime(to, null) : null);
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
@@ -4318,6 +4416,7 @@ async function sendImage(to, imageUrl, caption, options) {
       return true;
     }
     const runtime = await outboundRuntimeForConversation(to, options);
+    deliveryRuntime = runtime || deliveryRuntime;
     const phoneNumberId = runtime && runtime.phoneNumberId;
     const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
@@ -4328,6 +4427,19 @@ async function sendImage(to, imageUrl, caption, options) {
     );
     return true;
   } catch (err) {
+    const durableInbound = recipient.channel === "whatsapp" && deliveryRuntime && (
+      deliveryRuntime.requirePersistence === true || deliveryRuntime.require_persistence === true
+    );
+    if (durableInbound) {
+      const classification = classifyWhatsAppDeliveryError(err);
+      whatsappRuntimeState.last_error_at = new Date().toISOString();
+      whatsappRuntimeState.last_error_stage = "send_image";
+      whatsappRuntimeState.last_error_code = classification.meta_code;
+      whatsappRuntimeState.last_error_subcode = classification.meta_subcode;
+      if (classification.retryable) whatsappRuntimeState.retryable_outbound_failures++;
+      else whatsappRuntimeState.permanent_outbound_failures++;
+      throw whatsappDeliveryFailure(err);
+    }
     console.error(`${channelLabel(to)} image error:`, err.response?.data?.error || err.message);
     return false;
   }
@@ -4462,8 +4574,10 @@ async function sendLocation(to, lat, lng, name, address, options) {
     await sendText(to, `${name}\n${address}\nhttps://www.google.com/maps?q=${lat},${lng}`);
     return;
   }
+  let deliveryRuntime = options || cachedConversationRuntime(to, null);
   try {
     const runtime = await outboundRuntimeForConversation(to, options);
+    deliveryRuntime = runtime || deliveryRuntime;
     const phoneNumberId = runtime && runtime.phoneNumberId;
     const accessToken = runtime && runtime.accessToken;
     if (!phoneNumberId || !accessToken) throw new Error("WhatsApp messaging is not configured");
@@ -4473,6 +4587,19 @@ async function sendLocation(to, lat, lng, name, address, options) {
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
   } catch (err) {
+    const durableInbound = deliveryRuntime && (
+      deliveryRuntime.requirePersistence === true || deliveryRuntime.require_persistence === true
+    );
+    if (durableInbound) {
+      const classification = classifyWhatsAppDeliveryError(err);
+      whatsappRuntimeState.last_error_at = new Date().toISOString();
+      whatsappRuntimeState.last_error_stage = "send_location";
+      whatsappRuntimeState.last_error_code = classification.meta_code;
+      whatsappRuntimeState.last_error_subcode = classification.meta_subcode;
+      if (classification.retryable) whatsappRuntimeState.retryable_outbound_failures++;
+      else whatsappRuntimeState.permanent_outbound_failures++;
+      throw whatsappDeliveryFailure(err);
+    }
     console.error("WA location error:", err.response?.data?.error || err.message);
   }
 }
@@ -4551,7 +4678,7 @@ async function executeSendShippingInfo(userId) {
   return { sent: true };
 }
 
-async function executeLookupOrderStatus(userId, input) {
+async function executeLookupOrderStatus(userId, input, tenantId) {
   const result = await lookupOrderStatus(input || {});
   log("info", "order_status_lookup", {
     userId,
@@ -4562,8 +4689,8 @@ async function executeLookupOrderStatus(userId, input) {
   });
   if (result.matched) {
     const purchaseEventId = "shopify-order:" + (result.order_name || input && input.order_number || "matched");
-    await recordRetargetingSignal(userId, "purchase_confirmed", purchaseEventId, "shopify");
-    await createRetargetingJobForCustomer(userId, "post_purchase", purchaseEventId + ":post-purchase", {
+    await recordRetargetingSignal(tenantId, userId, "purchase_confirmed", purchaseEventId, "shopify");
+    await createRetargetingJobForCustomer(tenantId, userId, "post_purchase", purchaseEventId + ":post-purchase", {
       source_at: new Date().toISOString(),
       last_customer_message_at: new Date().toISOString()
     });
@@ -4845,11 +4972,11 @@ async function executeNotifyTeam(userId, stateId) {
 }
 
 async function executeHumanHandoff(userId, input, runtime) {
-  const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || DEFAULT_TENANT_ID;
+  const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
+  if (!tenantId) throw new Error("retargeting_tenant_required");
   const stateKey = tenantConversationStateKey(userId, tenantId);
-  addHumanHandoff(userId, tenantId);
   const reason = input.reason || "solicitud_cliente";
-  await recordRetargetingSignal(userId, "handoff", "handoff:" + Date.now(), "system");
+  await recordRetargetingSignal(tenantId, userId, "handoff", "handoff:" + Date.now(), "system");
   const state = checkouts.get(stateKey);
   let notif = `🚨 *Handoff a humano*\nCanal: ${channelLabel(userId)}\nCliente: ${channelContactLabel(userId)}\nMotivo: ${reason}\n\n`;
   if (state?.products && state.products.length > 0 && reason !== "venta_cerrada") {
@@ -4862,9 +4989,24 @@ async function executeHumanHandoff(userId, input, runtime) {
     }
   }
   notif += `Toma el control en ${channelLabel(userId)}.`;
-  await notifyTeam(notif, userId);
   const customerMessage = "¡Listo! 🎉 Ya te conecté con alguien del equipo. Te escribirá en unos minutos por este mismo chat. 🙏";
-  const delivered = await sendText(userId, customerMessage, runtime);
+  let delivered;
+  try {
+    delivered = await sendText(userId, customerMessage, runtime);
+  } catch (error) {
+    // A definitive rejection cannot be recovered by replaying this webhook.
+    // Keep the tenant-local escalation visible, but never notify RAV for an
+    // external tenant. Retryable failures leave handoff inactive so replay can
+    // still deliver the customer acknowledgement.
+    if (error && error.whatsappDeliveryFailure && error.permanent === true) {
+      addHumanHandoff(userId, tenantId);
+    }
+    throw error;
+  }
+  addHumanHandoff(userId, tenantId);
+  // The global notification list belongs to RAV. External tenants retain the
+  // handoff in their own Customer Panel and must never notify RAV recipients.
+  if (isRavTenantId(tenantId)) await notifyTeam(notif, userId);
   console.log(`Handoff activated for ${maskedIdentifier(userId)}, reason: ${String(reason || "").slice(0, 80)}`);
   return { handoff: true, bot_paused: true, delivered: !!delivered, customer_message: customerMessage };
 }
@@ -4965,6 +5107,12 @@ function acceptInboundMessageRate(userId, now) {
 }
 
 async function handleConversation(userId, userMessage, conversationMeta) {
+  return conversationTurnContext.run(function () {
+    return handleConversationInTurnContext(userId, userMessage, conversationMeta);
+  });
+}
+
+async function handleConversationInTurnContext(userId, userMessage, conversationMeta) {
   conversationMeta = conversationMeta || {};
   userId = normalizeConversationUserId(userId);
   userMessage = String(userMessage || "").trim();
@@ -5021,12 +5169,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   const previousActivityAt = conversationLastActiveAt.get(stateKey) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
   conversationLastActiveAt.set(stateKey, Date.now());
-  turnZeroSearchActive = false;  // (v33.4) reset por turno
-  turnTools = []; turnZeroQueries = []; turnHandoff = false; turnRating = null;  // (Tarea 1) reset logger
   if (await humanControlActiveFor(userId, tenantId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${maskedIdentifier(userId)}`);
-    turnHandoff = true;
-    turnTools.push("human_handoff_active");
+    conversationTurnContext.set("handoff", true);
+    conversationTurnContext.push("tools", "human_handoff_active");
     await recordTurn(userId, userMessage, "", "ok", conversationRuntime);
     return;
   }
@@ -5063,7 +5209,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
   });
   const tenantConfigurationPrompts = runtimePolicy.prompts;
   if (!runtimePolicy.ready) {
-    turnTools.push("tenant_configuration_required");
+    conversationTurnContext.push("tools", "tenant_configuration_required");
     log("error", "tenant_bot_response_blocked", {
       tenant_id: tenantId,
       channel: conversationRuntime.channel,
@@ -5099,7 +5245,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
     history.push({ role: "user", content: userMessage });
     history.push({ role: "assistant", content: question });
     conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
-    turnTools.push("service_area_confirmation");
+    conversationTurnContext.push("tools", "service_area_confirmation");
     const sent = await sendBotReply(question);
     if (sent) {
       rememberServiceAreaCheck(stateKey, {
@@ -5187,7 +5333,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
         const toolResults = [];
         let handoffCustomerReply = null;
         for (const toolUse of toolUses) {
-          turnTools.push(toolUse.name);  // (Tarea 1)
+          conversationTurnContext.push("tools", toolUse.name);
           let result;
           try {
             switch (toolUse.name) {
@@ -5200,8 +5346,10 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                   console.log(`Product search processed: ${result.products?.length || 0} found`);
                   searchedThisTurn = true;
                   lastSearchResultsThisTurn = result;
-                  turnZeroSearchActive = (!result || !result.products || result.products.length === 0);  // (v33.4)
-                  if (turnZeroSearchActive && result) turnZeroQueries.push(result.query);  // (Tarea 1)
+                  conversationTurnContext.set("zeroSearchActive", !result || !result.products || result.products.length === 0);
+                  if (conversationTurnContext.get("zeroSearchActive") && result) {
+                    conversationTurnContext.push("zeroResultQueries", result.query);
+                  }
                 }
                 break;
               case "send_product_card":
@@ -5220,13 +5368,13 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 result = await executeSendShippingInfo(userId);
                 break;
               case "lookup_order_status":
-                result = await executeLookupOrderStatus(userId, toolUse.input);
+                  result = await executeLookupOrderStatus(userId, toolUse.input, tenantId);
                 break;
               case "send_rating_request":
                 result = await executeSendRatingRequest(userId, stateKey);
                 break;
               case "save_rating":
-              turnRating = (toolUse.input && (toolUse.input.rating ?? toolUse.input.stars ?? toolUse.input.score)) ?? true;  // (Tarea 1)
+              conversationTurnContext.set("rating", (toolUse.input && (toolUse.input.rating ?? toolUse.input.stars ?? toolUse.input.score)) ?? true);
                 result = await executeSaveRating(userId, toolUse.input, stateKey);
                 break;
               case "save_warranty_field":
@@ -5238,7 +5386,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
               case "select_product_for_purchase":
                 result = await executeSelectProductForPurchase(userId, toolUse.input, stateKey);
                 if (result && (result.added || result.already_in_cart)) {
-                  await createRetargetingJobForCustomer(userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
+                  await createRetargetingJobForCustomer(tenantId, userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
                     source_at: conversationMeta.source_at || new Date().toISOString(),
                     last_customer_message_at: conversationMeta.source_at || new Date().toISOString(),
                     product_name: result.title
@@ -5261,7 +5409,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 result = await executeNotifyTeam(userId, stateKey);
                 break;
               case "request_human_handoff":
-              turnHandoff = true;  // (Tarea 1)
+              conversationTurnContext.set("handoff", true);
                 result = await executeHumanHandoff(userId, toolUse.input, conversationRuntime);
                 handoffCustomerReply = result && result.customer_message ? {
                   text: result.customer_message,
@@ -5278,6 +5426,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
                 result = { error: "Unknown tool: " + toolUse.name };
             }
           } catch (e) {
+            if (e && e.whatsappDeliveryFailure) throw e;
             console.error(`Tool ${toolUse.name} error:`, e.message);
             result = { error: e.message };
           }
@@ -5329,7 +5478,7 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       if (reply) await recordTurn(userId, userMessage, reply, replySent ? "ok" : "error", conversationRuntime);
       else await recordTurn(userId, userMessage, "", "fallback", conversationRuntime);
       if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
-        await createRetargetingJobForCustomer(userId, "high_intent", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":high-intent", {
+        await createRetargetingJobForCustomer(tenantId, userId, "high_intent", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":high-intent", {
           source_at: conversationMeta.source_at || new Date().toISOString(),
           last_customer_message_at: conversationMeta.source_at || new Date().toISOString(),
           preferred_name: customerMemory && customerMemory.preferred_name,
@@ -5338,6 +5487,24 @@ async function handleConversation(userId, userMessage, conversationMeta) {
       }
       return;
     } catch (err) {
+      if (err && err.whatsappDeliveryFailure) {
+        const checkpoint = whatsappDeliveryCheckpointDecision(err);
+        try {
+          await recordTurn(
+            userId,
+            userMessage,
+            checkpoint && checkpoint.outbound_text || "",
+            checkpoint && checkpoint.status || "error",
+            conversationRuntime
+          );
+        } catch (persistenceError) {
+          // Re-running tools without a durable checkpoint is unsafe.
+          persistenceError.permanent = true;
+          persistenceError.retryable = false;
+          throw persistenceError;
+        }
+        throw err;
+      }
       if (err && err.conversationPersistenceFailure) throw err;
       console.error("Claude error:", err.response?.data || err.message);
             botStats.anthropic.failedCalls++;
@@ -5384,6 +5551,8 @@ app.get("/webhook", (req, res) => {
 async function processWhatsAppInboxEvent(payload, inboxRow) {
   const value = payload && payload.value;
   const message = payload && payload.message;
+  const deliveryStatus = payload && payload.status;
+  if (value && deliveryStatus) return processWhatsAppStatusInboxEvent(value, deliveryStatus, inboxRow);
   if (!value || !message) {
     const invalid = new Error("invalid_whatsapp_webhook_event");
     invalid.permanent = true;
@@ -5406,13 +5575,27 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
     missingSender.permanent = true;
     throw missingSender;
   }
+  let receipt = null;
   if (inboxRow) {
     destination.sourceEventId = cleanRuntimeText(message.id, 500);
     destination.source_event_id = cleanRuntimeText(message.id, 500);
     destination.requirePersistence = true;
     destination.require_persistence = true;
-    const receipt = await persistWhatsAppInboundReceipt(from, message, destination);
+    receipt = await persistWhatsAppInboundReceipt(from, message, destination);
     if (receipt.already_processed) return { tenant_id: destination.tenantId };
+    if (receipt.pending_reply) {
+      await resumeWhatsAppPendingReply(receipt.pending_reply, {
+        sendText: function (outboundText) { return sendText(from, outboundText, destination); },
+        persistResult: function (status) {
+          return persistWhatsAppPendingReplyResult(receipt.pending_reply, destination, status);
+        },
+        activateHandoff: function () {
+          addHumanHandoff(from, destination.tenantId);
+          return Promise.resolve(true);
+        }
+      });
+      return { tenant_id: destination.tenantId, delivery_resumed: true };
+    }
   }
   whatsappRuntimeState.inbound_messages++;
   whatsappRuntimeState.last_inbound_at = new Date().toISOString();
@@ -5421,6 +5604,7 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
   const type = message.type;
   const inboundText = type === "text" ? message.text && message.text.body || "" : "";
   await recordRetargetingSignal(
+    destination.tenantId,
     from,
     isStopMessage(inboundText) ? "stop" : "customer_replied",
     message.id || "wa:" + Date.now(),
@@ -5518,6 +5702,79 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
   return { tenant_id: destination.tenantId };
 }
 
+async function processWhatsAppStatusInboxEvent(value, status, inboxRow) {
+  const destination = await resolveWhatsAppDestinationRuntime(value);
+  if (!destination.ok) {
+    const rejected = new Error(destination.reason || "delivery_status_destination_rejected");
+    rejected.permanent = ["ambiguous_destination_owner", "destination_asset_mismatch"].includes(destination.reason);
+    throw rejected;
+  }
+  const recipientId = normalizeConversationUserId(status && status.recipient_id);
+  if (!recipientId) {
+    const missingRecipient = new Error("whatsapp_delivery_status_recipient_missing");
+    missingRecipient.permanent = true;
+    throw missingRecipient;
+  }
+  const state = cleanRuntimeText(status && status.status, 80).toLowerCase();
+  const eventId = cleanRuntimeText(inboxRow && inboxRow.event_id, 500);
+  const errors = Array.isArray(status && status.errors) ? status.errors : [];
+  const errorCodes = errors.reduce(function (codes, error) {
+    [error && error.code, error && error.error_subcode].forEach(function (value) {
+      const code = cleanRuntimeText(value, 80);
+      if (code && !codes.includes(code)) codes.push(code);
+    });
+    return codes;
+  }, []).slice(0, 8);
+  const billingRelevant = state === "failed" && errorCodes.includes("131042") ||
+    ["delivered", "read"].includes(state);
+  if (billingRelevant) {
+    if (!channelConnectionService || typeof channelConnectionService.recordWhatsAppDeliveryStatus !== "function") {
+      throw new Error("whatsapp_billing_state_store_unavailable");
+    }
+    const billingState = await channelConnectionService.recordWhatsAppDeliveryStatus(
+      destination.tenantId,
+      destination.phoneNumberId,
+      status,
+      "system:meta-webhook"
+    );
+    whatsappRuntimeState.outbound_billing_blocked = billingState.outbound_billing_blocked === true;
+    if (billingState.updated) invalidateChannelRuntimeCache();
+  }
+  if (!eventId || !processedWhatsAppStatusEventIds.has(eventId)) {
+    whatsappRuntimeState.status_events++;
+    if (Object.prototype.hasOwnProperty.call(whatsappRuntimeState.message_statuses, state)) {
+      whatsappRuntimeState.message_statuses[state]++;
+    }
+    whatsappRuntimeState.last_status_at = new Date().toISOString();
+    whatsappRuntimeState.last_status = state || "unknown";
+    whatsappRuntimeState.last_status_tenant_id = destination.tenantId;
+    whatsappRuntimeState.last_status_message_id_suffix = String(status && status.id || "").slice(-16) || null;
+    whatsappRuntimeState.last_status_recipient_suffix = String(recipientId).slice(-8) || null;
+    whatsappRuntimeState.last_status_error_code = errorCodes[0] || null;
+    if (state === "failed") {
+      whatsappRuntimeState.last_error_at = whatsappRuntimeState.last_status_at;
+      whatsappRuntimeState.last_error_stage = "delivery_status";
+      whatsappRuntimeState.last_error_code = errorCodes[0] || null;
+      whatsappRuntimeState.last_error_message = "whatsapp_delivery_status_failed";
+    }
+    log(state === "failed" ? "warn" : "info", "whatsapp_delivery_status", {
+      tenant_id: destination.tenantId,
+      status: state || "unknown",
+      message_id_suffix: String(status && status.id || "").slice(-16) || null,
+      recipient_suffix: String(recipientId).slice(-8) || null,
+      error_code: errorCodes[0] || null
+    });
+    if (eventId) {
+      processedWhatsAppStatusEventIds.add(eventId);
+      if (processedWhatsAppStatusEventIds.size > 10000) {
+        const oldest = processedWhatsAppStatusEventIds.values().next().value;
+        processedWhatsAppStatusEventIds.delete(oldest);
+      }
+    }
+  }
+  return { tenant_id: destination.tenantId, delivery_status: state || "unknown" };
+}
+
 app.post("/webhook", async (req, res) => {
   whatsappRuntimeState.webhook_requests++;
   whatsappRuntimeState.last_webhook_at = new Date().toISOString();
@@ -5534,6 +5791,12 @@ app.post("/webhook", async (req, res) => {
   if (req.body?.object !== "whatsapp_business_account") {
     whatsappRuntimeState.last_skip_reason = "unsupported_object";
     return res.sendStatus(200);
+  }
+  if (CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED && !metaWebhookInbox) {
+    whatsappRuntimeState.last_error_at = new Date().toISOString();
+    whatsappRuntimeState.last_error_stage = "webhook_inbox_unavailable";
+    log("error", "meta_webhook_inbox_unavailable", { dedicated_store_enabled: true });
+    return res.sendStatus(503);
   }
   const events = extractWhatsAppMessageEvents(req.body);
   if (!events.length) {
@@ -5708,13 +5971,26 @@ app.get("/messenger/health", async (req, res) => {
 app.get("/whatsapp/health", async (req, res) => {
   const checkedAt = new Date().toISOString();
   const bootstrap = await channelConnectionBootstrapPromise;
-  const runtime = await resolveWhatsAppRuntimeForTenant(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
+  const healthTenantId = cleanTenantId(CHANNEL_CONNECTION_WHATSAPP_RUNTIME_TENANT_ID);
+  let durableConnection = null;
+  try {
+    durableConnection = channelConnectionStore && await channelConnectionStore.get(healthTenantId, "whatsapp");
+  } catch (error) {
+    log("warn", "whatsapp_health_connection_state_unavailable", {
+      tenant_id: healthTenantId,
+      error: cleanRuntimeText(error && error.message, 240)
+    });
+  }
+  const outboundBillingBlocked = !!(durableConnection && durableConnection.status === "connected" &&
+    durableConnection.webhook_status === "outbound_billing_blocked");
+  const runtime = await resolveWhatsAppRuntimeForTenant(healthTenantId);
   const phoneNumberId = runtime && runtime.phoneNumberId;
   const whatsappBusinessAccountId = runtime && (
     runtime.whatsappBusinessAccountId || runtime.whatsapp_business_account_id
   );
   const accessToken = runtime && runtime.accessToken;
   const safeRuntime = Object.assign({}, whatsappRuntimeState, {
+    outbound_billing_blocked: outboundBillingBlocked,
     runtime_source: runtime && runtime.source || null,
     tenant_id: cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id)) || null,
     phone_number_suffix: String(phoneNumberId || "").slice(-8) || null,
@@ -5727,6 +6003,17 @@ app.get("/whatsapp/health", async (req, res) => {
       registration: bootstrap && bootstrap.registration || null
     }
   });
+  if (outboundBillingBlocked) {
+    return res.status(503).json({
+      ok: false,
+      configured: true,
+      status: "outbound_billing_blocked",
+      outbound_billing_blocked: true,
+      message: "Meta bloqueó las respuestas de WhatsApp (131042). Agrega un método de pago válido en WhatsApp Manager.",
+      checked_at: checkedAt,
+      runtime: safeRuntime
+    });
+  }
   if (!phoneNumberId || !accessToken) {
     return res.status(503).json({
       ok: false,
@@ -5942,7 +6229,7 @@ app.post("/instagram/webhook", async (req, res) => {
         instagramRuntimeState.last_inbound_at = new Date().toISOString();
         instagramRuntimeState.last_skip_reason = null;
         refreshInstagramProfile(userId, destination.tenantId);
-        await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
+        await recordRetargetingSignal(destination.tenantId, userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ig:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
           await handleConversation(userId, event.message.text, {
@@ -6015,7 +6302,7 @@ app.post("/messenger/webhook", async (req, res) => {
         messengerRuntimeState.inbound_messages++;
         messengerRuntimeState.last_inbound_at = new Date().toISOString();
         messengerRuntimeState.last_skip_reason = null;
-        await recordRetargetingSignal(userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ms:" + Date.now(), "customer");
+        await recordRetargetingSignal(destination.tenantId, userId, isStopMessage(event.message?.text || "") ? "stop" : "customer_replied", event.message?.mid || "ms:" + Date.now(), "customer");
         if (event.message?.text) {
           console.log(`Inbound ${maskedIdentifier(userId)}: text (${String(event.message.text || "").length} chars)`);
           await handleConversation(userId, event.message.text, {
@@ -8774,9 +9061,10 @@ function approvedRetargetingTemplate(name) {
   };
 }
 
-async function recordRetargetingSignal(userId, signal, sourceEventId, actor) {
+async function recordRetargetingSignal(tenantId, userId, signal, sourceEventId, actor) {
   try {
-    const tenantId = CUSTOMER_PANEL_BUSINESS.id;
+    tenantId = cleanTenantId(tenantId);
+    if (!tenantId) throw new Error("retargeting_tenant_required");
     if (signal === "stop") {
       await retargetingEngine.recordConsent({
         tenant_id: tenantId,
@@ -8800,9 +9088,10 @@ async function recordRetargetingSignal(userId, signal, sourceEventId, actor) {
   }
 }
 
-async function createRetargetingJobForCustomer(userId, eventType, sourceEventId, context) {
+async function createRetargetingJobForCustomer(tenantId, userId, eventType, sourceEventId, context) {
   try {
-    const tenantId = CUSTOMER_PANEL_BUSINESS.id;
+    tenantId = cleanTenantId(tenantId);
+    if (!tenantId) throw new Error("retargeting_tenant_required");
     const policy = await retargetingPolicyForTenant(tenantId);
     const templateNames = {
       abandoned_cart: "abandoned_cart_rav",
@@ -10159,16 +10448,18 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       group.last_text = eventText;
     } else if (replyText) {
       const actor = customerPanelReplyActor(turn);
-      const delivered = turn.status !== "error";
+      const deliveryStatus = turn.status === "outbound_pending" ? "pending" : turn.status === "error" ? "failed" : "sent";
+      const delivered = deliveryStatus === "sent";
       group.messages.push({
         ts,
         author: actor,
         text: replyText,
-        delivery_status: delivered ? "sent" : "failed"
+        delivery_status: deliveryStatus
       });
       if (actor === "human" && delivered) group.last_human_reply_ms = Math.max(group.last_human_reply_ms, tsMs);
-      group.last_text = delivered ? replyText : "⚠ No enviado: " + replyText;
-      group.last_delivery_status = delivered ? "sent" : "failed";
+      group.last_text = deliveryStatus === "pending" ? "Pendiente de reintento: " + replyText
+        : delivered ? replyText : "⚠ No enviado: " + replyText;
+      group.last_delivery_status = deliveryStatus;
       group.last_delivery_actor = actor;
     }
 
@@ -11534,7 +11825,7 @@ app.post("/admin/takeover/:userId", async (req, res) => {
   const auth = dashboardAuth(req);
   const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
   addHumanHandoff(userId, tenantMeta.tenant_id);
-  await recordRetargetingSignal(userId, "handoff", "admin-takeover:" + Date.now(), auth.name || "admin");
+  await recordRetargetingSignal(tenantMeta.tenant_id, userId, "handoff", "admin-takeover:" + Date.now(), auth.name || "admin");
   recordAdminEvent(userId, "admin_takeover", "[Humano] Control tomado desde el panel.", "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true });
 });
@@ -11577,7 +11868,7 @@ app.post("/admin/send-message", async (req, res) => {
     return;
   }
   addHumanHandoff(userId, tenantMeta.tenant_id);
-  await recordRetargetingSignal(userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
+  await recordRetargetingSignal(tenantMeta.tenant_id, userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
   await recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, "ok", undefined, tenantMeta);
   res.json({ ok: true, userId, handoff: true, meta_sent: true });
 });
@@ -13671,6 +13962,10 @@ app.post("/admin/panel/channel-connections/whatsapp/verify", async (req, res) =>
     const stored = channelConnectionStore && await channelConnectionStore.get(tenantId, "whatsapp");
     if (pendingWhatsAppAttemptRecord(stored)) {
       await reconcilePendingWhatsAppRecord(stored, "customer-panel");
+    } else if (stored && stored.webhook_status === "outbound_billing_blocked") {
+      // This check intentionally preserves the billing block. Only a later
+      // delivered/read receipt can prove that Meta restored outbound delivery.
+      await channelConnectionService.verify(tenantId, "whatsapp", auth);
     }
     const connection = (await channelConnectionService.listTenant(tenantId)).find(function (item) {
       return item.channel === "whatsapp";

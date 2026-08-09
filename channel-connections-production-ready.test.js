@@ -62,6 +62,16 @@ async function waitForJson(url, predicate, timeoutMs) {
 
 (async function run() {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  const connectionSource = fs.readFileSync(path.join(__dirname, "channel-connections.js"), "utf8");
+  const panelSource = fs.readFileSync(path.join(__dirname, "customer-panel.js"), "utf8");
+  const whatsappV2MigrationSource = fs.readFileSync(
+    path.join(__dirname, "docs/migrations/20260808_whatsapp_onboarding_v2_up.sql"),
+    "utf8"
+  );
+  assert.match(whatsappV2MigrationSource, /whatsapp_outbound_billing_status_at timestamptz/);
+  assert.match(connectionSource, /failureAt < watermarkAt/);
+  assert.match(connectionSource, /failureAt === watermarkAt/);
+  assert.match(connectionSource, /deliveredAt <= watermarkAt/);
   assert.match(source, /runStartupProtectionDiagnostics\(\{[\s\S]*?store: channelConnectionStore,[\s\S]*?env: process\.env,[\s\S]*?log/);
   assert.match(source, /const CHANNEL_CONNECTION_TENANT_ALIASES = Object\.freeze\(\{\}\)/);
   assert.match(source, /const protectedLegacyChannelConnections = Object\.freeze\(\[\]\)/);
@@ -109,6 +119,47 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(source, /checkout: checkouts\.get\(stateKey\)/);
   assert.match(source, /pendingRatings\.has\(stateKey\)/);
   assert.match(source, /checkouts\.delete\(tenantConversationStateKey\(userId, tenantId\)\)/);
+  assert.match(source, /recordRetargetingSignal\(\s*destination\.tenantId,\s*from,/,
+    "WhatsApp webhook signals must use the resolved tenant, never the RAV default");
+  assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ig:/,
+    "Instagram webhook signals must use the resolved tenant");
+  assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ms:/,
+    "Messenger webhook signals must use the resolved tenant");
+  assert.doesNotMatch(
+    source,
+    /async function recordRetargetingSignal\([\s\S]*?\n}\n\nasync function createRetargetingJobForCustomer[\s\S]*?const tenantId = CUSTOMER_PANEL_BUSINESS\.id/,
+    "tenant B signals/jobs must never be attributed to RAV"
+  );
+  assert.match(source, /if \(isRavTenantId\(tenantId\)\) await notifyTeam\(notif, userId\)/,
+    "external handoffs must remain tenant-local and never notify RAV recipients");
+  assert.match(source, /CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED && !metaWebhookInbox[\s\S]*?return res\.sendStatus\(503\)/,
+    "dedicated delivery must fail closed when the durable inbox is unavailable");
+  assert.match(source, /message_statuses: \{ sent: 0, delivered: 0, read: 0, failed: 0 \}/);
+  assert.match(source, /processWhatsAppStatusInboxEvent\(value, deliveryStatus, inboxRow\)/);
+  assert.doesNotMatch(source, /\[WhatsAppDeliveryStatus\]/,
+    "delivery receipts are operational events and must not become visible conversation turns");
+  assert.match(source, /if \(e && e\.whatsappDeliveryFailure\) throw e;/,
+    "tool delivery failures must escape to the durable worker without a second fallback");
+  assert.match(source, /if \(err && err\.whatsappDeliveryFailure\)[\s\S]*?throw err;/,
+    "conversation delivery failures must escape to the durable worker");
+  assert.match(source, /recordWhatsAppDeliveryStatus\([\s\S]*?destination\.tenantId,[\s\S]*?destination\.phoneNumberId/,
+    "async Meta statuses must mutate only the resolved tenant and phone");
+  assert.match(source, /status: "outbound_billing_blocked"[\s\S]*?outbound_billing_blocked: true/,
+    "WhatsApp health must fail closed when durable billing is blocked");
+  assert.match(connectionSource, /status !== "connected" \|\| cleanText\(current\.phone_number_id, 240\) !== cleanPhone/,
+    "billing CAS must require the exact active tenant phone");
+  assert.match(connectionSource, /whatsappOutboundBillingBlocked\(record\)[\s\S]*?return publicConnection\(current \|\| record/,
+    "read-only verification must preserve the billing block");
+  assert.match(connectionSource, /deliveredAt <= watermarkAt/,
+    "out-of-order delivery receipts must never move the durable billing watermark backwards");
+  assert.match(panelSource, /Comprobar pago/);
+  assert.match(panelSource, /método de pago/i);
+  assert.match(source, /receipt\.pending_reply[\s\S]*?resumeWhatsAppPendingReply/,
+    "a durable retry must resume only the checkpointed delivery");
+  assert.match(source, /checkpoint && checkpoint\.status \|\| "error"/,
+    "a retryable text failure must persist outbound_pending before inbox retry");
+  assert.match(source, /turn\.status === "outbound_pending" \? "pending"/);
+  assert.match(panelSource, /Pendiente de reintento/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -176,7 +227,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v347-whatsapp-self-service"));
+    assert((await response.text()).includes("NextforIA Chatbot v348-whatsapp-v4-delivery"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

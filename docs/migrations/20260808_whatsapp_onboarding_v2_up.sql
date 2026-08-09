@@ -1,4 +1,4 @@
--- WhatsApp Embedded Signup v2: durable, one-shot registration attempts.
+-- WhatsApp onboarding storage v2 for Embedded Signup v4: durable, one-shot registration attempts.
 -- Apply in Staging before enabling the dedicated Supabase connection store.
 
 begin;
@@ -23,7 +23,8 @@ alter table public.tenant_channel_connections
   add column if not exists onboarding_attempt_reconcile_lease_until timestamptz,
   add column if not exists onboarding_attempt_reconcile_owner text,
   add column if not exists whatsapp_last_registration_phone_number_id text,
-  add column if not exists whatsapp_last_registration_requested_at timestamptz;
+  add column if not exists whatsapp_last_registration_requested_at timestamptz,
+  add column if not exists whatsapp_outbound_billing_status_at timestamptz;
 
 -- Immutable global guard. Connection rows can be cancelled or replaced, but a
 -- phone that already reached /register must remain protected across tenants and
@@ -649,12 +650,12 @@ begin
          last_error = coalesce(last_error, 'webhook_retry_window_exhausted'),
          updated_at = v_now
    where status in ('pending', 'processing')
-     and (attempts >= 48 or received_at <= v_now - interval '72 hours')
+     and (attempts >= 160 or received_at <= v_now - interval '72 hours')
      and coalesce(lease_until, '-infinity'::timestamptz) <= v_now;
 
   select candidate.event_id into v_event_id
     from public.meta_webhook_events candidate
-   where candidate.attempts < 48
+   where candidate.attempts < 160
      and candidate.received_at > v_now - interval '72 hours'
      and (
        (candidate.status = 'pending' and coalesce(candidate.next_attempt_at, '-infinity'::timestamptz) <= v_now)

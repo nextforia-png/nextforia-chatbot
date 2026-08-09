@@ -2,6 +2,12 @@
 
 const crypto = require("crypto");
 
+// At the 30-minute capped backoff, 160 attempts are enough to keep a
+// recoverable Meta outage (including billing code 131042) live for the full
+// 72-hour inbox window. The age boundary remains the authoritative limit.
+const MAX_EVENT_ATTEMPTS = 160;
+const MAX_EVENT_AGE_MS = 72 * 60 * 60 * 1000;
+
 function text(value, maximum) {
   const clean = String(value || "").trim();
   return maximum ? clean.slice(0, maximum) : clean;
@@ -18,6 +24,78 @@ function eventIdentifier(destinationId, message) {
     .digest("hex");
 }
 
+function statusEventIdentifier(destinationId, status) {
+  const identity = {
+    destination_id: text(destinationId, 500),
+    message_id: text(status && status.id, 500),
+    status: text(status && status.status, 80).toLowerCase(),
+    timestamp: text(status && status.timestamp, 80),
+    recipient_id: text(status && status.recipient_id, 500),
+    errors: Array.isArray(status && status.errors) ? status.errors.map(function (error) {
+      return {
+        code: text(error && error.code, 80),
+        error_subcode: text(error && error.error_subcode, 80)
+      };
+    }) : []
+  };
+  return "whatsapp:status:sha256:" + crypto.createHash("sha256")
+    .update(JSON.stringify(identity))
+    .digest("hex");
+}
+
+function eventOrderingIdentity(payload) {
+  const messageSender = text(payload && payload.message && payload.message.from, 500);
+  if (messageSender) return messageSender;
+  const statusRecipient = text(payload && payload.status && payload.status.recipient_id, 500);
+  if (statusRecipient) return statusRecipient;
+  const statusMessage = text(payload && payload.status && payload.status.id, 500);
+  return statusMessage ? "status:" + statusMessage : "unknown";
+}
+
+function expectedEventIdentifier(payload) {
+  const destinationId = text(payload && payload.value && payload.value.metadata && payload.value.metadata.phone_number_id, 240);
+  if (payload && payload.status) return statusEventIdentifier(destinationId, payload.status);
+  return eventIdentifier(destinationId, payload && payload.message);
+}
+
+function classifyWhatsAppDeliveryError(error) {
+  const responseStatus = Number(error && error.response && error.response.status) || null;
+  const meta = error && error.response && error.response.data && error.response.data.error || {};
+  const metaCode = Number(meta.code) || null;
+  const metaSubcode = Number(meta.error_subcode) || null;
+  const retryableMetaCodes = new Set([
+    1, 2, 4, 17, 32, 613, 80007, 130429, 131000, 131016, 131042, 131048, 131056, 133004
+  ]);
+  const retryable = !error || !error.response ||
+    [408, 409, 425, 429].includes(responseStatus) ||
+    responseStatus >= 500 ||
+    retryableMetaCodes.has(metaCode) ||
+    retryableMetaCodes.has(metaSubcode);
+  return {
+    retryable,
+    permanent: !retryable,
+    http_status: responseStatus,
+    meta_code: metaCode,
+    meta_subcode: metaSubcode,
+    error_type: text(meta.type || error && error.code, 100) || null
+  };
+}
+
+function whatsappDeliveryFailure(error) {
+  const classification = classifyWhatsAppDeliveryError(error);
+  const code = classification.meta_subcode || classification.meta_code || classification.http_status || "unknown";
+  const failure = new Error("whatsapp_delivery_failed_" + (classification.retryable ? "retryable" : "permanent") + ":" + code);
+  failure.name = "WhatsAppDeliveryError";
+  failure.whatsappDeliveryFailure = true;
+  failure.retryable = classification.retryable;
+  failure.permanent = classification.permanent;
+  failure.http_status = classification.http_status;
+  failure.meta_code = classification.meta_code;
+  failure.meta_subcode = classification.meta_subcode;
+  failure.error_type = classification.error_type;
+  return failure;
+}
+
 function extractWhatsAppMessageEvents(body) {
   if (!body || body.object !== "whatsapp_business_account") return [];
   const events = [];
@@ -32,7 +110,19 @@ function extractWhatsAppMessageEvents(body) {
           channel: "whatsapp",
           destination_id: destinationId,
           received_at: new Date().toISOString(),
-          payload: { value, message }
+          ordering_identity: text(message.from, 500),
+          payload: { event_type: "message", value, message }
+        });
+      }
+      for (const status of Array.isArray(value && value.statuses) ? value.statuses : []) {
+        if (!destinationId || !status) continue;
+        events.push({
+          event_id: statusEventIdentifier(destinationId, status),
+          channel: "whatsapp",
+          destination_id: destinationId,
+          received_at: new Date().toISOString(),
+          ordering_identity: text(status.recipient_id, 500) || "status:" + text(status.id, 500),
+          payload: { event_type: "status", value, status }
         });
       }
     }
@@ -59,7 +149,7 @@ class InMemoryMetaWebhookInboxStore {
         channel: event.channel,
         destination_id: event.destination_id,
         sender_key: crypto.createHash("sha256")
-          .update(text(event.payload && event.payload.message && event.payload.message.from, 500))
+          .update(text(event.ordering_identity, 500) || eventOrderingIdentity(event.payload))
           .digest("hex"),
         payload: event.payload,
         status: "pending",
@@ -84,7 +174,7 @@ class InMemoryMetaWebhookInboxStore {
       const due = Date.parse(row.next_attempt_at || "") <= now.getTime();
       const expired = !row.lease_until || Date.parse(row.lease_until) <= now.getTime();
       const active = row.status === "pending" && due || row.status === "processing" && expired;
-      if (!active || row.attempts >= 48 || Date.parse(row.received_at) <= now.getTime() - 72 * 60 * 60 * 1000) {
+      if (!active || row.attempts >= MAX_EVENT_ATTEMPTS || Date.parse(row.received_at) <= now.getTime() - MAX_EVENT_AGE_MS) {
         return false;
       }
       return !rows.some(function (earlier) {
@@ -129,8 +219,8 @@ class InMemoryMetaWebhookInboxStore {
   async fail(eventId, owner, error, options) {
     const row = this.rows.get(eventId);
     if (!row || row.status !== "processing" || row.lease_owner !== owner) return false;
-    const permanent = options && options.permanent === true || row.attempts >= 48 ||
-      Date.parse(row.received_at) <= this.clock().getTime() - 72 * 60 * 60 * 1000;
+    const permanent = options && options.permanent === true || row.attempts >= MAX_EVENT_ATTEMPTS ||
+      Date.parse(row.received_at) <= this.clock().getTime() - MAX_EVENT_AGE_MS;
     row.status = permanent ? "dead_letter" : "pending";
     row.next_attempt_at = permanent
       ? null
@@ -168,7 +258,7 @@ class SupabaseMetaWebhookInboxStore {
       event_id: event.event_id,
       channel: event.channel,
       destination_id: event.destination_id,
-      sender_key: this.senderKey(text(event.payload && event.payload.message && event.payload.message.from, 500)),
+      sender_key: this.senderKey(text(event.ordering_identity, 500) || eventOrderingIdentity(event.payload)),
       payload_ciphertext: this.encrypt(JSON.stringify(event.payload || {})),
       status: "pending",
       attempts: 0,
@@ -234,10 +324,9 @@ class SupabaseMetaWebhookInboxStore {
       error.lease_owner = owner;
       throw error;
     }
-    const message = payload && payload.message;
     const destinationId = text(payload && payload.value && payload.value.metadata && payload.value.metadata.phone_number_id, 240);
-    const expectedEventId = eventIdentifier(destinationId, message);
-    const expectedSenderKey = this.senderKey(text(message && message.from, 500));
+    const expectedEventId = expectedEventIdentifier(payload);
+    const expectedSenderKey = this.senderKey(eventOrderingIdentity(payload));
     if (destinationId !== row.destination_id || expectedEventId !== row.event_id || expectedSenderKey !== row.sender_key) {
       const invalid = new Error("meta_webhook_inbox_integrity_failed");
       invalid.permanent = true;
@@ -322,6 +411,25 @@ function createMetaWebhookInbox(options) {
   let stopped = false;
   let timer = null;
 
+  function leaseLost(eventId, cause) {
+    const error = new Error("meta_webhook_lease_lost:" + String(eventId || "unknown").slice(-32));
+    error.leaseLost = true;
+    error.permanent = false;
+    if (cause) error.cause = cause;
+    return error;
+  }
+
+  async function renewLease(row) {
+    let renewed;
+    try {
+      renewed = await store.heartbeat(row.event_id, owner, 180);
+    } catch (error) {
+      throw leaseLost(row.event_id, error);
+    }
+    if (renewed !== true) throw leaseLost(row.event_id);
+    return true;
+  }
+
   async function drain() {
     if (draining || stopped) return 0;
     draining = true;
@@ -339,26 +447,39 @@ function createMetaWebhookInbox(options) {
         }
         if (!row) break;
         try {
+          await renewLease(row);
+          let heartbeatFailure = null;
+          let heartbeatInFlight = false;
           const heartbeat = setInterval(function () {
-            store.heartbeat(row.event_id, owner, 180).catch(function (error) {
+            if (heartbeatInFlight || heartbeatFailure) return;
+            heartbeatInFlight = true;
+            renewLease(row).catch(function (error) {
+              heartbeatFailure = error;
               log("warn", "meta_webhook_heartbeat_failed", {
                 event_id_suffix: String(row.event_id || "").slice(-16),
                 error: text(error && error.message, 240)
               });
+            }).finally(function () {
+              heartbeatInFlight = false;
             });
           }, 30000);
           if (heartbeat.unref) heartbeat.unref();
           try {
-          const result = await processEvent(row.payload, row);
-          await store.complete(row.event_id, owner, result || {});
+            const result = await processEvent(row.payload, row);
+            if (heartbeatFailure) throw heartbeatFailure;
+            await renewLease(row);
+            const completed = await store.complete(row.event_id, owner, result || {});
+            if (completed !== true) throw leaseLost(row.event_id);
           } finally {
             clearInterval(heartbeat);
           }
         } catch (error) {
-          const permanent = error && error.permanent === true || Number(row.attempts) >= 48;
+          if (error && error.leaseLost) throw error;
+          const permanent = error && error.permanent === true || Number(row.attempts) >= MAX_EVENT_ATTEMPTS;
           const exponent = Math.min(10, Math.max(0, Number(row.attempts) - 1));
           const delayMs = Math.min(30 * 60 * 1000, 1000 * Math.pow(2, exponent));
-          await store.fail(row.event_id, owner, error, { permanent, delay_ms: delayMs });
+          const failed = await store.fail(row.event_id, owner, error, { permanent, delay_ms: delayMs });
+          if (failed !== true) throw leaseLost(row.event_id);
           log("warn", "meta_webhook_event_failed", {
             event_id_suffix: String(row.event_id || "").slice(-16),
             attempts: row.attempts,
@@ -409,6 +530,9 @@ function createMetaWebhookInbox(options) {
 module.exports = {
   InMemoryMetaWebhookInboxStore,
   SupabaseMetaWebhookInboxStore,
+  classifyWhatsAppDeliveryError,
   createMetaWebhookInbox,
-  extractWhatsAppMessageEvents
+  eventOrderingIdentity,
+  extractWhatsAppMessageEvents,
+  whatsappDeliveryFailure
 };

@@ -1778,14 +1778,32 @@ function commerceDisplayStatus(commerce){commerce=commerce||{};if(commerce.integ
 function commerceDisplayStore(commerce){commerce=commerce||{};return commerce.shopify_shop||commerce.store_url||"";}
 function onboardingAnswers(){return state.onboarding&&state.onboarding.onboarding&&state.onboarding.onboarding.answers||{};}
 function selectedChannelHints(answers){answers=answers||{};var appt=answers.appointment_setup||{},hints=[];if(setupPathGet(answers,"meta.whatsapp_number"))hints.push("whatsapp");if(appt.instagram_username||setupPathGet(answers,"meta.instagram_account"))hints.push("instagram");if(appt.messenger_page||setupPathGet(answers,"meta.facebook_page"))hints.push("messenger");return hints;}
+function onboardingConfigurationStatus(configuration){
+  if(!configuration)return"Sin configuración";
+  var lifecycle=String(configuration.lifecycle||"").toLowerCase();
+  if(lifecycle==="approved_for_testing"&&String(configuration.system_prompt||"").trim())return"Listo";
+  if(lifecycle==="approved_for_testing")return"Aprobado sin instrucciones";
+  if(lifecycle==="draft")return"Borrador";
+  return lifecycle?lifecycle.replace(/_/g," "):"Sin estado";
+}
+function onboardingBotReadiness(onboarding,goal){
+  if(!onboarding.setup_completed)return{title:setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,detail:"Se define al cerrar el cuestionario."};
+  var configurations=[];
+  if(goal==="customer_service"||goal==="both")configurations.push({label:"Atención al cliente",value:onboarding.customer_service_configuration});
+  if(goal==="appointments"||goal==="both")configurations.push({label:"Agendamiento",value:onboarding.appointment_configuration});
+  if(!configurations.length)return{title:"Configuración pendiente",detail:"El cuestionario está completo, pero todavía no existe una configuración de bot para este objetivo."};
+  var allReady=configurations.every(function(item){return onboardingConfigurationStatus(item.value)==="Listo";});
+  if(allReady)return{title:"Listo para atender/probar",detail:"La configuración aprobada tiene instrucciones activas y está lista para pruebas humanas."};
+  return{title:configurations.map(function(item){return item.label+": "+onboardingConfigurationStatus(item.value);}).join(" · "),detail:"Este es el estado real de la configuración generada; se actualizará cuando cambie su revisión."};
+}
 function renderConnectionHub(){
   var root=document.getElementById("connectionHubSummary"),commerceRoot=document.getElementById("commerceConnectorCards");
   if(!root&&!commerceRoot)return;
-  var payload=state.onboarding||{},onboarding=payload.onboarding||{},answers=onboarding.answers||{},goal=answers.setup_goal,commerce=answers.commerce||{},hints=selectedChannelHints(answers),connections=state.channelConnections&&state.channelConnections.channels||[],connected=connections.filter(function(row){return row.status==="connected";}).length,commercePlatform=commerce.platform||"unknown",commerceStatus=commerceDisplayStatus(commerce),commerceStore=commerceDisplayStore(commerce),commerceRequested=commercePlatform&&commercePlatform!=="none"&&commercePlatform!=="unknown"&&(commerce.integration_intent==="yes"||commerce.integration_intent==="later"||commerceStatus!=="not_requested");
+  var payload=state.onboarding||{},onboarding=payload.onboarding||{},answers=onboarding.answers||{},goal=answers.setup_goal,botReadiness=onboardingBotReadiness(onboarding,goal),commerce=answers.commerce||{},hints=selectedChannelHints(answers),connections=state.channelConnections&&state.channelConnections.channels||[],connected=connections.filter(function(row){return row.status==="connected";}).length,commercePlatform=commerce.platform||"unknown",commerceStatus=commerceDisplayStatus(commerce),commerceStore=commerceDisplayStore(commerce),commerceRequested=commercePlatform&&commercePlatform!=="none"&&commercePlatform!=="unknown"&&(commerce.integration_intent==="yes"||commerce.integration_intent==="later"||commerceStatus!=="not_requested");
   if(root){
     var cards=[
       ["Cuestionario",onboarding.setup_completed?"Completo":"En progreso",onboarding.setup_completed?"Tu información quedó guardada en el registro compartido.":"Puedes terminarlo sin empezar de cero."],
-      ["Bot",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,onboarding.setup_completed?"Borrador generado automáticamente; queda pendiente la aprobación final de NextforIA.":"Se define al cerrar el cuestionario."],
+      ["Bot",botReadiness.title,botReadiness.detail],
       ["Canales",connected?connected+" conectado(s)":hints.length?hints.map(function(item){return channelConnectionInitial(item);}).join(" · ")+" pendiente(s)":"Por elegir","Conecta solo los canales que vas a usar ahora; los demás pueden esperar."],
       ["Comercio",commerceRequested?commercePlatformLabel(commercePlatform):"Opcional",commerceRequested?commerceStatusLabel(commerceStatus)+" · "+setupShort(commerceStore,"sin URL"):"Si vendes online, puedes solicitar Shopify o WooCommerce aquí."]
     ];
@@ -1843,10 +1861,11 @@ function renderChannelConnections(){
   var root=document.getElementById("channelConnectionCards"),payload=state.channelConnections;
   if(!root||!payload)return;
   var canManage=SERVER_ROLE==="admin"||SERVER_ROLE==="super_admin",available=payload.meta_authorization_available||{},hints=selectedChannelHints(onboardingAnswers()),cards=(payload.channels||[]).map(function(item){
-    var channel=item.channel||item.id,status=item.status||"not_connected",soon=item.coming_soon||item.available===false,recommended=hints.includes(channel),primary=channel==="whatsapp",connected=status==="connected",attemptActive=primary&&item.onboarding_attempt_active===true,activeConnection=primary&&item.disconnect_available===true&&!attemptActive,verifyAvailable=attemptActive&&whatsappAttemptCanVerify(item),cancelAttemptAvailable=attemptActive&&item.cancel_attempt_available===true,verifyBusy=verifyAvailable&&whatsappVerificationBusy(),account=item.account_label?'<div class="channelAccount">'+esc(item.account_label)+'</div>':recommended?'<div class="channelAccount">Sugerido por tu cuestionario</div>':"",activationMessage=attemptActive&&item.onboarding_attempt_message||item.activation_message||primary&&!connected&&!attemptActive&&!activeConnection&&"Necesitarás un número nuevo que todavía no esté activo en WhatsApp."||"",activation=activationMessage?'<div class="channelAccount">'+esc(activationMessage)+'</div>':"",actions='<span class="channelState '+attr(status)+'">'+esc(soon?"Próximamente":channelConnectionStatusLabel(status))+'</span>';
+    var channel=item.channel||item.id,status=item.status||"not_connected",soon=item.coming_soon||item.available===false,recommended=hints.includes(channel),primary=channel==="whatsapp",connected=status==="connected",billingBlocked=primary&&item.outbound_billing_blocked===true,attemptActive=primary&&item.onboarding_attempt_active===true,activeConnection=primary&&item.disconnect_available===true&&!attemptActive,verifyAvailable=attemptActive&&whatsappAttemptCanVerify(item),cancelAttemptAvailable=attemptActive&&item.cancel_attempt_available===true,verifyBusy=verifyAvailable&&whatsappVerificationBusy(),account=item.account_label?'<div class="channelAccount">'+esc(item.account_label)+'</div>':recommended?'<div class="channelAccount">Sugerido por tu cuestionario</div>':"",activationMessage=attemptActive&&item.onboarding_attempt_message||item.activation_message||primary&&!connected&&!attemptActive&&!activeConnection&&"Necesitarás un número nuevo que todavía no esté activo en WhatsApp."||"",activation=activationMessage?'<div class="channelAccount">'+esc(activationMessage)+'</div>':"",actions='<span class="channelState '+attr(status)+'">'+esc(soon?"Próximamente":channelConnectionStatusLabel(status))+'</span>';
     if(!soon&&canManage){
       if(primary){
         if(connected||activeConnection){
+          if(billingBlocked)actions+='<button class="primaryBtn" type="button" onclick="checkWhatsAppBillingConnection(this)"'+(state.whatsappConnecting?' disabled aria-busy="true"':'')+'>'+(state.whatsappConnecting?'Comprobando…':'Comprobar pago')+'</button>';
           if(item.disconnect_available)actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';
         }else if(attemptActive){
           if(verifyAvailable)actions+='<button class="primaryBtn" type="button" onclick="checkWhatsAppConnection(this)"'+(state.whatsappConnecting||verifyBusy?' disabled aria-busy="true"':'')+'>'+(verifyBusy?'Comprobando…':'Comprobar conexión')+'</button>';
@@ -2024,6 +2043,27 @@ function checkWhatsAppConnection(){
   if(!whatsappAttemptCanVerify(connection)||whatsappVerificationBusy()||state.whatsappConnecting)return;
   scheduleWhatsAppVerification(connection,{immediate:true,restart:true});
 }
+function checkWhatsAppBillingConnection(){
+  var connection=currentWhatsAppConnection();
+  if(!connection||connection.outbound_billing_blocked!==true||state.whatsappConnecting)return;
+  state.whatsappConnecting=true;
+  renderChannelConnections();
+  setChannelConnectionMessage("Comprobando WhatsApp con Meta…");
+  api("/admin/panel/channel-connections/whatsapp/verify",{method:"POST",body:"{}"}).then(function(body){
+    state.whatsappConnecting=false;
+    applyWhatsAppConnection(body&&body.connection||null);
+    renderChannelConnections();
+    if(body&&body.connection&&body.connection.status==="connected"){
+      setChannelConnectionMessage("Listo. Meta confirmó que WhatsApp puede volver a responder.","success");
+    }else{
+      setChannelConnectionMessage("Meta todavía no confirmó una entrega nueva. Agrega el método de pago y envía una prueba por WhatsApp.","error");
+    }
+  }).catch(function(error){
+    state.whatsappConnecting=false;
+    renderChannelConnections();
+    setChannelConnectionMessage(error&&error.body&&error.body.message||"No pudimos comprobar WhatsApp con Meta.","error");
+  });
+}
 var metaSdkPromise=null;
 function loadMetaSdk(config){
   if(window.FB){window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});return Promise.resolve(window.FB);}
@@ -2071,6 +2111,12 @@ function completeWhatsAppEmbeddedSignup(){
     loadChannelConnections(true);
   });
 }
+function trustedWhatsAppEmbeddedOrigin(origin){
+  try{
+    var source=new URL(origin),hostname=String(source.hostname||"").toLowerCase();
+    return source.protocol==="https:"&&(hostname==="facebook.com"||hostname.endsWith(".facebook.com"));
+  }catch(_){return false;}
+}
 function whatsappEmbeddedErrorMessage(payload){
   var detail=String(payload&&payload.data&&(payload.data.error_message||payload.data.message)||"").toLowerCase();
   if(/already|registered|another business|otro negocio|portfolio|portafolio|linked|vinculad/.test(detail))return"Este número ya está vinculado a otro portafolio de Meta. Desconéctalo allí o pide a soporte que lo mueva antes de volver a intentarlo.";
@@ -2082,7 +2128,6 @@ function launchWhatsAppEmbeddedSignup(config){
   state.whatsappConnecting=true;
   renderChannelConnections();
   loadMetaSdk(config).then(function(FB){
-    var extras={setup:{},sessionInfoVersion:"3"};
     FB.login(function(response){
       var pending=state.whatsappEmbedded,code=response&&response.authResponse&&response.authResponse.code;
       if(!pending)return;
@@ -2099,14 +2144,14 @@ function launchWhatsAppEmbeddedSignup(config){
       config_id:config.configuration_id,
       response_type:"code",
       override_default_response_type:true,
-      extras:extras
+      extras:{}
     });
   }).catch(function(){
     stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("No pudimos abrir la conexión segura de Meta. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);
   });
 }
 window.addEventListener("message",function(event){
-  if(event.origin!=="https://www.facebook.com"&&event.origin!=="https://web.facebook.com")return;
+  if(!trustedWhatsAppEmbeddedOrigin(event.origin))return;
   var payload=event.data;
   if(typeof payload==="string"){try{payload=JSON.parse(payload);}catch(_){return;}}
   if(!payload||payload.type!=="WA_EMBEDDED_SIGNUP"||!state.whatsappEmbedded)return;
@@ -2273,7 +2318,7 @@ function closeMobileChat(){document.body.classList.remove("chat-open");}
 function renderQuickReplies(item){var box=document.getElementById("quickReplies");if(!box)return;if(!isHumanTab()||!item){box.innerHTML="";return;}var replies=["🙌 ¡Hola! Ya te ayudo","🙏 Lamento mucho eso","📦 Reviso tu pedido","✅ Te confirmo disponibilidad"];box.innerHTML=replies.map(function(reply){return '<button type="button" data-reply="'+attr(reply)+'" onclick="applyQuickReply(this.dataset.reply)">'+esc(reply)+'</button>';}).join("");}
 function applyQuickReply(reply){var input=document.getElementById("replyText");if(input){input.value=reply;updateReplyCount();input.focus();}}
 function renderHandoffContext(item){text("handoffReason",item?handoffReason(item):"Selecciona una conversación.");text("contextCustomer",item?customerDisplay(item):"—");text("contextStatus",item?handoffStatus(item):"—");}
-function renderChat(){var item=findConversation(state.selected),canWrite=!!SERVER_CAPABILITIES.intervene,canMeta=!!SERVER_CAPABILITIES.manage_notes_tags,human=isHumanTab();["copyBtn","takeBtn","resolveTopBtn","resolveBtn","releaseBtn","sendBtn","sendCircleBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=!item;});var send=document.getElementById("sendBtn"),sendCircle=document.getElementById("sendCircleBtn");if(send)send.disabled=!item||!canWrite;if(sendCircle)sendCircle.disabled=!item||!canWrite;var take=document.getElementById("takeBtn"),release=document.getElementById("releaseBtn"),resolveTop=document.getElementById("resolveTopBtn"),resolveSide=document.getElementById("resolveBtn"),composer=document.getElementById("composer"),note=document.getElementById("customerNote"),copy=document.getElementById("copyBtn");if(copy)copy.textContent=item&&item.channel==="instagram"?(item.instagram_username?"Copiar @usuario":"Copiar ID de Instagram"):"Copiar teléfono";if(take){take.textContent=human?"Atender ahora 🙌":"Tomar control";take.disabled=!item||!canWrite||item.conversation_status==="team_active"||item.conversation_status==="resolved";}if(release){release.textContent="Devolver a la IA";release.disabled=!item||!canWrite||!["needs_attention","team_active"].includes(item.conversation_status);}var canResolve=!!item&&canWrite&&["needs_attention","team_active"].includes(item.conversation_status);if(resolveTop)resolveTop.disabled=!canResolve;if(resolveSide)resolveSide.disabled=!canResolve;if(composer)composer.style.display=(!item||!canWrite||item.conversation_status==="resolved")?"none":"grid";text("hintTitle",human?"✧ Te recomiendo mirar":"✧ Sugerencia IA");if(!item){text("chatTitle",human?"Selecciona un caso":"Selecciona una conversación");text("chatSubtitle",human?("Elige una alerta para responder en "+channelLabel()+"."):"Elige un cliente para ver su historial.");document.getElementById("messages").innerHTML='<div class="empty">'+(human?"No hay caso seleccionado.":"Sin conversación seleccionada.")+'</div>';renderTags(null,canMeta);renderQuickReplies(null);renderHandoffContext(null);if(note){note.value="";note.disabled=true;}text("aiHint",human?"Cuando elijas un caso, te dejo una respuesta lista para usar.":"El bot lo tiene bajo control.");text("autopilotCopy","El bot responde mientras no tomes control.");text("metaHint","Selecciona una conversación.");return;}text("chatTitle",customerDisplay(item));text("chatSubtitle",handoffStatus(item));if(!state.metaDirty)state.draftTags=(item.tags||[]).slice();renderTags(item,canMeta);renderQuickReplies(item);renderHandoffContext(item);if(note&&!state.metaDirty)note.value=item.note||"";if(note)note.disabled=!canMeta;var save=document.getElementById("saveMetaBtn");if(save)save.disabled=!canMeta||!state.metaDirty;text("metaHint",!canMeta?"Tu rol es de solo lectura.":(state.metaDirty?"Cambios sin guardar.":(item.meta_updated_at?"Guardado "+when(item.meta_updated_at):"Sin nota guardada")));text("autopilotCopy",item.conversation_status==="resolved"?"Conversación cerrada.":(["needs_attention","team_active"].includes(item.conversation_status)?"Autopiloto en pausa mientras intervienes.":"La IA responde y mantiene el caso bajo control."));renderSuggestion(item);var messages=document.getElementById("messages");messages.innerHTML=(item.messages||[]).length?item.messages.map(function(m){var author=m.author||"bot",failed=m.delivery_status==="failed",label=author==="customer"?"Cliente":(author==="human"?"Agente":(author==="system"?"Evento":"🤖 Autopiloto IA"));if(failed)label+=" · No enviado";var checks=failed?'<span class="checks">⚠</span>':(author==="human"?'<span class="checks read">✓✓</span>':(author==="bot"?'<span class="checks">✓✓</span>':""));return '<div class="bubble '+attr(author)+(failed?" deliveryFailed":"")+'">'+esc(m.text)+'<div class="bubbleMeta"><span>'+esc(label)+(m.ts?" · "+esc(when(m.ts)):"")+'</span>'+checks+'</div></div>';}).join(""):'<div class="empty">No hay mensajes para este cliente.</div>';messages.scrollTop=messages.scrollHeight;updateReplyCount();}
+function renderChat(){var item=findConversation(state.selected),canWrite=!!SERVER_CAPABILITIES.intervene,canMeta=!!SERVER_CAPABILITIES.manage_notes_tags,human=isHumanTab();["copyBtn","takeBtn","resolveTopBtn","resolveBtn","releaseBtn","sendBtn","sendCircleBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=!item;});var send=document.getElementById("sendBtn"),sendCircle=document.getElementById("sendCircleBtn");if(send)send.disabled=!item||!canWrite;if(sendCircle)sendCircle.disabled=!item||!canWrite;var take=document.getElementById("takeBtn"),release=document.getElementById("releaseBtn"),resolveTop=document.getElementById("resolveTopBtn"),resolveSide=document.getElementById("resolveBtn"),composer=document.getElementById("composer"),note=document.getElementById("customerNote"),copy=document.getElementById("copyBtn");if(copy)copy.textContent=item&&item.channel==="instagram"?(item.instagram_username?"Copiar @usuario":"Copiar ID de Instagram"):"Copiar teléfono";if(take){take.textContent=human?"Atender ahora 🙌":"Tomar control";take.disabled=!item||!canWrite||item.conversation_status==="team_active"||item.conversation_status==="resolved";}if(release){release.textContent="Devolver a la IA";release.disabled=!item||!canWrite||!["needs_attention","team_active"].includes(item.conversation_status);}var canResolve=!!item&&canWrite&&["needs_attention","team_active"].includes(item.conversation_status);if(resolveTop)resolveTop.disabled=!canResolve;if(resolveSide)resolveSide.disabled=!canResolve;if(composer)composer.style.display=(!item||!canWrite||item.conversation_status==="resolved")?"none":"grid";text("hintTitle",human?"✧ Te recomiendo mirar":"✧ Sugerencia IA");if(!item){text("chatTitle",human?"Selecciona un caso":"Selecciona una conversación");text("chatSubtitle",human?("Elige una alerta para responder en "+channelLabel()+"."):"Elige un cliente para ver su historial.");document.getElementById("messages").innerHTML='<div class="empty">'+(human?"No hay caso seleccionado.":"Sin conversación seleccionada.")+'</div>';renderTags(null,canMeta);renderQuickReplies(null);renderHandoffContext(null);if(note){note.value="";note.disabled=true;}text("aiHint",human?"Cuando elijas un caso, te dejo una respuesta lista para usar.":"El bot lo tiene bajo control.");text("autopilotCopy","El bot responde mientras no tomes control.");text("metaHint","Selecciona una conversación.");return;}text("chatTitle",customerDisplay(item));text("chatSubtitle",handoffStatus(item));if(!state.metaDirty)state.draftTags=(item.tags||[]).slice();renderTags(item,canMeta);renderQuickReplies(item);renderHandoffContext(item);if(note&&!state.metaDirty)note.value=item.note||"";if(note)note.disabled=!canMeta;var save=document.getElementById("saveMetaBtn");if(save)save.disabled=!canMeta||!state.metaDirty;text("metaHint",!canMeta?"Tu rol es de solo lectura.":(state.metaDirty?"Cambios sin guardar.":(item.meta_updated_at?"Guardado "+when(item.meta_updated_at):"Sin nota guardada")));text("autopilotCopy",item.conversation_status==="resolved"?"Conversación cerrada.":(["needs_attention","team_active"].includes(item.conversation_status)?"Autopiloto en pausa mientras intervienes.":"La IA responde y mantiene el caso bajo control."));renderSuggestion(item);var messages=document.getElementById("messages");messages.innerHTML=(item.messages||[]).length?item.messages.map(function(m){var author=m.author||"bot",failed=m.delivery_status==="failed",pending=m.delivery_status==="pending",label=author==="customer"?"Cliente":(author==="human"?"Agente":(author==="system"?"Evento":"🤖 Autopiloto IA"));if(failed)label+=" · No enviado";if(pending)label+=" · Pendiente de reintento";var checks=failed?'<span class="checks">⚠</span>':(pending?'<span class="checks">⏳</span>':(author==="human"?'<span class="checks read">✓✓</span>':(author==="bot"?'<span class="checks">✓✓</span>':"")));return '<div class="bubble '+attr(author)+(failed?" deliveryFailed":"")+'">'+esc(m.text)+'<div class="bubbleMeta"><span>'+esc(label)+(m.ts?" · "+esc(when(m.ts)):"")+'</span>'+checks+'</div></div>';}).join(""):'<div class="empty">No hay mensajes para este cliente.</div>';messages.scrollTop=messages.scrollHeight;updateReplyCount();}
 function renderSuggestion(item){var textValue="El bot lo tiene bajo control.",reply="";if(item.needs_reply){textValue=isHumanTab()?"🙌 Un mensaje tuyo puede destrabar esta conversación. Te dejo una respuesta lista para usar.":"Te recomiendo responder: este cliente está esperando una acción del equipo.";reply="🙌 ¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu caso y te ayudo con mucho gusto.";}else if((item.tags||[]).includes("venta")){textValue="Hay señal de venta. Confirmar disponibilidad o envío puede cerrar esta conversación.";reply="✅ Te confirmo disponibilidad y opciones de envío para que puedas completar tu compra.";}state.suggestion=reply;text("aiHint",textValue);}
 function useSuggestion(){var input=document.getElementById("replyText");if(input&&state.suggestion){input.value=state.suggestion;updateReplyCount();input.focus();}}
 function toggleAutopilot(){state.autopilot=!state.autopilot;var sw=document.getElementById("autopilotSwitch");if(sw)sw.classList.toggle("on",state.autopilot);text("autopilotCopy",state.autopilot?"El bot responde mientras no tomes control.":"El equipo humano está priorizado.");}

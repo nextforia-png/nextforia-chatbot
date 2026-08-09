@@ -184,6 +184,9 @@ function createMultimodalAgent(config) {
       });
       return { handled: true, media_kind: media.kind };
     } catch (error) {
+      // handleConversation may have delivered a reply and then failed its
+      // strict inbox persistence. A fallback here would produce two replies.
+      if (error && error.conversationPersistenceFailure) throw error;
       logger("warn", "multimodal_agent_failed", {
         media_kind: media.kind,
         error: cleanText(error && error.message, 160)
@@ -192,7 +195,7 @@ function createMultimodalAgent(config) {
         ? "Aun no pude procesar esa nota de voz con seguridad. ¿Me la escribes en texto o quieres que te pase con alguien del equipo?"
         : "Aun no pude analizar esa imagen con seguridad. ¿Me describes lo que aparece o quieres que te pase con alguien del equipo?";
       const sent = await sendText(input.user_id, fallback);
-      recordTurn(input.user_id, media.kind === "audio" ? "[Audio recibido]" : "[Imagen recibida]", fallback, sent ? "ok" : "error");
+      await recordTurn(input.user_id, media.kind === "audio" ? "[Audio recibido]" : "[Imagen recibida]", fallback, sent ? "ok" : "error");
       return { handled: true, media_kind: media.kind, fallback: true, error: cleanText(error && error.message, 160) };
     }
   }

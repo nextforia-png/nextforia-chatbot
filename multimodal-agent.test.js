@@ -102,6 +102,7 @@ assert(!imageAnalysisPrompt("generic").includes("garantia_o_dano"));
   assert(appointmentImageMessage.includes("solicitud de cita"));
 
   let fallbackSent = "";
+  let fallbackRecorded = false;
   const handledFallback = await agent.handleIncomingMedia({
     user_id: "573001112233",
     tenant_id: "rav-toys",
@@ -112,11 +113,36 @@ assert(!imageAnalysisPrompt("generic").includes("garantia_o_dano"));
       fallbackSent = text;
       return true;
     },
-    handleConversation: async function () { throw new Error("conversation should not run"); }
+    handleConversation: async function () { throw new Error("conversation should not run"); },
+    recordTurn: async function () {
+      await Promise.resolve();
+      fallbackRecorded = true;
+    }
   });
   assert.strictEqual(handledFallback.handled, true);
   assert.strictEqual(handledFallback.fallback, true);
   assert(fallbackSent.includes("imagen"));
+  assert.strictEqual(fallbackRecorded, true, "media fallback persistence must finish before the inbox can complete");
+
+  let duplicateFallbackSends = 0;
+  const persistenceError = new Error("conversation persistence failed after reply");
+  persistenceError.conversationPersistenceFailure = true;
+  await assert.rejects(agent.handleIncomingMedia({
+    user_id: "573001112233",
+    tenant_id: "rav-toys",
+    message: { type: "audio", audio: { id: "audio-persistence", mime_type: "audio/ogg" } },
+    downloadMedia: async function () { return { buffer: Buffer.from("fake-audio"), mime_type: "audio/ogg" }; },
+    transcribeAudio: async function () { return { text: "Necesito ayuda" }; },
+    sendText: async function () {
+      duplicateFallbackSends++;
+      return true;
+    },
+    handleConversation: async function () { throw persistenceError; }
+  }), function (error) {
+    return error === persistenceError;
+  });
+  assert.strictEqual(duplicateFallbackSends, 0,
+    "a strict persistence failure after the main reply must not send a second media fallback");
 
   const disabled = createMultimodalAgent({ enabled: false, voice_input_enabled: true });
   const disabledResult = await disabled.handleIncomingMedia({

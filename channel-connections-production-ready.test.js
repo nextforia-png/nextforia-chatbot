@@ -48,8 +48,30 @@ function postSignedWebhook(base, route, secret, body) {
   });
 }
 
+async function waitForJson(url, predicate, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 5000);
+  let latest = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(url);
+    latest = await response.json();
+    if (predicate(latest)) return latest;
+    await new Promise(function (resolve) { setTimeout(resolve, 25); });
+  }
+  throw new Error("condition_timeout:" + url + "\n" + JSON.stringify(latest));
+}
+
 (async function run() {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
+  const connectionSource = fs.readFileSync(path.join(__dirname, "channel-connections.js"), "utf8");
+  const panelSource = fs.readFileSync(path.join(__dirname, "customer-panel.js"), "utf8");
+  const whatsappV2MigrationSource = fs.readFileSync(
+    path.join(__dirname, "docs/migrations/20260808_whatsapp_onboarding_v2_up.sql"),
+    "utf8"
+  );
+  assert.match(whatsappV2MigrationSource, /whatsapp_outbound_billing_status_at timestamptz/);
+  assert.match(connectionSource, /failureAt < watermarkAt/);
+  assert.match(connectionSource, /failureAt === watermarkAt/);
+  assert.match(connectionSource, /deliveredAt <= watermarkAt/);
   assert.match(source, /runStartupProtectionDiagnostics\(\{[\s\S]*?store: channelConnectionStore,[\s\S]*?env: process\.env,[\s\S]*?log/);
   assert.match(source, /const CHANNEL_CONNECTION_TENANT_ALIASES = Object\.freeze\(\{\}\)/);
   assert.match(source, /const protectedLegacyChannelConnections = Object\.freeze\(\[\]\)/);
@@ -72,6 +94,10 @@ function postSignedWebhook(base, route, secret, body) {
   assert.match(source, /function customerTenantForAuth\(auth\)[\s\S]*?auth\.version !== 2[\s\S]*?auth\.session_version !== 2[\s\S]*?return cleanTenantId\(auth\.tenant_id\)/);
   assert.match(source, /function isRavTenantId\(tenantId\)[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
   assert.match(source, /handoffCustomerReply[\s\S]*?recordTurn\(/);
+  assert.match(source, /type === "audio"[\s\S]*?conversation_meta: \{[\s\S]*?require_persistence: !!inboxRow/);
+  assert.match(source, /type === "image"[\s\S]*?conversation_meta: \{[\s\S]*?require_persistence: !!inboxRow/);
+  assert.match(source, /Aún no puedo leer documentos directamente[\s\S]*?await recordTurn\(/);
+  assert.match(source, /Solo puedo leer texto por ahora[\s\S]*?await recordTurn\(/);
   assert.doesNotMatch(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
   assert.doesNotMatch(source, /source: "environment"/);
   assert.doesNotMatch(source, /source: "legacy_destination"/);
@@ -93,6 +119,47 @@ function postSignedWebhook(base, route, secret, body) {
   assert.match(source, /checkout: checkouts\.get\(stateKey\)/);
   assert.match(source, /pendingRatings\.has\(stateKey\)/);
   assert.match(source, /checkouts\.delete\(tenantConversationStateKey\(userId, tenantId\)\)/);
+  assert.match(source, /recordRetargetingSignal\(\s*destination\.tenantId,\s*from,/,
+    "WhatsApp webhook signals must use the resolved tenant, never the RAV default");
+  assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ig:/,
+    "Instagram webhook signals must use the resolved tenant");
+  assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ms:/,
+    "Messenger webhook signals must use the resolved tenant");
+  assert.doesNotMatch(
+    source,
+    /async function recordRetargetingSignal\([\s\S]*?\n}\n\nasync function createRetargetingJobForCustomer[\s\S]*?const tenantId = CUSTOMER_PANEL_BUSINESS\.id/,
+    "tenant B signals/jobs must never be attributed to RAV"
+  );
+  assert.match(source, /if \(isRavTenantId\(tenantId\)\) await notifyTeam\(notif, userId\)/,
+    "external handoffs must remain tenant-local and never notify RAV recipients");
+  assert.match(source, /CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED && !metaWebhookInbox[\s\S]*?return res\.sendStatus\(503\)/,
+    "dedicated delivery must fail closed when the durable inbox is unavailable");
+  assert.match(source, /message_statuses: \{ sent: 0, delivered: 0, read: 0, failed: 0 \}/);
+  assert.match(source, /processWhatsAppStatusInboxEvent\(value, deliveryStatus, inboxRow\)/);
+  assert.doesNotMatch(source, /\[WhatsAppDeliveryStatus\]/,
+    "delivery receipts are operational events and must not become visible conversation turns");
+  assert.match(source, /if \(e && e\.whatsappDeliveryFailure\) throw e;/,
+    "tool delivery failures must escape to the durable worker without a second fallback");
+  assert.match(source, /if \(err && err\.whatsappDeliveryFailure\)[\s\S]*?throw err;/,
+    "conversation delivery failures must escape to the durable worker");
+  assert.match(source, /recordWhatsAppDeliveryStatus\([\s\S]*?destination\.tenantId,[\s\S]*?destination\.phoneNumberId/,
+    "async Meta statuses must mutate only the resolved tenant and phone");
+  assert.match(source, /status: "outbound_billing_blocked"[\s\S]*?outbound_billing_blocked: true/,
+    "WhatsApp health must fail closed when durable billing is blocked");
+  assert.match(connectionSource, /status !== "connected" \|\| cleanText\(current\.phone_number_id, 240\) !== cleanPhone/,
+    "billing CAS must require the exact active tenant phone");
+  assert.match(connectionSource, /whatsappOutboundBillingBlocked\(record\)[\s\S]*?return publicConnection\(current \|\| record/,
+    "read-only verification must preserve the billing block");
+  assert.match(connectionSource, /deliveredAt <= watermarkAt/,
+    "out-of-order delivery receipts must never move the durable billing watermark backwards");
+  assert.match(panelSource, /Comprobar pago/);
+  assert.match(panelSource, /método de pago/i);
+  assert.match(source, /receipt\.pending_reply[\s\S]*?resumeWhatsAppPendingReply/,
+    "a durable retry must resume only the checkpointed delivery");
+  assert.match(source, /checkpoint && checkpoint\.status \|\| "error"/,
+    "a retryable text failure must persist outbound_pending before inbox retry");
+  assert.match(source, /turn\.status === "outbound_pending" \? "pending"/);
+  assert.match(panelSource, /Pendiente de reintento/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -122,6 +189,7 @@ function postSignedWebhook(base, route, secret, body) {
       ANTHROPIC_API_KEY: "channel-production-anthropic",
       DATA_ENCRYPTION_KEY: encryptionKey,
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
+      CHANNEL_CONNECTIONS_MUTATIONS_ENABLED: "0",
       SUPABASE_URL: "https://nextforia-test.supabase.co",
       SUPABASE_KEY: "channel-production-supabase-key"
     }),
@@ -160,14 +228,30 @@ function postSignedWebhook(base, route, secret, body) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v345-tenant-config-required"));
+    assert((await response.text()).includes("NextforIA Chatbot v349-whatsapp-free-cutover"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");
 
-    response = await fetch(base + "/whatsapp/health");
-    assert.strictEqual(response.status, 503);
-    const whatsappHealth = await response.json();
+    response = await fetch(base + "/admin/channel-connections/meta/callback?state=cutover-test", {
+      redirect: "manual"
+    });
+    assert.strictEqual(response.status, 302, "free cutover must close OAuth callbacks before provider work");
+    assert.strictEqual(response.headers.get("retry-after"), "120");
+    assert.strictEqual(
+      response.headers.get("location"),
+      "/admin/panel?tab=channels&connection=maintenance"
+    );
+
+    response = await fetch(base + "/admin/health");
+    assert.strictEqual(response.status, 200);
+    const maintenanceHealth = await response.json();
+    assert.strictEqual(maintenanceHealth.customer_setup.meta_oauth_ready, false,
+      "public health must expose that connector mutations are closed");
+
+    const whatsappHealth = await waitForJson(base + "/whatsapp/health", function (body) {
+      return body && body.runtime && body.runtime.last_skip_reason === "tenant_runtime_not_configured";
+    });
     assert.strictEqual(whatsappHealth.configured, false, "environment credentials must not configure WhatsApp runtime");
     assert.strictEqual(whatsappHealth.status, "not_configured");
     assert.strictEqual(whatsappHealth.runtime.runtime_source, null);

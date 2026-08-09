@@ -5,6 +5,7 @@ const childProcess = require("child_process");
 const crypto = require("crypto");
 const net = require("net");
 const path = require("path");
+const vm = require("vm");
 
 function availablePort() {
   return new Promise(function (resolve, reject) {
@@ -48,6 +49,72 @@ async function login(base, body) {
     body: await response.json(),
     cookie: String(response.headers.get("set-cookie") || "").split(";")[0]
   };
+}
+
+function whatsappEmbeddedListenerHarness(panel) {
+  const start = panel.indexOf("function trustedWhatsAppEmbeddedOrigin");
+  const end = panel.indexOf("\nfunction connectChannel", start);
+  assert(start >= 0 && end > start, "the rendered panel must contain the Embedded Signup listener");
+  let listener = null;
+  const calls = { clears: [], completes: 0, loads: [], messages: [], stops: [] };
+  const context = {
+    JSON,
+    String,
+    URL,
+    clearTimeout: function (timer) { calls.clears.push(timer); },
+    completeWhatsAppEmbeddedSignup: function () { calls.completes++; },
+    loadChannelConnections: function (force) { calls.loads.push(force); },
+    setChannelConnectionMessage: function (message, type) { calls.messages.push({ message, type }); },
+    state: {
+      channelConnections: { cached: true },
+      whatsappConnecting: true,
+      whatsappEmbedded: {
+        completing: false,
+        config: { configuration_id: "config-v4" },
+        code: "embedded-code",
+        session: null,
+        sessionTimer: "session-timer"
+      }
+    },
+    stopWhatsAppVerification: function (options) { calls.stops.push(options); },
+    window: {
+      addEventListener: function (type, callback) {
+        if (type === "message") listener = callback;
+      }
+    }
+  };
+  vm.runInNewContext(panel.slice(start, end), context);
+  assert.strictEqual(typeof listener, "function");
+  return { calls, context, listener };
+}
+
+function renderConnectionHubForOnboarding(panel, onboarding) {
+  const start = panel.indexOf("function onboardingConfigurationStatus");
+  const end = panel.indexOf("\nfunction requestCommerceConnector", start);
+  assert(start >= 0 && end > start, "the rendered panel must contain the connection hub renderer");
+  const connectionHubSummary = { innerHTML: "" };
+  const context = {
+    PANEL_CONTEXT: { assignedBotName: "Bot asignado" },
+    String,
+    channelConnectionInitial: function (channel) { return channel; },
+    commerceDisplayStatus: function () { return "not_requested"; },
+    commerceDisplayStore: function () { return ""; },
+    commercePlatformLabel: function (platform) { return platform; },
+    commerceStatusLabel: function (status) { return status; },
+    document: {
+      getElementById: function (id) { return id === "connectionHubSummary" ? connectionHubSummary : null; }
+    },
+    esc: function (value) { return String(value == null ? "" : value); },
+    selectedChannelHints: function () { return []; },
+    setupGoalLabel: function (goal) {
+      return goal === "appointments" ? "Agendamiento" : goal === "customer_service" ? "Atención al cliente" : "Atención al cliente + Agendamiento";
+    },
+    setupShort: function (value, fallback) { return String(value || fallback || ""); },
+    state: { channelConnections: { channels: [] }, onboarding: { onboarding } }
+  };
+  vm.runInNewContext(panel.slice(start, end), context);
+  context.renderConnectionHub();
+  return connectionHubSummary.innerHTML;
 }
 
 (async function run() {
@@ -102,7 +169,7 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     let body = await response.json();
     assert.strictEqual(body.customer_setup.meta_oauth_ready, true);
-    assert.strictEqual(body.customer_setup.channel_storage_ready, false);
+    assert.strictEqual(body.customer_setup.channel_storage_ready, true);
     assert.strictEqual(body.customer_setup.shopify_install_ready, false);
     assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
 
@@ -118,26 +185,99 @@ async function login(base, body) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Revisar estado"));
-    assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
+    assert(panel.includes("Conectar WhatsApp"));
+    assert(panel.includes("Cancelar intento"));
+    assert(panel.includes("/admin/panel/channel-connections/whatsapp/attempt"));
     assert(!panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(!panel.includes("activateWhatsApp("));
-    assert(panel.includes("if(state.whatsappActivating)return"));
-    assert(panel.includes('var extras={setup:{},sessionInfoVersion:"3"}'));
-    assert(panel.includes('if(config.onboarding_mode==="coexistence")extras.featureType="whatsapp_business_app_onboarding"'));
-    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
-    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
-    assert(panel.includes('else if(item.activation_available){actions+=\'<button class="primaryBtn" type="button" onclick="verifyWhatsAppConnection(this)">Revisar estado</button>\'+whatsappModeActions(true)'));
+    assert(panel.includes("if(channel===\"whatsapp\"&&(state.whatsappConnecting||state.whatsappEmbedded))return"));
+    assert(panel.includes("extras:{}"));
+    assert(!panel.includes("sessionInfoVersion"));
+    assert(panel.includes("WHATSAPP_VERIFY_WINDOW_MS=120000"));
+    assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
+    assert(panel.includes("metaSdkPromise=null"));
+    assert(!panel.includes("featureType=\"whatsapp_business_app_onboarding\""));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;)'));
+    assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
+    assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
+    assert(panel.includes('connection&&connection.status==="connected"'));
     assert(panel.includes('payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
-    assert(panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
+    assert(!panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));
-    assert(panel.includes("Nextfor no envió ninguna solicitud de registro"));
     assert(!panel.includes('id="whatsappRegistrationPin"'));
     assert(!panel.includes("JSON.stringify({pin:pin})"));
-    assert(panel.indexOf("if(item.activation_rate_limited)") < panel.indexOf("else if(item.activation_available)"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
+
+    const finishHarness = whatsappEmbeddedListenerHarness(panel);
+    finishHarness.listener({
+      origin: "https://business.facebook.com",
+      data: JSON.stringify({
+        type: "WA_EMBEDDED_SIGNUP",
+        event: "FINISH",
+        data: { waba_id: "waba-v4", phone_number_id: "phone-v4", business_id: "business-v4" }
+      })
+    });
+    assert.strictEqual(finishHarness.context.state.whatsappEmbedded.session.waba_id, "waba-v4");
+    assert.strictEqual(finishHarness.context.state.whatsappEmbedded.session.phone_number_id, "phone-v4");
+    assert.strictEqual(finishHarness.context.state.whatsappEmbedded.session.business_id, "business-v4");
+    assert.strictEqual(finishHarness.context.state.whatsappEmbedded.session.onboarding_event, "FINISH");
+    assert.deepStrictEqual(finishHarness.calls.clears, ["session-timer"]);
+    assert.strictEqual(finishHarness.calls.completes, 1);
+
+    const untrustedOriginHarness = whatsappEmbeddedListenerHarness(panel);
+    untrustedOriginHarness.listener({
+      origin: "https://evilfacebook.com",
+      data: { type: "WA_EMBEDDED_SIGNUP", event: "FINISH", data: { waba_id: "attacker-waba" } }
+    });
+    assert.strictEqual(untrustedOriginHarness.context.state.whatsappEmbedded.session, null);
+    assert.strictEqual(untrustedOriginHarness.calls.completes, 0);
+
+    const cancelHarness = whatsappEmbeddedListenerHarness(panel);
+    cancelHarness.listener({
+      origin: "https://web.facebook.com",
+      data: { type: "WA_EMBEDDED_SIGNUP", event: "CANCEL", data: { current_step: "phone_number" } }
+    });
+    assert.strictEqual(cancelHarness.context.state.whatsappEmbedded, null);
+    assert.strictEqual(cancelHarness.context.state.whatsappConnecting, false);
+    assert.strictEqual(cancelHarness.context.state.channelConnections, null);
+    assert.strictEqual(cancelHarness.calls.loads.length, 1);
+    assert.strictEqual(cancelHarness.calls.loads[0], true);
+    assert.strictEqual(cancelHarness.calls.messages[0].type, "error");
+
+    const errorHarness = whatsappEmbeddedListenerHarness(panel);
+    errorHarness.listener({
+      origin: "https://www.facebook.com",
+      data: { type: "WA_EMBEDDED_SIGNUP", event: "ERROR", data: { error_message: "Number already linked" } }
+    });
+    assert.strictEqual(errorHarness.context.state.whatsappEmbedded, null);
+    assert.strictEqual(errorHarness.context.state.whatsappConnecting, false);
+    assert.strictEqual(errorHarness.calls.loads.length, 1);
+    assert.strictEqual(errorHarness.calls.messages[0].type, "error");
+    assert(errorHarness.calls.messages[0].message.includes("otro portafolio"));
+
+    const readyHub = renderConnectionHubForOnboarding(panel, {
+      setup_completed: true,
+      answers: { setup_goal: "customer_service" },
+      customer_service_configuration: {
+        lifecycle: "approved_for_testing",
+        system_prompt: "Instrucciones activas del tenant"
+      }
+    });
+    assert(readyHub.includes("Listo para atender/probar"));
+    assert(!readyHub.includes("queda pendiente la aprobación final"));
+
+    const draftHub = renderConnectionHubForOnboarding(panel, {
+      setup_completed: true,
+      answers: { setup_goal: "appointments" },
+      appointment_configuration: {
+        lifecycle: "draft",
+        system_prompt: "Borrador de instrucciones"
+      }
+    });
+    assert(draftHub.includes("Agendamiento: Borrador"));
+    assert(!draftHub.includes("Listo para atender/probar"));
 
     response = await fetch(base + "/admin/panel?tab=channels", { headers: { cookie: appointmentUser.cookie } });
     assert.strictEqual(response.status, 200);
@@ -241,27 +381,13 @@ async function login(base, body) {
       },
       body: "{}"
     });
-    assert.strictEqual(response.status, 400, "WhatsApp onboarding must require an explicit number type");
-    assert.strictEqual((await response.json()).error, "whatsapp_onboarding_mode_required");
-
-    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        origin: "https://nextforia.com",
-        "x-nextforia-panel-origin": "https://nextforia.com",
-        "x-forwarded-proto": "https",
-        "x-forwarded-host": "nextforia.com",
-        cookie: ravCustomer.cookie
-      },
-      body: JSON.stringify({ onboarding_mode: "coexistence" })
-    });
-    assert.strictEqual(response.status, 200, "RAV customer must connect its own tenant-scoped WhatsApp account");
+    assert.strictEqual(response.status, 200, "the Customer Panel must start WhatsApp with one simple action");
     body = await response.json();
     assert.strictEqual(body.embedded_signup.app_id, "123456789");
     assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-config");
     assert.strictEqual(body.embedded_signup.graph_version, "v23.0");
-    assert.strictEqual(body.embedded_signup.onboarding_mode, "coexistence");
+    assert.strictEqual(body.embedded_signup.onboarding_mode, "cloud_api");
+    assert.strictEqual(body.embedded_signup.flow, "new_cloud_api_number");
     assert(body.embedded_signup.oauth_state);
     assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
 
@@ -283,6 +409,13 @@ async function login(base, body) {
       })
     });
     assert.strictEqual(response.status, 403);
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/attempt", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual((await response.json()).connection.status, "not_connected");
 
     response = await fetch(base + "/admin/panel/channel-connections/instagram/connect", {
       method: "POST",
@@ -365,18 +498,14 @@ async function login(base, body) {
       },
       body: "{}"
     });
-    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.status, 409, "support must not connect a customer's WhatsApp on its behalf");
     body = await response.json();
-    const superAdminAuthorization = new URL(body.authorization_url);
-    assert.strictEqual(superAdminAuthorization.hostname, "www.facebook.com");
-    assert(superAdminAuthorization.searchParams.get("scope").includes("whatsapp_business_management"));
-    const superAdminState = decodeURIComponent(superAdminAuthorization.searchParams.get("state"));
-    assert(!body.authorization_url.includes("channel-e2e-meta-app-secret-value"));
+    assert.strictEqual(body.error, "whatsapp_customer_panel_required");
     response = await fetch(base + "/admin/channel-connections", { headers: { cookie: superAdmin.cookie } });
     body = await response.json();
     assert.strictEqual(body.channels.find(function (row) {
       return row.tenant_id === "tenant-a" && row.channel === "whatsapp";
-    }).status, "connecting");
+    }).status, "not_connected");
 
     response = await fetch(base + "/admin/channel-connections/rav-toys/whatsapp/disconnect", {
       method: "POST",

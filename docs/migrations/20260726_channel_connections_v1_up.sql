@@ -1,5 +1,6 @@
 -- NextforIA Channel Connection Flow v1.
--- SOLO STAGING. No aplicar a Producción sin aprobación explícita de Santiago.
+-- En Producción, aplicar únicamente mediante el runbook de WhatsApp con el
+-- alta pública desactivada y antes de la migración 20260808 v2.
 -- Depende de 20260721_customer_access_v2_up.sql.
 
 begin;

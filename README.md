@@ -63,7 +63,7 @@ Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento po
 | `META_WHATSAPP_CONFIG_ID` | Configuration ID de WhatsApp Embedded Signup creado para NextforIA |
 | `MESSENGER_APP_SECRET` | Alias heredado de `META_APP_SECRET` |
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
-| `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
+| `META_GRAPH_VERSION` | Versión de Graph API para WhatsApp, Instagram y Messenger (default: `v26.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
 | `OPENAI_API_KEY` | API key usada por el agente multimodal cuando se activan voz o imagen |
 | `OPENAI_TRANSCRIPTION_MODEL` | Modelo de transcripción multimodal (default: `gpt-4o-mini-transcribe`) |
@@ -92,6 +92,7 @@ Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento po
 | `SUPABASE_TENANT_COLUMNS_ENABLED` | Debe ser `1` fuera de desarrollo; producción fuerza escritura y filtrado por `tenant_id` para evitar mezclar clientes |
 | `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
 | `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de la pantalla simple de conexiones: WhatsApp primero, Instagram opcional; solo Staging hasta aprobación explícita |
+| `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED` | Habilita el almacén Supabase atómico exigido por WhatsApp; solo usar tras la migración v2, drenado del fleet anterior y preflight de propietarios |
 | `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
 | `CUSTOMER_INVITE_TTL_HOURS` | Vigencia de la invitación privada (default `24`, máximo `168`) |
 | `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |

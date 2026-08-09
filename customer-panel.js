@@ -1692,7 +1692,7 @@ ${customerBotConfiguration.styles}
 <script>
 var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_PERSONALITY_PATH="/admin/panel/bot-personality",PANEL_ACCOUNT_PATH="/admin/panel/account-profile",PANEL_PASSWORD_PATH="/admin/panel/account-password",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_ENABLED=${channelConnectionsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_DEMO=${safeJson(channelConnectionsDemo)};
 var PLAN_DATA=${safeJson(planData)};
-var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,channelConnections:null,channelConnectionsLoading:false,whatsappEmbedded:null,externalIntegrationPending:false,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,onboarding:null,onboardingLoading:false,setupDetailsOpen:false,personality:null,personalityDirty:false,personalityLoading:false,personalityCanEdit:false,accountProfile:null,accountProfileLoading:false,accountLogo:"",notifications:null,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
+var state={tab:INITIAL_TAB,channel:INITIAL_CHANNEL,filter:"all",bot:PANEL_CONTEXT.appointments&&!PANEL_CONTEXT.support?"appointments":"support",data:null,health:null,billing:null,billingLoading:false,channelConnections:null,channelConnectionsLoading:false,whatsappEmbedded:null,whatsappConnecting:false,whatsappVerification:null,whatsappVerificationExhaustedAttemptId:"",externalIntegrationPending:false,allConversations:[],conversations:[],selected:null,metaDirty:false,draftTags:[],loading:false,guidedDraft:"",guidedFor:null,setup:null,setupDirty:false,setupLoading:false,setupStep:0,setupActivated:false,onboarding:null,onboardingLoading:false,setupDetailsOpen:false,personality:null,personalityDirty:false,personalityLoading:false,personalityCanEdit:false,accountProfile:null,accountProfileLoading:false,accountLogo:"",notifications:null,retargeting:null,retargetingLoading:false,appointments:null,appointmentsLoading:false,appointmentMode:"week",appointmentSection:"agenda",appointmentFilter:"all",selectedAppointment:null,reprogramDay:0};
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function attr(v){return esc(v).replace(/"/g,"&quot;");}
 function text(id,value){var el=document.getElementById(id);if(el)el.textContent=value;}
@@ -1778,14 +1778,32 @@ function commerceDisplayStatus(commerce){commerce=commerce||{};if(commerce.integ
 function commerceDisplayStore(commerce){commerce=commerce||{};return commerce.shopify_shop||commerce.store_url||"";}
 function onboardingAnswers(){return state.onboarding&&state.onboarding.onboarding&&state.onboarding.onboarding.answers||{};}
 function selectedChannelHints(answers){answers=answers||{};var appt=answers.appointment_setup||{},hints=[];if(setupPathGet(answers,"meta.whatsapp_number"))hints.push("whatsapp");if(appt.instagram_username||setupPathGet(answers,"meta.instagram_account"))hints.push("instagram");if(appt.messenger_page||setupPathGet(answers,"meta.facebook_page"))hints.push("messenger");return hints;}
+function onboardingConfigurationStatus(configuration){
+  if(!configuration)return"Sin configuración";
+  var lifecycle=String(configuration.lifecycle||"").toLowerCase();
+  if(lifecycle==="approved_for_testing"&&String(configuration.system_prompt||"").trim())return"Listo";
+  if(lifecycle==="approved_for_testing")return"Aprobado sin instrucciones";
+  if(lifecycle==="draft")return"Borrador";
+  return lifecycle?lifecycle.replace(/_/g," "):"Sin estado";
+}
+function onboardingBotReadiness(onboarding,goal){
+  if(!onboarding.setup_completed)return{title:setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,detail:"Se define al cerrar el cuestionario."};
+  var configurations=[];
+  if(goal==="customer_service"||goal==="both")configurations.push({label:"Atención al cliente",value:onboarding.customer_service_configuration});
+  if(goal==="appointments"||goal==="both")configurations.push({label:"Agendamiento",value:onboarding.appointment_configuration});
+  if(!configurations.length)return{title:"Configuración pendiente",detail:"El cuestionario está completo, pero todavía no existe una configuración de bot para este objetivo."};
+  var allReady=configurations.every(function(item){return onboardingConfigurationStatus(item.value)==="Listo";});
+  if(allReady)return{title:"Listo para atender/probar",detail:"La configuración aprobada tiene instrucciones activas y está lista para pruebas humanas."};
+  return{title:configurations.map(function(item){return item.label+": "+onboardingConfigurationStatus(item.value);}).join(" · "),detail:"Este es el estado real de la configuración generada; se actualizará cuando cambie su revisión."};
+}
 function renderConnectionHub(){
   var root=document.getElementById("connectionHubSummary"),commerceRoot=document.getElementById("commerceConnectorCards");
   if(!root&&!commerceRoot)return;
-  var payload=state.onboarding||{},onboarding=payload.onboarding||{},answers=onboarding.answers||{},goal=answers.setup_goal,commerce=answers.commerce||{},hints=selectedChannelHints(answers),connections=state.channelConnections&&state.channelConnections.channels||[],connected=connections.filter(function(row){return row.status==="connected";}).length,commercePlatform=commerce.platform||"unknown",commerceStatus=commerceDisplayStatus(commerce),commerceStore=commerceDisplayStore(commerce),commerceRequested=commercePlatform&&commercePlatform!=="none"&&commercePlatform!=="unknown"&&(commerce.integration_intent==="yes"||commerce.integration_intent==="later"||commerceStatus!=="not_requested");
+  var payload=state.onboarding||{},onboarding=payload.onboarding||{},answers=onboarding.answers||{},goal=answers.setup_goal,botReadiness=onboardingBotReadiness(onboarding,goal),commerce=answers.commerce||{},hints=selectedChannelHints(answers),connections=state.channelConnections&&state.channelConnections.channels||[],connected=connections.filter(function(row){return row.status==="connected";}).length,commercePlatform=commerce.platform||"unknown",commerceStatus=commerceDisplayStatus(commerce),commerceStore=commerceDisplayStore(commerce),commerceRequested=commercePlatform&&commercePlatform!=="none"&&commercePlatform!=="unknown"&&(commerce.integration_intent==="yes"||commerce.integration_intent==="later"||commerceStatus!=="not_requested");
   if(root){
     var cards=[
       ["Cuestionario",onboarding.setup_completed?"Completo":"En progreso",onboarding.setup_completed?"Tu información quedó guardada en el registro compartido.":"Puedes terminarlo sin empezar de cero."],
-      ["Bot",setupGoalLabel(goal)||PANEL_CONTEXT.assignedBotName,onboarding.setup_completed?"Borrador generado automáticamente; queda pendiente la aprobación final de NextforIA.":"Se define al cerrar el cuestionario."],
+      ["Bot",botReadiness.title,botReadiness.detail],
       ["Canales",connected?connected+" conectado(s)":hints.length?hints.map(function(item){return channelConnectionInitial(item);}).join(" · ")+" pendiente(s)":"Por elegir","Conecta solo los canales que vas a usar ahora; los demás pueden esperar."],
       ["Comercio",commerceRequested?commercePlatformLabel(commercePlatform):"Opcional",commerceRequested?commerceStatusLabel(commerceStatus)+" · "+setupShort(commerceStore,"sin URL"):"Si vendes online, puedes solicitar Shopify o WooCommerce aquí."]
     ];
@@ -1828,19 +1846,235 @@ function requestCommerceConnector(platform,connectNow){
   });
 }
 function setChannelConnectionMessage(message,tone){var root=document.getElementById("channelConnectionMessage");if(!root)return;root.textContent=message||"";root.className="channelsMessage"+(tone?" "+tone:"");}
-function whatsappModeActions(blockNewNumber){return '<button class="primaryBtn" type="button" onclick="connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)">Ya uso WhatsApp Business</button>'+(blockNewNumber?'<button class="ghostBtn" type="button" disabled>Número nuevo bloqueado mientras esta conexión está pendiente</button>':'<button class="ghostBtn" type="button" onclick="connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)">Usar un número nuevo</button>');}
+var WHATSAPP_VERIFY_INTERVAL_MS=5000,WHATSAPP_VERIFY_WINDOW_MS=120000;
+function whatsappAttemptId(item){return String(item&&item.onboarding_attempt_id||"");}
+function whatsappAttemptCanVerify(item){
+  if(!item||item.onboarding_attempt_active!==true||!item.onboarding_attempt_registration_requested_at)return false;
+  var stage=String(item.onboarding_attempt_stage||"").toLowerCase();
+  return !["registration_rejected","reconciliation_exhausted","cancelled","completed"].includes(stage);
+}
+function whatsappVerificationBusy(){return !!(state.whatsappVerification&&state.whatsappVerification.inFlight);}
+function currentWhatsAppConnection(){return (state.channelConnections&&state.channelConnections.channels||[]).find(function(item){return (item.channel||item.id)==="whatsapp";})||null;}
+function whatsappConnectAction(){return '<button class="primaryBtn" type="button" onclick="connectChannel(&quot;whatsapp&quot;)"'+(state.whatsappConnecting?' disabled aria-busy="true"':'')+'>'+(state.whatsappConnecting?'Conectando…':'Conectar WhatsApp')+'</button>';}
 function renderAppointmentCalendarGroup(calendars,canManage){calendars=(calendars||[]).filter(Boolean);if(!calendars.length)return"";var active=calendars.find(function(calendar){return calendar.active&&calendar.status==="connected";})||calendars.find(function(calendar){return calendar.active;}),connected=!!(active&&active.status==="connected"),account=active&&(active.calendar_summary||active.account_label||active.account_email)||"",actions='<span class="channelState '+attr(connected?"connected":"not_connected")+'">'+esc(connected?"Listo":"No conectado")+'</span>';if(canManage){actions+=calendars.map(function(calendar){var provider=calendar.provider==="microsoft"?"microsoft":"google",providerName=calendar.name||(provider==="microsoft"?"Microsoft Outlook":"Google Calendar"),providerConnected=calendar.active&&calendar.status==="connected";if(calendar.authorization_available===false)return '<span class="channelAccount">'+esc(providerName)+" · Próximamente"+'</span>';return '<button class="'+(providerConnected?"ghostBtn":"primaryBtn")+'" type="button" data-provider="'+attr(provider)+'" onclick="connectAppointmentCalendar(this.dataset.provider)">'+esc((providerConnected?"✓ ":"")+providerName)+'</button>';}).join("");if(connected)actions+='<button class="ghostBtn" type="button" onclick="disconnectAppointmentCalendar()">Desconectar</button>';}var accountText=connected?"Conectado: "+(account||(active&&active.name)||"calendario del negocio"):"Elige una opción. Solo mantendremos un calendario activo para las citas.";return '<article class="channelConnectCard'+(connected?' recommended':'')+'"><span class="channelConnectIcon calendar">CA</span><div class="channelConnectCopy"><h4>¿Qué calendario usa tu negocio?</h4><p>Conecta la agenda donde Nextfor revisará disponibilidad y creará Citas NextforIA.</p><div class="channelAccount">'+esc(accountText)+'</div></div><div class="channelConnectActions">'+actions+'</div></article>';}
-function renderChannelConnections(){var root=document.getElementById("channelConnectionCards"),payload=state.channelConnections;if(!root||!payload)return;var canManage=SERVER_ROLE==="admin"||SERVER_ROLE==="super_admin",available=payload.meta_authorization_available||{},hints=selectedChannelHints(onboardingAnswers()),cards=(payload.channels||[]).map(function(item){var channel=item.channel||item.id,status=item.status||"not_connected",soon=item.coming_soon||item.available===false,recommended=hints.includes(channel),account=item.account_label?'<div class="channelAccount">'+esc(item.account_label)+'</div>':recommended?'<div class="channelAccount">Sugerido por tu cuestionario</div>':"",activation=item.activation_message?'<div class="channelAccount">'+esc(item.activation_message)+'</div>':"",primary=channel==="whatsapp",pendingWhatsApp=primary&&item.webhook_status==="pending_activation",actions='<span class="channelState '+attr(status)+'">'+esc(soon?"Próximamente":channelConnectionStatusLabel(status))+'</span>';if(!soon&&canManage){if(item.activation_rate_limited){actions+='<button class="primaryBtn" type="button" onclick="verifyWhatsAppConnection(this)">Revisar estado sin registrar</button>'+whatsappModeActions(true);}else if(item.requires_selection){var options=(item.pending_assets||[]).map(function(asset){return '<option value="'+attr(asset.id)+'">'+esc(asset.label+(asset.detail?" · "+asset.detail:""))+'</option>';}).join("");actions+='<select class="channelAssetSelect" id="channelAsset-'+attr(channel)+'" aria-label="Elige una cuenta">'+options+'</select><button class="primaryBtn" type="button" data-channel="'+attr(channel)+'" onclick="selectChannelAsset(this.dataset.channel)">Elegir esta cuenta</button>';}else if(item.activation_available){actions+='<button class="primaryBtn" type="button" onclick="verifyWhatsAppConnection(this)">Revisar estado</button>'+whatsappModeActions(true);}else if(item.connect_available){actions+=primary?whatsappModeActions(false):'<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" onclick="connectChannel(this.dataset.channel)">'+(available[channel]===false?"Estamos preparando este paso":"Continuar con Meta")+'</button>';}else if(item.reconnect_available){actions+=primary?whatsappModeActions(pendingWhatsApp):'<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" onclick="connectChannel(this.dataset.channel)">Volver a conectar</button>';}if(item.disconnect_available){actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';}}return '<article class="channelConnectCard'+(soon?" comingSoon":"")+(primary?" primaryChannel":"")+(recommended&&!soon?" recommended":"")+'"><span class="channelConnectIcon '+attr(channel)+'">'+esc(channelConnectionInitial(channel))+'</span><div class="channelConnectCopy"><h4>'+esc(item.name||channel)+'</h4><p>'+esc(item.description||"")+'</p>'+account+activation+'</div><div class="channelConnectActions">'+actions+'</div></article>';});var calendars=payload.appointment_calendar_providers||[payload.appointment_calendar];cards.push(renderAppointmentCalendarGroup(calendars,canManage));root.innerHTML=cards.join("");renderConnectionHub();}
+function renderChannelConnections(){
+  var root=document.getElementById("channelConnectionCards"),payload=state.channelConnections;
+  if(!root||!payload)return;
+  var canManage=SERVER_ROLE==="admin"||SERVER_ROLE==="super_admin",available=payload.meta_authorization_available||{},hints=selectedChannelHints(onboardingAnswers()),cards=(payload.channels||[]).map(function(item){
+    var channel=item.channel||item.id,status=item.status||"not_connected",soon=item.coming_soon||item.available===false,recommended=hints.includes(channel),primary=channel==="whatsapp",connected=status==="connected",billingBlocked=primary&&item.outbound_billing_blocked===true,attemptActive=primary&&item.onboarding_attempt_active===true,activeConnection=primary&&item.disconnect_available===true&&!attemptActive,verifyAvailable=attemptActive&&whatsappAttemptCanVerify(item),cancelAttemptAvailable=attemptActive&&item.cancel_attempt_available===true,verifyBusy=verifyAvailable&&whatsappVerificationBusy(),account=item.account_label?'<div class="channelAccount">'+esc(item.account_label)+'</div>':recommended?'<div class="channelAccount">Sugerido por tu cuestionario</div>':"",activationMessage=attemptActive&&item.onboarding_attempt_message||item.activation_message||primary&&!connected&&!attemptActive&&!activeConnection&&"Necesitarás un número nuevo que todavía no esté activo en WhatsApp."||"",activation=activationMessage?'<div class="channelAccount">'+esc(activationMessage)+'</div>':"",actions='<span class="channelState '+attr(status)+'">'+esc(soon?"Próximamente":channelConnectionStatusLabel(status))+'</span>';
+    if(!soon&&canManage){
+      if(primary){
+        if(connected||activeConnection){
+          if(billingBlocked)actions+='<button class="primaryBtn" type="button" onclick="checkWhatsAppBillingConnection(this)"'+(state.whatsappConnecting?' disabled aria-busy="true"':'')+'>'+(state.whatsappConnecting?'Comprobando…':'Comprobar pago')+'</button>';
+          if(item.disconnect_available)actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';
+        }else if(attemptActive){
+          if(verifyAvailable)actions+='<button class="primaryBtn" type="button" onclick="checkWhatsAppConnection(this)"'+(state.whatsappConnecting||verifyBusy?' disabled aria-busy="true"':'')+'>'+(verifyBusy?'Comprobando…':'Comprobar conexión')+'</button>';
+          if(cancelAttemptAvailable)actions+='<button class="ghostBtn" type="button" onclick="cancelWhatsAppAttempt(this)"'+(state.whatsappConnecting||verifyBusy?' disabled aria-busy="true"':'')+'>'+(state.whatsappConnecting?'Cancelando…':'Cancelar intento')+'</button>';
+        }else if((item.connect_available||item.reconnect_available)&&available.whatsapp!==false){
+          actions+=whatsappConnectAction();
+        }
+      }else{
+        if(item.requires_selection){
+          var options=(item.pending_assets||[]).map(function(asset){return '<option value="'+attr(asset.id)+'">'+esc(asset.label+(asset.detail?" · "+asset.detail:""))+'</option>';}).join("");
+          actions+='<select class="channelAssetSelect" id="channelAsset-'+attr(channel)+'" aria-label="Elige una cuenta">'+options+'</select><button class="primaryBtn" type="button" data-channel="'+attr(channel)+'" onclick="selectChannelAsset(this.dataset.channel)">Elegir esta cuenta</button>';
+        }else if(item.connect_available){
+          actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" onclick="connectChannel(this.dataset.channel)">'+(available[channel]===false?"Estamos preparando este paso":"Continuar con Meta")+'</button>';
+        }else if(item.reconnect_available){
+          actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" onclick="connectChannel(this.dataset.channel)">Volver a conectar</button>';
+        }
+        if(item.disconnect_available)actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';
+      }
+    }
+    return '<article class="channelConnectCard'+(soon?" comingSoon":"")+(primary?" primaryChannel":"")+(recommended&&!soon?" recommended":"")+'"><span class="channelConnectIcon '+attr(channel)+'">'+esc(channelConnectionInitial(channel))+'</span><div class="channelConnectCopy"><h4>'+esc(item.name||channel)+'</h4><p>'+esc(item.description||"")+'</p>'+account+activation+'</div><div class="channelConnectActions">'+actions+'</div></article>';
+  });
+  var calendars=payload.appointment_calendar_providers||[payload.appointment_calendar];
+  cards.push(renderAppointmentCalendarGroup(calendars,canManage));
+  root.innerHTML=cards.join("");
+  renderConnectionHub();
+}
 function fallbackChannelConnections(){return{ok:false,storage_ready:false,meta_authorization_available:{whatsapp:false,instagram:false,messenger:false},channels:[{id:"whatsapp",channel:"whatsapp",name:"WhatsApp",description:"Recomendado. Aquí es donde tu Nextfor empezará a atender primero.",status:"needs_attention",connect_available:false},{id:"instagram",channel:"instagram",name:"Instagram",description:"Opcional. Súmalo si también recibes clientes por mensajes de Instagram.",status:"needs_attention",connect_available:false},{id:"messenger",channel:"messenger",name:"Facebook Messenger",description:"Opcional. Súmalo si tus clientes también te escriben por Facebook.",status:"needs_attention",connect_available:false}]};}
-function loadChannelConnections(force){if(!PANEL_CHANNEL_CONNECTIONS_ENABLED||state.channelConnectionsLoading||(!force&&state.channelConnections))return;if(DEMO_MODE&&PANEL_CHANNEL_CONNECTIONS_DEMO){state.channelConnections=PANEL_CHANNEL_CONNECTIONS_DEMO;renderChannelConnections();return;}state.channelConnectionsLoading=true;api("/admin/panel/channel-connections",{redirectOnAuth:true}).then(function(body){state.channelConnections=body;renderChannelConnections();try{var url=new URL(location.href),result=url.searchParams.get("connection"),connectionError=url.searchParams.get("connection_error"),calendarResult=url.searchParams.get("calendar");if(result==="success")setChannelConnectionMessage("Listo. Tu Nextfor ya sabe dónde atender.","success");else if(result==="select")setChannelConnectionMessage("Elige la cuenta correcta para terminar.");else if(result==="error")setChannelConnectionMessage(connectionError==="channel_asset_already_assigned"?"Esta cuenta ya está conectada a otra empresa. Desconéctala allí antes de asignarla de nuevo.":"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");if(calendarResult==="success")setChannelConnectionMessage("Listo. Creamos Citas NextforIA en tu calendario.","success");else if(calendarResult==="cancelled")setChannelConnectionMessage("No conectamos el calendario porque cerraste o cancelaste el permiso. Puedes intentarlo nuevamente.","error");else if(calendarResult==="error")setChannelConnectionMessage("No pudimos completar la conexión. Intenta nuevamente; si persiste, habla con NextforIA.","error");url.searchParams.delete("connection");url.searchParams.delete("connection_error");url.searchParams.delete("calendar");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}}).catch(function(error){state.channelConnections=fallbackChannelConnections();renderChannelConnections();setChannelConnectionMessage(error&&error.status===401?"Tu sesión venció. Vuelve a ingresar para conectar tus canales.":"Tus datos están guardados. Estamos reactivando la conexión con Meta; Shopify sigue disponible abajo.","error");}).finally(function(){state.channelConnectionsLoading=false;});}
+function loadChannelConnections(force){
+  if(!PANEL_CHANNEL_CONNECTIONS_ENABLED||state.channelConnectionsLoading||(!force&&state.channelConnections))return;
+  if(DEMO_MODE&&PANEL_CHANNEL_CONNECTIONS_DEMO){state.channelConnections=PANEL_CHANNEL_CONNECTIONS_DEMO;renderChannelConnections();return;}
+  state.channelConnectionsLoading=true;
+  api("/admin/panel/channel-connections",{redirectOnAuth:true}).then(function(body){
+    state.channelConnections=body;
+    renderChannelConnections();
+    syncWhatsAppVerification(body);
+    try{
+      var url=new URL(location.href),result=url.searchParams.get("connection"),connectionError=url.searchParams.get("connection_error"),calendarResult=url.searchParams.get("calendar");
+      if(result==="success")setChannelConnectionMessage("Listo. Tu Nextfor ya sabe dónde atender.","success");
+      else if(result==="select")setChannelConnectionMessage("Elige la cuenta correcta para terminar.");
+      else if(result==="error")setChannelConnectionMessage(connectionError==="channel_asset_already_assigned"?"Esta cuenta ya está conectada a otra empresa. Desconéctala allí antes de asignarla de nuevo.":"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");
+      if(calendarResult==="success")setChannelConnectionMessage("Listo. Creamos Citas NextforIA en tu calendario.","success");
+      else if(calendarResult==="cancelled")setChannelConnectionMessage("No conectamos el calendario porque cerraste o cancelaste el permiso. Puedes intentarlo nuevamente.","error");
+      else if(calendarResult==="error")setChannelConnectionMessage("No pudimos completar la conexión. Intenta nuevamente; si persiste, habla con NextforIA.","error");
+      url.searchParams.delete("connection");url.searchParams.delete("connection_error");url.searchParams.delete("calendar");history.replaceState(null,"",url.pathname+url.search+url.hash);
+    }catch(e){}
+  }).catch(function(error){
+    state.channelConnections=fallbackChannelConnections();renderChannelConnections();setChannelConnectionMessage(error&&error.status===401?"Tu sesión venció. Vuelve a ingresar para conectar tus canales.":"Tus datos están guardados. Estamos reactivando la conexión con Meta; Shopify sigue disponible abajo.","error");
+  }).finally(function(){state.channelConnectionsLoading=false;});
+}
+function whatsappConnectionFromPayload(payload){return (payload&&payload.channels||[]).find(function(item){return (item.channel||item.id)==="whatsapp";})||null;}
+function applyWhatsAppConnection(connection){
+  if(!connection||!state.channelConnections||!Array.isArray(state.channelConnections.channels))return;
+  state.channelConnections=Object.assign({},state.channelConnections,{channels:state.channelConnections.channels.map(function(item){return (item.channel||item.id)==="whatsapp"?connection:item;})});
+  renderChannelConnections();
+}
+function stopWhatsAppVerification(options){
+  options=options||{};
+  var verification=state.whatsappVerification;
+  if(verification){
+    verification.stopped=true;
+    if(verification.timer)clearTimeout(verification.timer);
+    if(verification.deadlineTimer)clearTimeout(verification.deadlineTimer);
+    if(verification.controller){try{verification.controller.abort();}catch(_){}}
+  }
+  state.whatsappVerification=null;
+  if(options.clearExhausted)state.whatsappVerificationExhaustedAttemptId="";
+  if(options.exhaustedAttemptId!==undefined)state.whatsappVerificationExhaustedAttemptId=String(options.exhaustedAttemptId||"");
+}
+function expireWhatsAppVerification(verification){
+  if(state.whatsappVerification!==verification)return;
+  var attemptId=verification.attemptId;
+  stopWhatsAppVerification({exhaustedAttemptId:attemptId});
+  renderChannelConnections();
+  setChannelConnectionMessage("Meta todavía no confirma la conexión. Puedes comprobarla otra vez desde aquí.");
+}
+function whatsappVerificationErrorIsTransient(error){
+  var status=Number(error&&error.status||0),code=String(error&&error.body&&(error.body.error||error.body.code)||"");
+  return !status||status>=500||status===409&&code==="whatsapp_activation_in_progress";
+}
+function armWhatsAppVerificationDeadline(verification){
+  if(verification.deadlineTimer)clearTimeout(verification.deadlineTimer);
+  verification.deadlineTimer=setTimeout(function(){expireWhatsAppVerification(verification);},Math.max(0,verification.deadlineAt-Date.now()));
+}
+function scheduleWhatsAppVerification(item,options){
+  options=options||{};
+  if(!whatsappAttemptCanVerify(item)||state.whatsappConnecting)return;
+  var attemptId=whatsappAttemptId(item);
+  if(!attemptId)return;
+  var verification=state.whatsappVerification;
+  if(!verification||verification.attemptId!==attemptId){
+    stopWhatsAppVerification();
+    if(state.whatsappVerificationExhaustedAttemptId===attemptId&&!options.restart)return;
+    state.whatsappVerificationExhaustedAttemptId="";
+    verification={attemptId:attemptId,connection:item,startedAt:Date.now(),deadlineAt:Date.now()+WHATSAPP_VERIFY_WINDOW_MS,timer:null,deadlineTimer:null,controller:null,inFlight:false,stopped:false};
+    state.whatsappVerification=verification;
+    armWhatsAppVerificationDeadline(verification);
+  }else if(options.restart){
+    if(verification.timer)clearTimeout(verification.timer);
+    verification.timer=null;
+    verification.startedAt=Date.now();
+    verification.deadlineAt=verification.startedAt+WHATSAPP_VERIFY_WINDOW_MS;
+    state.whatsappVerificationExhaustedAttemptId="";
+    armWhatsAppVerificationDeadline(verification);
+  }
+  verification.connection=item;
+  if(verification.inFlight||verification.timer)return;
+  if(Date.now()>=verification.deadlineAt){expireWhatsAppVerification(verification);return;}
+  verification.timer=setTimeout(function(){
+    verification.timer=null;
+    runWhatsAppVerification(verification);
+  },options.immediate?0:WHATSAPP_VERIFY_INTERVAL_MS);
+}
+function runWhatsAppVerification(verification){
+  if(state.whatsappVerification!==verification||verification.stopped||verification.inFlight)return;
+  if(Date.now()>=verification.deadlineAt){expireWhatsAppVerification(verification);return;}
+  verification.inFlight=true;
+  verification.controller=typeof AbortController==="function"?new AbortController():null;
+  renderChannelConnections();
+  setChannelConnectionMessage("Comprobando la conexión con Meta…");
+  var requestOptions={method:"POST",body:"{}"};
+  if(verification.controller)requestOptions.signal=verification.controller.signal;
+  api("/admin/panel/channel-connections/whatsapp/verify",requestOptions).then(function(body){
+    if(state.whatsappVerification!==verification||verification.stopped)return;
+    verification.inFlight=false;
+    verification.controller=null;
+    var connection=body&&body.connection||null;
+    applyWhatsAppConnection(connection);
+    if(connection&&connection.status==="connected"){
+      stopWhatsAppVerification({clearExhausted:true});
+      state.channelConnections=null;
+      setChannelConnectionMessage("Listo. WhatsApp quedó conectado a tu Nextfor.","success");
+      loadChannelConnections(true);
+      return;
+    }
+    if(!whatsappAttemptCanVerify(connection)){
+      var terminal=connection&&["registration_rejected","cancelled","completed"].includes(String(connection.onboarding_attempt_stage||"").toLowerCase());
+      stopWhatsAppVerification({exhaustedAttemptId:verification.attemptId});
+      renderChannelConnections();
+      setChannelConnectionMessage(terminal?"Meta rechazó el registro de este número.":"WhatsApp todavía no está conectado.",terminal?"error":"");
+      return;
+    }
+    if(Date.now()>=verification.deadlineAt){expireWhatsAppVerification(verification);return;}
+    setChannelConnectionMessage("Meta todavía está terminando la conexión. Nextfor volverá a comprobarla automáticamente.");
+    scheduleWhatsAppVerification(connection);
+  }).catch(function(error){
+    if(state.whatsappVerification!==verification||verification.stopped)return;
+    verification.inFlight=false;
+    verification.controller=null;
+    if(whatsappVerificationErrorIsTransient(error)&&Date.now()<verification.deadlineAt){
+      renderChannelConnections();
+      setChannelConnectionMessage("Meta todavía está procesando la conexión. Nextfor volverá a comprobarla automáticamente.");
+      scheduleWhatsAppVerification(currentWhatsAppConnection()||verification.connection);
+      return;
+    }
+    stopWhatsAppVerification({exhaustedAttemptId:verification.attemptId});
+    state.channelConnections=null;
+    setChannelConnectionMessage(error&&error.body&&error.body.message||"No pudimos comprobar la conexión con Meta.","error");
+    loadChannelConnections(true);
+  });
+}
+function syncWhatsAppVerification(payload){
+  var connection=whatsappConnectionFromPayload(payload);
+  if(!connection||connection.status==="connected"){
+    stopWhatsAppVerification({clearExhausted:true});
+    return;
+  }
+  if(!whatsappAttemptCanVerify(connection)){
+    stopWhatsAppVerification();
+    return;
+  }
+  scheduleWhatsAppVerification(connection);
+}
+function checkWhatsAppConnection(){
+  var connection=currentWhatsAppConnection();
+  if(!whatsappAttemptCanVerify(connection)||whatsappVerificationBusy()||state.whatsappConnecting)return;
+  scheduleWhatsAppVerification(connection,{immediate:true,restart:true});
+}
+function checkWhatsAppBillingConnection(){
+  var connection=currentWhatsAppConnection();
+  if(!connection||connection.outbound_billing_blocked!==true||state.whatsappConnecting)return;
+  state.whatsappConnecting=true;
+  renderChannelConnections();
+  setChannelConnectionMessage("Comprobando WhatsApp con Meta…");
+  api("/admin/panel/channel-connections/whatsapp/verify",{method:"POST",body:"{}"}).then(function(body){
+    state.whatsappConnecting=false;
+    applyWhatsAppConnection(body&&body.connection||null);
+    renderChannelConnections();
+    if(body&&body.connection&&body.connection.status==="connected"){
+      setChannelConnectionMessage("Listo. Meta confirmó que WhatsApp puede volver a responder.","success");
+    }else{
+      setChannelConnectionMessage("Meta todavía no confirmó una entrega nueva. Agrega el método de pago y envía una prueba por WhatsApp.","error");
+    }
+  }).catch(function(error){
+    state.whatsappConnecting=false;
+    renderChannelConnections();
+    setChannelConnectionMessage(error&&error.body&&error.body.message||"No pudimos comprobar WhatsApp con Meta.","error");
+  });
+}
 var metaSdkPromise=null;
 function loadMetaSdk(config){
   if(window.FB){window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});return Promise.resolve(window.FB);}
   if(metaSdkPromise)return metaSdkPromise;
   metaSdkPromise=new Promise(function(resolve,reject){
-    var timer=setTimeout(function(){reject(new Error("meta_sdk_timeout"));},15000);
-    window.fbAsyncInit=function(){clearTimeout(timer);window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});resolve(window.FB);};
-    var script=document.createElement("script");script.id="facebook-jssdk";script.async=true;script.defer=true;script.crossOrigin="anonymous";script.src="https://connect.facebook.net/es_LA/sdk.js";script.onerror=function(){clearTimeout(timer);reject(new Error("meta_sdk_unavailable"));};document.head.appendChild(script);
+    var settled=false,existing=document.getElementById("facebook-jssdk"),script=document.createElement("script"),timer;
+    if(existing&&existing.parentNode)existing.parentNode.removeChild(existing);
+    function fail(error){if(settled)return;settled=true;clearTimeout(timer);if(script.parentNode)script.parentNode.removeChild(script);metaSdkPromise=null;reject(error);}
+    timer=setTimeout(function(){fail(new Error("meta_sdk_timeout"));},15000);
+    window.fbAsyncInit=function(){if(settled)return;settled=true;clearTimeout(timer);window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});resolve(window.FB);};
+    script.id="facebook-jssdk";script.async=true;script.defer=true;script.crossOrigin="anonymous";script.src="https://connect.facebook.net/es_LA/sdk.js";script.onerror=function(){fail(new Error("meta_sdk_unavailable"));};document.head.appendChild(script);
   });
   return metaSdkPromise;
 }
@@ -1848,57 +2082,138 @@ function completeWhatsAppEmbeddedSignup(){
   var pending=state.whatsappEmbedded;
   if(!pending||pending.completing||!pending.code||!pending.session)return;
   pending.completing=true;
-  setChannelConnectionMessage("Verificando tu WhatsApp con Meta…");
+  if(pending.sessionTimer)clearTimeout(pending.sessionTimer);
+  state.whatsappConnecting=true;
+  renderChannelConnections();
+  setChannelConnectionMessage("Terminando y comprobando la conexión de WhatsApp…");
   api("/admin/panel/channel-connections/whatsapp/complete",{method:"POST",body:JSON.stringify({state:pending.config.oauth_state,code:pending.code,session:pending.session})}).then(function(body){
-    state.whatsappEmbedded=null;state.channelConnections=null;if(body.connection&&body.connection.status==="connecting")setChannelConnectionMessage("Meta dejó la conexión en proceso. Puedes revisarla aquí sin repetir la autorización.","success");else setChannelConnectionMessage("Listo. WhatsApp quedó conectado a tu Nextfor.","success");loadChannelConnections(true);
+    var connection=body&&body.connection||null,connected=!!(connection&&connection.status==="connected");
+    state.whatsappEmbedded=null;
+    state.whatsappConnecting=false;
+    state.channelConnections=null;
+    if(connected){
+      stopWhatsAppVerification({clearExhausted:true});
+      setChannelConnectionMessage("Listo. WhatsApp quedó conectado a tu Nextfor.","success");
+    }else if(connection&&connection.status==="connecting"){
+      setChannelConnectionMessage("Meta aceptó la configuración. Nextfor está comprobando la conexión automáticamente.");
+      scheduleWhatsAppVerification(connection);
+    }else{
+      stopWhatsAppVerification({exhaustedAttemptId:whatsappAttemptId(connection)});
+      setChannelConnectionMessage("WhatsApp todavía no está conectado.","error");
+    }
+    loadChannelConnections(true);
   }).catch(function(error){
-    state.whatsappEmbedded=null;setChannelConnectionMessage(error.body&&error.body.message||"Meta no pudo terminar la conexión. Intenta de nuevo.","error");loadChannelConnections(true);
+    state.whatsappEmbedded=null;
+    state.whatsappConnecting=false;
+    stopWhatsAppVerification();
+    renderChannelConnections();
+    setChannelConnectionMessage(error.body&&error.body.message||"Meta no pudo terminar la conexión. Puedes cancelar este intento y empezar de nuevo.","error");
+    loadChannelConnections(true);
   });
+}
+function trustedWhatsAppEmbeddedOrigin(origin){
+  try{
+    var source=new URL(origin),hostname=String(source.hostname||"").toLowerCase();
+    return source.protocol==="https:"&&(hostname==="facebook.com"||hostname.endsWith(".facebook.com"));
+  }catch(_){return false;}
 }
 function whatsappEmbeddedErrorMessage(payload){
   var detail=String(payload&&payload.data&&(payload.data.error_message||payload.data.message)||"").toLowerCase();
   if(/already|registered|another business|otro negocio|portfolio|portafolio|linked|vinculad/.test(detail))return"Este número ya está vinculado a otro portafolio de Meta. Desconéctalo allí o pide a soporte que lo mueva antes de volver a intentarlo.";
-  return"La conexión con Meta quedó incompleta. Puedes retomarla cuando quieras.";
+  return"La conexión con Meta quedó incompleta. Cancela el intento para empezar de nuevo.";
 }
 function launchWhatsAppEmbeddedSignup(config){
+  stopWhatsAppVerification({clearExhausted:true});
   state.whatsappEmbedded={config:config,code:null,session:null,completing:false};
+  state.whatsappConnecting=true;
+  renderChannelConnections();
   loadMetaSdk(config).then(function(FB){
-    var extras={setup:{},sessionInfoVersion:"3"};
-    if(config.onboarding_mode==="coexistence")extras.featureType="whatsapp_business_app_onboarding";
     FB.login(function(response){
       var pending=state.whatsappEmbedded,code=response&&response.authResponse&&response.authResponse.code;
       if(!pending)return;
-      if(!code){state.whatsappEmbedded=null;setChannelConnectionMessage("La autorización de Meta no se completó. Puedes intentarlo de nuevo.","error");return;}
-      pending.code=code;setChannelConnectionMessage("Meta autorizó la cuenta. Terminando la conexión…");completeWhatsAppEmbeddedSignup();
+      if(!code){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("La autorización de Meta no se completó. Puedes cancelar el intento y empezar de nuevo.","error");loadChannelConnections(true);return;}
+      pending.code=code;
+      pending.sessionTimer=setTimeout(function(){
+        if(state.whatsappEmbedded!==pending||pending.session||pending.completing)return;
+        stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;
+        setChannelConnectionMessage("Meta no devolvió los datos del número. Cancela el intento y empieza de nuevo.","error");
+        loadChannelConnections(true);
+      },30000);
+      setChannelConnectionMessage("Meta autorizó la cuenta. Terminando la conexión…");completeWhatsAppEmbeddedSignup();
     },{
       config_id:config.configuration_id,
       response_type:"code",
       override_default_response_type:true,
-      extras:extras
+      extras:{}
     });
   }).catch(function(){
-    state.whatsappEmbedded=null;setChannelConnectionMessage("No pudimos abrir la conexión segura de Meta. Recarga e intenta de nuevo.","error");
+    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("No pudimos abrir la conexión segura de Meta. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);
   });
 }
 window.addEventListener("message",function(event){
-  if(event.origin!=="https://www.facebook.com"&&event.origin!=="https://web.facebook.com")return;
+  if(!trustedWhatsAppEmbeddedOrigin(event.origin))return;
   var payload=event.data;
   if(typeof payload==="string"){try{payload=JSON.parse(payload);}catch(_){return;}}
   if(!payload||payload.type!=="WA_EMBEDDED_SIGNUP"||!state.whatsappEmbedded)return;
-  if(payload.event==="FINISH"||payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"){
+  if(payload.event==="FINISH"){
     var session=payload.data||{};
-    if(!session.waba_id){setChannelConnectionMessage("Meta no devolvió la cuenta de WhatsApp seleccionada. Intenta de nuevo.","error");return;}
-    state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:session.phone_number_id?String(session.phone_number_id):"",business_id:session.business_id?String(session.business_id):"",coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"||session.is_wa_login_user===true,is_wa_login_user:session.is_wa_login_user===true,onboarding_mode:state.whatsappEmbedded.config.onboarding_mode,onboarding_event:payload.event};
+    if(!session.waba_id){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta no devolvió la cuenta de WhatsApp seleccionada. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);return;}
+    state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:session.phone_number_id?String(session.phone_number_id):"",business_id:session.business_id?String(session.business_id):"",onboarding_event:"FINISH"};
+    if(state.whatsappEmbedded.sessionTimer)clearTimeout(state.whatsappEmbedded.sessionTimer);
     completeWhatsAppEmbeddedSignup();
   }else if(payload.event==="CANCEL"||payload.event==="ERROR"){
-    state.whatsappEmbedded=null;setChannelConnectionMessage(whatsappEmbeddedErrorMessage(payload),"error");
+    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage(whatsappEmbeddedErrorMessage(payload),"error");loadChannelConnections(true);
+  }else if(payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"){
+    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Para conectar WhatsApp aquí, usa un número nuevo que todavía no esté activo en WhatsApp.","error");loadChannelConnections(true);
   }
 });
-function connectChannel(channel,onboardingMode){if(DEMO_MODE){setChannelConnectionMessage("Demo: aquí continuarías con Meta para elegir la cuenta de tu negocio.","success");return;}if(channel==="whatsapp"&&onboardingMode!=="coexistence"&&onboardingMode!=="cloud_api"){setChannelConnectionMessage("Elige si conservarás tu WhatsApp Business actual o usarás un número nuevo.","error");return;}var externalTab=channel==="whatsapp"?null:prepareExternalIntegrationTab("Meta");if(channel!=="whatsapp"&&!externalTab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}setChannelConnectionMessage(channel==="whatsapp"?"Abriendo la conexión segura de WhatsApp…":"Meta se abrirá en una pestaña nueva…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/connect",{method:"POST",body:JSON.stringify(channel==="whatsapp"?{onboarding_mode:onboardingMode}:{})}).then(function(body){if(channel==="whatsapp"&&body.embedded_signup){launchWhatsAppEmbeddedSignup(body.embedded_signup);return;}if(!body.authorization_url)throw new Error("authorization_unavailable");if(!navigateExternalIntegrationTab(externalTab,body.authorization_url))throw new Error("popup_navigation_failed");setChannelConnectionMessage("Meta se abrió en una pestaña nueva. Termina allí y luego vuelve a este panel.","success");}).catch(function(error){closeExternalIntegrationTab(externalTab);setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");loadChannelConnections(true);});}
-function verifyWhatsAppConnection(button){if(state.whatsappActivating)return;state.whatsappActivating=true;if(button){button.disabled=true;button.textContent="Revisando…";}setChannelConnectionMessage("Consultando el estado de WhatsApp sin volver a registrarlo…");api("/admin/panel/channel-connections/whatsapp/verify",{method:"POST",body:"{}"}).then(function(body){state.channelConnections=null;if(body.connection&&body.connection.status==="connected")setChannelConnectionMessage("Listo. WhatsApp quedó conectado y preparado para recibir mensajes.","success");else setChannelConnectionMessage("El número todavía no está activo. Nextfor no envió ninguna solicitud de registro.","error");loadChannelConnections(true);}).catch(function(error){state.channelConnections=null;setChannelConnectionMessage(error.body&&error.body.message||"No pudimos consultar el estado. No se intentó registrar el número.","error");loadChannelConnections(true);}).finally(function(){state.whatsappActivating=false;if(button&&button.isConnected){button.disabled=false;button.textContent="Revisar estado";}});}
+function connectChannel(channel){
+  if(DEMO_MODE){setChannelConnectionMessage("Demo: aquí continuarías con Meta para elegir la cuenta de tu negocio.","success");return;}
+  if(channel==="whatsapp"&&(state.whatsappConnecting||state.whatsappEmbedded))return;
+  var externalTab=channel==="whatsapp"?null:prepareExternalIntegrationTab("Meta");
+  if(channel!=="whatsapp"&&!externalTab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}
+  if(channel==="whatsapp"){
+    stopWhatsAppVerification({clearExhausted:true});
+    state.whatsappConnecting=true;
+    renderChannelConnections();
+  }
+  setChannelConnectionMessage(channel==="whatsapp"?"Abriendo la conexión segura de WhatsApp…":"Meta se abrirá en una pestaña nueva…");
+  api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/connect",{method:"POST",body:"{}"}).then(function(body){
+    if(channel==="whatsapp"&&body.embedded_signup){launchWhatsAppEmbeddedSignup(body.embedded_signup);return;}
+    if(!body.authorization_url)throw new Error("authorization_unavailable");
+    if(!navigateExternalIntegrationTab(externalTab,body.authorization_url))throw new Error("popup_navigation_failed");
+    setChannelConnectionMessage("Meta se abrió en una pestaña nueva. Termina allí y luego vuelve a este panel.","success");
+  }).catch(function(error){
+    closeExternalIntegrationTab(externalTab);
+    if(channel==="whatsapp"){state.whatsappEmbedded=null;state.whatsappConnecting=false;renderChannelConnections();}
+    setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");
+    loadChannelConnections(true);
+  });
+}
+function cancelWhatsAppAttempt(button){
+  var connection=currentWhatsAppConnection();
+  if(state.whatsappConnecting||whatsappVerificationBusy()||!connection||connection.cancel_attempt_available!==true)return;
+  stopWhatsAppVerification({clearExhausted:true});
+  state.whatsappConnecting=true;
+  if(button){button.disabled=true;button.textContent="Cancelando…";}
+  setChannelConnectionMessage("Cancelando el intento pendiente…");
+  api("/admin/panel/channel-connections/whatsapp/attempt",{method:"DELETE"}).then(function(){
+    state.whatsappEmbedded=null;
+    state.whatsappConnecting=false;
+    stopWhatsAppVerification({clearExhausted:true});
+    state.channelConnections=null;
+    setChannelConnectionMessage("Intento cancelado. Ya puedes conectar otro número.","success");
+    loadChannelConnections(true);
+  }).catch(function(error){
+    state.whatsappConnecting=false;
+    state.channelConnections=null;
+    setChannelConnectionMessage(error.body&&error.body.message||"No pudimos cancelar el intento. Intenta de nuevo.","error");
+    loadChannelConnections(true);
+  });
+}
 function connectAppointmentCalendar(provider){provider=provider==="microsoft"?"microsoft":"google";var name=provider==="microsoft"?"Microsoft":"Google";if(DEMO_MODE){setChannelConnectionMessage("Demo: aquí abriríamos "+name+" para conectar el calendario de tu negocio.","success");return;}var externalTab=prepareExternalIntegrationTab(name+" Calendar");if(!externalTab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}setChannelConnectionMessage(name+" se abrirá en una pestaña nueva…");api("/admin/panel/appointment-calendar/"+provider+"/connect",{method:"POST",body:JSON.stringify({return_to:"channels"})}).then(function(body){if(!body.authorization_url)throw new Error("authorization_unavailable");if(!navigateExternalIntegrationTab(externalTab,body.authorization_url))throw new Error("popup_navigation_failed");setChannelConnectionMessage(name+" se abrió en una pestaña nueva. Termina allí y luego vuelve a este panel.","success");}).catch(function(error){closeExternalIntegrationTab(externalTab);setChannelConnectionMessage(error.body&&error.body.message||"No pudimos abrir el calendario. Intenta de nuevo o habla con NextforIA.","error");loadChannelConnections(true);});}
 function selectChannelAsset(channel){var select=document.getElementById("channelAsset-"+channel),assetId=select&&select.value;if(!assetId)return;setChannelConnectionMessage("Revisando que sea la cuenta correcta…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/select",{method:"POST",body:JSON.stringify({asset_id:assetId})}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Listo. Tu Nextfor ya sabe dónde atender.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");});}
-function disconnectChannel(channel,name){if(!confirm("¿Desconectar "+name+"? Tu Nextfor dejará de recibir nuevos mensajes de este canal."))return;setChannelConnectionMessage("Desconectando el canal…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/disconnect",{method:"POST",body:"{}"}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Canal desconectado.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos desconectar el canal. Habla con NextforIA.","error");});}
+function disconnectChannel(channel,name){if(!confirm("¿Desconectar "+name+"? Tu Nextfor dejará de recibir nuevos mensajes de este canal."))return;if(channel==="whatsapp")stopWhatsAppVerification({clearExhausted:true});setChannelConnectionMessage("Desconectando el canal…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/disconnect",{method:"POST",body:"{}"}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Canal desconectado.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos desconectar el canal. Habla con NextforIA.","error");});}
 function disconnectAppointmentCalendar(){if(!confirm("¿Desconectar el calendario? Nextfor dejará de crear o sincronizar citas allí."))return;setChannelConnectionMessage("Desconectando calendario…");api("/admin/panel/appointment-calendar/disconnect",{method:"POST",body:"{}"}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Calendario desconectado.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos desconectar el calendario. Habla con NextforIA.","error");});}
 function showTab(name){
   if(name==="human")name="conversations";
@@ -2003,7 +2318,7 @@ function closeMobileChat(){document.body.classList.remove("chat-open");}
 function renderQuickReplies(item){var box=document.getElementById("quickReplies");if(!box)return;if(!isHumanTab()||!item){box.innerHTML="";return;}var replies=["🙌 ¡Hola! Ya te ayudo","🙏 Lamento mucho eso","📦 Reviso tu pedido","✅ Te confirmo disponibilidad"];box.innerHTML=replies.map(function(reply){return '<button type="button" data-reply="'+attr(reply)+'" onclick="applyQuickReply(this.dataset.reply)">'+esc(reply)+'</button>';}).join("");}
 function applyQuickReply(reply){var input=document.getElementById("replyText");if(input){input.value=reply;updateReplyCount();input.focus();}}
 function renderHandoffContext(item){text("handoffReason",item?handoffReason(item):"Selecciona una conversación.");text("contextCustomer",item?customerDisplay(item):"—");text("contextStatus",item?handoffStatus(item):"—");}
-function renderChat(){var item=findConversation(state.selected),canWrite=!!SERVER_CAPABILITIES.intervene,canMeta=!!SERVER_CAPABILITIES.manage_notes_tags,human=isHumanTab();["copyBtn","takeBtn","resolveTopBtn","resolveBtn","releaseBtn","sendBtn","sendCircleBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=!item;});var send=document.getElementById("sendBtn"),sendCircle=document.getElementById("sendCircleBtn");if(send)send.disabled=!item||!canWrite;if(sendCircle)sendCircle.disabled=!item||!canWrite;var take=document.getElementById("takeBtn"),release=document.getElementById("releaseBtn"),resolveTop=document.getElementById("resolveTopBtn"),resolveSide=document.getElementById("resolveBtn"),composer=document.getElementById("composer"),note=document.getElementById("customerNote"),copy=document.getElementById("copyBtn");if(copy)copy.textContent=item&&item.channel==="instagram"?(item.instagram_username?"Copiar @usuario":"Copiar ID de Instagram"):"Copiar teléfono";if(take){take.textContent=human?"Atender ahora 🙌":"Tomar control";take.disabled=!item||!canWrite||item.conversation_status==="team_active"||item.conversation_status==="resolved";}if(release){release.textContent="Devolver a la IA";release.disabled=!item||!canWrite||!["needs_attention","team_active"].includes(item.conversation_status);}var canResolve=!!item&&canWrite&&["needs_attention","team_active"].includes(item.conversation_status);if(resolveTop)resolveTop.disabled=!canResolve;if(resolveSide)resolveSide.disabled=!canResolve;if(composer)composer.style.display=(!item||!canWrite||item.conversation_status==="resolved")?"none":"grid";text("hintTitle",human?"✧ Te recomiendo mirar":"✧ Sugerencia IA");if(!item){text("chatTitle",human?"Selecciona un caso":"Selecciona una conversación");text("chatSubtitle",human?("Elige una alerta para responder en "+channelLabel()+"."):"Elige un cliente para ver su historial.");document.getElementById("messages").innerHTML='<div class="empty">'+(human?"No hay caso seleccionado.":"Sin conversación seleccionada.")+'</div>';renderTags(null,canMeta);renderQuickReplies(null);renderHandoffContext(null);if(note){note.value="";note.disabled=true;}text("aiHint",human?"Cuando elijas un caso, te dejo una respuesta lista para usar.":"El bot lo tiene bajo control.");text("autopilotCopy","El bot responde mientras no tomes control.");text("metaHint","Selecciona una conversación.");return;}text("chatTitle",customerDisplay(item));text("chatSubtitle",handoffStatus(item));if(!state.metaDirty)state.draftTags=(item.tags||[]).slice();renderTags(item,canMeta);renderQuickReplies(item);renderHandoffContext(item);if(note&&!state.metaDirty)note.value=item.note||"";if(note)note.disabled=!canMeta;var save=document.getElementById("saveMetaBtn");if(save)save.disabled=!canMeta||!state.metaDirty;text("metaHint",!canMeta?"Tu rol es de solo lectura.":(state.metaDirty?"Cambios sin guardar.":(item.meta_updated_at?"Guardado "+when(item.meta_updated_at):"Sin nota guardada")));text("autopilotCopy",item.conversation_status==="resolved"?"Conversación cerrada.":(["needs_attention","team_active"].includes(item.conversation_status)?"Autopiloto en pausa mientras intervienes.":"La IA responde y mantiene el caso bajo control."));renderSuggestion(item);var messages=document.getElementById("messages");messages.innerHTML=(item.messages||[]).length?item.messages.map(function(m){var author=m.author||"bot",failed=m.delivery_status==="failed",label=author==="customer"?"Cliente":(author==="human"?"Agente":(author==="system"?"Evento":"🤖 Autopiloto IA"));if(failed)label+=" · No enviado";var checks=failed?'<span class="checks">⚠</span>':(author==="human"?'<span class="checks read">✓✓</span>':(author==="bot"?'<span class="checks">✓✓</span>':""));return '<div class="bubble '+attr(author)+(failed?" deliveryFailed":"")+'">'+esc(m.text)+'<div class="bubbleMeta"><span>'+esc(label)+(m.ts?" · "+esc(when(m.ts)):"")+'</span>'+checks+'</div></div>';}).join(""):'<div class="empty">No hay mensajes para este cliente.</div>';messages.scrollTop=messages.scrollHeight;updateReplyCount();}
+function renderChat(){var item=findConversation(state.selected),canWrite=!!SERVER_CAPABILITIES.intervene,canMeta=!!SERVER_CAPABILITIES.manage_notes_tags,human=isHumanTab();["copyBtn","takeBtn","resolveTopBtn","resolveBtn","releaseBtn","sendBtn","sendCircleBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.disabled=!item;});var send=document.getElementById("sendBtn"),sendCircle=document.getElementById("sendCircleBtn");if(send)send.disabled=!item||!canWrite;if(sendCircle)sendCircle.disabled=!item||!canWrite;var take=document.getElementById("takeBtn"),release=document.getElementById("releaseBtn"),resolveTop=document.getElementById("resolveTopBtn"),resolveSide=document.getElementById("resolveBtn"),composer=document.getElementById("composer"),note=document.getElementById("customerNote"),copy=document.getElementById("copyBtn");if(copy)copy.textContent=item&&item.channel==="instagram"?(item.instagram_username?"Copiar @usuario":"Copiar ID de Instagram"):"Copiar teléfono";if(take){take.textContent=human?"Atender ahora 🙌":"Tomar control";take.disabled=!item||!canWrite||item.conversation_status==="team_active"||item.conversation_status==="resolved";}if(release){release.textContent="Devolver a la IA";release.disabled=!item||!canWrite||!["needs_attention","team_active"].includes(item.conversation_status);}var canResolve=!!item&&canWrite&&["needs_attention","team_active"].includes(item.conversation_status);if(resolveTop)resolveTop.disabled=!canResolve;if(resolveSide)resolveSide.disabled=!canResolve;if(composer)composer.style.display=(!item||!canWrite||item.conversation_status==="resolved")?"none":"grid";text("hintTitle",human?"✧ Te recomiendo mirar":"✧ Sugerencia IA");if(!item){text("chatTitle",human?"Selecciona un caso":"Selecciona una conversación");text("chatSubtitle",human?("Elige una alerta para responder en "+channelLabel()+"."):"Elige un cliente para ver su historial.");document.getElementById("messages").innerHTML='<div class="empty">'+(human?"No hay caso seleccionado.":"Sin conversación seleccionada.")+'</div>';renderTags(null,canMeta);renderQuickReplies(null);renderHandoffContext(null);if(note){note.value="";note.disabled=true;}text("aiHint",human?"Cuando elijas un caso, te dejo una respuesta lista para usar.":"El bot lo tiene bajo control.");text("autopilotCopy","El bot responde mientras no tomes control.");text("metaHint","Selecciona una conversación.");return;}text("chatTitle",customerDisplay(item));text("chatSubtitle",handoffStatus(item));if(!state.metaDirty)state.draftTags=(item.tags||[]).slice();renderTags(item,canMeta);renderQuickReplies(item);renderHandoffContext(item);if(note&&!state.metaDirty)note.value=item.note||"";if(note)note.disabled=!canMeta;var save=document.getElementById("saveMetaBtn");if(save)save.disabled=!canMeta||!state.metaDirty;text("metaHint",!canMeta?"Tu rol es de solo lectura.":(state.metaDirty?"Cambios sin guardar.":(item.meta_updated_at?"Guardado "+when(item.meta_updated_at):"Sin nota guardada")));text("autopilotCopy",item.conversation_status==="resolved"?"Conversación cerrada.":(["needs_attention","team_active"].includes(item.conversation_status)?"Autopiloto en pausa mientras intervienes.":"La IA responde y mantiene el caso bajo control."));renderSuggestion(item);var messages=document.getElementById("messages");messages.innerHTML=(item.messages||[]).length?item.messages.map(function(m){var author=m.author||"bot",failed=m.delivery_status==="failed",pending=m.delivery_status==="pending",label=author==="customer"?"Cliente":(author==="human"?"Agente":(author==="system"?"Evento":"🤖 Autopiloto IA"));if(failed)label+=" · No enviado";if(pending)label+=" · Pendiente de reintento";var checks=failed?'<span class="checks">⚠</span>':(pending?'<span class="checks">⏳</span>':(author==="human"?'<span class="checks read">✓✓</span>':(author==="bot"?'<span class="checks">✓✓</span>':"")));return '<div class="bubble '+attr(author)+(failed?" deliveryFailed":"")+'">'+esc(m.text)+'<div class="bubbleMeta"><span>'+esc(label)+(m.ts?" · "+esc(when(m.ts)):"")+'</span>'+checks+'</div></div>';}).join(""):'<div class="empty">No hay mensajes para este cliente.</div>';messages.scrollTop=messages.scrollHeight;updateReplyCount();}
 function renderSuggestion(item){var textValue="El bot lo tiene bajo control.",reply="";if(item.needs_reply){textValue=isHumanTab()?"🙌 Un mensaje tuyo puede destrabar esta conversación. Te dejo una respuesta lista para usar.":"Te recomiendo responder: este cliente está esperando una acción del equipo.";reply="🙌 ¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu caso y te ayudo con mucho gusto.";}else if((item.tags||[]).includes("venta")){textValue="Hay señal de venta. Confirmar disponibilidad o envío puede cerrar esta conversación.";reply="✅ Te confirmo disponibilidad y opciones de envío para que puedas completar tu compra.";}state.suggestion=reply;text("aiHint",textValue);}
 function useSuggestion(){var input=document.getElementById("replyText");if(input&&state.suggestion){input.value=state.suggestion;updateReplyCount();input.focus();}}
 function toggleAutopilot(){state.autopilot=!state.autopilot;var sw=document.getElementById("autopilotSwitch");if(sw)sw.classList.toggle("on",state.autopilot);text("autopilotCopy",state.autopilot?"El bot responde mientras no tomes control.":"El equipo humano está priorizado.");}

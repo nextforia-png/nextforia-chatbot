@@ -189,6 +189,7 @@ async function waitForJson(url, predicate, timeoutMs) {
       ANTHROPIC_API_KEY: "channel-production-anthropic",
       DATA_ENCRYPTION_KEY: encryptionKey,
       CHANNEL_CONNECTIONS_V1_ENABLED: "1",
+      CHANNEL_CONNECTIONS_MUTATIONS_ENABLED: "0",
       SUPABASE_URL: "https://nextforia-test.supabase.co",
       SUPABASE_KEY: "channel-production-supabase-key"
     }),
@@ -227,10 +228,26 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v348-whatsapp-v4-delivery"));
+    assert((await response.text()).includes("NextforIA Chatbot v349-whatsapp-free-cutover"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");
+
+    response = await fetch(base + "/admin/channel-connections/meta/callback?state=cutover-test", {
+      redirect: "manual"
+    });
+    assert.strictEqual(response.status, 302, "free cutover must close OAuth callbacks before provider work");
+    assert.strictEqual(response.headers.get("retry-after"), "120");
+    assert.strictEqual(
+      response.headers.get("location"),
+      "/admin/panel?tab=channels&connection=maintenance"
+    );
+
+    response = await fetch(base + "/admin/health");
+    assert.strictEqual(response.status, 200);
+    const maintenanceHealth = await response.json();
+    assert.strictEqual(maintenanceHealth.customer_setup.meta_oauth_ready, false,
+      "public health must expose that connector mutations are closed");
 
     const whatsappHealth = await waitForJson(base + "/whatsapp/health", function (body) {
       return body && body.runtime && body.runtime.last_skip_reason === "tenant_runtime_not_configured";

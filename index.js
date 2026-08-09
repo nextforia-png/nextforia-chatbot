@@ -327,7 +327,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v348-whatsapp-v4-delivery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v349-whatsapp-free-cutover";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -410,6 +410,11 @@ const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLE
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED =
   process.env.CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED === "1";
+// Operational kill switch for connector mutations. Existing webhook routing and
+// outbound runtimes stay active while customer/super-admin connect, select,
+// verify and disconnect operations are closed during a zero-cost rolling cutover.
+const CHANNEL_CONNECTIONS_MUTATIONS_ENABLED =
+  process.env.CHANNEL_CONNECTIONS_MUTATIONS_ENABLED !== "0";
 const PAYMENTS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.PAYMENTS_TEST_MODE === "1";
 const PAYMENTS_V1_GATE = process.env.PAYMENTS_V1_ENABLED === "1";
 const PAYMENTS_ENV = String(process.env.PAYMENTS_ENV || "").trim().toLowerCase();
@@ -7901,7 +7906,11 @@ function appointmentIntegrationOptions(channels, calendarConnection, record, ten
     calendarTenantMap: APPOINTMENT_CALENDAR_TENANT_MAP,
     calendarConnected: !!(calendarConnection && calendarConnection.status === "connected"),
     calendarConnection: calendarConnection || null,
-    metaOAuthReady: !!(CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService),
+    metaOAuthReady: !!(
+      CHANNEL_CONNECTIONS_MUTATIONS_ENABLED &&
+      CHANNEL_CONNECTIONS_V1_VISIBLE &&
+      channelConnectionService
+    ),
     whatsappConnected: setupChannelConnected(channels, "whatsapp"),
     supabaseAppointmentsEnabled: persistenceReady === true
   };
@@ -13715,6 +13724,33 @@ function channelConnectionErrorResponse(res, error) {
   });
 }
 
+function isChannelConnectionMutationRequest(req) {
+  const requestPath = String(req.path || "");
+  if (req.method === "GET") {
+    return requestPath === "/admin/channel-connections/meta/callback";
+  }
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) return false;
+  return requestPath.startsWith("/admin/panel/channel-connections/") ||
+    requestPath.startsWith("/admin/channel-connections/");
+}
+
+app.use(function channelConnectionMutationMaintenance(req, res, next) {
+  if (CHANNEL_CONNECTIONS_MUTATIONS_ENABLED || !isChannelConnectionMutationRequest(req)) {
+    next();
+    return;
+  }
+  res.set("Retry-After", "120");
+  if (req.method === "GET") {
+    res.redirect("/admin/panel?tab=channels&connection=maintenance");
+    return;
+  }
+  res.status(503).json({
+    ok: false,
+    error: "channel_connections_maintenance",
+    message: "Los conectores están en mantenimiento por unos minutos. Tus canales activos siguen funcionando."
+  });
+});
+
 app.get("/admin/panel/channel-connections", async (req, res) => {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
     res.status(404).json({ ok: false, error: "channel_connections_disabled" });
@@ -13737,6 +13773,7 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
     // subscription, not only a previously saved OAuth result. Refresh stale
     // connections when the customer opens the channel hub.
     for (const connection of channels) {
+      if (!CHANNEL_CONNECTIONS_MUTATIONS_ENABLED) break;
       const activationPending = connection && connection.channel === "whatsapp" &&
         connection.status === "connecting" && connection.webhook_status === "pending_activation";
       if (!connection || (connection.status !== "connected" && !activationPending)) continue;
@@ -13779,9 +13816,9 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
         ? appointmentCalendarProvidersForConnection(appointmentCalendar)
         : [],
       meta_authorization_available: {
-        whatsapp: publicWhatsAppOnboardingReady() && channelConnectionService.providerConfigured("whatsapp"),
-        instagram: channelConnectionService.providerConfigured("instagram"),
-        messenger: channelConnectionService.providerConfigured("messenger")
+        whatsapp: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && publicWhatsAppOnboardingReady() && channelConnectionService.providerConfigured("whatsapp"),
+        instagram: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("instagram"),
+        messenger: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("messenger")
       }
     });
   } catch (error) {
@@ -16199,6 +16236,7 @@ async function buildAdminHealthResult() {
     channel_connections: {
       visible: CHANNEL_CONNECTIONS_V1_VISIBLE,
       enabled_flag: CHANNEL_CONNECTIONS_V1_ENABLED,
+      mutations_enabled: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED,
       production_ready: CHANNEL_CONNECTIONS_PRODUCTION_READY,
       storage: channelConnectionStore
         ? (CHANNEL_CONNECTIONS_TEST_MODE || channelConnectionsMemoryPreview
@@ -16211,9 +16249,9 @@ async function buildAdminHealthResult() {
         atomicWhatsAppOnboardingStorageReady()
       ),
       meta_authorization_available: channelConnectionService ? {
-        whatsapp: publicWhatsAppOnboardingReady() && channelConnectionService.providerConfigured("whatsapp"),
-        instagram: channelConnectionService.providerConfigured("instagram"),
-        messenger: channelConnectionService.providerConfigured("messenger")
+        whatsapp: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && publicWhatsAppOnboardingReady() && channelConnectionService.providerConfigured("whatsapp"),
+        instagram: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("instagram"),
+        messenger: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("messenger")
       } : {
         whatsapp: false,
         instagram: false,

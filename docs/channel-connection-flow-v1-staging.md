@@ -91,7 +91,9 @@ https://staging.nextforia.com/messenger/webhook
 
 Permisos que deben tener Advanced Access/App Review para clientes externos:
 
-- WhatsApp: `business_management`, `whatsapp_business_management`, `whatsapp_business_messaging`.
+- WhatsApp Cloud API: `whatsapp_business_management`, `whatsapp_business_messaging`.
+  No se solicita `business_management`: no es necesario para Embedded Signup
+  y agregaría una revisión de acceso ajena al flujo del número.
 - Instagram: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `instagram_basic`, `instagram_manage_messages`.
 
 WhatsApp requiere que la app esté configurada como Tech Provider/Solution Partner y que el `META_WHATSAPP_CONFIG_ID` corresponda al Embedded Signup aprobado.

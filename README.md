@@ -63,7 +63,7 @@ Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento po
 | `META_WHATSAPP_CONFIG_ID` | Configuration ID de WhatsApp Embedded Signup creado para NextforIA |
 | `MESSENGER_APP_SECRET` | Alias heredado de `META_APP_SECRET` |
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
-| `META_GRAPH_VERSION` | Versión de Graph API para Instagram y Messenger (default: `v23.0`) |
+| `META_GRAPH_VERSION` | Versión de Graph API para WhatsApp, Instagram y Messenger (default: `v26.0`) |
 | `ANTHROPIC_API_KEY` | API key de Anthropic (Claude) |
 | `OPENAI_API_KEY` | API key usada por el agente multimodal cuando se activan voz o imagen |
 | `OPENAI_TRANSCRIPTION_MODEL` | Modelo de transcripción multimodal (default: `gpt-4o-mini-transcribe`) |

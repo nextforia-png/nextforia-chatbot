@@ -1513,7 +1513,10 @@ class MetaChannelProvider {
       return url.toString();
     }
     const scopes = {
-      whatsapp: ["business_management", "whatsapp_business_management", "whatsapp_business_messaging"],
+      // Cloud API Embedded Signup only requires the two WhatsApp permissions.
+      // Requesting business_management would unnecessarily make external
+      // customers depend on a third Advanced Access review.
+      whatsapp: ["whatsapp_business_management", "whatsapp_business_messaging"],
       instagram: ["business_management", "pages_show_list", "pages_read_engagement", "pages_manage_metadata", "instagram_basic", "instagram_manage_messages"],
       messenger: ["business_management", "pages_show_list", "pages_manage_metadata", "pages_messaging"]
     }[channel];

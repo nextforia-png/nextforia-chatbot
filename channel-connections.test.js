@@ -63,6 +63,8 @@ function expectCode(promise, code) {
   assert.strictEqual(waUrl.hostname, "www.facebook.com");
   assert.strictEqual(waUrl.searchParams.get("config_id"), "wa-config-123");
   assert(waUrl.searchParams.get("scope").includes("whatsapp_business_management"));
+  assert(waUrl.searchParams.get("scope").includes("whatsapp_business_messaging"));
+  assert(!waUrl.searchParams.get("scope").split(",").includes("business_management"));
   assert(!waUrl.toString().includes("meta-app-secret"));
   const instagramUrl = new URL(meta.authorizationUrl("instagram", state));
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));

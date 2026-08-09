@@ -7,6 +7,7 @@ const {
   ChannelConnectionError,
   InMemoryChannelConnectionStore,
   MigratingChannelConnectionStore,
+  SupabaseChannelConnectionStore,
   createChannelConnectionService
 } = require("./channel-connections");
 
@@ -107,6 +108,39 @@ function providerFor(options) {
   assert.strictEqual(cutoverStore.primaryAuthoritative, true, "runtime authority must remain sticky after cutover");
   assert.strictEqual((await cutoverStore.get("tenant-cutover", "whatsapp")).phone_number_id, "phone-new");
 
+  const beginRpcCalls = [];
+  const supabaseAttemptStore = new SupabaseChannelConnectionStore({
+    url: "https://supabase.example",
+    headers: { Authorization: "Bearer service-role" },
+    axiosClient: {
+      post: async function (url, body) {
+        beginRpcCalls.push({ url, body });
+        return { data: [{
+          tenant_id: body.p_tenant_id,
+          channel: "whatsapp",
+          status: "connecting",
+          onboarding_attempt_id: body.p_attempt_id,
+          onboarding_attempt_status: "awaiting_meta"
+        }] };
+      }
+    }
+  });
+  const supabaseBegin = await supabaseAttemptStore.beginWhatsAppAttempt(
+    "tenant-rpc",
+    "attempt-rpc",
+    { allow_protected_reconnect: false },
+    { actor: "owner@example.com" }
+  );
+  assert.strictEqual(supabaseBegin.started, true);
+  assert.strictEqual(beginRpcCalls.length, 1);
+  assert.strictEqual(beginRpcCalls[0].url, "https://supabase.example/rest/v1/rpc/begin_whatsapp_attempt_v2");
+  assert.deepStrictEqual(beginRpcCalls[0].body, {
+    p_tenant_id: "tenant-rpc",
+    p_attempt_id: "attempt-rpc",
+    p_actor: "owner@example.com",
+    p_allow_protected_reconnect: false
+  });
+
   const store = new InMemoryChannelConnectionStore();
   let preparations = 0;
   let registrations = 0;
@@ -138,6 +172,143 @@ function providerFor(options) {
     whatsappVerificationChecks: 1,
     whatsappVerificationIntervalMs: 0
   });
+
+  const concurrentBeginStore = new InMemoryChannelConnectionStore();
+  const concurrentBeginServiceA = createChannelConnectionService({
+    store: concurrentBeginStore,
+    provider: providerFor(),
+    encryptionKey,
+    now
+  });
+  const concurrentBeginServiceB = createChannelConnectionService({
+    store: concurrentBeginStore,
+    provider: providerFor(),
+    encryptionKey,
+    now
+  });
+  const concurrentBegins = await Promise.allSettled([
+    concurrentBeginServiceA.begin(
+      "tenant-concurrent-begin",
+      "whatsapp",
+      "owner@example.com",
+      "state-a",
+      { attemptId: "attempt-concurrent-a" }
+    ),
+    concurrentBeginServiceB.begin(
+      "tenant-concurrent-begin",
+      "whatsapp",
+      "owner@example.com",
+      "state-b",
+      { attemptId: "attempt-concurrent-b" }
+    )
+  ]);
+  assert.strictEqual(concurrentBegins.filter(function (result) {
+    return result.status === "fulfilled";
+  }).length, 1, "only one application replica may atomically start a WhatsApp attempt");
+  const concurrentBeginFailure = concurrentBegins.find(function (result) {
+    return result.status === "rejected";
+  });
+  assert(concurrentBeginFailure.reason instanceof ChannelConnectionError);
+  assert.strictEqual(concurrentBeginFailure.reason.code, "whatsapp_onboarding_attempt_active");
+  const concurrentBeginRow = await concurrentBeginStore.get("tenant-concurrent-begin", "whatsapp");
+  assert(["attempt-concurrent-a", "attempt-concurrent-b"].includes(concurrentBeginRow.onboarding_attempt_id));
+  assert.strictEqual(concurrentBeginStore.audit.filter(function (event) {
+    return event.action === "whatsapp_onboarding_started";
+  }).length, 1, "the losing replica must not append a second start audit event");
+  const cancelledThroughGenericDisconnect = await concurrentBeginServiceA.disconnect(
+    "tenant-concurrent-begin",
+    "whatsapp",
+    "super-admin"
+  );
+  assert.strictEqual(cancelledThroughGenericDisconnect.status, "not_connected",
+    "generic disconnect must delegate a pre-registration attempt to the attempt CAS");
+  assert.strictEqual(
+    (await concurrentBeginStore.get("tenant-concurrent-begin", "whatsapp")).onboarding_attempt_status,
+    "cancelled"
+  );
+
+  const delayedBeginStore = new InMemoryChannelConnectionStore();
+  const delayedBeginEntered = deferred();
+  const delayedBeginRelease = deferred();
+  const delayedRegisterEntered = deferred();
+  const delayedRegisterRelease = deferred();
+  const atomicBegin = delayedBeginStore.beginWhatsAppAttempt.bind(delayedBeginStore);
+  delayedBeginStore.beginWhatsAppAttempt = async function (tenantId, attemptId, fields, event) {
+    if (attemptId === "attempt-delayed") {
+      delayedBeginEntered.resolve();
+      await delayedBeginRelease.promise;
+    }
+    return atomicBegin(tenantId, attemptId, fields, event);
+  };
+  const delayedBeginService = createChannelConnectionService({
+    store: delayedBeginStore,
+    provider: providerFor(),
+    encryptionKey,
+    now
+  });
+  const winningBeginService = createChannelConnectionService({
+    store: delayedBeginStore,
+    provider: providerFor({
+      onRegister: async function () {
+        delayedRegisterEntered.resolve();
+        await delayedRegisterRelease.promise;
+        return { ok: true };
+      }
+    }),
+    encryptionKey,
+    now,
+    whatsappVerificationChecks: 1,
+    whatsappVerificationIntervalMs: 0
+  });
+  const delayedBegin = delayedBeginService.begin(
+    "tenant-delayed-begin",
+    "whatsapp",
+    "slow@example.com",
+    "state-delayed",
+    { attemptId: "attempt-delayed" }
+  );
+  await delayedBeginEntered.promise;
+  await winningBeginService.begin(
+    "tenant-delayed-begin",
+    "whatsapp",
+    "winner@example.com",
+    "state-winner",
+    { attemptId: "attempt-winner" }
+  );
+  const winningCompletion = winningBeginService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-delayed-begin",
+    actor: "winner@example.com",
+    attempt_id: "attempt-winner",
+    code: "oauth-winner",
+    session: { waba_id: "waba-winner", phone_number_id: "phone-winner" }
+  });
+  await delayedRegisterEntered.promise;
+  const beforeDelayedBegin = await delayedBeginStore.get("tenant-delayed-begin", "whatsapp");
+  assert.strictEqual(beforeDelayedBegin.onboarding_attempt_id, "attempt-winner");
+  assert.strictEqual(beforeDelayedBegin.onboarding_attempt_status, "registering");
+  assert.strictEqual(beforeDelayedBegin.onboarding_attempt_phone_number_id, "phone-winner");
+  assert.strictEqual(beforeDelayedBegin.onboarding_attempt_waba_id, "waba-winner");
+  assert(beforeDelayedBegin.onboarding_attempt_registration_requested_at);
+  assert(beforeDelayedBegin.onboarding_attempt_ciphertext);
+  assert.strictEqual(delayedBeginStore.whatsappRegistrationLedger.length, 1);
+  const delayedBeginRejected = expectCode(delayedBegin, "whatsapp_onboarding_attempt_active");
+  delayedBeginRelease.resolve();
+  await delayedBeginRejected;
+  const afterDelayedBegin = await delayedBeginStore.get("tenant-delayed-begin", "whatsapp");
+  assert.strictEqual(afterDelayedBegin.onboarding_attempt_id, "attempt-winner");
+  assert.strictEqual(
+    afterDelayedBegin.onboarding_attempt_registration_requested_at,
+    beforeDelayedBegin.onboarding_attempt_registration_requested_at,
+    "a delayed begin must not erase a registration claim"
+  );
+  assert.strictEqual(
+    afterDelayedBegin.onboarding_attempt_ciphertext,
+    beforeDelayedBegin.onboarding_attempt_ciphertext,
+    "a delayed begin must not erase the persisted candidate"
+  );
+  assert.strictEqual(delayedBeginStore.whatsappRegistrationLedger.length, 1);
+  delayedRegisterRelease.resolve();
+  assert.strictEqual((await winningCompletion).connection.status, "connected");
 
   const authorizationUrl = await service.begin(
     "tenant-a",
@@ -602,6 +773,21 @@ function providerFor(options) {
     inFlightService.discardWhatsAppAttempt("tenant-register-in-flight", "owner@example.com"),
     "whatsapp_onboarding_cannot_cancel"
   );
+  const authoritativeInFlightGet = inFlightStore.get.bind(inFlightStore);
+  let staleDisconnectReads = 2;
+  inFlightStore.get = async function (tenantId, channel) {
+    const current = await authoritativeInFlightGet(tenantId, channel);
+    if (tenantId === "tenant-register-in-flight" && channel === "whatsapp" && staleDisconnectReads > 0) {
+      staleDisconnectReads--;
+      return Object.assign({}, current, { onboarding_attempt_registration_requested_at: null });
+    }
+    return current;
+  };
+  await expectCode(
+    inFlightService.disconnect("tenant-register-in-flight", "whatsapp", "super-admin"),
+    "whatsapp_onboarding_cannot_cancel"
+  );
+  inFlightStore.get = authoritativeInFlightGet;
   await expectCode(inFlightService.begin(
     "tenant-register-in-flight",
     "whatsapp",
@@ -612,6 +798,10 @@ function providerFor(options) {
   const inFlightDuringRegistration = await inFlightStore.get("tenant-register-in-flight", "whatsapp");
   assert.strictEqual(inFlightDuringRegistration.onboarding_attempt_id, "attempt-register-in-flight");
   assert(inFlightDuringRegistration.onboarding_attempt_registration_requested_at);
+  assert(inFlightDuringRegistration.onboarding_attempt_ciphertext,
+    "a stale or super-admin disconnect must not erase the claimed candidate");
+  assert.strictEqual(inFlightDuringRegistration.onboarding_attempt_phone_number_id, "phone-register-in-flight");
+  assert.strictEqual(inFlightDuringRegistration.onboarding_attempt_waba_id, "waba-register-in-flight");
   registrationRelease.resolve();
   const inFlightFinished = await inFlightCompletion;
   assert.strictEqual(inFlightFinished.connection.status, "connected");

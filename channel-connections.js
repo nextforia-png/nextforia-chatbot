@@ -166,6 +166,15 @@ function mapStoreError(error) {
   if (/WHATSAPP_ASSET_ALREADY_ASSIGNED/.test(detail)) {
     return new ChannelConnectionError("channel_asset_already_assigned", 409, detail);
   }
+  if (/WHATSAPP_CONNECTION_ACTIVE/.test(detail)) {
+    return new ChannelConnectionError("active_connection_must_be_disconnected", 409, detail);
+  }
+  if (/WHATSAPP_ATTEMPT_ACTIVE/.test(detail)) {
+    return new ChannelConnectionError("whatsapp_onboarding_attempt_active", 409, detail);
+  }
+  if (/LEGACY_CONNECTION_PROTECTED/.test(detail)) {
+    return new ChannelConnectionError("legacy_connection_protected", 409, detail);
+  }
   if (status === 404) return new ChannelConnectionError("connection_not_found", 404, detail);
   if (status === 409 || storeCode === "23505") {
     return new ChannelConnectionError("channel_asset_already_assigned", 409, detail);
@@ -444,6 +453,71 @@ class InMemoryChannelConnectionStore {
       });
     }
     return this.get(tenantId, channel);
+  }
+
+  async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const cleanAttempt = cleanText(attemptId, 100);
+    if (!cleanTenant || !cleanAttempt) {
+      throw new ChannelConnectionError("invalid_channel_request", 400);
+    }
+    let row = this.rows.find(function (item) {
+      return item.tenant_id === cleanTenant && item.channel === "whatsapp";
+    });
+    if (row && row.protected_legacy && !(fields && fields.allow_protected_reconnect)) {
+      throw new ChannelConnectionError("legacy_connection_protected", 409);
+    }
+    if (row && row.status === "connected") {
+      throw new ChannelConnectionError("active_connection_must_be_disconnected", 409);
+    }
+    if (whatsappAttemptRecordIsActive(row)) {
+      throw new ChannelConnectionError("whatsapp_onboarding_attempt_active", 409);
+    }
+    if (!row) {
+      row = emptyConnection(cleanTenant, "whatsapp");
+      this.rows.push(row);
+    }
+    const startedAt = iso(fields && fields.started_at);
+    Object.assign(row, {
+      tenant_id: cleanTenant,
+      channel: "whatsapp",
+      status: "connecting",
+      webhook_status: "not_configured",
+      last_error: null,
+      last_error_at: null,
+      pending_assets: [],
+      registration_pin_required: false,
+      coexistence_confirmed: false,
+      onboarding_attempt_id: cleanAttempt,
+      onboarding_attempt_status: "awaiting_meta",
+      onboarding_attempt_started_at: startedAt,
+      onboarding_attempt_updated_at: startedAt,
+      onboarding_attempt_registration_requested_at: null,
+      onboarding_attempt_registration_accepted_at: null,
+      onboarding_attempt_subscription_confirmed_at: null,
+      onboarding_attempt_phone_number_id: null,
+      onboarding_attempt_waba_id: null,
+      onboarding_attempt_ciphertext: null,
+      onboarding_attempt_last_error: null,
+      onboarding_attempt_last_error_at: null,
+      onboarding_attempt_reconcile_count: 0,
+      onboarding_attempt_reconcile_after: null,
+      onboarding_attempt_reconcile_lease_until: null,
+      onboarding_attempt_reconcile_owner: null,
+      updated_at: startedAt
+    });
+    if (event) {
+      this.audit.push({
+        id: crypto.randomUUID(),
+        tenant_id: cleanTenant,
+        channel: "whatsapp",
+        action: event.action,
+        actor: event.actor,
+        details: event.details || {},
+        created_at: startedAt
+      });
+    }
+    return { started: true, row: await this.get(cleanTenant, "whatsapp") };
   }
 
   async bindWhatsAppAttemptAsset(tenantId, attemptId, fields, event) {
@@ -875,6 +949,40 @@ class SupabaseChannelConnectionStore {
     }
   }
 
+  async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const cleanAttempt = cleanText(attemptId, 100);
+    if (!cleanTenant || !cleanAttempt) {
+      throw new ChannelConnectionError("invalid_channel_request", 400);
+    }
+    try {
+      const response = await this.axios.post(
+        this.url + "/rest/v1/rpc/begin_whatsapp_attempt_v2",
+        {
+          p_tenant_id: cleanTenant,
+          p_attempt_id: cleanAttempt,
+          p_actor: cleanText(event && event.actor, 200),
+          p_allow_protected_reconnect: !!(fields && fields.allow_protected_reconnect)
+        },
+        {
+          headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+          timeout: 8000
+        }
+      );
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (!rows.length) {
+        throw new ChannelConnectionError(
+          "channel_store_unavailable",
+          503,
+          "Atomic WhatsApp attempt did not return a connection row"
+        );
+      }
+      return { started: true, row: rows[0] };
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
   async bindWhatsAppAttemptAsset(tenantId, attemptId, fields, event) {
     const cleanTenant = cleanTenantId(tenantId);
     const cleanAttempt = cleanText(attemptId, 100);
@@ -1169,7 +1277,9 @@ class MigratingChannelConnectionStore {
     this.primary = options.primary;
     this.fallback = options.fallback;
     this.supportsAtomicWhatsAppRegistration = !!(
-      this.primary && this.primary.supportsAtomicWhatsAppRegistration
+      this.primary &&
+      this.primary.supportsAtomicWhatsAppRegistration &&
+      typeof this.primary.beginWhatsAppAttempt === "function"
     );
     // Once the historical cutover succeeds, the dedicated store remains the
     // only runtime authority. A later preflight failure may pause new
@@ -1259,6 +1369,10 @@ class MigratingChannelConnectionStore {
   async upsert(input, event) {
     const current = await this.get(input && input.tenant_id, input && input.channel);
     return this.primary.upsert(Object.assign({}, current || {}, input || {}), event);
+  }
+
+  async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
+    return this.primary.beginWhatsAppAttempt(tenantId, attemptId, fields, event);
   }
 
   async bindWhatsAppAttemptAsset(tenantId, attemptId, fields, event) {
@@ -2695,6 +2809,7 @@ function createChannelConnectionService(options) {
               store.whatsappOnboardingReady !== false &&
               store.whatsappWebhookInboxReady !== false &&
               store.whatsappPublicOnboardingEnabled !== false &&
+              typeof store.beginWhatsAppAttempt === "function" &&
               typeof store.bindWhatsAppAttemptAsset === "function" &&
               typeof store.claimWhatsAppRegistration === "function" &&
               typeof store.claimWhatsAppReconciliation === "function" &&
@@ -2742,22 +2857,24 @@ function createChannelConnectionService(options) {
       if (clean.channel === "whatsapp" && typeof store.assertWhatsAppWebhookInboxReady === "function") {
         await store.assertWhatsAppWebhookInboxReady({ force: true });
       }
-      const legacy = legacyFor(clean.tenantId, clean.channel);
-      let storedConnection = null;
-      try { storedConnection = await store.get(clean.tenantId, clean.channel); }
-      catch (error) { throw mapStoreError(error); }
-      // A protected environment fallback must not block a tenant that has a
-      // real, encrypted channel record.
-      if (legacy && legacy.protected_legacy &&
-          (!storedConnection || storedConnection.protected_legacy || !storedConnection.credentials_ciphertext) &&
-          !allowProtectedLegacyReconnect(clean.tenantId, clean.channel)) {
-        throw new ChannelConnectionError("legacy_connection_protected", 409);
-      }
       if (clean.channel === "whatsapp") {
+        const protectedFallback = legacyFor(clean.tenantId, clean.channel);
+        if (protectedFallback && protectedFallback.protected_legacy &&
+            !allowProtectedLegacyReconnect(clean.tenantId, clean.channel)) {
+          let durableConnection = null;
+          try { durableConnection = await store.get(clean.tenantId, clean.channel); }
+          catch (error) { throw mapStoreError(error); }
+          // This read only distinguishes a protected environment fallback from
+          // a real durable connection. Attempt creation remains one atomic CAS.
+          if (!durableConnection || durableConnection.protected_legacy || !durableConnection.credentials_ciphertext) {
+            throw new ChannelConnectionError("legacy_connection_protected", 409);
+          }
+        }
         if (store.whatsappOnboardingReady === false ||
             store.whatsappWebhookInboxReady === false ||
             store.whatsappPublicOnboardingEnabled === false ||
             !store.supportsAtomicWhatsAppRegistration ||
+            typeof store.beginWhatsAppAttempt !== "function" ||
             typeof store.bindWhatsAppAttemptAsset !== "function" ||
             typeof store.claimWhatsAppRegistration !== "function" ||
             typeof store.claimWhatsAppReconciliation !== "function" ||
@@ -2772,48 +2889,27 @@ function createChannelConnectionService(options) {
         }
         const attemptId = cleanText(options && options.attemptId, 100);
         if (!attemptId) throw new ChannelConnectionError("invalid_channel_request", 400, "WhatsApp attempt ID is missing");
-        if (storedConnection && storedConnection.status === "connected" && storedConnection.credentials_ciphertext) {
-          throw new ChannelConnectionError(
-            "active_connection_must_be_disconnected",
-            409,
-            "Disconnect the active WhatsApp connection before connecting another phone"
-          );
-        }
-        if (whatsappAttemptIsActive(storedConnection)) {
-          throw new ChannelConnectionError("whatsapp_onboarding_attempt_active", 409);
-        }
         const startedAt = iso(now());
-        await store.upsert(Object.assign(emptyConnection(clean.tenantId, clean.channel), storedConnection || {}, {
-          tenant_id: clean.tenantId,
-          channel: clean.channel,
-          status: "connecting",
-          webhook_status: "not_configured",
-          last_error: null,
-          last_error_at: null,
-          pending_assets: [],
-          onboarding_attempt_id: attemptId,
-          onboarding_attempt_status: "awaiting_meta",
-          onboarding_attempt_started_at: startedAt,
-          onboarding_attempt_updated_at: startedAt,
-          onboarding_attempt_registration_requested_at: null,
-          onboarding_attempt_registration_accepted_at: null,
-          onboarding_attempt_subscription_confirmed_at: null,
-          onboarding_attempt_phone_number_id: null,
-          onboarding_attempt_waba_id: null,
-          onboarding_attempt_ciphertext: null,
-          onboarding_attempt_last_error: null,
-          onboarding_attempt_last_error_at: null,
-          onboarding_attempt_reconcile_count: 0,
-          onboarding_attempt_reconcile_after: null,
-          onboarding_attempt_reconcile_lease_until: null,
-          onboarding_attempt_reconcile_owner: null,
-          updated_at: startedAt
-        }), {
+        await store.beginWhatsAppAttempt(clean.tenantId, attemptId, {
+          started_at: startedAt,
+          allow_protected_reconnect: allowProtectedLegacyReconnect(clean.tenantId, clean.channel)
+        }, {
           action: "whatsapp_onboarding_started",
           actor: actorLabel(actor),
           details: { onboarding_attempt_id: attemptId, flow: "new_cloud_api_number" }
         });
       } else {
+        const legacy = legacyFor(clean.tenantId, clean.channel);
+        let storedConnection = null;
+        try { storedConnection = await store.get(clean.tenantId, clean.channel); }
+        catch (error) { throw mapStoreError(error); }
+        // A protected environment fallback must not block a tenant that has a
+        // real, encrypted channel record.
+        if (legacy && legacy.protected_legacy &&
+            (!storedConnection || storedConnection.protected_legacy || !storedConnection.credentials_ciphertext) &&
+            !allowProtectedLegacyReconnect(clean.tenantId, clean.channel)) {
+          throw new ChannelConnectionError("legacy_connection_protected", 409);
+        }
         await store.upsert({
           tenant_id: clean.tenantId,
           channel: clean.channel,
@@ -3168,6 +3264,19 @@ function createChannelConnectionService(options) {
       const record = await storedOrLegacy(clean.tenantId, clean.channel);
       if (!record) throw new ChannelConnectionError("connection_not_found", 404);
       if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+      if (clean.channel === "whatsapp" && whatsappAttemptIsActive(record)) {
+        if (record.onboarding_attempt_registration_requested_at) {
+          throw new ChannelConnectionError(
+            "whatsapp_onboarding_cannot_cancel",
+            409,
+            "Registration already started; the attempt can only be verified"
+          );
+        }
+        // The attempt-specific CAS is the only path allowed to clear pending
+        // WhatsApp identity. If another replica claims /register after the read,
+        // cancelWhatsAppAttempt fails closed and discard surfaces the conflict.
+        return this.discardWhatsAppAttempt(clean.tenantId, actor);
+      }
       let providerResult = { ok: true };
       try {
         const credential = credentialPayload(record);

@@ -172,6 +172,130 @@ alter table public.tenant_channel_connection_audit
     )
   );
 
+-- Starting an Embedded Signup flow is itself a durable compare-and-set. The
+-- advisory lock covers the no-row-yet case; FOR UPDATE covers an existing row.
+-- A slow request can therefore never overwrite a newer attempt, a bound Meta
+-- asset, or a registration claim created by another application replica.
+create or replace function public.begin_whatsapp_attempt_v2(
+  p_tenant_id text,
+  p_attempt_id text,
+  p_actor text,
+  p_allow_protected_reconnect boolean default false
+)
+returns setof public.tenant_channel_connections
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+  v_connection public.tenant_channel_connections%rowtype;
+  v_now timestamptz := clock_timestamp();
+begin
+  if coalesce(auth.role()::text, '') <> 'service_role' then
+    raise exception 'SERVICE_ROLE_REQUIRED' using errcode = '42501';
+  end if;
+  if coalesce(btrim(p_tenant_id), '') = '' or coalesce(btrim(p_attempt_id), '') = '' then
+    raise exception 'WHATSAPP_BEGIN_INVALID' using errcode = '22023';
+  end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('nextfor:wa-attempt:' || p_tenant_id, 0)
+  );
+
+  select * into v_connection
+    from public.tenant_channel_connections
+   where tenant_id = p_tenant_id and channel = 'whatsapp'
+   for update;
+
+  if found and v_connection.protected_legacy and not coalesce(p_allow_protected_reconnect, false) then
+    raise exception 'LEGACY_CONNECTION_PROTECTED' using errcode = 'P0001';
+  end if;
+  if found and v_connection.status = 'connected' then
+    raise exception 'WHATSAPP_CONNECTION_ACTIVE' using errcode = 'P0001';
+  end if;
+  if found
+     and v_connection.onboarding_attempt_id is not null
+     and coalesce(v_connection.onboarding_attempt_status, '') not in ('completed', 'cancelled') then
+    raise exception 'WHATSAPP_ATTEMPT_ACTIVE' using errcode = 'P0001';
+  end if;
+
+  if found then
+    update public.tenant_channel_connections
+       set status = 'connecting',
+           webhook_status = 'not_configured',
+           last_error = null,
+           last_error_at = null,
+           pending_assets = '[]'::jsonb,
+           registration_pin_required = false,
+           coexistence_confirmed = false,
+           onboarding_attempt_id = p_attempt_id,
+           onboarding_attempt_status = 'awaiting_meta',
+           onboarding_attempt_started_at = v_now,
+           onboarding_attempt_updated_at = v_now,
+           onboarding_attempt_registration_requested_at = null,
+           onboarding_attempt_registration_accepted_at = null,
+           onboarding_attempt_subscription_confirmed_at = null,
+           onboarding_attempt_phone_number_id = null,
+           onboarding_attempt_waba_id = null,
+           onboarding_attempt_ciphertext = null,
+           onboarding_attempt_last_error = null,
+           onboarding_attempt_last_error_at = null,
+           onboarding_attempt_reconcile_count = 0,
+           onboarding_attempt_reconcile_after = null,
+           onboarding_attempt_reconcile_lease_until = null,
+           onboarding_attempt_reconcile_owner = null,
+           updated_at = v_now
+     where tenant_id = p_tenant_id and channel = 'whatsapp'
+     returning * into v_connection;
+  else
+    insert into public.tenant_channel_connections (
+      tenant_id,
+      channel,
+      status,
+      webhook_status,
+      pending_assets,
+      registration_pin_required,
+      coexistence_confirmed,
+      onboarding_attempt_id,
+      onboarding_attempt_status,
+      onboarding_attempt_started_at,
+      onboarding_attempt_updated_at,
+      onboarding_attempt_reconcile_count,
+      updated_at
+    ) values (
+      p_tenant_id,
+      'whatsapp',
+      'connecting',
+      'not_configured',
+      '[]'::jsonb,
+      false,
+      false,
+      p_attempt_id,
+      'awaiting_meta',
+      v_now,
+      v_now,
+      0,
+      v_now
+    ) returning * into v_connection;
+  end if;
+
+  insert into public.tenant_channel_connection_audit (
+    tenant_id, channel, action, actor, details
+  ) values (
+    p_tenant_id,
+    'whatsapp',
+    'whatsapp_onboarding_started',
+    left(coalesce(nullif(p_actor, ''), 'system:whatsapp-onboarding'), 200),
+    jsonb_build_object(
+      'onboarding_attempt_id', p_attempt_id,
+      'flow', 'new_cloud_api_number'
+    )
+  );
+
+  return next v_connection;
+end;
+$$;
+
 create or replace function public.claim_whatsapp_registration_v2(
   p_tenant_id text,
   p_attempt_id text,
@@ -472,6 +596,10 @@ revoke all on public.whatsapp_registration_claims from public, anon, authenticat
 grant select on public.whatsapp_registration_claims to service_role;
 revoke all on public.meta_webhook_events from public, anon, authenticated;
 grant select, insert, update on public.meta_webhook_events to service_role;
+revoke all on function public.begin_whatsapp_attempt_v2(text, text, text, boolean)
+  from public, anon, authenticated;
+grant execute on function public.begin_whatsapp_attempt_v2(text, text, text, boolean)
+  to service_role;
 revoke all on function public.claim_whatsapp_registration_v2(text, text, text, text, text)
   from public, anon, authenticated;
 grant execute on function public.claim_whatsapp_registration_v2(text, text, text, text, text)

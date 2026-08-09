@@ -1133,6 +1133,7 @@ function atomicWhatsAppOnboardingStorageReady() {
   return !!(
     channelConnectionStore &&
     channelConnectionStore.supportsAtomicWhatsAppRegistration &&
+    typeof channelConnectionStore.beginWhatsAppAttempt === "function" &&
     typeof channelConnectionStore.bindWhatsAppAttemptAsset === "function" &&
     typeof channelConnectionStore.claimWhatsAppRegistration === "function" &&
     typeof channelConnectionStore.claimWhatsAppReconciliation === "function" &&
@@ -5452,6 +5453,7 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
           access_token: destination.accessToken,
           source: destination.source || "webhook",
           source_event_id: message.id || "wa:" + Date.now(),
+          require_persistence: !!inboxRow,
           source_at: new Date().toISOString()
         },
         downloadMedia: function (media) { return downloadWhatsAppMediaForMultimodal(media, { phone_number_id: destination.phoneNumberId, access_token: destination.accessToken }); },
@@ -5461,14 +5463,18 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
         recordTurn: function (userId, inbound, outbound, status) { return recordTurn(userId, inbound, outbound, status, destination); },
         log
       });
-      if (!multimodalResult.handled) await sendText(from, "No puedo escuchar audio 😊 ¿Me escribes qué buscas?");
+      if (!multimodalResult.handled) {
+        const fallback = "No puedo escuchar audio 😊 ¿Me escribes qué buscas?";
+        const sent = await sendText(from, fallback, destination);
+        await recordTurn(from, describeInboundMessage(message), fallback, sent ? "ok" : "error", destination);
+      }
     }
   } else if (type === "image" || type === "document") {
     console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
     if (await humanControlActiveFor(from, destination.tenantId)) {
       await recordHumanPausedInbound(from, message, destination);
     } else if (type === "image") {
-      await multimodalAgent.handleIncomingMedia({
+      const multimodalResult = await multimodalAgent.handleIncomingMedia({
         user_id: from,
         tenant_id: destination.tenantId,
         message,
@@ -5478,6 +5484,7 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
           access_token: destination.accessToken,
           source: destination.source || "webhook",
           source_event_id: message.id || "wa:" + Date.now(),
+          require_persistence: !!inboxRow,
           source_at: new Date().toISOString()
         },
         downloadMedia: function (media) { return downloadWhatsAppMediaForMultimodal(media, { phone_number_id: destination.phoneNumberId, access_token: destination.accessToken }); },
@@ -5487,13 +5494,24 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
         recordTurn: function (userId, inbound, outbound, status) { return recordTurn(userId, inbound, outbound, status, destination); },
         log
       });
+      if (!multimodalResult.handled) {
+        const fallback = "Aún no puedo analizar esa imagen con seguridad. ¿Me describes lo que aparece?";
+        const sent = await sendText(from, fallback, destination);
+        await recordTurn(from, describeInboundMessage(message), fallback, sent ? "ok" : "error", destination);
+      }
+    } else {
+      const fallback = "Aún no puedo leer documentos directamente. ¿Me escribes la información principal?";
+      const sent = await sendText(from, fallback, destination);
+      await recordTurn(from, describeInboundMessage(message), fallback, sent ? "ok" : "error", destination);
     }
   } else {
     console.log(`Inbound ${maskedIdentifier(from)}: ${type}`);
     if (await humanControlActiveFor(from, destination.tenantId)) {
       await recordHumanPausedInbound(from, message, destination);
     } else {
-      await sendText(from, "Solo puedo leer texto por ahora 😊 ¿En qué te ayudo?");
+      const fallback = "Solo puedo leer texto por ahora 😊 ¿En qué te ayudo?";
+      const sent = await sendText(from, fallback, destination);
+      await recordTurn(from, describeInboundMessage(message), fallback, sent ? "ok" : "error", destination);
     }
   }
   return { tenant_id: destination.tenantId };

@@ -84,6 +84,10 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(source, /function customerTenantForAuth\(auth\)[\s\S]*?auth\.version !== 2[\s\S]*?auth\.session_version !== 2[\s\S]*?return cleanTenantId\(auth\.tenant_id\)/);
   assert.match(source, /function isRavTenantId\(tenantId\)[\s\S]*?CHANNEL_CONNECTION_BOOTSTRAP_WHATSAPP_TENANT_ID/);
   assert.match(source, /handoffCustomerReply[\s\S]*?recordTurn\(/);
+  assert.match(source, /type === "audio"[\s\S]*?conversation_meta: \{[\s\S]*?require_persistence: !!inboxRow/);
+  assert.match(source, /type === "image"[\s\S]*?conversation_meta: \{[\s\S]*?require_persistence: !!inboxRow/);
+  assert.match(source, /Aún no puedo leer documentos directamente[\s\S]*?await recordTurn\(/);
+  assert.match(source, /Solo puedo leer texto por ahora[\s\S]*?await recordTurn\(/);
   assert.doesNotMatch(source, /if \(alias && alias\.source === "channel_connection"\) return alias/);
   assert.doesNotMatch(source, /source: "environment"/);
   assert.doesNotMatch(source, /source: "legacy_destination"/);

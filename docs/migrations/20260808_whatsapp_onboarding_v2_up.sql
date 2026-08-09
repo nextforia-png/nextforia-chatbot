@@ -296,6 +296,122 @@ begin
 end;
 $$;
 
+-- Provider unsubscribe is an external await. Finalize it only if the durable
+-- connection is still the exact snapshot that initiated the call. Using the
+-- same tenant advisory lock as begin_whatsapp_attempt_v2 guarantees that a new
+-- attempt can never be erased by a late disconnect response.
+create or replace function public.disconnect_whatsapp_connection_v2(
+  p_tenant_id text,
+  p_expected_status text,
+  p_expected_updated_at timestamptz,
+  p_expected_phone_number_id text,
+  p_expected_waba_id text,
+  p_expected_attempt_id text,
+  p_expected_attempt_status text,
+  p_disconnect_completed boolean,
+  p_error text,
+  p_actor text
+)
+returns setof public.tenant_channel_connections
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+  v_connection public.tenant_channel_connections%rowtype;
+  v_now timestamptz := clock_timestamp();
+begin
+  if coalesce(auth.role()::text, '') <> 'service_role' then
+    raise exception 'SERVICE_ROLE_REQUIRED' using errcode = '42501';
+  end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('nextfor:wa-attempt:' || p_tenant_id, 0)
+  );
+
+  select * into v_connection
+    from public.tenant_channel_connections
+   where tenant_id = p_tenant_id and channel = 'whatsapp'
+   for update;
+
+  if not found
+     or (
+       v_connection.onboarding_attempt_id is not null
+       and coalesce(v_connection.onboarding_attempt_status, '') not in ('completed', 'cancelled')
+     )
+     or v_connection.status is distinct from p_expected_status
+     or v_connection.updated_at is distinct from p_expected_updated_at
+     or v_connection.phone_number_id is distinct from p_expected_phone_number_id
+     or v_connection.whatsapp_business_account_id is distinct from p_expected_waba_id
+     or v_connection.onboarding_attempt_id is distinct from p_expected_attempt_id
+     or v_connection.onboarding_attempt_status is distinct from p_expected_attempt_status then
+    return;
+  end if;
+
+  if coalesce(p_disconnect_completed, false) then
+    update public.tenant_channel_connections
+       set status = 'disconnected',
+           webhook_status = 'unsubscribed',
+           last_error = null,
+           last_error_at = null,
+           disconnected_at = v_now,
+           disconnected_by = left(coalesce(nullif(p_actor, ''), 'system'), 200),
+           account_id = null,
+           account_label = null,
+           meta_business_id = null,
+           whatsapp_business_account_id = null,
+           phone_number_id = null,
+           page_id = null,
+           instagram_user_id = null,
+           pending_assets = '[]'::jsonb,
+           credentials_ciphertext = null,
+           credential_source = null,
+           registration_pin_required = false,
+           coexistence_confirmed = false,
+           onboarding_attempt_status = 'cancelled',
+           onboarding_attempt_updated_at = v_now,
+           onboarding_attempt_phone_number_id = null,
+           onboarding_attempt_waba_id = null,
+           onboarding_attempt_ciphertext = null,
+           onboarding_attempt_last_error = null,
+           onboarding_attempt_last_error_at = null,
+           onboarding_attempt_reconcile_count = 0,
+           onboarding_attempt_reconcile_after = null,
+           onboarding_attempt_reconcile_lease_until = null,
+           onboarding_attempt_reconcile_owner = null,
+           updated_at = v_now
+     where tenant_id = p_tenant_id and channel = 'whatsapp'
+     returning * into v_connection;
+  else
+    update public.tenant_channel_connections
+       set status = 'needs_attention',
+           webhook_status = 'unsubscribe_unconfirmed',
+           last_error = left(coalesce(nullif(p_error, ''), 'Meta unsubscribe failed'), 800),
+           last_error_at = v_now,
+           pending_assets = '[]'::jsonb,
+           onboarding_attempt_updated_at = v_now,
+           updated_at = v_now
+     where tenant_id = p_tenant_id and channel = 'whatsapp'
+     returning * into v_connection;
+  end if;
+
+  insert into public.tenant_channel_connection_audit (
+    tenant_id, channel, action, actor, details
+  ) values (
+    p_tenant_id,
+    'whatsapp',
+    case when coalesce(p_disconnect_completed, false) then 'disconnected' else 'disconnect_failed' end,
+    left(coalesce(nullif(p_actor, ''), 'system'), 200),
+    jsonb_build_object(
+      'provider_unsubscribe_confirmed', coalesce(p_disconnect_completed, false),
+      'error', case when coalesce(p_disconnect_completed, false) then null else p_error end
+    )
+  );
+
+  return next v_connection;
+end;
+$$;
+
 create or replace function public.claim_whatsapp_registration_v2(
   p_tenant_id text,
   p_attempt_id text,
@@ -599,6 +715,14 @@ grant select, insert, update on public.meta_webhook_events to service_role;
 revoke all on function public.begin_whatsapp_attempt_v2(text, text, text, boolean)
   from public, anon, authenticated;
 grant execute on function public.begin_whatsapp_attempt_v2(text, text, text, boolean)
+  to service_role;
+revoke all on function public.disconnect_whatsapp_connection_v2(
+  text, text, timestamptz, text, text, text, text, boolean, text, text
+)
+  from public, anon, authenticated;
+grant execute on function public.disconnect_whatsapp_connection_v2(
+  text, text, timestamptz, text, text, text, text, boolean, text, text
+)
   to service_role;
 revoke all on function public.claim_whatsapp_registration_v2(text, text, text, text, text)
   from public, anon, authenticated;

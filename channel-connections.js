@@ -520,6 +520,40 @@ class InMemoryChannelConnectionStore {
     return { started: true, row: await this.get(cleanTenant, "whatsapp") };
   }
 
+  async disconnectWhatsAppConnection(tenantId, expected, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    const row = this.rows.find(function (item) {
+      return item.tenant_id === cleanTenant && item.channel === "whatsapp";
+    });
+    const unchanged = row && !whatsappAttemptRecordIsActive(row) &&
+      cleanText(row.status, 40) === cleanText(expected && expected.status, 40) &&
+      cleanText(row.updated_at, 80) === cleanText(expected && expected.updated_at, 80) &&
+      cleanText(row.phone_number_id, 240) === cleanText(expected && expected.phone_number_id, 240) &&
+      cleanText(row.whatsapp_business_account_id, 240) === cleanText(expected && expected.whatsapp_business_account_id, 240) &&
+      cleanText(row.onboarding_attempt_id, 100) === cleanText(expected && expected.onboarding_attempt_id, 100) &&
+      cleanText(row.onboarding_attempt_status, 80) === cleanText(expected && expected.onboarding_attempt_status, 80);
+    if (!unchanged) {
+      return { updated: false, row: row ? await this.get(cleanTenant, "whatsapp") : null };
+    }
+    Object.assign(row, fields || {}, {
+      tenant_id: cleanTenant,
+      channel: "whatsapp",
+      updated_at: fields && fields.updated_at || new Date().toISOString()
+    });
+    if (event) {
+      this.audit.push({
+        id: crypto.randomUUID(),
+        tenant_id: cleanTenant,
+        channel: "whatsapp",
+        action: event.action,
+        actor: event.actor,
+        details: event.details || {},
+        created_at: row.updated_at
+      });
+    }
+    return { updated: true, row: await this.get(cleanTenant, "whatsapp") };
+  }
+
   async bindWhatsAppAttemptAsset(tenantId, attemptId, fields, event) {
     const cleanTenant = cleanTenantId(tenantId);
     const cleanAttempt = cleanText(attemptId, 100);
@@ -983,6 +1017,36 @@ class SupabaseChannelConnectionStore {
     }
   }
 
+  async disconnectWhatsAppConnection(tenantId, expected, fields, event) {
+    const cleanTenant = cleanTenantId(tenantId);
+    try {
+      const response = await this.axios.post(
+        this.url + "/rest/v1/rpc/disconnect_whatsapp_connection_v2",
+        {
+          p_tenant_id: cleanTenant,
+          p_expected_status: cleanText(expected && expected.status, 40),
+          p_expected_updated_at: cleanText(expected && expected.updated_at, 80) || null,
+          p_expected_phone_number_id: cleanText(expected && expected.phone_number_id, 240) || null,
+          p_expected_waba_id: cleanText(expected && expected.whatsapp_business_account_id, 240) || null,
+          p_expected_attempt_id: cleanText(expected && expected.onboarding_attempt_id, 100) || null,
+          p_expected_attempt_status: cleanText(expected && expected.onboarding_attempt_status, 80) || null,
+          p_disconnect_completed: cleanText(fields && fields.status, 40) === "disconnected",
+          p_error: cleanText(fields && fields.last_error, 800) || null,
+          p_actor: cleanText(event && event.actor, 200)
+        },
+        {
+          headers: Object.assign({ Prefer: "return=representation" }, this.headers),
+          timeout: 8000
+        }
+      );
+      const rows = Array.isArray(response.data) ? response.data : [];
+      if (!rows.length) return { updated: false, row: await this.get(cleanTenant, "whatsapp") };
+      return { updated: true, row: rows[0] };
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
   async bindWhatsAppAttemptAsset(tenantId, attemptId, fields, event) {
     const cleanTenant = cleanTenantId(tenantId);
     const cleanAttempt = cleanText(attemptId, 100);
@@ -1279,7 +1343,8 @@ class MigratingChannelConnectionStore {
     this.supportsAtomicWhatsAppRegistration = !!(
       this.primary &&
       this.primary.supportsAtomicWhatsAppRegistration &&
-      typeof this.primary.beginWhatsAppAttempt === "function"
+      typeof this.primary.beginWhatsAppAttempt === "function" &&
+      typeof this.primary.disconnectWhatsAppConnection === "function"
     );
     // Once the historical cutover succeeds, the dedicated store remains the
     // only runtime authority. A later preflight failure may pause new
@@ -1373,6 +1438,10 @@ class MigratingChannelConnectionStore {
 
   async beginWhatsAppAttempt(tenantId, attemptId, fields, event) {
     return this.primary.beginWhatsAppAttempt(tenantId, attemptId, fields, event);
+  }
+
+  async disconnectWhatsAppConnection(tenantId, expected, fields, event) {
+    return this.primary.disconnectWhatsAppConnection(tenantId, expected, fields, event);
   }
 
   async bindWhatsAppAttemptAsset(tenantId, attemptId, fields, event) {
@@ -2810,6 +2879,7 @@ function createChannelConnectionService(options) {
               store.whatsappWebhookInboxReady !== false &&
               store.whatsappPublicOnboardingEnabled !== false &&
               typeof store.beginWhatsAppAttempt === "function" &&
+              typeof store.disconnectWhatsAppConnection === "function" &&
               typeof store.bindWhatsAppAttemptAsset === "function" &&
               typeof store.claimWhatsAppRegistration === "function" &&
               typeof store.claimWhatsAppReconciliation === "function" &&
@@ -2875,6 +2945,7 @@ function createChannelConnectionService(options) {
             store.whatsappPublicOnboardingEnabled === false ||
             !store.supportsAtomicWhatsAppRegistration ||
             typeof store.beginWhatsAppAttempt !== "function" ||
+            typeof store.disconnectWhatsAppConnection !== "function" ||
             typeof store.bindWhatsAppAttemptAsset !== "function" ||
             typeof store.claimWhatsAppRegistration !== "function" ||
             typeof store.claimWhatsAppReconciliation !== "function" ||
@@ -3298,7 +3369,7 @@ function createChannelConnectionService(options) {
       }
       const disconnectedAt = iso(now());
       const disconnectCompleted = !!providerResult.ok;
-      const row = await store.upsert({
+      const transition = {
         tenant_id: clean.tenantId,
         channel: clean.channel,
         status: disconnectCompleted ? "disconnected" : "needs_attention",
@@ -3329,14 +3400,51 @@ function createChannelConnectionService(options) {
         onboarding_attempt_reconcile_after: disconnectCompleted ? null : record.onboarding_attempt_reconcile_after,
         onboarding_attempt_reconcile_lease_until: disconnectCompleted ? null : record.onboarding_attempt_reconcile_lease_until,
         onboarding_attempt_reconcile_owner: disconnectCompleted ? null : record.onboarding_attempt_reconcile_owner
-      }, {
+      };
+      const event = {
         action: disconnectCompleted ? "disconnected" : "disconnect_failed",
         actor: actorLabel(actor),
         details: {
           provider_unsubscribe_confirmed: disconnectCompleted,
           error: disconnectCompleted ? null : providerResult.error
         }
-      });
+      };
+      let row;
+      if (clean.channel === "whatsapp") {
+        if (typeof store.disconnectWhatsAppConnection !== "function") {
+          throw new ChannelConnectionError(
+            "channel_store_unavailable",
+            503,
+            "Atomic WhatsApp disconnect storage is not enabled"
+          );
+        }
+        const finalized = await store.disconnectWhatsAppConnection(clean.tenantId, {
+          status: record.status,
+          updated_at: record.updated_at,
+          phone_number_id: record.phone_number_id,
+          whatsapp_business_account_id: record.whatsapp_business_account_id,
+          onboarding_attempt_id: record.onboarding_attempt_id,
+          onboarding_attempt_status: record.onboarding_attempt_status
+        }, transition, event);
+        if (!finalized || !finalized.updated) {
+          const current = finalized && finalized.row;
+          if (whatsappAttemptIsActive(current) && current.onboarding_attempt_registration_requested_at) {
+            throw new ChannelConnectionError(
+              "whatsapp_onboarding_cannot_cancel",
+              409,
+              "Registration started while disconnect was in progress; the attempt was preserved"
+            );
+          }
+          throw new ChannelConnectionError(
+            "whatsapp_connection_changed",
+            409,
+            "WhatsApp changed while disconnect was in progress; no durable state was cleared"
+          );
+        }
+        row = finalized.row;
+      } else {
+        row = await store.upsert(transition, event);
+      }
       if (!disconnectCompleted) {
         throw new ChannelConnectionError("disconnect_failed", 422, providerResult.error);
       }

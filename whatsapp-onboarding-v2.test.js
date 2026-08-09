@@ -2,7 +2,7 @@
 
 const assert = require("assert");
 const crypto = require("crypto");
-const { decryptStoredText } = require("./security");
+const { decryptStoredText, encryptStoredText } = require("./security");
 const {
   ChannelConnectionError,
   InMemoryChannelConnectionStore,
@@ -68,7 +68,10 @@ function providerFor(options) {
       if (settings.onVerify) return settings.onVerify(asset);
       return { ok: true, account_label: asset.account_label };
     },
-    disconnect: async function () { return { ok: true }; }
+    disconnect: async function (channel, asset) {
+      if (settings.onDisconnect) return settings.onDisconnect(channel, asset);
+      return { ok: true };
+    }
   };
 }
 
@@ -309,6 +312,102 @@ function providerFor(options) {
   assert.strictEqual(delayedBeginStore.whatsappRegistrationLedger.length, 1);
   delayedRegisterRelease.resolve();
   assert.strictEqual((await winningCompletion).connection.status, "connected");
+
+  const disconnectRaceStore = new InMemoryChannelConnectionStore();
+  const disconnectRaceEntered = deferred();
+  const disconnectRaceRelease = deferred();
+  const oldDisconnectCredential = candidate("phone-disconnect-old", "waba-disconnect-old");
+  await disconnectRaceStore.upsert({
+    tenant_id: "tenant-disconnect-race",
+    channel: "whatsapp",
+    status: "needs_attention",
+    webhook_status: "subscribed",
+    account_id: oldDisconnectCredential.account_id,
+    account_label: oldDisconnectCredential.account_label,
+    phone_number_id: oldDisconnectCredential.phone_number_id,
+    whatsapp_business_account_id: oldDisconnectCredential.whatsapp_business_account_id,
+    credentials_ciphertext: encryptStoredText(JSON.stringify(oldDisconnectCredential), encryptionKey),
+    credential_source: "oauth",
+    updated_at: "2026-08-08T22:59:00.000Z"
+  });
+  const disconnectRaceService = createChannelConnectionService({
+    store: disconnectRaceStore,
+    provider: providerFor({
+      onDisconnect: async function () {
+        disconnectRaceEntered.resolve();
+        await disconnectRaceRelease.promise;
+        return { ok: true };
+      }
+    }),
+    encryptionKey,
+    now
+  });
+  const disconnectInFlight = disconnectRaceService.disconnect(
+    "tenant-disconnect-race",
+    "whatsapp",
+    "super-admin"
+  );
+  await disconnectRaceEntered.promise;
+  await disconnectRaceService.begin(
+    "tenant-disconnect-race",
+    "whatsapp",
+    "owner@example.com",
+    "state-new-attempt",
+    { attemptId: "attempt-after-disconnect-started" }
+  );
+  const staleDisconnectRejected = expectCode(disconnectInFlight, "whatsapp_connection_changed");
+  disconnectRaceRelease.resolve();
+  await staleDisconnectRejected;
+  const survivedDisconnect = await disconnectRaceStore.get("tenant-disconnect-race", "whatsapp");
+  assert.strictEqual(survivedDisconnect.status, "connecting");
+  assert.strictEqual(survivedDisconnect.onboarding_attempt_id, "attempt-after-disconnect-started");
+  assert.strictEqual(survivedDisconnect.onboarding_attempt_status, "awaiting_meta");
+  assert.strictEqual(survivedDisconnect.phone_number_id, "phone-disconnect-old");
+  assert(survivedDisconnect.credentials_ciphertext,
+    "a late provider disconnect must not clear credentials or the new attempt");
+  assert.strictEqual(disconnectRaceStore.audit.filter(function (event) {
+    return event.action === "disconnected";
+  }).length, 0, "a stale disconnect must not write a successful durable transition");
+
+  const realDisconnectStore = new InMemoryChannelConnectionStore();
+  let realProviderDisconnects = 0;
+  const realDisconnectCredential = candidate("phone-real-disconnect", "waba-real-disconnect");
+  await realDisconnectStore.upsert({
+    tenant_id: "tenant-real-disconnect",
+    channel: "whatsapp",
+    status: "connected",
+    webhook_status: "subscribed",
+    account_id: realDisconnectCredential.account_id,
+    account_label: realDisconnectCredential.account_label,
+    phone_number_id: realDisconnectCredential.phone_number_id,
+    whatsapp_business_account_id: realDisconnectCredential.whatsapp_business_account_id,
+    credentials_ciphertext: encryptStoredText(JSON.stringify(realDisconnectCredential), encryptionKey),
+    credential_source: "oauth",
+    updated_at: "2026-08-08T22:58:00.000Z"
+  });
+  const realDisconnectService = createChannelConnectionService({
+    store: realDisconnectStore,
+    provider: providerFor({
+      onDisconnect: function () {
+        realProviderDisconnects++;
+        return { ok: true };
+      }
+    }),
+    encryptionKey,
+    now
+  });
+  const realDisconnected = await realDisconnectService.disconnect(
+    "tenant-real-disconnect",
+    "whatsapp",
+    "owner@example.com"
+  );
+  assert.strictEqual(realProviderDisconnects, 1);
+  assert.strictEqual(realDisconnected.status, "disconnected");
+  const realDisconnectedRow = await realDisconnectStore.get("tenant-real-disconnect", "whatsapp");
+  assert.strictEqual(realDisconnectedRow.credentials_ciphertext, null);
+  assert.strictEqual(realDisconnectedRow.phone_number_id, null);
+  assert.strictEqual(realDisconnectedRow.whatsapp_business_account_id, null);
+  assert.strictEqual(realDisconnectedRow.onboarding_attempt_status, "cancelled");
 
   const authorizationUrl = await service.begin(
     "tenant-a",

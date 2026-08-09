@@ -1134,6 +1134,7 @@ function atomicWhatsAppOnboardingStorageReady() {
     channelConnectionStore &&
     channelConnectionStore.supportsAtomicWhatsAppRegistration &&
     typeof channelConnectionStore.beginWhatsAppAttempt === "function" &&
+    typeof channelConnectionStore.disconnectWhatsAppConnection === "function" &&
     typeof channelConnectionStore.bindWhatsAppAttemptAsset === "function" &&
     typeof channelConnectionStore.claimWhatsAppRegistration === "function" &&
     typeof channelConnectionStore.claimWhatsAppReconciliation === "function" &&

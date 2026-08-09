@@ -48,6 +48,18 @@ function postSignedWebhook(base, route, secret, body) {
   });
 }
 
+async function waitForJson(url, predicate, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 5000);
+  let latest = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(url);
+    latest = await response.json();
+    if (predicate(latest)) return latest;
+    await new Promise(function (resolve) { setTimeout(resolve, 25); });
+  }
+  throw new Error("condition_timeout:" + url + "\n" + JSON.stringify(latest));
+}
+
 (async function run() {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   assert.match(source, /runStartupProtectionDiagnostics\(\{[\s\S]*?store: channelConnectionStore,[\s\S]*?env: process\.env,[\s\S]*?log/);
@@ -165,9 +177,9 @@ function postSignedWebhook(base, route, secret, body) {
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");
 
-    response = await fetch(base + "/whatsapp/health");
-    assert.strictEqual(response.status, 503);
-    const whatsappHealth = await response.json();
+    const whatsappHealth = await waitForJson(base + "/whatsapp/health", function (body) {
+      return body && body.runtime && body.runtime.last_skip_reason === "tenant_runtime_not_configured";
+    });
     assert.strictEqual(whatsappHealth.configured, false, "environment credentials must not configure WhatsApp runtime");
     assert.strictEqual(whatsappHealth.status, "not_configured");
     assert.strictEqual(whatsappHealth.runtime.runtime_source, null);

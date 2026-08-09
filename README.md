@@ -92,6 +92,7 @@ Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento po
 | `SUPABASE_TENANT_COLUMNS_ENABLED` | Debe ser `1` fuera de desarrollo; producción fuerza escritura y filtrado por `tenant_id` para evitar mezclar clientes |
 | `CUSTOMER_ACCESS_V2_ENABLED` | Gate del alta multi-cliente; debe permanecer `0` en producción hasta aprobación explícita |
 | `CHANNEL_CONNECTIONS_V1_ENABLED` | Gate de la pantalla simple de conexiones: WhatsApp primero, Instagram opcional; solo Staging hasta aprobación explícita |
+| `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED` | Habilita el almacén Supabase atómico exigido por WhatsApp; solo usar tras la migración v2, drenado del fleet anterior y preflight de propietarios |
 | `CUSTOMER_PANEL_BASE_URL` | Origen HTTPS de Staging usado únicamente dentro del correo de invitación |
 | `CUSTOMER_INVITE_TTL_HOURS` | Vigencia de la invitación privada (default `24`, máximo `168`) |
 | `CUSTOMER_ACCESS_EMAIL_PROVIDER` | Proveedor del correo de invitación; v2 requiere `resend` fuera de tests |

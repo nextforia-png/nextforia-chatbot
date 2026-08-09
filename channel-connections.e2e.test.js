@@ -102,7 +102,7 @@ async function login(base, body) {
     assert.strictEqual(response.status, 200);
     let body = await response.json();
     assert.strictEqual(body.customer_setup.meta_oauth_ready, true);
-    assert.strictEqual(body.customer_setup.channel_storage_ready, false);
+    assert.strictEqual(body.customer_setup.channel_storage_ready, true);
     assert.strictEqual(body.customer_setup.shopify_install_ready, false);
     assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
 
@@ -118,23 +118,26 @@ async function login(base, body) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Revisar estado"));
-    assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
+    assert(panel.includes("Conectar WhatsApp"));
+    assert(panel.includes("Cancelar intento"));
+    assert(panel.includes("/admin/panel/channel-connections/whatsapp/attempt"));
     assert(!panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(!panel.includes("activateWhatsApp("));
-    assert(panel.includes("if(state.whatsappActivating)return"));
+    assert(panel.includes("if(channel===\"whatsapp\"&&(state.whatsappConnecting||state.whatsappEmbedded))return"));
     assert(panel.includes('var extras={setup:{},sessionInfoVersion:"3"}'));
-    assert(panel.includes('if(config.onboarding_mode==="coexistence")extras.featureType="whatsapp_business_app_onboarding"'));
-    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
-    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
-    assert(panel.includes('else if(item.activation_available){actions+=\'<button class="primaryBtn" type="button" onclick="verifyWhatsAppConnection(this)">Revisar estado</button>\'+whatsappModeActions(true)'));
+    assert(panel.includes("WHATSAPP_VERIFY_WINDOW_MS=120000"));
+    assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
+    assert(panel.includes("metaSdkPromise=null"));
+    assert(!panel.includes("featureType=\"whatsapp_business_app_onboarding\""));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;)'));
+    assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
+    assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
+    assert(panel.includes('connection&&connection.status==="connected"'));
     assert(panel.includes('payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
-    assert(panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
+    assert(!panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));
-    assert(panel.includes("Nextfor no envió ninguna solicitud de registro"));
     assert(!panel.includes('id="whatsappRegistrationPin"'));
     assert(!panel.includes("JSON.stringify({pin:pin})"));
-    assert(panel.indexOf("if(item.activation_rate_limited)") < panel.indexOf("else if(item.activation_available)"));
     assert(panel.includes("Conecta tu tienda"));
     assert(panel.includes("Hacer esto más tarde"));
     assert(!panel.toLowerCase().includes("access token"));
@@ -241,27 +244,13 @@ async function login(base, body) {
       },
       body: "{}"
     });
-    assert.strictEqual(response.status, 400, "WhatsApp onboarding must require an explicit number type");
-    assert.strictEqual((await response.json()).error, "whatsapp_onboarding_mode_required");
-
-    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        origin: "https://nextforia.com",
-        "x-nextforia-panel-origin": "https://nextforia.com",
-        "x-forwarded-proto": "https",
-        "x-forwarded-host": "nextforia.com",
-        cookie: ravCustomer.cookie
-      },
-      body: JSON.stringify({ onboarding_mode: "coexistence" })
-    });
-    assert.strictEqual(response.status, 200, "RAV customer must connect its own tenant-scoped WhatsApp account");
+    assert.strictEqual(response.status, 200, "the Customer Panel must start WhatsApp with one simple action");
     body = await response.json();
     assert.strictEqual(body.embedded_signup.app_id, "123456789");
     assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-config");
     assert.strictEqual(body.embedded_signup.graph_version, "v23.0");
-    assert.strictEqual(body.embedded_signup.onboarding_mode, "coexistence");
+    assert.strictEqual(body.embedded_signup.onboarding_mode, "cloud_api");
+    assert.strictEqual(body.embedded_signup.flow, "new_cloud_api_number");
     assert(body.embedded_signup.oauth_state);
     assert(!JSON.stringify(body).includes("channel-e2e-meta-app-secret-value"));
 
@@ -283,6 +272,13 @@ async function login(base, body) {
       })
     });
     assert.strictEqual(response.status, 403);
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/attempt", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual((await response.json()).connection.status, "not_connected");
 
     response = await fetch(base + "/admin/panel/channel-connections/instagram/connect", {
       method: "POST",
@@ -365,18 +361,14 @@ async function login(base, body) {
       },
       body: "{}"
     });
-    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.status, 409, "support must not connect a customer's WhatsApp on its behalf");
     body = await response.json();
-    const superAdminAuthorization = new URL(body.authorization_url);
-    assert.strictEqual(superAdminAuthorization.hostname, "www.facebook.com");
-    assert(superAdminAuthorization.searchParams.get("scope").includes("whatsapp_business_management"));
-    const superAdminState = decodeURIComponent(superAdminAuthorization.searchParams.get("state"));
-    assert(!body.authorization_url.includes("channel-e2e-meta-app-secret-value"));
+    assert.strictEqual(body.error, "whatsapp_customer_panel_required");
     response = await fetch(base + "/admin/channel-connections", { headers: { cookie: superAdmin.cookie } });
     body = await response.json();
     assert.strictEqual(body.channels.find(function (row) {
       return row.tenant_id === "tenant-a" && row.channel === "whatsapp";
-    }).status, "connecting");
+    }).status, "not_connected");
 
     response = await fetch(base + "/admin/channel-connections/rav-toys/whatsapp/disconnect", {
       method: "POST",

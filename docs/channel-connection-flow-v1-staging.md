@@ -66,6 +66,7 @@ docs/migrations/20260726_channel_connections_v1_down.sql
 
 ```text
 CHANNEL_CONNECTIONS_V1_ENABLED=1
+CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=1
 META_APP_ID=<app-id-de-staging>
 META_APP_SECRET=<app-secret-de-staging>
 META_WHATSAPP_CONFIG_ID=<embedded-signup-configuration-id>
@@ -117,16 +118,16 @@ La matriz específica cubre:
 
 ## Activación en Staging
 
-1. Respaldar Supabase Staging.
-2. Aplicar la migración `up`.
-3. Registrar la URI OAuth exacta en la app Meta de Staging.
-4. Crear o confirmar el Embedded Signup Configuration ID.
-5. Confirmar App Review/Advanced Access de los permisos anteriores.
-6. Añadir las variables solo al servicio Render `nextforia-staging`.
-7. Activar el gate sobre `v136-staging-channel-preview-whatsapp-first`, que debe estar desplegada.
-8. Probar un activo de prueba de WhatsApp y, si aplica, uno de Instagram.
+1. Poner `CHANNEL_CONNECTIONS_V1_ENABLED=0` y drenar por completo todas las instancias de la versión anterior. No puede quedar un proceso viejo capaz de llamar `/register`.
+2. Respaldar Supabase Staging y aplicar, en orden, `20260726_channel_connections_v1_up.sql` y `20260808_whatsapp_onboarding_v2_up.sql`.
+3. Desplegar la nueva versión todavía con `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=0`.
+4. Registrar la URI OAuth exacta, confirmar el Configuration ID y los permisos Advanced Access.
+5. Activar solo `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=1`. El arranque compara por separado el almacén dedicado y el histórico append-only, rechaza propietarios duplicados por número o WABA y copia únicamente filas sin equivalente dedicado.
+6. Confirmar en `/admin/health` que `channel_storage_ready=true`. Si el preflight falla, WhatsApp permanece oculto y ningún intento puede comenzar.
+7. Activar `CHANNEL_CONNECTIONS_V1_ENABLED=1` únicamente después de que todo el fleet nuevo esté sano.
+8. Probar con un número Cloud API nuevo: una sola llamada `/register`, webhook firmado, mensaje visible en Customer Panel y respuesta entregada.
 9. Confirmar en Super Admin cuenta, estado, fecha, actor y ausencia de secretos.
-10. Confirmar que RAV sigue visible como conexión protegida y que sus health checks no cambian.
+10. Mantener la tabla `whatsapp_registration_claims` durante cualquier rollback; el down v2 es deliberadamente no destructivo.
 
 ## Antes de Producción
 

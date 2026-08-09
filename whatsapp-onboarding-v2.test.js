@@ -111,6 +111,34 @@ function providerFor(options) {
   assert.strictEqual(cutoverStore.primaryAuthoritative, true, "runtime authority must remain sticky after cutover");
   assert.strictEqual((await cutoverStore.get("tenant-cutover", "whatsapp")).phone_number_id, "phone-new");
 
+  const diagnosticPrimary = new InMemoryChannelConnectionStore();
+  const diagnosticFallback = new InMemoryChannelConnectionStore();
+  await diagnosticFallback.upsert({
+    tenant_id: "tenant-diagnostic",
+    channel: "whatsapp",
+    status: "needs_attention",
+    phone_number_id: "phone-12345678",
+    whatsapp_business_account_id: "waba-87654321",
+    updated_at: "2026-08-08T12:00:00.000Z"
+  });
+  diagnosticPrimary.upsert = async function () {
+    throw new ChannelConnectionError("channel_asset_already_assigned", 409);
+  };
+  const diagnosticStore = new MigratingChannelConnectionStore({
+    primary: diagnosticPrimary,
+    fallback: diagnosticFallback
+  });
+  await assert.rejects(
+    diagnosticStore.assertWhatsAppOnboardingReady(),
+    function (error) {
+      return error instanceof ChannelConnectionError &&
+        error.code === "channel_store_unavailable" &&
+        /tenant=tenant-diagnostic channel=whatsapp/.test(error.internalMessage) &&
+        /phone_suffix=12345678/.test(error.internalMessage) &&
+        /waba_suffix=87654321/.test(error.internalMessage);
+    }
+  );
+
   const beginRpcCalls = [];
   const supabaseAttemptStore = new SupabaseChannelConnectionStore({
     url: "https://supabase.example",

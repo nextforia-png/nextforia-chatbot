@@ -327,7 +327,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v349-whatsapp-free-cutover";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v350-whatsapp-v4-finish";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -13925,7 +13925,8 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
     log("info", "whatsapp_customer_activation_result", {
       tenant_id: tenantId,
       status: result.connection && result.connection.status,
-      webhook_status: result.connection && result.connection.webhook_status
+      webhook_status: result.connection && result.connection.webhook_status,
+      onboarding_event: cleanRuntimeText(embeddedSession.onboarding_event, 100) || null
     });
     res.json({ ok: true, connection: result.connection });
   } catch (error) {

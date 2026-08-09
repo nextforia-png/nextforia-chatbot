@@ -193,6 +193,8 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(panel.includes("if(channel===\"whatsapp\"&&(state.whatsappConnecting||state.whatsappEmbedded))return"));
     assert(panel.includes("extras:{}"));
     assert(!panel.includes("sessionInfoVersion"));
+    assert(panel.includes('"FINISH_ONLY_WABA"'));
+    assert(panel.includes('"FINISH_GRANT_ONLY_API_ACCESS"'));
     assert(panel.includes("WHATSAPP_VERIFY_WINDOW_MS=120000"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
     assert(panel.includes("metaSdkPromise=null"));
@@ -201,7 +203,7 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
     assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
     assert(panel.includes('connection&&connection.status==="connected"'));
-    assert(panel.includes('payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
+    assert(panel.includes('embeddedEvent==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(!panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));
     assert(!panel.includes('id="whatsappRegistrationPin"'));
@@ -225,6 +227,20 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert.strictEqual(finishHarness.context.state.whatsappEmbedded.session.onboarding_event, "FINISH");
     assert.deepStrictEqual(finishHarness.calls.clears, ["session-timer"]);
     assert.strictEqual(finishHarness.calls.completes, 1);
+
+    const finishOnlyWabaHarness = whatsappEmbeddedListenerHarness(panel);
+    finishOnlyWabaHarness.listener({
+      origin: "https://business.facebook.com",
+      data: {
+        type: "WA_EMBEDDED_SIGNUP",
+        event: "FINISH_ONLY_WABA",
+        data: { waba_id: "waba-only-v4", business_id: "business-v4" }
+      }
+    });
+    assert.strictEqual(finishOnlyWabaHarness.context.state.whatsappEmbedded.session.waba_id, "waba-only-v4");
+    assert.strictEqual(finishOnlyWabaHarness.context.state.whatsappEmbedded.session.phone_number_id, "");
+    assert.strictEqual(finishOnlyWabaHarness.context.state.whatsappEmbedded.session.onboarding_event, "FINISH_ONLY_WABA");
+    assert.strictEqual(finishOnlyWabaHarness.calls.completes, 1);
 
     const untrustedOriginHarness = whatsappEmbeddedListenerHarness(panel);
     untrustedOriginHarness.listener({

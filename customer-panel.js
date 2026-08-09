@@ -2064,7 +2064,7 @@ function checkWhatsAppBillingConnection(){
     setChannelConnectionMessage(error&&error.body&&error.body.message||"No pudimos comprobar WhatsApp con Meta.","error");
   });
 }
-var metaSdkPromise=null;
+var metaSdkPromise=null,WHATSAPP_EMBEDDED_COMPLETION_TIMEOUT_MS=30000;
 function loadMetaSdk(config){
   if(window.FB){window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});return Promise.resolve(window.FB);}
   if(metaSdkPromise)return metaSdkPromise;
@@ -2122,6 +2122,18 @@ function whatsappEmbeddedErrorMessage(payload){
   if(/already|registered|another business|otro negocio|portfolio|portafolio|linked|vinculad/.test(detail))return"Este número ya está vinculado a otro portafolio de Meta. Desconéctalo allí o pide a soporte que lo mueva antes de volver a intentarlo.";
   return"La conexión con Meta quedó incompleta. Cancela el intento para empezar de nuevo.";
 }
+function armWhatsAppEmbeddedCompletionTimer(pending){
+  if(!pending||pending.completing||pending.sessionTimer)return;
+  pending.sessionTimer=setTimeout(function(){
+    if(state.whatsappEmbedded!==pending||pending.completing)return;
+    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;
+    setChannelConnectionMessage("Meta no devolvió la autorización completa del número. Cancela el intento y empieza de nuevo.","error");
+    loadChannelConnections(true);
+  },WHATSAPP_EMBEDDED_COMPLETION_TIMEOUT_MS);
+}
+function whatsappEmbeddedCloudFinishEvent(eventName){
+  return ["FINISH","FINISH_ONLY_WABA","FINISH_GRANT_ONLY_API_ACCESS","FINISH_OBO_MIGRATION"].includes(String(eventName||"").toUpperCase());
+}
 function launchWhatsAppEmbeddedSignup(config){
   stopWhatsAppVerification({clearExhausted:true});
   state.whatsappEmbedded={config:config,code:null,session:null,completing:false};
@@ -2133,12 +2145,7 @@ function launchWhatsAppEmbeddedSignup(config){
       if(!pending)return;
       if(!code){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("La autorización de Meta no se completó. Puedes cancelar el intento y empezar de nuevo.","error");loadChannelConnections(true);return;}
       pending.code=code;
-      pending.sessionTimer=setTimeout(function(){
-        if(state.whatsappEmbedded!==pending||pending.session||pending.completing)return;
-        stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;
-        setChannelConnectionMessage("Meta no devolvió los datos del número. Cancela el intento y empieza de nuevo.","error");
-        loadChannelConnections(true);
-      },30000);
+      armWhatsAppEmbeddedCompletionTimer(pending);
       setChannelConnectionMessage("Meta autorizó la cuenta. Terminando la conexión…");completeWhatsAppEmbeddedSignup();
     },{
       config_id:config.configuration_id,
@@ -2155,16 +2162,20 @@ window.addEventListener("message",function(event){
   var payload=event.data;
   if(typeof payload==="string"){try{payload=JSON.parse(payload);}catch(_){return;}}
   if(!payload||payload.type!=="WA_EMBEDDED_SIGNUP"||!state.whatsappEmbedded)return;
-  if(payload.event==="FINISH"){
+  var embeddedEvent=String(payload.event||"").toUpperCase();
+  if(whatsappEmbeddedCloudFinishEvent(embeddedEvent)){
     var session=payload.data||{};
     if(!session.waba_id){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta no devolvió la cuenta de WhatsApp seleccionada. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);return;}
-    state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:session.phone_number_id?String(session.phone_number_id):"",business_id:session.business_id?String(session.business_id):"",onboarding_event:"FINISH"};
-    if(state.whatsappEmbedded.sessionTimer)clearTimeout(state.whatsappEmbedded.sessionTimer);
+    state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:session.phone_number_id?String(session.phone_number_id):"",business_id:session.business_id?String(session.business_id):"",onboarding_event:embeddedEvent};
+    if(state.whatsappEmbedded.sessionTimer){clearTimeout(state.whatsappEmbedded.sessionTimer);state.whatsappEmbedded.sessionTimer=null;}
+    if(!state.whatsappEmbedded.code)armWhatsAppEmbeddedCompletionTimer(state.whatsappEmbedded);
     completeWhatsAppEmbeddedSignup();
-  }else if(payload.event==="CANCEL"||payload.event==="ERROR"){
+  }else if(embeddedEvent==="CANCEL"||embeddedEvent==="ERROR"){
     stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage(whatsappEmbeddedErrorMessage(payload),"error");loadChannelConnections(true);
-  }else if(payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"){
+  }else if(embeddedEvent==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"){
     stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Para conectar WhatsApp aquí, usa un número nuevo que todavía no esté activo en WhatsApp.","error");loadChannelConnections(true);
+  }else if(embeddedEvent.startsWith("FINISH")){
+    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta terminó con un tipo de conexión que todavía no es compatible. Cancela el intento y vuelve a empezar.","error");loadChannelConnections(true);
   }
 });
 function connectChannel(channel){

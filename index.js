@@ -16375,7 +16375,11 @@ app.get("/admin/health", async (req, res) => {
           atomicWhatsAppOnboardingStorageReady()
         ),
         appointment_storage_ready: appointmentStorageReadyNow,
-        meta_oauth_ready: !!(channelConnectionProvider && channelConnectionProvider.configured("whatsapp")),
+        meta_oauth_ready: !!(
+          CHANNEL_CONNECTIONS_MUTATIONS_ENABLED &&
+          channelConnectionProvider &&
+          channelConnectionProvider.configured("whatsapp")
+        ),
         shopify_install_ready: !!(
           SHOPIFY_APP_INSTALL_URL &&
           String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32 &&

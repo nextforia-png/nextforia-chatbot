@@ -135,15 +135,51 @@ function providerFor(options) {
         error.code === "channel_store_unavailable" &&
         /tenant=tenant-diagnostic channel=whatsapp/.test(error.internalMessage) &&
         /phone_suffix=12345678/.test(error.internalMessage) &&
-        /waba_suffix=87654321/.test(error.internalMessage);
+      /waba_suffix=87654321/.test(error.internalMessage);
     }
   );
+
+  const orphanPrimary = new InMemoryChannelConnectionStore();
+  const orphanFallback = new InMemoryChannelConnectionStore();
+  await orphanPrimary.upsert({
+    tenant_id: "canonical-tenant",
+    channel: "whatsapp",
+    status: "connected",
+    phone_number_id: "shared-phone",
+    whatsapp_business_account_id: "shared-waba",
+    updated_at: "2026-08-08T12:00:00.000Z"
+  });
+  await orphanFallback.upsert({
+    tenant_id: "removed-tenant",
+    channel: "whatsapp",
+    status: "connected",
+    phone_number_id: "shared-phone",
+    whatsapp_business_account_id: "shared-waba",
+    updated_at: "2026-08-01T12:00:00.000Z"
+  });
+  orphanPrimary.tenantExists = async function (tenantId) {
+    return tenantId === "canonical-tenant";
+  };
+  const orphanStore = new MigratingChannelConnectionStore({
+    primary: orphanPrimary,
+    fallback: orphanFallback
+  });
+  const orphanCutover = await orphanStore.assertWhatsAppOnboardingReady();
+  assert.strictEqual(orphanCutover.skipped_orphaned_tenants, 1);
+  assert.strictEqual(orphanStore.primaryAuthoritative, true);
+  assert.strictEqual(await orphanPrimary.get("removed-tenant", "whatsapp"), null,
+    "a deleted tenant's append-only state must never be backfilled or compete with its canonical owner");
 
   const beginRpcCalls = [];
   const supabaseAttemptStore = new SupabaseChannelConnectionStore({
     url: "https://supabase.example",
     headers: { Authorization: "Bearer service-role" },
     axiosClient: {
+      get: async function (url, options) {
+        assert.strictEqual(url, "https://supabase.example/rest/v1/tenants");
+        assert.strictEqual(options.params.select, "id");
+        return { data: options.params.id === "eq.tenant-rpc" ? [{ id: "tenant-rpc" }] : [] };
+      },
       post: async function (url, body) {
         beginRpcCalls.push({ url, body });
         return { data: [{
@@ -156,6 +192,8 @@ function providerFor(options) {
       }
     }
   });
+  assert.strictEqual(await supabaseAttemptStore.tenantExists("tenant-rpc"), true);
+  assert.strictEqual(await supabaseAttemptStore.tenantExists("removed-rpc"), false);
   const supabaseBegin = await supabaseAttemptStore.beginWhatsAppAttempt(
     "tenant-rpc",
     "attempt-rpc",

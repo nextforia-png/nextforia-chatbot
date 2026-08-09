@@ -1033,6 +1033,21 @@ class SupabaseChannelConnectionStore {
     }
   }
 
+  async tenantExists(tenantId) {
+    const cleanTenant = cleanTenantId(tenantId);
+    if (!cleanTenant) return false;
+    try {
+      const response = await this.axios.get(this.url + "/rest/v1/tenants", {
+        params: { select: "id", id: "eq." + cleanTenant, limit: 1 },
+        headers: this.headers,
+        timeout: 8000
+      });
+      return Array.isArray(response.data) && response.data.length === 1;
+    } catch (error) {
+      throw mapStoreError(error);
+    }
+  }
+
   async listAll() {
     try {
       const rows = [];
@@ -1588,9 +1603,23 @@ class MigratingChannelConnectionStore {
     const self = this;
     const preparation = (async function () {
       const primaryRows = await self.primary.listAll();
-      const fallbackRows = typeof self.fallback.listAllStrictForCutover === "function"
+      const scannedFallbackRows = typeof self.fallback.listAllStrictForCutover === "function"
         ? await self.fallback.listAllStrictForCutover()
         : await self.fallback.listAll();
+      let fallbackRows = scannedFallbackRows;
+      let skippedOrphanedTenants = 0;
+      if (typeof self.primary.tenantExists === "function") {
+        const tenantExistence = new Map();
+        fallbackRows = [];
+        for (const row of scannedFallbackRows || []) {
+          const tenantId = cleanTenantId(row && row.tenant_id);
+          if (!tenantExistence.has(tenantId)) {
+            tenantExistence.set(tenantId, tenantId ? await self.primary.tenantExists(tenantId) : false);
+          }
+          if (tenantExistence.get(tenantId)) fallbackRows.push(row);
+          else skippedOrphanedTenants++;
+        }
+      }
       assertHistoricalWhatsAppOwnership(primaryRows, fallbackRows);
       const primaryByKey = new Map((primaryRows || []).map(function (row) {
         return [cleanTenantId(row && row.tenant_id) + ":" + cleanChannel(row && row.channel), row];
@@ -1641,7 +1670,7 @@ class MigratingChannelConnectionStore {
       assertHistoricalWhatsAppOwnership(refreshedPrimaryRows, fallbackRows);
       self.primaryAuthoritative = true;
       self.whatsappOnboardingReady = true;
-      return { ok: true, backfilled };
+      return { ok: true, backfilled, skipped_orphaned_tenants: skippedOrphanedTenants };
     })();
     this.whatsappPreparationPromise = preparation;
     try {

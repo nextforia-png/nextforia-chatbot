@@ -23,6 +23,44 @@ const SHIPPING_SUGGESTIONS = Object.freeze([
   ["billing_details", "Datos de facturación"]
 ]);
 
+const BOT_CONFIGURATION_CONTRACT = Object.freeze({
+  response_length: "prompt",
+  emoji_level: "prompt",
+  "profile.avatar_url": "whatsapp_profile",
+  "profile.display_name": "prompt_and_whatsapp_profile",
+  "profile.description": "prompt_and_whatsapp_profile",
+  "greeting.tone": "editor_state",
+  "greeting.selected": "editor_state",
+  "greeting.custom": "editor_state",
+  "greeting.text": "prompt",
+  "business.hours": "prompt",
+  "business.address": "prompt_and_whatsapp_profile",
+  "business.returns_policy": "prompt",
+  "business.out_of_hours_notice": "prompt",
+  "shipping.fields": "prompt",
+  "reminders.type": "prompt",
+  "reminders.selected": "editor_state",
+  "reminders.custom": "editor_state",
+  "reminders.text": "prompt",
+  "reminders.timings": "prompt",
+  "reminders.allow_confirm_cancel": "prompt",
+  "catalog.price_mode": "prompt",
+  "catalog.out_of_stock_message": "prompt",
+  "payments.methods": "prompt",
+  "payments.confirmation_message": "prompt",
+  faqs: "prompt",
+  "escalation.triggers": "prompt",
+  "escalation.notify_contact": "prompt",
+  "farewell.tone": "editor_state",
+  "farewell.selected": "editor_state",
+  "farewell.custom": "editor_state",
+  "farewell.text": "prompt",
+  preferred_words: "prompt",
+  avoided_words: "prompt",
+  custom_instructions: "prompt",
+  extra_context: "prompt"
+});
+
 function cleanText(value, max) {
   return String(value == null ? "" : value)
     .replace(/\u0000/g, "")
@@ -433,7 +471,8 @@ function buildBotConfigurationPrompt(configuration, meta) {
     moderados: "Puedes usar hasta 2 emojis pertinentes por mensaje."
   }[config.emoji_level];
   const lines = [
-    "CONFIGURACIÓN PUBLICADA POR EL CLIENTE (aplica a conversaciones nuevas):",
+    "CONFIGURACIÓN ACTUAL PUBLICADA POR EL CLIENTE (aplica inmediatamente, incluso a conversaciones abiertas):",
+    "Esta configuración reemplaza cualquier dato diferente o anterior del setup inicial.",
     "- Extensión: " + lengthRule,
     "- Emojis: " + emojiRule,
     "- Nombre del asistente: " + (config.profile.display_name || "Nextfor") + ".",
@@ -534,6 +573,7 @@ function maxTokensForConfiguration(configuration) {
 }
 
 module.exports = {
+  BOT_CONFIGURATION_CONTRACT,
   EMOJI_LEVELS,
   ESCALATION_TRIGGERS,
   GREETING_TONES,

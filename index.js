@@ -327,7 +327,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v352-whatsapp-profile-sync";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v353-whatsapp-profile-sync";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -9665,7 +9665,11 @@ async function applyTenantWhatsAppProfilePicture(tenantId, personality, actor) {
     return { status: "pending_connection", applied: false, message: "Conecta WhatsApp para publicar esta imagen." };
   }
   try {
-    const result = await channelConnectionService.syncWhatsAppBusinessProfile(tenantId, personality, actor);
+    const result = await channelConnectionService.syncWhatsAppBusinessProfile(
+      tenantId,
+      personality && personality.profile,
+      actor
+    );
     return {
       status: "applied",
       applied: true,

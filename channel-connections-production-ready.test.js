@@ -115,6 +115,7 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(source, /tenant_bot_response_blocked/);
   assert.match(source, /applyTenantWhatsAppProfilePicture/);
   assert.match(source, /bot-personality\/whatsapp-profile-sync/);
+  assert.match(source, /syncWhatsAppBusinessProfile\(\s*tenantId,\s*personality && personality\.profile,\s*actor\s*\)/);
   assert.match(connectionSource, /async updateWhatsAppBusinessProfile\(credential, input\)/);
   assert.match(connectionSource, /profile_picture_handle: handle/);
   assert.match(connectionSource, /whatsapp_profile_picture_not_verified/);
@@ -234,7 +235,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v352-whatsapp-profile-sync"));
+    assert((await response.text()).includes("NextforIA Chatbot v353-whatsapp-profile-sync"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

@@ -48,6 +48,7 @@ function loadClient(panelContext) {
   const sandbox = {
     PANEL_CONTEXT: panelContext,
     PANEL_CHECK_ICON: "<svg></svg>",
+    PANEL_REDESIGN_ENABLED: false,
     document: { getElementById(id) { return id === "planCatalogGrid" ? grid : null; } },
     esc(value) { return String(value == null ? "" : value); },
     console

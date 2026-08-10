@@ -402,7 +402,9 @@ function signedSessionCookie(secret, user) {
       headers: { origin: base, cookie: userA.cookie }
     });
     assert.strictEqual(response.status, 200);
-    assert.match(String(response.headers.get("set-cookie") || ""), /Max-Age=0/);
+    const logoutCookies = String(response.headers.get("set-cookie") || "");
+    assert.match(logoutCookies, /nextforia_dashboard_session=;[\s\S]*Max-Age=0/);
+    assert.match(logoutCookies, /rav_dashboard_session=;[\s\S]*Max-Age=0/);
 
     response = await fetch(base + "/admin/panel?tab=summary", { headers: { cookie: userB.cookie } });
     assert.strictEqual(response.status, 200);

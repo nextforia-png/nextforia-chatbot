@@ -18,6 +18,9 @@ assert(configurationUi.clientScript.includes("Cambios aplicados al bot"));
 assert(configurationUi.clientScript.includes('typeof payload.can_edit==="boolean"'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
+assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));
+assert(configurationUi.clientScript.includes("La dirección también se publica"));
+assert(configurationUi.clientScript.includes("Verificando perfil en WhatsApp"));
 assert(!configurationUi.clientScript.includes("URL del logo o imagen"));
 new Function(configurationUi.clientScript);
 

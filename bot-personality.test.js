@@ -88,4 +88,64 @@ assert.ok(auraPrompt.includes("Métodos de pago autorizados"));
 assert.ok(auraPrompt.includes("RESPUESTAS EXACTAS"));
 assert.ok(auraPrompt.includes("No prometas inventario"));
 
+const contractPrompt = buildBotConfigurationPrompt({
+  response_length: "detallada",
+  emoji_level: "ninguno",
+  profile: { display_name: "Asistente Contrato", description: "DESCRIPCION-CONTRATO" },
+  greeting: { text: "SALUDO-CONTRATO" },
+  business: {
+    hours: "HORARIO-CONTRATO",
+    address: "DIRECCION-CONTRATO",
+    returns_policy: "DEVOLUCION-CONTRATO",
+    out_of_hours_notice: true
+  },
+  shipping: { fields: [{ id: "city", label: "CIUDAD-CONTRATO", required: true }] },
+  reminders: {
+    type: "virtual",
+    text: "RECORDATORIO-CONTRATO",
+    timings: ["one_day", "one_hour"],
+    allow_confirm_cancel: false
+  },
+  catalog: { price_mode: "human", out_of_stock_message: "AGOTADO-CONTRATO" },
+  payments: { methods: ["card"], confirmation_message: "PAGO-CONTRATO" },
+  faqs: [{ question: "PREGUNTA-CONTRATO", answer: "RESPUESTA-CONTRATO" }],
+  escalation: { triggers: ["unknown_answer"], notify_contact: "CONTACTO-CONTRATO" },
+  farewell: { text: "DESPEDIDA-CONTRATO" },
+  preferred_words: "PREFERIDA-CONTRATO",
+  avoided_words: "EVITADA-CONTRATO",
+  custom_instructions: "INSTRUCCION-CONTRATO",
+  extra_context: "CONTEXTO-CONTRATO"
+}, { plan_id: "nextfor-atlas" });
+[
+  "Puedes responder con más detalle",
+  "No uses emojis",
+  "Asistente Contrato",
+  "DESCRIPCION-CONTRATO",
+  "SALUDO-CONTRATO",
+  "HORARIO-CONTRATO",
+  "DIRECCION-CONTRATO",
+  "DEVOLUCION-CONTRATO",
+  "Fuera del horario humano",
+  "CIUDAD-CONTRATO (obligatorio)",
+  "cita virtual",
+  "RECORDATORIO-CONTRATO",
+  "un día antes, 1 hora antes",
+  "No ofrezcas confirmación o cancelación automática",
+  "no da precios",
+  "AGOTADO-CONTRATO",
+  "tarjeta",
+  "PAGO-CONTRATO",
+  "PREGUNTA-CONTRATO",
+  "RESPUESTA-CONTRATO",
+  "no conoces la respuesta",
+  "CONTACTO-CONTRATO",
+  "DESPEDIDA-CONTRATO",
+  "PREFERIDA-CONTRATO",
+  "EVITADA-CONTRATO",
+  "INSTRUCCION-CONTRATO",
+  "CONTEXTO-CONTRATO"
+].forEach(function (fragment) {
+  assert(contractPrompt.includes(fragment), "el control visible debe llegar al prompt activo: " + fragment);
+});
+
 console.log("bot-personality.test.js ok");

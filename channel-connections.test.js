@@ -92,11 +92,17 @@ function expectCode(promise, code) {
     if (request.url.endsWith("/v25.0/profile-phone/whatsapp_business_profile") && request.method === "POST") {
       assert.strictEqual(request.data.messaging_product, "whatsapp");
       assert.strictEqual(request.data.profile_picture_handle, "profile-picture-handle");
+      assert.strictEqual(request.data.description, "Perfil comercial RAV");
+      assert.strictEqual(request.data.address, "Medellín, Colombia");
       return { data: { success: true } };
     }
     if (request.url.endsWith("/v25.0/profile-phone/whatsapp_business_profile")) {
-      assert.strictEqual(request.params.fields, "profile_picture_url");
-      return { data: { data: [{ business_profile: { profile_picture_url: "https://lookaside.example/profile.jpg" } }] } };
+      assert.strictEqual(request.params.fields, "profile_picture_url,description,address");
+      return { data: { data: [{ business_profile: {
+        profile_picture_url: "https://lookaside.example/profile.jpg",
+        description: "Perfil comercial RAV",
+        address: "Medellín, Colombia"
+      } }] } };
     }
     throw new Error("Unexpected profile request: " + request.url);
   };
@@ -111,11 +117,50 @@ function expectCode(promise, code) {
     phone_number_id: "profile-phone",
     access_token: "profile-token"
   }, {
-    image: { mime_type: "image/jpeg", bytes: Buffer.from([1, 2, 3, 4]) }
+    image: { mime_type: "image/jpeg", bytes: Buffer.from([1, 2, 3, 4]) },
+    description: "Perfil comercial RAV",
+    address: "Medellín, Colombia"
   });
   assert.strictEqual(profileResult.ok, true);
+  assert.strictEqual(profileResult.profile_verified, true);
   assert.strictEqual(profileResult.picture_present, true);
+  assert.strictEqual(profileResult.description_applied, true);
+  assert.strictEqual(profileResult.address_applied, true);
   assert.strictEqual(profileRequests.length, 4);
+
+  const textProfileRequests = [];
+  const textProfileMeta = new MetaChannelProvider({
+    appId: "profile-app",
+    appSecret: "profile-secret",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      textProfileRequests.push(request);
+      assert(!request.url.includes("/uploads"), "text-only profile changes must not create an upload session");
+      if (request.method === "POST") {
+        assert.deepStrictEqual(request.data, {
+          messaging_product: "whatsapp",
+          description: "Nueva descripción",
+          address: "Nueva dirección"
+        });
+        return { data: { success: true } };
+      }
+      return { data: { data: [{ business_profile: {
+        description: "Nueva descripción",
+        address: "Nueva dirección"
+      } }] } };
+    }
+  });
+  const textProfileResult = await textProfileMeta.updateWhatsAppBusinessProfile({
+    phone_number_id: "profile-phone",
+    access_token: "profile-token"
+  }, {
+    description: "Nueva descripción",
+    address: "Nueva dirección"
+  });
+  assert.strictEqual(textProfileResult.profile_verified, true);
+  assert.strictEqual(textProfileResult.picture_present, false);
+  assert.strictEqual(textProfileRequests.length, 2);
 
   const embeddedExchangeRequests = [];
   const embeddedExchangeAxios = async function (request) {
@@ -594,16 +639,30 @@ function expectCode(promise, code) {
         assert.strictEqual(credential.phone_number_id, "profile-phone");
         assert.strictEqual(credential.access_token, "profile-token");
         syncedProfileImage = input.image;
-        return { ok: true, picture_present: true, phone_number_suffix: "le-phone" };
+        assert.strictEqual(input.description, "Perfil de tenant");
+        assert.strictEqual(input.address, "Calle del tenant");
+        return {
+          ok: true,
+          profile_verified: true,
+          picture_present: true,
+          description_applied: true,
+          address_applied: true,
+          phone_number_suffix: "le-phone"
+        };
       }
     },
     encryptionKey
   });
   const syncedProfile = await profileSyncService.syncWhatsAppBusinessProfile("tenant-profile", {
-    avatar_url: "data:image/jpeg;base64," + Buffer.from("profile-image").toString("base64")
+    avatar_url: "data:image/jpeg;base64," + Buffer.from("profile-image").toString("base64"),
+    description: "Perfil de tenant",
+    address: "Calle del tenant"
   }, "owner@profile.example");
   assert.strictEqual(syncedProfile.status, "applied");
+  assert.strictEqual(syncedProfile.profile_verified, true);
   assert.strictEqual(syncedProfile.picture_present, true);
+  assert.strictEqual(syncedProfile.description_applied, true);
+  assert.strictEqual(syncedProfile.address_applied, true);
   assert.strictEqual(syncedProfileImage.mime_type, "image/jpeg");
   assert.strictEqual(syncedProfileImage.bytes.toString(), "profile-image");
   await expectCode(profileSyncService.syncWhatsAppBusinessProfile("tenant-missing", {

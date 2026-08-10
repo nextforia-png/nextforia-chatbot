@@ -1855,58 +1855,83 @@ class MetaChannelProvider {
     const image = input && input.image;
     const bytes = image && Buffer.isBuffer(image.bytes) ? image.bytes : null;
     const mimeType = cleanText(image && image.mime_type, 80).toLowerCase();
+    const hasDescription = !!(input && Object.prototype.hasOwnProperty.call(input, "description"));
+    const hasAddress = !!(input && Object.prototype.hasOwnProperty.call(input, "address"));
+    const description = cleanText(input && input.description, 256);
+    const address = cleanText(input && input.address, 256);
     if (!phoneNumberId || !accessToken) {
       throw new ChannelConnectionError("existing_asset_credentials_required", 409);
     }
-    if (!this.appId || !bytes || !bytes.length || !["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+    if (bytes && (!this.appId || !bytes.length || !["image/jpeg", "image/png", "image/webp"].includes(mimeType))) {
       throw new ChannelConnectionError("whatsapp_profile_image_invalid", 400);
     }
+    if (!bytes && !hasDescription && !hasAddress) {
+      throw new ChannelConnectionError("whatsapp_profile_no_changes", 400);
+    }
     try {
-      const session = await this.graph(encodeURIComponent(this.appId) + "/uploads", accessToken, {
-        method: "POST",
-        params: {
-          file_length: bytes.length,
-          file_type: mimeType,
-          file_name: mimeType === "image/png" ? "profile.png" : mimeType === "image/webp" ? "profile.webp" : "profile.jpg"
-        },
-        data: {}
-      });
-      const uploadId = cleanText(session && session.data && session.data.id, 3000);
-      if (!uploadId) throw new Error("whatsapp_profile_upload_session_missing");
-      const upload = await this.graph(uploadId, accessToken, {
-        method: "POST",
-        headers: { "Content-Type": mimeType, file_offset: "0" },
-        data: bytes,
-        maxBodyLength: Math.max(bytes.length + 1024, 1024 * 1024)
-      });
-      const handle = cleanText(upload && upload.data && upload.data.h, 6000);
-      if (!handle) throw new Error("whatsapp_profile_picture_handle_missing");
+      let handle = "";
+      if (bytes) {
+        const session = await this.graph(encodeURIComponent(this.appId) + "/uploads", accessToken, {
+          method: "POST",
+          params: {
+            file_length: bytes.length,
+            file_type: mimeType,
+            file_name: mimeType === "image/png" ? "profile.png" : mimeType === "image/webp" ? "profile.webp" : "profile.jpg"
+          },
+          data: {}
+        });
+        const uploadId = cleanText(session && session.data && session.data.id, 3000);
+        if (!uploadId) throw new Error("whatsapp_profile_upload_session_missing");
+        const upload = await this.graph(uploadId, accessToken, {
+          method: "POST",
+          headers: { "Content-Type": mimeType, file_offset: "0" },
+          data: bytes,
+          maxBodyLength: Math.max(bytes.length + 1024, 1024 * 1024)
+        });
+        handle = cleanText(upload && upload.data && upload.data.h, 6000);
+        if (!handle) throw new Error("whatsapp_profile_picture_handle_missing");
+      }
+      const update = { messaging_product: "whatsapp" };
+      if (handle) update.profile_picture_handle = handle;
+      if (hasDescription) update.description = description;
+      if (hasAddress) update.address = address;
       await this.graph(encodeURIComponent(phoneNumberId) + "/whatsapp_business_profile", accessToken, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        data: {
-          messaging_product: "whatsapp",
-          profile_picture_handle: handle
-        }
+        data: update
       });
       let profile = null;
-      for (let attempt = 0; attempt < 4 && !(profile && profile.profile_picture_url); attempt++) {
+      let verified = false;
+      for (let attempt = 0; attempt < 4 && !verified; attempt++) {
         if (attempt > 0) await new Promise(function (resolve) { setTimeout(resolve, 500); });
         const verification = await this.graph(encodeURIComponent(phoneNumberId) + "/whatsapp_business_profile", accessToken, {
-          params: { fields: "profile_picture_url" }
+          params: { fields: "profile_picture_url,description,address" }
         });
         const profileRow = verification && verification.data && Array.isArray(verification.data.data)
           ? verification.data.data[0]
           : null;
         profile = profileRow && profileRow.business_profile || profileRow;
+        verified = !!profile &&
+          (!bytes || !!profile.profile_picture_url) &&
+          (!hasDescription || cleanText(profile.description, 256) === description) &&
+          (!hasAddress || cleanText(profile.address, 256) === address);
       }
-      if (!profile || !profile.profile_picture_url) throw new Error("whatsapp_profile_picture_not_verified");
-      this.logger("info", "whatsapp_profile_picture_synced", {
+      if (!verified) throw new Error("whatsapp_business_profile_not_verified");
+      this.logger("info", "whatsapp_business_profile_synced", {
         phone_number_suffix: phoneNumberId.slice(-8),
-        image_bytes: bytes.length,
-        image_type: mimeType
+        image_bytes: bytes ? bytes.length : 0,
+        image_type: bytes ? mimeType : null,
+        description_applied: hasDescription,
+        address_applied: hasAddress
       });
-      return { ok: true, picture_present: true, phone_number_suffix: phoneNumberId.slice(-8) };
+      return {
+        ok: true,
+        profile_verified: true,
+        picture_present: !!(profile && profile.profile_picture_url),
+        description_applied: hasDescription,
+        address_applied: hasAddress,
+        phone_number_suffix: phoneNumberId.slice(-8)
+      };
     } catch (error) {
       if (error instanceof ChannelConnectionError) throw error;
       throw new ChannelConnectionError("whatsapp_profile_sync_failed", 422, internalError(error));
@@ -3634,16 +3659,23 @@ function createChannelConnectionService(options) {
       if (!credential || !provider || typeof provider.updateWhatsAppBusinessProfile !== "function") {
         throw new ChannelConnectionError("existing_asset_credentials_required", 409);
       }
-      const result = await provider.updateWhatsAppBusinessProfile(credential, {
-        image: decodeWhatsAppProfileImage(profile && profile.avatar_url)
-      });
-      if (!result || result.ok !== true || result.picture_present !== true) {
+      const avatarUrl = cleanText(profile && profile.avatar_url, 8 * 1024 * 1024);
+      const input = {
+        description: cleanText(profile && profile.description, 256),
+        address: cleanText(profile && profile.address, 256)
+      };
+      if (avatarUrl) input.image = decodeWhatsAppProfileImage(avatarUrl);
+      const result = await provider.updateWhatsAppBusinessProfile(credential, input);
+      if (!result || result.ok !== true || result.profile_verified !== true) {
         throw new ChannelConnectionError("whatsapp_profile_sync_failed", 422);
       }
       return {
         ok: true,
         status: "applied",
-        picture_present: true,
+        profile_verified: true,
+        picture_present: result.picture_present === true,
+        description_applied: result.description_applied === true,
+        address_applied: result.address_applied === true,
         phone_number_suffix: cleanText(result.phone_number_suffix, 8) || String(record.phone_number_id || "").slice(-8),
         synced_by: actorLabel(actor)
       };

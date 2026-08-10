@@ -64,6 +64,7 @@ assert.strictEqual(unchangedB.fingerprint, initialB.fingerprint, "otro tenant de
 assert(!unchangedB.prompts.join("\n").includes("GAMMA"));
 
 recordA.customer_service_configuration.support_hours = "HORARIO-ANTIGUO-SETUP";
+recordA.customer_service_configuration.business_summary = "SALUDO-ANTIGUO-EN-RESUMEN-SETUP";
 recordA.customer_service_configuration.value_proposition = "DESCRIPCION-ANTIGUA-SETUP";
 recordA.customer_service_configuration.tone = "TONO-ANTIGUO-SETUP";
 recordA.customer_service_configuration.important_policies = "POLITICA-ANTIGUA-SETUP";
@@ -101,6 +102,7 @@ const precedencePrompt = precedenceA.prompts.join("\n");
 });
 [
   "HORARIO-ANTIGUO-SETUP",
+  "SALUDO-ANTIGUO-EN-RESUMEN-SETUP",
   "DESCRIPCION-ANTIGUA-SETUP",
   "TONO-ANTIGUO-SETUP",
   "POLITICA-ANTIGUA-SETUP",

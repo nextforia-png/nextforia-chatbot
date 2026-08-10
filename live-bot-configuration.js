@@ -106,6 +106,7 @@ function effectiveCustomerServiceConfiguration(service, personality) {
   const escalation = current.escalation || {};
   const updated = Object.assign({}, service, {
     assistant_name: profile.display_name || service.assistant_name,
+    business_summary: profile.description || "",
     value_proposition: profile.description || "",
     support_hours: business.hours || "",
     important_policies: business.returns_policy || "",

@@ -2,12 +2,21 @@
 
 const assert = require("assert");
 const {
+  BOT_CONFIGURATION_CONTRACT,
   buildBotConfigurationPrompt,
   configurationForOnboarding,
   defaultsFromOnboarding,
   normalizeBotConfiguration,
   planFeatures
 } = require("./bot-personality");
+
+function configurationLeafPaths(value, prefix) {
+  if (Array.isArray(value)) return [prefix];
+  if (!value || typeof value !== "object") return [prefix];
+  return Object.keys(value).reduce(function (paths, key) {
+    return paths.concat(configurationLeafPaths(value[key], prefix ? prefix + "." + key : key));
+  }, []);
+}
 
 const onboarding = {
   answers: {
@@ -61,6 +70,19 @@ assert.deepStrictEqual(normalized.payments.methods, ["card"]);
 assert.strictEqual(normalized.faqs[0].question, "¿Horario?");
 assert.strictEqual(normalized.extra_context.length, 5000);
 assert.strictEqual(normalized.updated_by, "admin@example.com");
+const structuralPaths = configurationLeafPaths(normalizeBotConfiguration({}, {
+  fallback: defaults,
+  plan_id: "nextfor-atlas",
+  updated_at: "2026-08-10T00:00:00.000Z",
+  updated_by: "contract-test"
+}), "").filter(function (path) {
+  return !["version", "plan_id", "updated_at", "updated_by"].includes(path);
+}).sort();
+assert.deepStrictEqual(
+  structuralPaths,
+  Object.keys(BOT_CONFIGURATION_CONTRACT).sort(),
+  "todo campo presente o futuro debe declarar cómo controla el bot live"
+);
 const tinyImage = "data:image/png;base64,iVBORw0KGgo=";
 const withUploadedLogo = normalizeBotConfiguration({
   profile: { avatar_url: tinyImage }
@@ -116,6 +138,8 @@ const contractPrompt = buildBotConfigurationPrompt({
   custom_instructions: "INSTRUCCION-CONTRATO",
   extra_context: "CONTEXTO-CONTRATO"
 }, { plan_id: "nextfor-atlas" });
+assert(contractPrompt.includes("aplica inmediatamente, incluso a conversaciones abiertas"));
+assert(contractPrompt.includes("reemplaza cualquier dato diferente o anterior del setup inicial"));
 [
   "Puedes responder con más detalle",
   "No uses emojis",

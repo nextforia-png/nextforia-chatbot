@@ -63,6 +63,55 @@ assert(changedA.prompts.join("\n").includes("GAMMA"), "Configuración debe entra
 assert.strictEqual(unchangedB.fingerprint, initialB.fingerprint, "otro tenant debe quedar intacto");
 assert(!unchangedB.prompts.join("\n").includes("GAMMA"));
 
+recordA.customer_service_configuration.support_hours = "HORARIO-ANTIGUO-SETUP";
+recordA.customer_service_configuration.value_proposition = "DESCRIPCION-ANTIGUA-SETUP";
+recordA.customer_service_configuration.tone = "TONO-ANTIGUO-SETUP";
+recordA.customer_service_configuration.important_policies = "POLITICA-ANTIGUA-SETUP";
+recordA.customer_service_configuration.payments = "PAGO-ANTIGUO-SETUP";
+recordA.customer_service_configuration.shipping = "ENVIO-ANTIGUO-SETUP";
+recordA.customer_service_configuration.frequent_questions = "FAQ-ANTIGUA-SETUP";
+recordA.customer_service_configuration.handoff_contact = "CONTACTO-ANTIGUO-SETUP";
+recordA.bot_personality = normalizeBotPersonality({
+  profile: { description: "DESCRIPCION-ACTUAL-PANEL" },
+  greeting: { tone: "formal" },
+  business: { hours: "HORARIO-ACTUAL-PANEL", returns_policy: "POLITICA-ACTUAL-PANEL" },
+  shipping: { fields: [{ id: "city", label: "CIUDAD-ACTUAL-PANEL", required: true }] },
+  payments: { methods: ["card"], confirmation_message: "PAGO-ACTUAL-PANEL" },
+  faqs: [{ question: "FAQ-ACTUAL-PANEL", answer: "RESPUESTA-ACTUAL-PANEL" }],
+  escalation: { triggers: ["unknown_answer"], notify_contact: "CONTACTO-ACTUAL-PANEL" }
+}, {
+  fallback: changedA.personality,
+  plan_id: "nextfor-aura",
+  updated_at: "2026-08-08T12:02:00.000Z",
+  updated_by: "customer-a"
+});
+const precedenceA = resolveLiveBotConfiguration(recordA, { tenant_id: "company-a", plan_id: "nextfor-aura" });
+const precedencePrompt = precedenceA.prompts.join("\n");
+[
+  "HORARIO-ACTUAL-PANEL",
+  "DESCRIPCION-ACTUAL-PANEL",
+  "Saludo: Formal",
+  "POLITICA-ACTUAL-PANEL",
+  "CIUDAD-ACTUAL-PANEL",
+  "PAGO-ACTUAL-PANEL",
+  "FAQ-ACTUAL-PANEL",
+  "CONTACTO-ACTUAL-PANEL"
+].forEach(function (fragment) {
+  assert(precedencePrompt.includes(fragment), "el prompt live debe usar el valor actual: " + fragment);
+});
+[
+  "HORARIO-ANTIGUO-SETUP",
+  "DESCRIPCION-ANTIGUA-SETUP",
+  "TONO-ANTIGUO-SETUP",
+  "POLITICA-ANTIGUA-SETUP",
+  "PAGO-ANTIGUO-SETUP",
+  "ENVIO-ANTIGUO-SETUP",
+  "FAQ-ANTIGUA-SETUP",
+  "CONTACTO-ANTIGUO-SETUP"
+].forEach(function (fragment) {
+  assert(!precedencePrompt.includes(fragment), "el setup anterior no puede competir con el panel: " + fragment);
+});
+
 const inactive = liveRecord("inactive", "Inactiva", "No pública");
 inactive.setup_review.status = "building";
 inactive.answers.customer_service_setup.setup_status = "pending_review";

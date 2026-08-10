@@ -115,6 +115,12 @@ const {
 } = require("./bot-personality");
 const { resolveLiveBotConfiguration } = require("./live-bot-configuration");
 const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
+const {
+  ROUTES: ATLAS_ROUTES,
+  botCapabilitiesForRoute: atlasBotCapabilitiesForRoute,
+  coordinateAtlasTurn,
+  routeStateFromTurns: atlasRouteStateFromTurns
+} = require("./atlas-coordinator");
 const conversationTurnContext = require("./conversation-turn-context");
 const {
   RetargetingEngine,
@@ -327,7 +333,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v356-stale-summary-neutralized";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v357-atlas-coordinator";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -804,6 +810,7 @@ const shopifySessionMemory = new Map();
 const instagramProfileCache = new Map();
 const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
+const atlasRoutingStates = new Map();
 const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
 const processedWhatsAppStatusEventIds = new Set();
@@ -5092,6 +5099,52 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   };
 }
 
+async function loadAtlasRoutingState(userId, tenantId, stateKey) {
+  const cached = atlasRoutingStates.get(stateKey);
+  if (cached && Date.now() - cached.updated_at < CONVERSATION_SESSION_TIMEOUT_MS) return cached;
+  let restored = { active_route: null, awaiting_clarification: false, updated_at: 0 };
+  if (SUPABASE_ENABLED) {
+    let rows = null;
+    try {
+      const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+        params: {
+          select: "ts,tools",
+          user_id: "eq." + userId,
+          ...(SUPABASE_TENANT_COLUMNS_ENABLED ? { tenant_id: "eq." + (cleanTenantId(tenantId) || DEFAULT_TENANT_ID) } : {}),
+          order: "ts.desc",
+          limit: 20
+        },
+        headers: SB_HEADERS,
+        timeout: 8000
+      });
+      rows = Array.isArray(response.data) ? response.data : null;
+    } catch (error) {
+      log("warn", "atlas_route_restore_failed", {
+        tenant_id: cleanTenantId(tenantId) || null,
+        error: cleanRuntimeText(error && error.message, 160)
+      });
+    }
+    if (rows) {
+      restored = atlasRouteStateFromTurns(rows, {
+        now: Date.now(),
+        ttl_ms: CONVERSATION_SESSION_TIMEOUT_MS
+      });
+    }
+  }
+  if (restored.updated_at) atlasRoutingStates.set(stateKey, restored);
+  return restored;
+}
+
+function rememberAtlasRoutingDecision(stateKey, decision) {
+  const state = {
+    active_route: decision && decision.active_route || null,
+    awaiting_clarification: decision && decision.route === ATLAS_ROUTES.CLARIFY,
+    updated_at: Date.now()
+  };
+  atlasRoutingStates.set(stateKey, state);
+  return state;
+}
+
 // ─── MAIN CONVERSATION LOOP ──────────────────────────────────────────────────
 
 function acceptInboundMessageRate(userId, now) {
@@ -5178,6 +5231,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   const previousActivityAt = conversationLastActiveAt.get(stateKey) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
   conversationLastActiveAt.set(stateKey, Date.now());
+  if (newSession) atlasRoutingStates.delete(stateKey);
   if (await humanControlActiveFor(userId, tenantId)) {
     console.log(`[HANDOFF ACTIVE] Ignoring message from ${maskedIdentifier(userId)}`);
     conversationTurnContext.set("handoff", true);
@@ -5207,13 +5261,40 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     plan_id: activeTenantPlanId
   });
   const usesCustomerServiceBot = liveBotConfiguration.active;
-  const botPersonalityPrompt = usesCustomerServiceBot ? liveBotConfiguration.personality_prompt : "";
+  const isAtlasConversation = usesCustomerServiceBot && usesAppointmentBot;
+  let routeUsesCustomerServiceBot = usesCustomerServiceBot;
+  let routeUsesAppointmentBot = usesAppointmentBot;
+  if (isAtlasConversation) {
+    const previousAtlasState = await loadAtlasRoutingState(userId, tenantId, stateKey);
+    const atlasDecision = coordinateAtlasTurn(userMessage, previousAtlasState);
+    rememberAtlasRoutingDecision(stateKey, atlasDecision);
+    conversationTurnContext.push("tools", atlasDecision.marker);
+    log("info", "atlas_message_routed", {
+      tenant_id: tenantId,
+      channel: conversationRuntime.channel,
+      route: atlasDecision.route,
+      reason: atlasDecision.reason,
+      switched: atlasDecision.switched === true
+    });
+    if (atlasDecision.route === ATLAS_ROUTES.CLARIFY) {
+      history.push({ role: "user", content: userMessage });
+      history.push({ role: "assistant", content: atlasDecision.reply });
+      conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
+      const sent = await sendBotReply(atlasDecision.reply);
+      await recordTurn(userId, userMessage, atlasDecision.reply, sent ? "ok" : "error", conversationRuntime);
+      return;
+    }
+    const atlasCapabilities = atlasBotCapabilitiesForRoute(atlasDecision.route);
+    routeUsesCustomerServiceBot = atlasCapabilities.customer_service;
+    routeUsesAppointmentBot = atlasCapabilities.appointments;
+  }
+  const botPersonalityPrompt = routeUsesCustomerServiceBot ? liveBotConfiguration.personality_prompt : "";
   const runtimePolicy = resolveTenantRuntimePolicy({
-    customer_service_prompt: usesCustomerServiceBot && liveBotConfiguration.customer_service_configuration
+    customer_service_prompt: routeUsesCustomerServiceBot && liveBotConfiguration.customer_service_configuration
       ? liveBotConfiguration.customer_service_configuration.system_prompt
       : "",
-    appointment_prompt: usesAppointmentBot ? appointmentConfiguration.system_prompt : "",
-    appointment_operational_prompt: usesAppointmentBot ? APPOINTMENT_OPERATIONAL_PROMPT : "",
+    appointment_prompt: routeUsesAppointmentBot ? appointmentConfiguration.system_prompt : "",
+    appointment_operational_prompt: routeUsesAppointmentBot ? APPOINTMENT_OPERATIONAL_PROMPT : "",
     business_tools_profile: isRavTenantId(tenantId) ? "rav" : ""
   });
   const tenantConfigurationPrompts = runtimePolicy.prompts;
@@ -5232,7 +5313,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   let conversationTools = ravOperationalToolsAllowed
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
-  if (usesAppointmentBot) {
+  if (routeUsesAppointmentBot) {
     APPOINTMENT_TOOLS.forEach(function (tool) {
       if (tool && !conversationTools.some(function (current) { return current.name === tool.name; })) conversationTools.push(tool);
     });

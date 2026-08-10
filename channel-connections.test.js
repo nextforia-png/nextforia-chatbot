@@ -72,6 +72,51 @@ function expectCode(promise, code) {
   assert(instagramUrl.searchParams.get("scope").includes("instagram_manage_messages"));
   assert(instagramUrl.searchParams.get("scope").includes("business_management"));
 
+  const profileRequests = [];
+  const profileAxios = async function (request) {
+    profileRequests.push(request);
+    assert.strictEqual(request.headers.Authorization, "Bearer profile-token");
+    assert(!request.url.includes("profile-token"));
+    if (request.url.endsWith("/v25.0/profile-app/uploads")) {
+      assert.strictEqual(request.method, "POST");
+      assert.strictEqual(request.params.file_type, "image/jpeg");
+      assert.strictEqual(request.params.file_length, 4);
+      return { data: { id: "upload:profile-session?sig=safe-signature" } };
+    }
+    if (request.url.includes("/v25.0/upload:profile-session?sig=safe-signature")) {
+      assert.strictEqual(request.method, "POST");
+      assert.strictEqual(request.headers.file_offset, "0");
+      assert(Buffer.isBuffer(request.data));
+      return { data: { h: "profile-picture-handle" } };
+    }
+    if (request.url.endsWith("/v25.0/profile-phone/whatsapp_business_profile") && request.method === "POST") {
+      assert.strictEqual(request.data.messaging_product, "whatsapp");
+      assert.strictEqual(request.data.profile_picture_handle, "profile-picture-handle");
+      return { data: { success: true } };
+    }
+    if (request.url.endsWith("/v25.0/profile-phone/whatsapp_business_profile")) {
+      assert.strictEqual(request.params.fields, "profile_picture_url");
+      return { data: { data: [{ business_profile: { profile_picture_url: "https://lookaside.example/profile.jpg" } }] } };
+    }
+    throw new Error("Unexpected profile request: " + request.url);
+  };
+  const profileMeta = new MetaChannelProvider({
+    appId: "profile-app",
+    appSecret: "profile-secret",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: profileAxios
+  });
+  const profileResult = await profileMeta.updateWhatsAppBusinessProfile({
+    phone_number_id: "profile-phone",
+    access_token: "profile-token"
+  }, {
+    image: { mime_type: "image/jpeg", bytes: Buffer.from([1, 2, 3, 4]) }
+  });
+  assert.strictEqual(profileResult.ok, true);
+  assert.strictEqual(profileResult.picture_present, true);
+  assert.strictEqual(profileRequests.length, 4);
+
   const embeddedExchangeRequests = [];
   const embeddedExchangeAxios = async function (request) {
     embeddedExchangeRequests.push(request);
@@ -528,6 +573,42 @@ function expectCode(promise, code) {
     encryptionKey,
     now: function () { return new Date("2026-07-26T12:00:00.000Z"); }
   });
+
+  const profileSyncStore = new InMemoryChannelConnectionStore();
+  await profileSyncStore.upsert({
+    tenant_id: "tenant-profile",
+    channel: "whatsapp",
+    status: "connected",
+    webhook_status: "subscribed",
+    phone_number_id: "profile-phone",
+    credentials_ciphertext: encryptStoredText(JSON.stringify({
+      phone_number_id: "profile-phone",
+      access_token: "profile-token"
+    }), encryptionKey)
+  });
+  let syncedProfileImage = null;
+  const profileSyncService = createChannelConnectionService({
+    store: profileSyncStore,
+    provider: {
+      updateWhatsAppBusinessProfile: async function (credential, input) {
+        assert.strictEqual(credential.phone_number_id, "profile-phone");
+        assert.strictEqual(credential.access_token, "profile-token");
+        syncedProfileImage = input.image;
+        return { ok: true, picture_present: true, phone_number_suffix: "le-phone" };
+      }
+    },
+    encryptionKey
+  });
+  const syncedProfile = await profileSyncService.syncWhatsAppBusinessProfile("tenant-profile", {
+    avatar_url: "data:image/jpeg;base64," + Buffer.from("profile-image").toString("base64")
+  }, "owner@profile.example");
+  assert.strictEqual(syncedProfile.status, "applied");
+  assert.strictEqual(syncedProfile.picture_present, true);
+  assert.strictEqual(syncedProfileImage.mime_type, "image/jpeg");
+  assert.strictEqual(syncedProfileImage.bytes.toString(), "profile-image");
+  await expectCode(profileSyncService.syncWhatsAppBusinessProfile("tenant-missing", {
+    avatar_url: "data:image/jpeg;base64," + Buffer.from("profile-image").toString("base64")
+  }, "owner@profile.example"), "whatsapp_profile_not_connected");
 
   let duplicateActivations = 0;
   const isolatedAssetStore = new InMemoryChannelConnectionStore();

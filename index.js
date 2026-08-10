@@ -3,6 +3,7 @@ const axios = require("axios");
 const crypto = require("crypto");
 const { EventEmitter } = require("events");
 const path = require("path");
+const webPush = require("web-push");
 const { ElevenLabsClient } = require("@elevenlabs/elevenlabs-js");
 const {
   createRateLimiter,
@@ -34,6 +35,13 @@ const {
 } = require("./customer-appointments");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
+const {
+  CUSTOMER_NOTIFICATION_TOOL,
+  CUSTOMER_NOTIFICATION_READ_TOOL,
+  CUSTOMER_PUSH_SUBSCRIPTION_TOOL,
+  InMemoryCustomerNotificationStore,
+  createCustomerNotificationService
+} = require("./customer-notifications");
 const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
@@ -333,7 +341,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v357-atlas-coordinator";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v358-human-handoff-notifications";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -433,6 +441,10 @@ const WOMPI_ESTIMATED_FEE_TAX_RATE = Number(process.env.WOMPI_ESTIMATED_FEE_TAX_
 const CUSTOMER_INVITE_TTL_HOURS = boundedEnvInt("CUSTOMER_INVITE_TTL_HOURS", 24, 1, 168);
 const CUSTOMER_PANEL_BASE_URL = configuredHttpsOrigin(process.env.CUSTOMER_PANEL_BASE_URL, PUBLIC_BASE_URL);
 const CUSTOMER_PANEL_FALLBACK_BASE_URLS = configuredHttpsOrigins(process.env.CUSTOMER_PANEL_FALLBACK_BASE_URLS);
+const WEB_PUSH_VAPID_PUBLIC_KEY = String(process.env.WEB_PUSH_VAPID_PUBLIC_KEY || "").trim();
+const WEB_PUSH_VAPID_PRIVATE_KEY = String(process.env.WEB_PUSH_VAPID_PRIVATE_KEY || "").trim();
+const WEB_PUSH_VAPID_SUBJECT = String(process.env.WEB_PUSH_VAPID_SUBJECT || "mailto:soporte@nextforia.com").trim();
+const WEB_PUSH_CONFIGURED = !!(WEB_PUSH_VAPID_PUBLIC_KEY && WEB_PUSH_VAPID_PRIVATE_KEY && WEB_PUSH_VAPID_SUBJECT);
 const ADMIN_ALLOWED_BASE_URLS = [PUBLIC_BASE_URL].concat(CUSTOMER_PANEL_BASE_URL, CUSTOMER_PANEL_FALLBACK_BASE_URLS).filter(Boolean);
 const CHANNEL_CONNECTION_PUBLIC_ORIGINS = configuredHttpsOrigins(
   process.env.CHANNEL_CONNECTION_PUBLIC_ORIGINS ||
@@ -671,6 +683,7 @@ if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLE
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if ((WEB_PUSH_VAPID_PUBLIC_KEY || WEB_PUSH_VAPID_PRIVATE_KEY) && !WEB_PUSH_CONFIGURED) productionConfigErrors.push("WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY and WEB_PUSH_VAPID_SUBJECT must be configured together");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (PAYMENTS_V1_ENABLED && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when PAYMENTS_V1_ENABLED=1");
@@ -945,6 +958,127 @@ const retargetingAppendLocks = new Map();
 
 // ─── Persistencia en Supabase (v37) ───────────────────────────────────
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+
+function customerNotificationPayloadFromTurn(turn, toolName, prefix) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  if (!tools.includes(toolName)) return null;
+  const raw = String(turn.botReply || "").replace(new RegExp("^\\[" + prefix + "\\]\\s*"), "");
+  try {
+    const payload = JSON.parse(raw);
+    const tenantId = cleanTenantId(payload && payload.tenant_id);
+    if (!tenantId) return null;
+    return Object.assign({}, payload, { tenant_id: tenantId });
+  } catch (_) {
+    return null;
+  }
+}
+
+function customerNotificationRecord(record, toolName, prefix, userId) {
+  return {
+    ts: record.created_at || record.read_at || record.updated_at || new Date().toISOString(),
+    tenantId: record.tenant_id,
+    userId,
+    userMessage: "",
+    botReply: "[" + prefix + "] " + JSON.stringify(record),
+    tools: [toolName],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: toolName }
+  };
+}
+
+function customerNotificationTurns(toolName, tenantId, limit) {
+  if (SUPABASE_ENABLED) {
+    return supabaseFetchToolRecent(toolName, limit || 1000, { tenantId }).then(function (rows) {
+      return (rows || []).map(normalizeTurnRow);
+    });
+  }
+  return Promise.resolve(conversationLogs.slice().reverse().filter(function (turn) {
+    return cleanTenantId(turn.tenantId || turn.tenant_id) === cleanTenantId(tenantId) &&
+      Array.isArray(turn.tools) && turn.tools.includes(toolName);
+  }).slice(0, limit || 1000));
+}
+
+const persistentCustomerNotificationStore = {
+  appendNotification: async function (record) {
+    const row = customerNotificationRecord(record, CUSTOMER_NOTIFICATION_TOOL, "CustomerPanelNotification", "__nextfor_notification__:" + record.id);
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(row);
+    else conversationLogs.push(row);
+    return record;
+  },
+  listNotifications: async function (tenantId, limit) {
+    const rows = await customerNotificationTurns(CUSTOMER_NOTIFICATION_TOOL, tenantId, limit || 200);
+    const latest = new Map();
+    rows.map(function (turn) {
+      return customerNotificationPayloadFromTurn(turn, CUSTOMER_NOTIFICATION_TOOL, "CustomerPanelNotification");
+    }).filter(Boolean).forEach(function (record) {
+      if (!latest.has(record.id)) latest.set(record.id, record);
+    });
+    return Array.from(latest.values()).sort(function (a, b) {
+      return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+    }).slice(0, limit || 200);
+  },
+  appendRead: async function (record) {
+    const row = customerNotificationRecord(record, CUSTOMER_NOTIFICATION_READ_TOOL, "CustomerPanelNotificationRead", "__nextfor_notification_read__:" + crypto.randomUUID());
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(row);
+    else conversationLogs.push(row);
+    return record;
+  },
+  listReads: async function (tenantId, actorId) {
+    const rows = await customerNotificationTurns(CUSTOMER_NOTIFICATION_READ_TOOL, tenantId, 1000);
+    return rows.map(function (turn) {
+      return customerNotificationPayloadFromTurn(turn, CUSTOMER_NOTIFICATION_READ_TOOL, "CustomerPanelNotificationRead");
+    }).filter(function (record) { return record && record.actor_id === String(actorId || "").trim().toLowerCase(); });
+  },
+  upsertSubscription: async function (record) {
+    const row = customerNotificationRecord(record, CUSTOMER_PUSH_SUBSCRIPTION_TOOL, "CustomerPanelPushSubscription", "__nextfor_push_subscription__:" + record.id);
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(row);
+    else conversationLogs.push(row);
+    return record;
+  },
+  listSubscriptions: async function (tenantId) {
+    const rows = await customerNotificationTurns(CUSTOMER_PUSH_SUBSCRIPTION_TOOL, tenantId, 2000);
+    const latest = new Map();
+    rows.map(function (turn) {
+      return customerNotificationPayloadFromTurn(turn, CUSTOMER_PUSH_SUBSCRIPTION_TOOL, "CustomerPanelPushSubscription");
+    }).filter(Boolean).forEach(function (record) {
+      if (!latest.has(record.id)) latest.set(record.id, record);
+    });
+    return Array.from(latest.values()).filter(function (record) { return record.active === true; });
+  }
+};
+
+let customerNotificationPushSender = null;
+if (WEB_PUSH_CONFIGURED) {
+  webPush.setVapidDetails(WEB_PUSH_VAPID_SUBJECT, WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY);
+  customerNotificationPushSender = {
+    send: function (subscription, payload) {
+      return webPush.sendNotification(subscription, JSON.stringify(payload), { TTL: 120, urgency: "high" });
+    }
+  };
+}
+const customerNotificationService = createCustomerNotificationService({
+  store: SUPABASE_ENABLED ? persistentCustomerNotificationStore : new InMemoryCustomerNotificationStore(),
+  pushSender: customerNotificationPushSender,
+  subscriptionAllowed: async function (subscription) {
+    if (!CUSTOMER_ACCESS_V2_ENABLED) return true;
+    const email = String(subscription && subscription.actor_id || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) return false;
+    const membership = await customerAccessStore.activeUserByEmail(email);
+    return !!(membership && membership.active && membership.status === "active" &&
+      cleanTenantId(membership.tenant_id) === cleanTenantId(subscription.tenant_id));
+  },
+  onError: function (error, notification) {
+    log("warn", "customer_notification_delivery_failed", {
+      notification_id: notification && notification.id,
+      tenant_id: notification && notification.tenant_id,
+      error: String(error && error.message || error || "unknown").slice(0, 180)
+    });
+  }
+});
 const metaWebhookInboxStore = CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED && SUPABASE_ENABLED && DATA_ENCRYPTION_KEY
   ? new SupabaseMetaWebhookInboxStore({
       url: SUPABASE_URL,
@@ -2564,7 +2698,7 @@ function isShopifySessionStateTurn(turn) {
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
-  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
+  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isSuperAdminAccessTurn(turn) ||
@@ -2577,6 +2711,9 @@ function isInternalAdminTurn(turn) {
     isCustomerMemoryTurn(turn) ||
     isChannelConnectionStateTurn(turn) ||
     isShopifySessionStateTurn(turn) ||
+    tools.includes(CUSTOMER_NOTIFICATION_TOOL) ||
+    tools.includes(CUSTOMER_NOTIFICATION_READ_TOOL) ||
+    tools.includes(CUSTOMER_PUSH_SUBSCRIPTION_TOOL) ||
     tools.includes(SIGNATURE_TOOL) ||
     tools.includes(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
 }
@@ -3050,12 +3187,18 @@ function recordTurn(userId, userMessage, botReply, status, meta) {
       sourceEventId: cleanRuntimeText(meta && (meta.sourceEventId || meta.source_event_id), 500) || null
     };
     rememberConversationTurn(rec);
-    return requirePersistence
+    const persistence = requirePersistence
       ? supabaseInsertStrict(rec).catch(function (error) {
           error.conversationPersistenceFailure = true;
           throw error;
         })
       : supabaseInsert(rec);
+    return Promise.resolve(persistence).then(async function (result) {
+      if (rec.handoff && rec.status !== "outbound_pending" && rec.tools.includes("request_human_handoff")) {
+        await queueCustomerHandoffNotification(tenantId, cleanUserId, "solicitud_cliente", meta);
+      }
+      return result;
+    });
   } catch (e) {
     console.error("recordTurn error:", e.message);
     return requirePersistence ? Promise.reject(e) : Promise.resolve(false);
@@ -4987,6 +5130,39 @@ async function executeNotifyTeam(userId, stateId) {
   return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length };
 }
 
+function customerHandoffNotificationId(tenantId, userId, reason, runtime) {
+  const source = cleanRuntimeText(runtime && (runtime.sourceEventId || runtime.source_event_id), 500);
+  if (!source) return "handoff-" + crypto.randomUUID();
+  return "handoff-" + crypto.createHash("sha256")
+    .update([cleanTenantId(tenantId), normalizeConversationUserId(userId), source, String(reason || "")].join("\u001f"))
+    .digest("hex").slice(0, 40);
+}
+
+async function queueCustomerHandoffNotification(tenantId, userId, reason, runtime) {
+  const cleanTenant = cleanTenantId(tenantId);
+  const cleanUser = normalizeConversationUserId(userId);
+  if (!cleanTenant || !cleanUser) return null;
+  try {
+    return await customerNotificationService.createHandoff({
+      id: customerHandoffNotificationId(cleanTenant, cleanUser, reason, runtime),
+      tenant_id: cleanTenant,
+      conversation_id: cleanUser,
+      channel: conversationChannel(cleanUser),
+      customer_label: channelContactLabel(cleanUser),
+      reason: reason || "solicitud_cliente",
+      title: "Un cliente necesita tu ayuda",
+      message: channelContactLabel(cleanUser) + " está esperando que tu equipo continúe la conversación."
+    });
+  } catch (error) {
+    log("error", "customer_handoff_notification_failed", {
+      tenant_id: cleanTenant,
+      conversation_suffix: cleanUser.slice(-8),
+      error: String(error && error.message || error || "unknown").slice(0, 180)
+    });
+    return null;
+  }
+}
+
 async function executeHumanHandoff(userId, input, runtime) {
   const tenantId = cleanTenantId(runtime && (runtime.tenantId || runtime.tenant_id));
   if (!tenantId) throw new Error("retargeting_tenant_required");
@@ -5679,9 +5855,12 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
         persistResult: function (status) {
           return persistWhatsAppPendingReplyResult(receipt.pending_reply, destination, status);
         },
-        activateHandoff: function () {
+        activateHandoff: async function () {
           addHumanHandoff(from, destination.tenantId);
-          return Promise.resolve(true);
+          await queueCustomerHandoffNotification(destination.tenantId, from, "solicitud_cliente", {
+            source_event_id: String(message.id || "") + ":resumed-handoff"
+          });
+          return true;
         }
       });
       return { tenant_id: destination.tenantId, delivery_resumed: true };
@@ -8962,6 +9141,24 @@ function buildNextforNotifications(onboarding, questionnaire) {
   };
 }
 
+function customerNotificationActorId(auth) {
+  return String(auth && (auth.email || auth.username || auth.user_id || auth.name) || "").trim().toLowerCase();
+}
+
+async function buildCustomerNotificationSnapshot(tenantId, auth, onboarding, questionnaire) {
+  const base = buildNextforNotifications(onboarding, questionnaire);
+  const handoffs = await customerNotificationService.list(tenantId, customerNotificationActorId(auth), 100);
+  return {
+    count: handoffs.count + base.count,
+    unread_count: handoffs.unread_count + base.unread_count,
+    pending_count: base.pending_count,
+    pending_questions: base.pending_questions,
+    push_available: WEB_PUSH_CONFIGURED,
+    push_public_key: WEB_PUSH_CONFIGURED ? WEB_PUSH_VAPID_PUBLIC_KEY : "",
+    items: handoffs.items.concat(base.items)
+  };
+}
+
 async function persistCustomerSetupQuestionnaire(input, auth) {
   const current = await loadCustomerSetupQuestionnaire(false);
   const incoming = input && typeof input === "object" ? input : {};
@@ -11051,7 +11248,23 @@ app.post("/admin/login", loginRateLimiter, async (req, res) => {
   });
 });
 
-app.post("/admin/logout", (req, res) => {
+async function disableCustomerPushOnLogout(req) {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.version !== 2) return;
+  try {
+    await customerNotificationService.unsubscribeActor(
+      customerTenantForAuth(auth), customerNotificationActorId(auth)
+    );
+  } catch (error) {
+    log("warn", "customer_push_logout_cleanup_failed", {
+      tenant_id: cleanTenantId(auth.tenant_id),
+      error: String(error && error.message || error || "unknown").slice(0, 180)
+    });
+  }
+}
+
+app.post("/admin/logout", async (req, res) => {
+  await disableCustomerPushOnLogout(req);
   clearDashboardSessionCookie(req, res);
   res.setHeader("Clear-Site-Data", '"cache", "storage"');
   if (req.query.redirect === "1") {
@@ -11061,7 +11274,8 @@ app.post("/admin/logout", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/admin/logout", (req, res) => {
+app.get("/admin/logout", async (req, res) => {
+  await disableCustomerPushOnLogout(req);
   clearDashboardSessionCookie(req, res);
   res.setHeader("Clear-Site-Data", '"cache", "storage"');
   res.redirect(302, "/admin/login?logged_out=1");
@@ -14777,6 +14991,179 @@ app.post("/admin/appointment-calendar-connections/:tenantId/disconnect", async (
   }
 });
 
+app.get("/admin/customer-notification-sw.js", (req, res) => {
+  res.setHeader("content-type", "application/javascript; charset=utf-8");
+  res.setHeader("cache-control", "no-cache, no-store, must-revalidate");
+  res.send(`"use strict";
+self.addEventListener("push", function (event) {
+  var payload = {};
+  try { payload = event.data ? event.data.json() : {}; } catch (_) {}
+  var action = String(payload.action_url || "/admin/panel?tab=notifications");
+  if (action.indexOf("/admin/panel?") !== 0) action = "/admin/panel?tab=notifications";
+  event.waitUntil(self.registration.showNotification(String(payload.title || "Nextfor necesita tu atención"), {
+    body: String(payload.body || "Un cliente está esperando a tu equipo."),
+    icon: "/admin/assets/nextfor-mark.png",
+    badge: "/admin/assets/nextfor-mark.png",
+    tag: String(payload.tag || "nextfor-human-handoff"),
+    renotify: true,
+    requireInteraction: true,
+    data: { action_url: action, notification_id: String(payload.notification_id || "") }
+  }));
+});
+self.addEventListener("notificationclick", function (event) {
+  event.notification.close();
+  var action = event.notification && event.notification.data && event.notification.data.action_url || "/admin/panel?tab=notifications";
+  event.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (windows) {
+    for (var i = 0; i < windows.length; i += 1) {
+      if (new URL(windows[i].url).origin === self.location.origin) {
+        windows[i].navigate(action);
+        return windows[i].focus();
+      }
+    }
+    return clients.openWindow(action);
+  }));
+});`);
+});
+
+if (process.env.NODE_ENV === "test") {
+  app.post("/admin/test/human-handoff-notification", async (req, res) => {
+    if (!customerPanelAuthOk(req, "admin")) {
+      res.status(401).json({ ok: false, error: "unauthorized" });
+      return;
+    }
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const userId = normalizeConversationUserId(req.body && req.body.conversation_id);
+    if (!userId) {
+      res.status(400).json({ ok: false, error: "missing_conversation_id" });
+      return;
+    }
+    addHumanHandoff(userId, tenantId);
+    await conversationTurnContext.run({ tools: ["request_human_handoff"], handoff: true }, function () {
+      return recordTurn(userId, req.body && req.body.message || "Necesito una persona", "Te conecté con el equipo.", "ok", {
+        tenant_id: tenantId,
+        source_event_id: "test-handoff:" + crypto.randomUUID()
+      });
+    });
+    res.json({ ok: true, tenant_id: tenantId, conversation_id: userId });
+  });
+}
+
+app.get("/admin/panel/notifications", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  try {
+    const notifications = await customerNotificationService.list(
+      customerTenantForAuth(auth), customerNotificationActorId(auth), req.query.limit
+    );
+    res.json(Object.assign({
+      ok: true,
+      push_available: WEB_PUSH_CONFIGURED,
+      push_public_key: WEB_PUSH_CONFIGURED ? WEB_PUSH_VAPID_PUBLIC_KEY : ""
+    }, notifications));
+  } catch (error) {
+    res.status(503).json({ ok: false, error: "notification_store_unavailable" });
+  }
+});
+
+app.post("/admin/panel/notifications/:notificationId/read", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  try {
+    const notification = await customerNotificationService.markRead(
+      customerTenantForAuth(auth), customerNotificationActorId(auth), req.params.notificationId
+    );
+    res.json({ ok: true, notification_id: notification.id });
+  } catch (error) {
+    res.status(error && error.status || 503).json({ ok: false, error: error && error.message || "notification_store_unavailable" });
+  }
+});
+
+app.put("/admin/panel/notifications/push-subscription", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!WEB_PUSH_CONFIGURED) {
+    res.status(503).json({ ok: false, error: "web_push_not_configured" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  try {
+    const subscription = await customerNotificationService.subscribe(
+      customerTenantForAuth(auth), customerNotificationActorId(auth), req.body && req.body.subscription
+    );
+    res.json({ ok: true, subscription });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error && error.message || "push_subscription_invalid" });
+  }
+});
+
+app.delete("/admin/panel/notifications/push-subscription", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  try {
+    const subscription = await customerNotificationService.unsubscribe(
+      customerTenantForAuth(auth), customerNotificationActorId(auth), req.body && req.body.endpoint
+    );
+    res.json({ ok: true, subscription });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error && error.message || "push_subscription_invalid" });
+  }
+});
+
+app.get("/admin/panel/notifications/events", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const actorId = customerNotificationActorId(auth);
+  res.setHeader("content-type", "text/event-stream");
+  res.setHeader("cache-control", "no-cache, no-transform");
+  res.setHeader("connection", "keep-alive");
+  res.flushHeaders();
+  res.write("retry: 2500\nevent: ready\ndata: {}\n\n");
+  const sent = new Set();
+  try {
+    const initial = await customerNotificationService.list(tenantId, actorId, 100);
+    initial.items.forEach(function (item) { sent.add(item.id); });
+  } catch (_) {}
+  const send = function (notification) {
+    if (!notification || notification.tenant_id !== tenantId || sent.has(notification.id)) return;
+    sent.add(notification.id);
+    res.write("id: " + notification.id + "\nevent: notification\ndata: " + JSON.stringify(notification) + "\n\n");
+  };
+  const channel = "tenant:" + tenantId;
+  customerNotificationService.events.on(channel, send);
+  const poll = setInterval(async function () {
+    try {
+      const current = await customerNotificationService.list(tenantId, actorId, 100);
+      current.items.slice().reverse().forEach(send);
+    } catch (_) {}
+  }, 4000);
+  const heartbeat = setInterval(function () { res.write(": keepalive\n\n"); }, 20000);
+  // Force a fresh authenticated request periodically so a disabled membership
+  // cannot keep an already-open event stream alive indefinitely.
+  const revalidate = setTimeout(function () { res.end(); }, 55000);
+  req.on("close", function () {
+    clearInterval(poll);
+    clearInterval(heartbeat);
+    clearTimeout(revalidate);
+    customerNotificationService.events.off(channel, send);
+  });
+});
+
 app.get("/admin/panel/data", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -14836,7 +15223,7 @@ app.get("/admin/panel/data", async (req, res) => {
     try {
       const onboarding = await reconcileShopifyOnboardingConnection(await loadClientOnboarding(false, tenantId));
       const questionnaire = await loadCustomerSetupQuestionnaire(false);
-      snapshot.nextfor_notifications = buildNextforNotifications(onboarding, questionnaire);
+      snapshot.nextfor_notifications = await buildCustomerNotificationSnapshot(tenantId, auth, onboarding, questionnaire);
     } catch (error) {
       console.error("customer panel notifications error:", error.message);
       snapshot.nextfor_notifications = { count: 0, unread_count: 0, pending_count: 0, pending_questions: [], items: [] };
@@ -15867,6 +16254,7 @@ app.get("/admin/panel", async (req, res) => {
     auth,
     capabilities,
     initialTab,
+    initialConversation: normalizeConversationUserId(req.query.conversation),
     tenantContext: panelBusinessContext,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,

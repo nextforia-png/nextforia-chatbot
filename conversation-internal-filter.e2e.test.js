@@ -124,6 +124,13 @@ async function fakeSupabase() {
         user_message: "internal",
         bot_reply: "[NextforSignature] internal-signature",
         tools: ["nextfor_signature"]
+      },
+      {
+        id: "customer-notification",
+        user_id: "__nextfor_notification__:handoff-a",
+        user_message: "",
+        bot_reply: "[CustomerPanelNotification] encrypted-notification",
+        tools: ["customer_panel_notification"]
       }
     );
 
@@ -136,6 +143,7 @@ async function fakeSupabase() {
     assert(!JSON.stringify(body).includes("ShopifySessionState"));
     assert(!JSON.stringify(body).includes("AppointmentCalendarConnectionState"));
     assert(!JSON.stringify(body).includes("NextforSignature"));
+    assert(!JSON.stringify(body).includes("CustomerPanelNotification"));
     console.log("conversation-internal-filter.e2e.test.js OK");
   } finally {
     child.kill();

@@ -20,7 +20,9 @@ renderCustomerPanel(res, {
 assert(html.includes("function notificationCardKey"));
 assert(html.includes("function notificationActionUrl"));
 assert(html.includes('data-action-url="'));
-assert(html.includes('notificationAction(this.dataset.actionUrl)'));
+assert(html.includes('notificationAction(this.dataset.actionUrl,this.dataset.notificationId)'));
+assert(html.includes('new EventSource("/admin/panel/notifications/events")'));
+assert(html.includes("function playNotificationSound"));
 assert(html.includes('target.searchParams.set("return_to","/admin/panel?tab=notifications")'));
 assert(html.includes('window.addEventListener("pageshow"'));
 assert(html.includes('window.addEventListener("popstate"'));

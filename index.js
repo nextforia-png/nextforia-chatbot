@@ -327,7 +327,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v351-profile-image-upload-fix";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v352-whatsapp-profile-sync";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -9656,6 +9656,41 @@ function customerAccountProfile(auth, onboarding) {
   };
 }
 
+async function applyTenantWhatsAppProfilePicture(tenantId, personality, actor) {
+  const avatarUrl = String(personality && personality.profile && personality.profile.avatar_url || "").trim();
+  if (!avatarUrl) {
+    return { status: "not_requested", applied: false, message: "No hay una imagen para enviar a WhatsApp." };
+  }
+  if (!CHANNEL_CONNECTIONS_V1_VISIBLE || !channelConnectionService) {
+    return { status: "pending_connection", applied: false, message: "Conecta WhatsApp para publicar esta imagen." };
+  }
+  try {
+    const result = await channelConnectionService.syncWhatsAppBusinessProfile(tenantId, personality, actor);
+    return {
+      status: "applied",
+      applied: true,
+      picture_present: result.picture_present === true,
+      phone_number_suffix: result.phone_number_suffix || null,
+      message: "La foto también quedó actualizada en WhatsApp."
+    };
+  } catch (error) {
+    const code = error instanceof ChannelConnectionError ? error.code : "whatsapp_profile_sync_failed";
+    const pending = code === "whatsapp_profile_not_connected";
+    log(pending ? "warn" : "error", "whatsapp_profile_picture_sync_failed", {
+      tenant_id: tenantId,
+      code
+    });
+    return {
+      status: pending ? "pending_connection" : "failed",
+      applied: false,
+      error: code,
+      message: pending
+        ? "La imagen quedó guardada en Nextfor. Conecta WhatsApp para publicarla allí."
+        : "La imagen quedó guardada en Nextfor, pero Meta no confirmó el cambio en WhatsApp. Reintenta."
+    };
+  }
+}
+
 async function updateCustomerTenantName(tenantId, companyName) {
   if (!SUPABASE_ENABLED) return;
   const response = await axios.patch(SUPABASE_URL + "/rest/v1/tenants", {
@@ -13098,6 +13133,11 @@ app.put("/admin/panel/account-profile", async (req, res) => {
       return;
     }
     const previous = await loadClientOnboarding(false, tenantId);
+    const previousLogo = String(
+      previous && previous.bot_personality && previous.bot_personality.profile && previous.bot_personality.profile.avatar_url ||
+      previous && previous.answers && previous.answers.business && previous.answers.business.logo_data_url ||
+      ""
+    ).trim();
     const record = JSON.parse(JSON.stringify(previous || {}));
     record.version = [1, 2].includes(record.version) ? record.version : 2;
     record.tenant_id = tenantId;
@@ -13126,6 +13166,9 @@ app.put("/admin/panel/account-profile", async (req, res) => {
     record.last_updated_at = now;
     record.updated_by = auth.name || auth.email || auth.username || "customer";
     await appendClientOnboardingRecord(record, tenantId);
+    const whatsappProfileSync = logoDataUrl && logoDataUrl !== previousLogo
+      ? await applyTenantWhatsAppProfilePicture(tenantId, personality, auth)
+      : { status: "unchanged", applied: false };
     try {
       await updateCustomerTenantName(tenantId, businessName);
     } catch (error) {
@@ -13134,7 +13177,8 @@ app.put("/admin/panel/account-profile", async (req, res) => {
     res.json({
       ok: true,
       can_edit: true,
-      profile: customerAccountProfile(auth, record)
+      profile: customerAccountProfile(auth, record),
+      whatsapp_profile_sync: whatsappProfileSync
     });
   } catch (error) {
     console.error("customer account profile save error:", error.message);
@@ -13244,6 +13288,10 @@ app.put("/admin/panel/bot-personality", async (req, res) => {
       tenant_id: tenantId,
       plan_id: planId
     });
+    const previousAvatar = String(
+      previousLiveConfiguration.personality && previousLiveConfiguration.personality.profile &&
+      previousLiveConfiguration.personality.profile.avatar_url || ""
+    ).trim();
     if (!previousLiveConfiguration.contracted) {
       res.status(409).json({
         ok: false,
@@ -13291,6 +13339,13 @@ app.put("/admin/panel/bot-personality", async (req, res) => {
       verificationError.status = 503;
       throw verificationError;
     }
+    const nextAvatar = String(
+      verifiedLiveConfiguration.personality && verifiedLiveConfiguration.personality.profile &&
+      verifiedLiveConfiguration.personality.profile.avatar_url || ""
+    ).trim();
+    const whatsappProfileSync = nextAvatar && nextAvatar !== previousAvatar
+      ? await applyTenantWhatsAppProfilePicture(tenantId, verifiedLiveConfiguration.personality, auth)
+      : { status: "unchanged", applied: false };
     res.json({
       ok: true,
       active: true,
@@ -13301,7 +13356,8 @@ app.put("/admin/panel/bot-personality", async (req, res) => {
       applied_at: verifiedLiveConfiguration.applied_at,
       plan_id: planId,
       features: planFeatures(planId),
-      personality: verifiedLiveConfiguration.personality
+      personality: verifiedLiveConfiguration.personality,
+      whatsapp_profile_sync: whatsappProfileSync
     });
   } catch (error) {
     console.error("bot personality save error:", error.message);
@@ -13309,6 +13365,42 @@ app.put("/admin/panel/bot-personality", async (req, res) => {
       ok: false,
       error: "bot_personality_save_failed",
       message: "No pudimos aplicar los cambios. Intenta de nuevo."
+    });
+  }
+});
+
+app.post("/admin/panel/bot-personality/whatsapp-profile-sync", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const onboarding = await loadClientOnboarding(true, tenantId);
+    const business = customerBusinessForAuthAndOnboarding(auth, onboarding);
+    const liveConfiguration = resolveLiveBotConfiguration(onboarding, {
+      tenant_id: tenantId,
+      plan_id: business.plan_id || "nextfor-uno"
+    });
+    if (!liveConfiguration.active) {
+      res.status(409).json({ ok: false, error: "bot_configuration_not_live", message: "La configuración del bot todavía no está activa." });
+      return;
+    }
+    const sync = await applyTenantWhatsAppProfilePicture(tenantId, liveConfiguration.personality, auth);
+    const success = sync.status === "applied";
+    res.status(success ? 200 : sync.status === "pending_connection" ? 409 : 502).json({
+      ok: success,
+      applied: liveConfiguration.active,
+      whatsapp_profile_sync: sync,
+      message: sync.message
+    });
+  } catch (error) {
+    console.error("whatsapp profile sync error:", error.message);
+    res.status(503).json({
+      ok: false,
+      error: "whatsapp_profile_sync_failed",
+      message: "No pudimos actualizar la foto en WhatsApp. Reintenta."
     });
   }
 });

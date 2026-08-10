@@ -68,6 +68,19 @@ function cleanWhatsAppOnboardingMode(value) {
   return mode === "coexistence" || mode === "cloud_api" ? mode : "";
 }
 
+function decodeWhatsAppProfileImage(value) {
+  const image = String(value || "").trim();
+  const match = image.match(/^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/i);
+  if (!match || image.length > 8 * 1024 * 1024) {
+    throw new ChannelConnectionError("whatsapp_profile_image_invalid", 400);
+  }
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > 5 * 1024 * 1024) {
+    throw new ChannelConnectionError("whatsapp_profile_image_invalid", 400);
+  }
+  return { mime_type: "image/" + match[1].toLowerCase(), bytes };
+}
+
 function iso(value) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
   return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
@@ -1836,6 +1849,70 @@ class MetaChannelProvider {
     }, settings));
   }
 
+  async updateWhatsAppBusinessProfile(credential, input) {
+    const phoneNumberId = cleanText(credential && credential.phone_number_id, 240);
+    const accessToken = cleanText(credential && credential.access_token, 4096);
+    const image = input && input.image;
+    const bytes = image && Buffer.isBuffer(image.bytes) ? image.bytes : null;
+    const mimeType = cleanText(image && image.mime_type, 80).toLowerCase();
+    if (!phoneNumberId || !accessToken) {
+      throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+    }
+    if (!this.appId || !bytes || !bytes.length || !["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+      throw new ChannelConnectionError("whatsapp_profile_image_invalid", 400);
+    }
+    try {
+      const session = await this.graph(encodeURIComponent(this.appId) + "/uploads", accessToken, {
+        method: "POST",
+        params: {
+          file_length: bytes.length,
+          file_type: mimeType,
+          file_name: mimeType === "image/png" ? "profile.png" : mimeType === "image/webp" ? "profile.webp" : "profile.jpg"
+        },
+        data: {}
+      });
+      const uploadId = cleanText(session && session.data && session.data.id, 3000);
+      if (!uploadId) throw new Error("whatsapp_profile_upload_session_missing");
+      const upload = await this.graph(uploadId, accessToken, {
+        method: "POST",
+        headers: { "Content-Type": mimeType, file_offset: "0" },
+        data: bytes,
+        maxBodyLength: Math.max(bytes.length + 1024, 1024 * 1024)
+      });
+      const handle = cleanText(upload && upload.data && upload.data.h, 6000);
+      if (!handle) throw new Error("whatsapp_profile_picture_handle_missing");
+      await this.graph(encodeURIComponent(phoneNumberId) + "/whatsapp_business_profile", accessToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        data: {
+          messaging_product: "whatsapp",
+          profile_picture_handle: handle
+        }
+      });
+      let profile = null;
+      for (let attempt = 0; attempt < 4 && !(profile && profile.profile_picture_url); attempt++) {
+        if (attempt > 0) await new Promise(function (resolve) { setTimeout(resolve, 500); });
+        const verification = await this.graph(encodeURIComponent(phoneNumberId) + "/whatsapp_business_profile", accessToken, {
+          params: { fields: "profile_picture_url" }
+        });
+        const profileRow = verification && verification.data && Array.isArray(verification.data.data)
+          ? verification.data.data[0]
+          : null;
+        profile = profileRow && profileRow.business_profile || profileRow;
+      }
+      if (!profile || !profile.profile_picture_url) throw new Error("whatsapp_profile_picture_not_verified");
+      this.logger("info", "whatsapp_profile_picture_synced", {
+        phone_number_suffix: phoneNumberId.slice(-8),
+        image_bytes: bytes.length,
+        image_type: mimeType
+      });
+      return { ok: true, picture_present: true, phone_number_suffix: phoneNumberId.slice(-8) };
+    } catch (error) {
+      if (error instanceof ChannelConnectionError) throw error;
+      throw new ChannelConnectionError("whatsapp_profile_sync_failed", 422, internalError(error));
+    }
+  }
+
   async exchangeCode(code, options) {
     const channel = cleanChannel(options && options.channel);
     const omitRedirectUri = channel === "whatsapp" && options && options.omitRedirectUri === true;
@@ -3544,6 +3621,32 @@ function createChannelConnectionService(options) {
         return publicConnection(record, { superAdmin: true });
       }
       return this.verify(clean.tenantId, "whatsapp", actor);
+    },
+
+    async syncWhatsAppBusinessProfile(tenantId, profile, actor) {
+      const clean = assertTenantChannel(tenantId, "whatsapp");
+      const record = await store.get(clean.tenantId, clean.channel);
+      if (!record || record.status !== "connected") {
+        throw new ChannelConnectionError("whatsapp_profile_not_connected", 409);
+      }
+      if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+      const credential = credentialPayload(record);
+      if (!credential || !provider || typeof provider.updateWhatsAppBusinessProfile !== "function") {
+        throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+      }
+      const result = await provider.updateWhatsAppBusinessProfile(credential, {
+        image: decodeWhatsAppProfileImage(profile && profile.avatar_url)
+      });
+      if (!result || result.ok !== true || result.picture_present !== true) {
+        throw new ChannelConnectionError("whatsapp_profile_sync_failed", 422);
+      }
+      return {
+        ok: true,
+        status: "applied",
+        picture_present: true,
+        phone_number_suffix: cleanText(result.phone_number_suffix, 8) || String(record.phone_number_id || "").slice(-8),
+        synced_by: actorLabel(actor)
+      };
     },
 
     async inspectWhatsApp(tenantId) {

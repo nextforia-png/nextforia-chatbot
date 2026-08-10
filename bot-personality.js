@@ -194,7 +194,7 @@ function defaultsFromOnboarding(record, planId) {
     profile: {
       avatar_url: cleanAvatarImage(service.company_logo),
       display_name: botName,
-      description: cleanText(service.value_proposition || service.business_offer_description, 300)
+      description: cleanText(service.value_proposition || service.business_offer_description, 256)
     },
     greeting: {
       tone,
@@ -324,7 +324,7 @@ function normalizeBotConfiguration(input, meta) {
     profile: {
       avatar_url: cleanAvatarImage(profile.avatar_url != null ? profile.avatar_url : profileFallback.avatar_url),
       display_name: cleanText(profile.display_name != null ? profile.display_name : profileFallback.display_name, 120),
-      description: cleanText(profile.description != null ? profile.description : profileFallback.description, 300)
+      description: cleanText(profile.description != null ? profile.description : profileFallback.description, 256)
     },
     greeting: {
       tone: cleanChoice(greeting.tone, GREETING_TONES, cleanChoice(greetingFallback.tone, GREETING_TONES, "cercano")),
@@ -441,6 +441,7 @@ function buildBotConfigurationPrompt(configuration, meta) {
     "- Responde primero a la intención concreta del cliente.",
     "- No inventes horarios, precios, políticas, disponibilidad, pagos ni datos de despacho."
   ];
+  if (config.profile.description) lines.push("- Descripción del negocio y del asistente: " + config.profile.description);
   if (config.greeting.text) lines.push("- Saludo exacto para el primer mensaje: " + config.greeting.text);
   if (config.business.hours) lines.push("- Horario del negocio: " + config.business.hours);
   if (config.business.address) lines.push("- Dirección o ubicación: " + config.business.address);
@@ -476,7 +477,26 @@ function buildBotConfigurationPrompt(configuration, meta) {
     if (config.payments.confirmation_message) lines.push("- Al confirmar el pedido: " + config.payments.confirmation_message);
   }
   if (features.reminders && config.reminders.text) {
+    const reminderTypeLabels = {
+      reservation: "reserva en sitio",
+      virtual: "cita virtual",
+      home: "servicio a domicilio"
+    };
+    const reminderTimingLabels = {
+      one_day: "un día antes",
+      three_hours: "3 horas antes",
+      one_hour: "1 hora antes"
+    };
+    lines.push("- Tipo de recordatorio: " + reminderTypeLabels[config.reminders.type] + ".");
     lines.push("- Plantilla de recordatorio de cita o reserva: " + config.reminders.text);
+    lines.push("- Momentos configurados para el recordatorio: " + (
+      config.reminders.timings.length
+        ? config.reminders.timings.map(function (timing) { return reminderTimingLabels[timing]; }).join(", ")
+        : "ninguno"
+    ) + ".");
+    lines.push(config.reminders.allow_confirm_cancel
+      ? "- Permite que el cliente confirme o cancele desde el recordatorio y escala la actualización de la agenda de forma segura."
+      : "- No ofrezcas confirmación o cancelación automática desde el recordatorio.");
   }
   if (config.faqs.length) {
     lines.push(promptList("RESPUESTAS EXACTAS PARA PREGUNTAS FRECUENTES:", config.faqs.map(function (faq) {

@@ -341,7 +341,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v358-human-handoff-notifications";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v359-supabase-egress-optimized";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -642,6 +642,24 @@ const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
 const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
+const SUPABASE_STATE_CACHE_TTL_MS = boundedEnvInt("SUPABASE_STATE_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
+const CUSTOMER_CONFIGURATION_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_CONFIGURATION_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
+const CUSTOMER_PANEL_PAGE_SIZE = boundedEnvInt("CUSTOMER_PANEL_PAGE_SIZE", 100, 25, 200);
+const CUSTOMER_PANEL_MAX_PAGE_SIZE = 200;
+const CUSTOMER_PANEL_INTERNAL_STATE_TOOLS = Object.freeze([
+  DASHBOARD_CUSTOMER_USER_TOOL,
+  SUPER_ADMIN_ACCESS_TOOL,
+  BOT_SETUP_TOOL,
+  CLIENT_ONBOARDING_TOOL,
+  CUSTOMER_SETUP_QUESTIONNAIRE_TOOL,
+  LEGACY_CLIENT_VISIBILITY_TOOL,
+  RETARGETING_EVENT_TOOL,
+  CHANNEL_CONNECTION_STATE_TOOL,
+  SHOPIFY_SESSION_STATE_TOOL,
+  SIGNATURE_TOOL,
+  APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL
+]);
+const CUSTOMER_PANEL_TURN_COLUMNS = "id,ts,tenant_id,phone_number_id,channel,user_id,user_message,bot_reply,tools,zero_result_queries,handoff,rating,num_tools,status,eval";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
 const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
 const RETARGETING_APPROVED_TEMPLATES = new Set((process.env.RETARGETING_APPROVED_TEMPLATES || "").split(",").map(function (value) { return value.trim(); }).filter(Boolean));
@@ -951,6 +969,7 @@ const clientOnboardingCacheByTenant = new Map();
 const clientOnboardingScopeConflictByKey = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
+const latestToolStateCache = new Map();
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
@@ -1203,7 +1222,7 @@ const appendOnlyChannelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHAN
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyChannelConnectionTurn).find(Boolean) || null;
       },
       loadAll: async function () {
-        const rows = await supabaseFetchToolRecent(CHANNEL_CONNECTION_STATE_TOOL, 3000, { allTenants: true });
+        const rows = await supabaseFetchLatestToolStates(CHANNEL_CONNECTION_STATE_TOOL);
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyChannelConnectionTurn).filter(Boolean);
       },
       loadAllStrict: async function () {
@@ -1238,6 +1257,7 @@ const appendOnlyChannelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHAN
           status: "ok",
           eval: { skip: true, reason: CHANNEL_CONNECTION_STATE_TOOL }
         });
+        invalidateChannelRuntimeCache();
       }
     })
   : null;
@@ -1366,7 +1386,7 @@ const appendOnlyAppointmentCalendarStore = SUPABASE_ENABLED && process.env.NODE_
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyAppointmentCalendarTurn).find(Boolean) || null;
       },
       loadAll: async function () {
-        const rows = await supabaseFetchToolRecent(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL, 3000, { allTenants: true });
+        const rows = await supabaseFetchLatestToolStates(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyAppointmentCalendarTurn).filter(Boolean);
       },
       append: async function (recordId, record, event) {
@@ -1597,7 +1617,7 @@ function connectionRuntimeFromRecord(record) {
 async function loadChannelRuntimeRows(force) {
   await channelConnectionBootstrapPromise;
   const now = Date.now();
-  if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < 15000) return channelRuntimeCache;
+  if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < SUPABASE_STATE_CACHE_TTL_MS) return channelRuntimeCache;
   const rows = [];
   if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionStore && typeof channelConnectionStore.listAll === "function") {
     try {
@@ -2292,6 +2312,7 @@ async function supabaseInsert(rec) {
       }, SB_HEADERS),
       timeout: 8000
     });
+    invalidateLatestToolStateCache(rec.tools, rec.tenantId);
   } catch (e) { console.error("supabaseInsert error:", e.response ? JSON.stringify(e.response.data).slice(0,200) : e.message); }
 }
 async function supabaseInsertStrict(rec) {
@@ -2317,6 +2338,88 @@ async function supabaseInsertStrict(rec) {
     }, SB_HEADERS),
     timeout: 8000
   });
+  invalidateLatestToolStateCache(rec.tools, rec.tenantId);
+}
+function latestToolStateCacheKey(toolName, tenantId) {
+  return String(toolName || "") + "\u001f" + (cleanTenantId(tenantId) || "*");
+}
+function invalidateLatestToolStateCache(tools, tenantId) {
+  (Array.isArray(tools) ? tools : []).forEach(function (toolName) {
+    latestToolStateCache.delete(latestToolStateCacheKey(toolName, tenantId));
+    latestToolStateCache.delete(latestToolStateCacheKey(toolName, null));
+  });
+}
+async function supabaseFetchLatestToolStates(toolName, options) {
+  if (!SUPABASE_ENABLED) return null;
+  options = options || {};
+  const tenantId = cleanTenantId(options.tenantId);
+  const cacheKey = latestToolStateCacheKey(toolName, tenantId);
+  const cached = latestToolStateCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.loaded_at < SUPABASE_STATE_CACHE_TTL_MS) return cached.rows.slice();
+  try {
+    const response = await axios.post(SUPABASE_URL + "/rest/v1/rpc/platform_latest_conversation_tool_states_v1", {
+      p_tool: String(toolName || ""),
+      p_tenant_id: tenantId || null
+    }, {
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length || process.env.NODE_ENV !== "test") {
+      latestToolStateCache.set(cacheKey, { loaded_at: Date.now(), rows: rows.slice() });
+      return rows;
+    }
+    throw Object.assign(new Error("test_rpc_unavailable"), { response: { status: 404, data: { code: "PGRST202" } } });
+  } catch (error) {
+    const status = error && error.response && error.response.status;
+    const code = error && error.response && error.response.data && error.response.data.code;
+    if (status !== 404 && code !== "PGRST202") throw error;
+    const rows = await supabaseFetchToolRecent(toolName, 3000, tenantId ? { tenantId } : { allTenants: true });
+    latestToolStateCache.set(cacheKey, { loaded_at: Date.now(), rows: (rows || []).slice() });
+    return rows || [];
+  }
+}
+async function supabaseFetchCustomerPanelPage(limit, options) {
+  if (!SUPABASE_ENABLED) return null;
+  options = options || {};
+  const tenantId = cleanTenantId(options.tenantId);
+  if (!tenantId) return [];
+  const before = options.before && Number.isFinite(Date.parse(options.before)) ? new Date(options.before).toISOString() : null;
+  try {
+    const response = await axios.post(SUPABASE_URL + "/rest/v1/rpc/platform_customer_panel_recent_turns_v1", {
+      p_tenant_id: tenantId,
+      p_limit: limit,
+      p_before: before
+    }, {
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length || process.env.NODE_ENV !== "test") return rows;
+    throw Object.assign(new Error("test_rpc_unavailable"), { response: { status: 404, data: { code: "PGRST202" } } });
+  } catch (error) {
+    const status = error && error.response && error.response.status;
+    const code = error && error.response && error.response.data && error.response.data.code;
+    if (status !== 404 && code !== "PGRST202") throw error;
+    const logic = CUSTOMER_PANEL_INTERNAL_STATE_TOOLS.map(function (toolName) {
+      return "tools.not.cs." + JSON.stringify([toolName]);
+    }).join(",");
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+      params: {
+        select: CUSTOMER_PANEL_TURN_COLUMNS,
+        tenant_id: "eq." + tenantId,
+        ...(before ? { ts: "lt." + before } : {}),
+        and: "(" + logic + ")",
+        order: "ts.desc",
+        limit
+      },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    return (Array.isArray(response.data) ? response.data : []).map(function (row) {
+      return Object.assign({ row_kind: "turn" }, row);
+    });
+  }
 }
 async function supabaseFetchSourceEventStrict(tenantId, channel, sourceEventId) {
   if (!SUPABASE_ENABLED || !SUPABASE_TENANT_COLUMNS_ENABLED) throw new Error("supabase_source_event_not_configured");
@@ -7732,7 +7835,7 @@ async function loadClientOnboarding(force, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
   const cached = clientOnboardingCacheByTenant.get(tenantId) || { loaded_at: 0, record: null };
-  if (!force && cached.loaded_at && now - cached.loaded_at < 30000) return cached.record;
+  if (!force && cached.loaded_at && now - cached.loaded_at < CUSTOMER_CONFIGURATION_CACHE_TTL_MS) return cached.record;
   let record = cached.record;
   const recordId = clientOnboardingRecordId(tenantId);
   if (SUPABASE_ENABLED) {
@@ -7776,9 +7879,7 @@ async function listRecentClientOnboardingRecords(limit) {
     collectRecord(record, tenantId);
   }
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200, {
-      allTenants: true
-    });
+    const rows = await supabaseFetchLatestToolStates(CLIENT_ONBOARDING_TOOL);
     (rows || []).map(normalizeTurnRow).forEach(collect);
     (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (envelope) {
       const record = envelope.record;
@@ -9082,7 +9183,7 @@ function parseCustomerSetupQuestionnaireTurn(turn) {
 
 async function loadCustomerSetupQuestionnaire(force) {
   const now = Date.now();
-  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < 30000) {
+  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < CUSTOMER_CONFIGURATION_CACHE_TTL_MS) {
     return customerSetupQuestionnaireCache.questionnaire;
   }
   let questionnaire = customerSetupQuestionnaireCache.questionnaire;
@@ -15169,18 +15270,29 @@ app.get("/admin/panel/data", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 500, 500));
+  const eventLimit = Math.max(25, Math.min(parseInt(req.query.limit) || CUSTOMER_PANEL_PAGE_SIZE, CUSTOMER_PANEL_MAX_PAGE_SIZE));
+  const requestedBefore = String(req.query.before || "").trim();
+  const before = requestedBefore && Number.isFinite(Date.parse(requestedBefore)) ? new Date(requestedBefore).toISOString() : null;
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
   let source = tenantId === DEFAULT_TENANT_ID ? "memory" : "tenant_isolated";
+  let hasMore = false;
+  let nextBefore = null;
   let turns = conversationLogs.filter(function (turn) {
-    return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId;
+    const inTenant = cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId;
+    const beforeMatch = !before || new Date(turn.ts || 0) < new Date(before);
+    return inTenant && beforeMatch;
   }).reverse();
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchRecent(500, { tenantId });
+    const rows = await supabaseFetchCustomerPanelPage(eventLimit + 1, { tenantId, before });
     if (rows) {
       source = tenantId === DEFAULT_TENANT_ID ? "supabase" : "tenant_supabase";
-      turns = rows.map(normalizeTurnRow);
+      const operationalRows = rows.filter(function (row) { return row.row_kind !== "context"; });
+      const contextRows = rows.filter(function (row) { return row.row_kind === "context"; });
+      hasMore = operationalRows.length > eventLimit;
+      const pageRows = operationalRows.slice(0, eventLimit);
+      nextBefore = hasMore && pageRows.length ? pageRows[pageRows.length - 1].ts : null;
+      turns = pageRows.concat(before ? [] : contextRows).map(normalizeTurnRow);
     }
   }
   turns.sort(function (a, b) {
@@ -15189,6 +15301,9 @@ app.get("/admin/panel/data", async (req, res) => {
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns, tenantId);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
+  snapshot.data_window.has_more = hasMore;
+  snapshot.data_window.next_before = nextBefore;
+  snapshot.data_window.page_size = eventLimit;
   if (auth.version === 2) {
     let onboardingForPanel = null;
     try { onboardingForPanel = await loadClientOnboarding(false, tenantId); }

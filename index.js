@@ -341,7 +341,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v358-human-handoff-notifications";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v359-staging-panel-update";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -10968,7 +10968,7 @@ function buildCustomerPanelDemoSnapshot() {
   function iso(minutesAgo) {
     return new Date(now - minutesAgo * 60 * 1000).toISOString();
   }
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer" };
+  const auth = { username: "demo", name: "Comercio piloto", role: "viewer" };
   const capabilities = customerPanelCapabilities("viewer");
   const conversations = [
     {
@@ -11088,9 +11088,31 @@ function buildCustomerPanelDemoSnapshot() {
         { ts: iso(36), author: "customer", text: "Perfecto, gracias por la recomendación." }
       ],
       business_signals: { sales_assisted: true, handoff_ever: false, resolved_by_bot: true, partial_resolution: false, evaluated: true }
+    },
+    {
+      id: "messenger:1029384756",
+      phone: "1029384756",
+      channel: "messenger",
+      channel_label: "Messenger",
+      messenger_username: "Laura Méndez",
+      display_name: "Laura Méndez",
+      copy_value: "Laura Méndez",
+      last_ts: iso(15),
+      last_text: "¿Alcanzaría a llegar antes del viernes?",
+      mode: "human",
+      needs_reply: true,
+      tags: ["venta", "envio"],
+      note: "Necesita confirmar el tiempo de entrega.",
+      meta_updated_at: iso(14),
+      messages: [
+        { ts: iso(28), author: "customer", text: "Hola, vi el set de arte en Facebook." },
+        { ts: iso(27), author: "bot", text: "Sí, está disponible. Puedo ayudarte a confirmar el envío." },
+        { ts: iso(15), author: "customer", text: "¿Alcanzaría a llegar antes del viernes?" }
+      ],
+      business_signals: { sales_assisted: true, handoff_ever: true, resolved_by_bot: false, partial_resolution: true, evaluated: true }
     }
   );
-  const demoStatusValues = ["needs_attention", "team_active", "resolved", "ai_active", "needs_attention", "resolved"];
+  const demoStatusValues = ["needs_attention", "team_active", "resolved", "ai_active", "needs_attention", "resolved", "needs_attention"];
   const demoStatusLabels = {
     ai_active: "✦ IA atendiendo",
     needs_attention: "🙋 Necesita tu atención",
@@ -11114,9 +11136,9 @@ function buildCustomerPanelDemoSnapshot() {
     pending_human_replies: 2,
     zero_result_searches: 14,
     opportunities_detected: 14,
-    sales_assisted: { count: 47, label: "ventas asistidas", confidence: "demo" },
+    sales_assisted: { count: 46, amount_cop: 22480600, label: "ventas asistidas", confidence: "demo" },
     solutions_provided: { count: 268, by_human: 44, total: 312, partial: 31, evaluated: 312, rate: 86 },
-    rating: { average: 4.8, count: 214 },
+    rating: { average: 4.8, count: 118, positive_rate: 92 },
     messages_by_day: [
       { day: "2026-07-07", messages: 34 },
       { day: "2026-07-08", messages: 43 },
@@ -11135,51 +11157,24 @@ function buildCustomerPanelDemoSnapshot() {
     conversation_modes: { human: 2, bot: 2, pending: 2 },
     conversation_statuses: { ai_active: 1, needs_attention: 1, team_active: 1, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
   };
-  const instagramSummary = {
-    clients_attended: 126,
-    messages: 487,
-    active_handoffs: 1,
-    handoffs_to_human: 9,
-    pending_human_replies: 1,
-    zero_result_searches: 7,
-    opportunities_detected: 7,
-    sales_assisted: { count: 23, label: "ventas asistidas", confidence: "demo" },
-    solutions_provided: { count: 103, by_human: 23, total: 126, partial: 14, evaluated: 126, rate: 82 },
-    rating: { average: 4.7, count: 71 },
-    messages_by_day: [
-      { day: "2026-07-07", messages: 12 },
-      { day: "2026-07-08", messages: 19 },
-      { day: "2026-07-09", messages: 17 },
-      { day: "2026-07-10", messages: 25 },
-      { day: "2026-07-11", messages: 31 },
-      { day: "2026-07-12", messages: 38 },
-      { day: "2026-07-13", messages: 29 }
-    ],
-    search_gaps: [
-      { query: "regalo para niña de 5 años", count: 3 },
-      { query: "carro control remoto rosado", count: 2 },
-      { query: "Lego flores", count: 2 }
-    ],
-    conversation_modes: { human: 1, bot: 1, pending: 1 },
-    conversation_statuses: { ai_active: 0, needs_attention: 1, team_active: 0, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
-  };
+  const instagramSummary = summarizeCustomerPanelChannel([], emptyCustomerPanelChannelStats());
   const messengerSummary = summarizeCustomerPanelChannel([], emptyCustomerPanelChannelStats());
   return {
     ok: true,
     demo: true,
     bot_version: BOT_VERSION,
     business: {
-      id: CUSTOMER_PANEL_BUSINESS.id,
-      name: CUSTOMER_PANEL_BUSINESS.name,
-      customer_number: CUSTOMER_PANEL_BUSINESS.customer_number,
-      status: CUSTOMER_PANEL_BUSINESS.status,
+      id: "nextfor-aura-demo",
+      name: "Comercio piloto",
+      customer_number: "+57 300 000 0000",
+      status: "active",
       whatsapp_setup: { status: "ready", label: "WhatsApp conectado" },
       instagram_setup: { status: "ready", label: "Instagram conectado" },
       messenger_setup: { status: "ready", label: "Messenger conectado" },
       channels: {
         whatsapp: { status: "ready", label: "WhatsApp conectado", conversations_count: 4 },
         instagram: { status: "ready", label: "Instagram conectado", conversations_count: 2 },
-        messenger: { status: "ready", label: "Messenger conectado", conversations_count: 0 }
+        messenger: { status: "ready", label: "Messenger conectado", conversations_count: 1 }
       }
     },
     user: {
@@ -11283,7 +11278,12 @@ app.get("/admin/logout", async (req, res) => {
 
 function customerLoginTarget(value) {
   const target = String(value || "");
-  const allowedPrefixes = ["/admin/panel", "/admin/client-onboarding"];
+  const allowedPrefixes = [
+    "/admin/panel",
+    "/admin/client-onboarding",
+    "/admin/integrations/shopify/connect",
+    "/admin/integrations/woocommerce/connect"
+  ];
   return allowedPrefixes.some(function (prefix) {
     return target === prefix || target.startsWith(prefix + "?");
   }) ? target : "/admin/panel?tab=summary";
@@ -16267,15 +16267,26 @@ app.get("/admin/panel", async (req, res) => {
 });
 
 app.get("/admin/panel-demo", (req, res) => {
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "admin", method: "demo" };
+  const auth = { username: "demo", name: "Comercio piloto", role: "admin", method: "demo" };
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "summary";
   renderCustomerPanel(res, {
     auth,
     capabilities,
     demoMode: true,
     initialTab,
+    tenantContext: {
+      id: "nextfor-aura-demo",
+      company_name: "Comercio piloto",
+      plan_id: "nextfor-aura",
+      plan_name: "Nextfor Aura",
+      assigned_bot_id: "customer-service",
+      assigned_bot_name: "Atención al cliente",
+      support: true,
+      appointments: false
+    },
+    customerSetupCompleted: true,
     dataPath: "/admin/panel/demo-data",
     appointmentsPath: "/admin/panel/demo-appointments-data",
     setupPath: "/admin/panel/demo-setup",
@@ -16443,7 +16454,7 @@ function canOpsWrite(){return DASHBOARD_ROLE==="agent"||DASHBOARD_ROLE==="admin"
 function canAdmin(){return DASHBOARD_ROLE==="admin"||DASHBOARD_ROLE==="super_admin";}
 function roleLabel(role){return role==="super_admin"?"Super admin":(role==="admin"?"Admin":(role==="agent"?"Agent":"Viewer"));}
 function initRoleBadge(){var el=document.getElementById("roleBadge");if(el)el.textContent=(DASHBOARD_USER||"Panel")+" · "+roleLabel(DASHBOARD_ROLE);var ev=document.getElementById("evalBtn");if(ev&&!canAdmin()){ev.style.opacity=".45";ev.title="Solo admin";}}
-function logoutDashboard(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
+function logoutDashboard(){try{["rav_dashboard_key","rav_dashboard_tab","rav_logo","nextfor-integration-result"].forEach(function(key){localStorage.removeItem(key);});}catch(e){}try{["nextforia_tenant_id","tenant_id","rav_tenant_id"].forEach(function(key){sessionStorage.removeItem(key);});}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
 function initTabs(){var tab="summary";try{tab=new URL(location.href).searchParams.get("tab")||localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab==="human"?"human":"summary");}

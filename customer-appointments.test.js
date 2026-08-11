@@ -36,6 +36,9 @@ assert(clientScript.includes("Número público de citas."));
 assert(clientScript.includes("Probar llamada"));
 assert(clientScript.includes("No requiere extensión."));
 assert(clientScript.includes("copyAppointmentCallNumber"));
+assert(clientScript.includes("Confirmar cita →"));
+assert(!clientScript.includes("Confirmar y enviar →"));
+assert(clientScript.includes("no se simula desde esta vista"));
 assert(styles.includes("apptGatePhone"));
 assert(styles.includes("auto-fit"));
 

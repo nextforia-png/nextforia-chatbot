@@ -95,6 +95,19 @@ assert(redesigned.includes('if(DEMO_MODE&&PANEL_REDESIGN_ENABLED){fillAccountPro
 assert(redesigned.includes('if(DEMO_MODE&&PANEL_REDESIGN_ENABLED){panelToast("Esta es una demo pública'));
 assert(redesigned.includes('onclick="requestPlanSupport(this.dataset.planId,this.dataset.planName)"'));
 assert(redesigned.includes('disabled title="Disponible cuando el backend publique métricas de hoy"'));
+assert(redesigned.includes('id="mnav-mobile-home"'));
+assert(redesigned.includes('id="mnav-mobile-chats"'));
+assert(redesigned.includes('id="mnav-mobile-profile"'));
+assert(redesigned.includes('style="--mobile-tabs:3"'));
+assert(redesigned.includes('class="mobileProfileLinks"'));
+assert(redesigned.includes("openProfileSection('plan')"));
+assert(redesigned.includes("openProfileSection('channels')"));
+assert(redesigned.includes("openProfileSection('setup')"));
+assert(redesigned.includes("openProfileSection('notifications')"));
+assert(!redesigned.includes("undefinedNotificaciones"));
+assert(!redesigned.includes('id="usagePct"'), "the approved plan redesign must not show chat consumption");
+assert(!redesigned.includes("Paquetes de rescate"), "unpublished rescue packages must not be shown as a product");
+assert(!redesigned.includes("Programa de referidos"), "an unimplemented referral program must not be presented as active");
 
 const redesignedMarkup = redesigned.split("<script>")[0];
 for (const match of redesignedMarkup.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)) {

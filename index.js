@@ -341,7 +341,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v360-staging-panel-redesign";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v361-staging-customer-panel-enhancement";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -13976,11 +13976,20 @@ app.post("/admin/bot-setup/publish", async (req, res) => {
 function retargetingTenantForRequest(req) {
   const auth = dashboardAuth(req);
   const requested = String(req.query.tenant_id || req.body && req.body.tenant_id || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  const sessionTenant = customerTenantForAuth(auth);
+  if (sessionTenant) return sessionTenant;
   return auth.role === "super_admin" && requested ? requested : CUSTOMER_PANEL_BUSINESS.id;
 }
 
+function retargetingAuthOk(req, minRole) {
+  const auth = dashboardAuth(req);
+  return auth.version === 2
+    ? customerPanelAuthOk(req, minRole || "viewer")
+    : adminAuthOk(req, minRole || "viewer");
+}
+
 app.get("/admin/retargeting", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!retargetingAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -13995,7 +14004,7 @@ app.get("/admin/retargeting", async (req, res) => {
 });
 
 app.post("/admin/retargeting/consent", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14020,7 +14029,7 @@ app.post("/admin/retargeting/consent", async (req, res) => {
 });
 
 app.post("/admin/retargeting/jobs", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14047,7 +14056,7 @@ app.post("/admin/retargeting/jobs", async (req, res) => {
 });
 
 app.post("/admin/retargeting/jobs/:jobId/approve", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14061,7 +14070,7 @@ app.post("/admin/retargeting/jobs/:jobId/approve", async (req, res) => {
 });
 
 app.post("/admin/retargeting/jobs/:jobId/cancel", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14075,7 +14084,7 @@ app.post("/admin/retargeting/jobs/:jobId/cancel", async (req, res) => {
 });
 
 app.post("/admin/retargeting/pause", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14085,7 +14094,7 @@ app.post("/admin/retargeting/pause", async (req, res) => {
 });
 
 app.post("/admin/retargeting/resume", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14095,7 +14104,7 @@ app.post("/admin/retargeting/resume", async (req, res) => {
 });
 
 app.post("/admin/retargeting/signals", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14115,7 +14124,7 @@ app.post("/admin/retargeting/signals", async (req, res) => {
 });
 
 app.post("/admin/retargeting/templates/status", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14138,7 +14147,7 @@ app.post("/admin/retargeting/templates/status", async (req, res) => {
 });
 
 app.post("/admin/retargeting/worker", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }

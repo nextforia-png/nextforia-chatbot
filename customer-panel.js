@@ -356,7 +356,8 @@ button{cursor:pointer}
 .profileBtn.primary{background:linear-gradient(135deg,var(--cyan-400),var(--cyan-500));color:#fff}
 .profileBtn:disabled{opacity:.55;cursor:not-allowed}
 .profileSecurity{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}.profileSecurityHead{display:flex;align-items:center;justify-content:space-between;gap:14px}.profileSecurityHead strong{display:block;color:var(--navy-900);font-size:15px}.profileSecurityHead p{margin-top:3px;color:var(--slate-500);font-size:11.5px}.profilePassword{display:none;margin-top:14px}.profilePassword.open{display:block}.profilePassword .profileActions{margin-top:14px}
-@media(max-width:640px){.profileModal{padding:10px;align-items:flex-end}.profileModal .profileCard{width:100%;max-height:92vh;border-radius:24px 24px 0 0;padding:22px}.profileHead h3{font-size:21px}.profileGrid{grid-template-columns:1fr}.profileField.wide{grid-column:auto}.profileLogoRow{align-items:stretch}.profileLogo{width:78px;height:78px}.profileUpload{min-height:78px;padding:12px}.profileUpload span small{display:none}.profileActions{display:grid;grid-template-columns:1fr 1fr}.profileActions .profileBtn{padding:0 10px}.profileSecurityHead{align-items:flex-start}}
+.mobileProfileLinks{display:none}
+@media(max-width:640px){.profileModal{padding:0;align-items:stretch;background:#fff}.profileScrim{display:none}.profileModal .profileCard{width:100%;max-height:100dvh;border-radius:0;padding:20px 18px 98px;box-shadow:none}.profileHead{position:sticky;top:-20px;z-index:2;margin:-20px -18px 0;padding:20px 18px 14px;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}.profileHead h3{font-size:21px}.mobileProfileLinks{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}.mobileProfileLink{min-height:78px;border:1px solid var(--line);border-radius:16px;background:#fff;color:var(--navy-900);padding:13px;text-align:left;font:800 13px var(--font-ui);box-shadow:0 8px 24px rgba(8,22,52,.06);cursor:pointer}.mobileProfileLink svg{display:block;width:21px;height:21px;margin-bottom:9px;color:var(--cyan-600)}.profileGrid{grid-template-columns:1fr}.profileField.wide{grid-column:auto}.profileLogoRow{align-items:stretch}.profileLogo{width:78px;height:78px}.profileUpload{min-height:78px;padding:12px}.profileUpload span small{display:none}.profileActions{display:grid;grid-template-columns:1fr 1fr}.profileActions .profileBtn{padding:0 10px}.profileSecurityHead{align-items:flex-start}}
 @media(prefers-reduced-motion:reduce){.panelActionToast{animation:none}}
 .main{min-width:0}
 .topbar{height:72px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:18px;padding:0 28px;position:sticky;top:0;z-index:4}
@@ -1344,7 +1345,7 @@ ${panelRedesignEnabled ? `
   .panel-redesign .metaConnectionSteps,.panel-redesign .connectionHubGrid{grid-template-columns:1fr}
   .panel-redesign .planHero{padding:24px 20px}.panel-redesign .planHero h3{font-size:26px}
   .panel-redesign .customizeSummary{display:none}
-  .panel-redesign .mobileTabbar{display:flex;grid-template-columns:none;overflow-x:auto;overflow-y:hidden;justify-content:flex-start;height:72px;padding:7px 6px}.panel-redesign .mobileTabbar button{display:grid!important;flex:0 0 68px;min-width:68px;height:58px}.panel-redesign .mobileTabbar button[style*="display: none"]{display:none!important}
+  .panel-redesign .mobileTabbar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));overflow:visible;height:72px;padding:7px 10px}.panel-redesign .mobileTabbar button{display:grid!important;min-width:0;height:58px}.panel-redesign .mobileTabbar button.active{border-radius:14px;background:#EAF8FF;color:#057BB6;box-shadow:inset 0 3px 0 #0587CC}.panel-redesign .mobileTabbar .navBadge{position:absolute;top:4px;right:calc(50% - 24px)}
 }
 @media(max-width:420px){.panel-redesign .metricRow{grid-template-columns:1fr}.panel-redesign .metric{min-height:150px}}
 @media(prefers-reduced-motion:reduce){.panel-redesign *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
@@ -1485,11 +1486,11 @@ ${panelRedesignEnabled ? `
               <div class="planMeta"><span class="planPill" id="planMonthly">${panelContext.v2 ? "Plan " + escapeHtml(panelContext.planName) : "$299.900/mes"}</span><span class="planPill" id="planRenewal">${panelContext.v2 ? "Servicio activo" : "Renueva el 1 de agosto"}</span><span class="planPill">${escapeHtml(panelContext.businessName)}</span></div>
             </div>
             ${panelRedesignEnabled ? '<div class="approvedPlanVisual"><img src="' + escapeHtml(approvedPlanProfile.image) + '" alt="' + escapeHtml(approvedPlanProfile.alt) + '"><article><small>Tu plan incluye</small><strong>' + escapeHtml(approvedPlanProfile.primary) + '</strong><span>' + escapeHtml(approvedPlanProfile.channels) + '</span><strong>' + escapeHtml(approvedPlanProfile.secondary) + '</strong><span>' + escapeHtml(approvedPlanProfile.detail) + '</span></article></div>' : ""}
-            <article class="usageCard">
+            ${panelRedesignEnabled ? "" : `<article class="usageCard">
               <div class="usageTop"><div><h4>Consumo de chats</h4><span id="usageMessage">Calculando consumo…</span></div><div><strong id="usagePct">0%</strong><span id="usageState">Vas al día</span></div></div>
               <div class="usageBar"><div class="usageFill" id="usageFill"></div></div>
               <p class="usageMsg"><strong id="chatsConsumed">0</strong> consumidos · <strong id="chatsIncluded">0</strong> incluidos · <strong id="chatsAvailable">0</strong> disponibles</p>
-            </article>
+            </article>`}
           </section>
 
           ${panelContext.v2 ? "" : `<section class="planBlock recommendation">
@@ -1519,18 +1520,18 @@ ${panelRedesignEnabled ? `
             </div>
           </section>
 
-          <section class="planBlock">
+          ${panelRedesignEnabled ? "" : `<section class="planBlock">
             <h3>Paquetes de rescate</h3>
             <p>Si te acercas al límite, puedes sumar chats extra sin cambiar de plan.</p>
             <div class="rescueGrid"><article class="rescueCard"><strong><span class="sectionIcon">${PANEL_ICONS.package}</span>20 chats</strong><span>Precio disponible próximamente</span>${panelRedesignEnabled ? '<button class="primaryBtn" type="button" style="margin-top:14px" disabled title="Los paquetes aún no están publicados">Próximamente</button>' : '<button class="primaryBtn" type="button" style="margin-top:14px">Comprar chats adicionales</button>'}</article><article class="rescueCard"><strong><span class="sectionIcon">${PANEL_ICONS.package}</span>50 chats</strong><span>Precio disponible próximamente</span>${panelRedesignEnabled ? '<button class="primaryBtn" type="button" style="margin-top:14px" disabled title="Los paquetes aún no están publicados">Próximamente</button>' : '<button class="primaryBtn" type="button" style="margin-top:14px">Comprar chats adicionales</button>'}</article></div>
-          </section>
+          </section>`}
 
-          <div class="refPromoGrid">
+          ${panelRedesignEnabled ? "" : `<div class="refPromoGrid">
             <section class="planBlock"><h3><span class="sectionIcon">${PANEL_ICONS.gift}</span>Programa de referidos</h3><p>Refiere un nuevo cliente y recibe un mes gratis de tu plan actual.</p><div class="refCode"><code id="refCode">${escapeHtml(panelContext.referralCode)}</code><button class="ghostBtn" type="button" onclick="copyReferral()">Copiar</button></div><p id="refHint" style="margin-top:12px">0 referidos activos · Se activa cuando tu referido esté activo y realice su primer pago a Nextfor IA.</p><button class="primaryBtn" type="button" onclick="shareReferral()" style="margin-top:14px">Compartir</button></section>
             ${panelContext.v2 ? "" : `<section class="planBlock promoCard"><h3><span class="sectionIcon">${PANEL_ICONS.sparkles}</span>Promoción activa</h3><p><strong>50% off en el setup de Nextfor Dúo</strong></p><p>Si decides subir de plan este mes, puedes ahorrar en la implementación inicial.</p><button class="primaryBtn" type="button" style="margin-top:16px"${panelRedesignEnabled ? ' onclick="requestPlanSupport(\'promocion\',\'Promoción Nextfor Dúo\')"' : ""}>${panelRedesignEnabled ? "Consultar promoción" : "Ver promoción"}</button></section>`}
-          </div>
+          </div>`}
 
-          <section class="planBlock">
+          ${panelRedesignEnabled ? "" : `<section class="planBlock">
             <h3>Transparencia del plan</h3>
             <p>Claro desde el principio: qué incluye, qué no incluye y cuándo habría costos adicionales.</p>
             <div class="transparencyGrid">
@@ -1539,7 +1540,7 @@ ${panelRedesignEnabled ? `
               <div class="transparencyBox"><h4>Límites</h4><ul><li>Chats incluidos por definir</li><li>Uso justo del servicio</li><li>Una marca por panel</li></ul></div>
               <div class="transparencyBox"><h4>Condiciones</h4><ul><li>Facturación mensual</li><li>Cancela cuando quieras</li><li>Sin permanencia</li><li>Costos extra se aprueban antes</li></ul></div>
             </div>
-          </section>
+          </section>`}
         </div>
       </section>
 
@@ -1856,22 +1857,22 @@ ${panelRedesignEnabled ? `
       </section>
     </div>
   </main>
-  <nav class="mobileTabbar" id="mobileTabbar" aria-label="Navegación móvil" style="--mobile-tabs:5">
-    <button id="mnav-summary" data-bot="support" type="button" onclick="showTab('summary')"><span class="mobileNavIcon">${PANEL_ICONS.resumen}</span><span>Resumen</span></button>
-    <button id="mnav-conversations" data-bot="support" type="button" onclick="showTab('conversations')"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span></button>
-    ${ordersMobileNav}
-    <button id="mnav-retargeting" data-bot="support" type="button" onclick="showTab('retargeting')"><span class="mobileNavIcon">${PANEL_ICONS.gift}</span><span>${panelRedesignEnabled ? "Ventas" : "Seguim."}</span></button>
-    ${mobileAppointmentTabs}
-    ${planMobileNav}
-    ${channelsMobileNav}
-    <button id="mnav-setup" data-bot="account" type="button" onclick="showTab('setup')"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Config.</span></button>
-    ${paymentGateRequired ? "" : notificationsMobileNav}
+  <nav class="mobileTabbar" id="mobileTabbar" aria-label="Navegación principal móvil" style="--mobile-tabs:3">
+    <button id="mnav-mobile-home" type="button" onclick="mobileGoHome()"><span class="mobileNavIcon">${PANEL_ICONS.resumen}</span><span>Panel</span></button>
+    <button id="mnav-mobile-chats" type="button" onclick="mobileGoChats()"><span class="mobileNavIcon">${PANEL_ICONS.conversaciones}</span><span>Chats</span><span class="navBadge hot" id="mnavMobileAlertCount" style="display:none"></span></button>
+    <button id="mnav-mobile-profile" type="button" onclick="openProfile()"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Perfil</span></button>
   </nav>
   <div class="profileModal" id="profileModal" role="dialog" aria-modal="true" aria-label="Perfil de la cuenta">
     <div class="profileScrim" onclick="closeProfile()"></div>
     <div class="profileCard">
       <div class="profileHead"><h3>Perfil de tu cuenta</h3><button class="profileClose" type="button" onclick="closeProfile()" aria-label="Cerrar">×</button></div>
       <p class="profileHint">Administra los datos de contacto y la seguridad de tu acceso.</p>
+      <nav class="mobileProfileLinks" aria-label="Cuenta y configuración">
+        <button class="mobileProfileLink" type="button" onclick="openProfileSection('plan')">${PANEL_ICONS.plan}<span>Mi plan</span></button>
+        ${channelConnectionsV1Enabled ? `<button class="mobileProfileLink" type="button" onclick="openProfileSection('channels')">${PANEL_ICONS.channels}<span>Conectar canales</span></button>` : ""}
+        <button class="mobileProfileLink" type="button" onclick="openProfileSection('setup')">${PANEL_ICONS.settings}<span>Configuración</span></button>
+        <button class="mobileProfileLink" type="button" onclick="openProfileSection('notifications')">${PANEL_ICONS.bell}<span>Notificaciones</span></button>
+      </nav>
       <div class="profileLogoRow">
         <div class="profileLogo" id="profileLogoPreview">${escapeHtml(panelContext.initials)}</div>
         <label class="profileUpload" id="profileUploadDrop" ondragover="profileLogoDrag(event,true)" ondragleave="profileLogoDrag(event,false)" ondrop="profileLogoDrop(event)">${PANEL_ICONS.edit}<span>Arrastra tu logo o selecciónalo<small>PNG, JPG o WebP · se ajusta automáticamente</small></span><input id="profileLogoInput" type="file" accept="image/png,image/jpeg,image/webp" onchange="handleLogoFile(this)" hidden></label>
@@ -1957,8 +1958,9 @@ function preparePanelImage(file){return new Promise(function(resolve,reject){if(
 function fillAccountProfile(payload){var profile=payload&&payload.profile||{},canEdit=payload&&payload.can_edit!==false;state.accountProfile=profile;state.accountLogo=profile.logo_data_url||"";var fields={profileNameInput:profile.business_name||PANEL_CONTEXT.businessName,profileAdminName:profile.administrator_name||"",profilePhone:profile.contact_phone||"",profileEmail:profile.administrator_email||""};Object.keys(fields).forEach(function(id){var field=document.getElementById(id);if(field){field.value=fields[id];if(id!=="profileEmail")field.disabled=!canEdit;}});var upload=document.getElementById("profileUploadDrop"),save=document.getElementById("profileSaveBtn");if(upload){upload.style.pointerEvents=canEdit?"auto":"none";upload.style.opacity=canEdit?"1":".6";}if(save)save.disabled=!canEdit;applyPanelLogo(state.accountLogo,fields.profileNameInput);profileStatus(canEdit?"":"Tu rol tiene acceso de solo lectura.",false);}
 function demoAccountProfile(){var stored={};try{stored=JSON.parse(localStorage.getItem("nx_demo_profile_v1")||"{}");}catch(_){}return{can_edit:true,profile:{business_name:stored.business_name||PANEL_CONTEXT.businessName,administrator_name:stored.administrator_name||"Administrador demo",administrator_email:"demo@nextforia.com",contact_phone:stored.contact_phone||"+57 300 000 0000",logo_data_url:stored.logo_data_url||""}};}
 function loadAccountProfile(force){if(state.accountProfileLoading||(!force&&state.accountProfile))return;if(DEMO_MODE&&PANEL_REDESIGN_ENABLED){fillAccountProfile(demoAccountProfile());profileStatus("Vista demo: los cambios se guardan solo en este navegador.",false);return;}state.accountProfileLoading=true;profileStatus("Cargando tu información…",false);api(PANEL_ACCOUNT_PATH,{redirectOnAuth:true}).then(fillAccountProfile).catch(function(error){profileStatus(error.body&&error.body.message||"No pudimos cargar tu perfil.",true);}).finally(function(){state.accountProfileLoading=false;});}
-function openProfile(){var modal=document.getElementById("profileModal");if(!modal)return;modal.classList.add("open");loadAccountProfile(true);}
-function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");}
+function openProfile(){var modal=document.getElementById("profileModal");if(!modal)return;modal.classList.add("open");loadAccountProfile(true);updateMobilePrimaryNav();}
+function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");updateMobilePrimaryNav();}
+function openProfileSection(tab){closeProfile();showTab(tab);}
 function profileLogoDrag(event,active){if(event){event.preventDefault();event.stopPropagation();}var drop=document.getElementById("profileUploadDrop");if(drop)drop.classList.toggle("drag",!!active);}
 function profileLogoDrop(event){profileLogoDrag(event,false);var file=event&&event.dataTransfer&&event.dataTransfer.files&&event.dataTransfer.files[0];if(file)processProfileLogo(file);}
 function processProfileLogo(file){preparePanelImage(file).then(function(image){state.accountLogo=image;var name=document.getElementById("profileNameInput");applyPanelLogo(image,name&&name.value);profileStatus("Imagen lista. Guarda los cambios para aplicarla.",false);}).catch(function(error){profileStatus(error.message||"No pudimos procesar la imagen.",true);});}
@@ -2481,6 +2483,23 @@ function connectAppointmentCalendar(provider){provider=provider==="microsoft"?"m
 function selectChannelAsset(channel){var select=document.getElementById("channelAsset-"+channel),assetId=select&&select.value;if(!assetId)return;setChannelConnectionMessage("Revisando que sea la cuenta correcta…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/select",{method:"POST",body:JSON.stringify({asset_id:assetId})}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Listo. Tu Nextfor ya sabe dónde atender.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");});}
 function disconnectChannel(channel,name){if(!confirm("¿Desconectar "+name+"? Tu Nextfor dejará de recibir nuevos mensajes de este canal."))return;if(channel==="whatsapp")stopWhatsAppVerification({clearExhausted:true});setChannelConnectionMessage("Desconectando el canal…");api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/disconnect",{method:"POST",body:"{}"}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Canal desconectado.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos desconectar el canal. Habla con NextforIA.","error");});}
 function disconnectAppointmentCalendar(){if(!confirm("¿Desconectar el calendario? Nextfor dejará de crear o sincronizar citas allí."))return;setChannelConnectionMessage("Desconectando calendario…");api("/admin/panel/appointment-calendar/disconnect",{method:"POST",body:"{}"}).then(function(){state.channelConnections=null;setChannelConnectionMessage("Calendario desconectado.","success");loadChannelConnections(true);}).catch(function(error){setChannelConnectionMessage(error.body&&error.body.message||"No pudimos desconectar el calendario. Habla con NextforIA.","error");});}
+function mobileGoHome(){
+  if(state.bot==="appointments"&&PANEL_CONTEXT.appointments){showTab("appointments");if(typeof showAppointmentSection==="function")showAppointmentSection("agenda");return;}
+  if(PANEL_CONTEXT.support){showTab("summary");return;}
+  showTab("appointments");if(typeof showAppointmentSection==="function")showAppointmentSection("agenda");
+}
+function mobileGoChats(){
+  if(state.bot==="appointments"&&PANEL_CONTEXT.appointments){showTab("appointments");if(typeof showAppointmentSection==="function")showAppointmentSection("chats");return;}
+  if(PANEL_CONTEXT.support){showTab("conversations");return;}
+  showTab("appointments");if(typeof showAppointmentSection==="function")showAppointmentSection("chats");
+}
+function updateMobilePrimaryNav(){
+  var home=document.getElementById("mnav-mobile-home"),chats=document.getElementById("mnav-mobile-chats"),profile=document.getElementById("mnav-mobile-profile"),modal=document.getElementById("profileModal");
+  var appointmentChat=state.tab==="appointments"&&state.appointmentSection==="chats";
+  if(home)home.classList.toggle("active",state.tab==="summary"||(state.tab==="appointments"&&!appointmentChat));
+  if(chats)chats.classList.toggle("active",state.tab==="conversations"||appointmentChat);
+  if(profile)profile.classList.toggle("active",!!(modal&&modal.classList.contains("open")));
+}
 function showTab(name){
   if(name==="human")name="conversations";
   if(name==="orders"&&!PANEL_REDESIGN_ENABLED)name="summary";
@@ -2519,7 +2538,7 @@ function showTab(name){
   text("pageSubtitle",pageSubtitle);
   if(window.innerWidth<=760&&name!=="appointments"){var activeMobileModule=document.getElementById("mobileModule-"+name);if(activeMobileModule)activeMobileModule.scrollIntoView({behavior:"smooth",block:"nearest",inline:"center"});}
   try{var url=new URL(location.href);url.searchParams.set("tab",name);url.searchParams.delete("channel");url.searchParams.delete("key");history.replaceState(null,"",url.pathname+url.search+url.hash);}catch(e){}
-  if(name==="orders")renderOrders();if(name==="channels")loadChannelConnections(false);if(name==="setup"){loadBotSetup();loadBotPersonality(false);}if(name==="notifications")renderNextforNotifications();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();window.scrollTo(0,0);
+  if(name==="orders")renderOrders();if(name==="channels")loadChannelConnections(false);if(name==="setup"){loadBotSetup();loadBotPersonality(false);}if(name==="notifications")renderNextforNotifications();if(name==="retargeting")loadRetargeting(false);if(name==="appointments")loadAppointments();renderInbox();renderPlan();updateMobilePrimaryNav();window.scrollTo(0,0);
 }
 function mergeConversationPages(newer,older){var byId=new Map(),order=[];function add(item,isNewer){var key=conversationKey(item);if(!key)return;var current=byId.get(key);if(!current){byId.set(key,Object.assign({},item,{messages:(item.messages||[]).slice()}));order.push(key);return;}var primary=isNewer?item:current,secondary=isNewer?current:item,seen=new Set(),messages=[];((primary.messages||[]).concat(secondary.messages||[])).forEach(function(message){var messageKey=[message.ts||"",message.author||"",message.text||"",message.event||""].join("\u001f");if(seen.has(messageKey))return;seen.add(messageKey);messages.push(message);});messages.sort(function(a,b){return new Date(a.ts||0)-new Date(b.ts||0);});byId.set(key,Object.assign({},secondary,primary,{messages:messages}));} (newer||[]).forEach(function(item){add(item,true);});(older||[]).forEach(function(item){add(item,false);});return order.map(function(key){return byId.get(key);}).sort(function(a,b){return new Date(b.last_ts||0)-new Date(a.last_ts||0);});}
 function panelPagePath(before){var url=new URL(PANEL_DATA_PATH,location.origin);url.searchParams.set("limit","100");if(before)url.searchParams.set("before",before);else url.searchParams.delete("before");return url.pathname+url.search;}
@@ -2587,7 +2606,7 @@ function dismissPlanRecommendation(button){var block=button&&button.closest(".re
 function requestPlanSupport(planId,planName){var selected=String(planName||planId||"mi plan Nextfor"),subject="Consulta sobre "+selected,body="Hola Nextfor IA,%0D%0A%0D%0AQuiero revisar "+encodeURIComponent(String(planName||planId||"un cambio de plan"))+" para "+encodeURIComponent(String(PANEL_CONTEXT.businessName||"mi empresa"))+".%0D%0A";if(DEMO_MODE){panelToast("Demo: aquí se abriría una solicitud para cambiar a "+selected+".");return;}panelToast("Abrimos un correo para consultar el cambio sin modificar tu plan actual.");location.href="mailto:soporte@nextforia.com?subject="+encodeURIComponent(subject)+"&body="+body;}
 function copyReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"NEXTFORIA",msg="Código copiado: "+code;if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(code).then(function(){text("refHint","¡Copiado! Comparte "+code+" con tu referido.");}).catch(function(){text("refHint",msg);});}else{text("refHint",msg);}}
 function shareReferral(){var code=(PLAN_DATA.referidos&&PLAN_DATA.referidos.codigo)||"NEXTFORIA",message="Te comparto Nextfor IA. Usa mi código "+code+" y cuéntales que vienes referido por "+PANEL_CONTEXT.businessName+".";if(navigator.share){navigator.share({title:"Nextfor IA",text:message}).catch(function(){copyReferral();});}else if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(message).then(function(){text("refHint","Mensaje de referido copiado. Pégalo en WhatsApp.");});}else{text("refHint",message);}}
-function renderHeader(){if(!state.data)return;var pending=state.conversations.filter(function(item){return uiStatus(item)==="you";}).length;text("navConvCount",pending||"");}
+function renderHeader(){if(!state.data)return;var pending=state.conversations.filter(function(item){return uiStatus(item)==="you";}).length;text("navConvCount",pending||"");var mobile=document.getElementById("mnavMobileAlertCount");if(mobile){mobile.textContent=pending||"";mobile.style.display=pending?"grid":"none";}}
 function pendingSalesClosings(){return state.conversations.filter(function(item){if(uiStatus(item)!=="you")return false;var tags=item.tags||[],memory=item.memory||{},stage=memory.purchase_stage||"",textValue=String(item.last_text||"").toLowerCase();return !!(item.business_signals&&item.business_signals.sales_assisted)||tags.includes("venta")||tags.includes("pendiente_pago")||["payment_pending","order_handoff"].includes(stage)||/comprar|quiero|me interesa|disponible|confirmar (el )?pago|cerrar la compra/.test(textValue);}).length;}
 function renderSummary(){if(!state.data)return;var s=activeSummary(),sales=s.sales_assisted||{},sol=s.solutions_provided||{},rating=s.rating||{},closings=pendingSalesClosings();var clients=s.clients_attended||0,saved=estimateHours(clients),rate=sol.rate==null?null:sol.rate,solvedValue=PANEL_REDESIGN_ENABLED?(sol.count||0):(rate==null?(sol.count||0):(rate+"%"));text("heroLine","Esta semana atendiste a "+clients+" clientes entre WhatsApp, Instagram y Messenger — tu equipo se ahorró ≈ "+saved+" de trabajo repetitivo, sin dejar un solo mensaje sin responder.");text("kSales",PANEL_REDESIGN_ENABLED&&sales.amount_cop?cop(sales.amount_cop):(sales.count||0));text("kSalesSub",(sales.count||0)+(sales.count===1?" venta asistida":" ventas asistidas"));text("kSalesDelta","↗ +"+(sales.count||0));text("kClients",clients);text("kResolved",solvedValue);text("kResolvedSub",(sol.count||0)?((sol.count||0)+" soluciones sin ayuda humana"+(PANEL_REDESIGN_ENABLED&&rate!=null?" · "+rate+"%":"")):"Aún no hay conversaciones resueltas");text("kClosings",closings);text("kClosingsSub",closings===1?"chat listo para cerrar la venta":"chats listos para cerrar la venta");var progress=rate==null?0:Math.max(0,Math.min(100,rate));var bar=document.getElementById("resolvedProgress");if(bar)bar.style.width=progress+"%";text("kResponse",clients?"4 s":"24/7");text("satValue",rating.average==null?"-":rating.average);text("satCopy",(rating.count||0)+" calificaciones");text("satPositive",rating.count?((rating.positive_rate||92)+" % positivas"):"0 % positivas");var deg=rating.average==null?0:Math.max(0,Math.min(360,Math.round(rating.average/5*360)));var ring=document.getElementById("satRing");if(ring)ring.style.setProperty("--satDeg",deg+"deg");renderActivity(s.messages_by_day||[]);renderGaps(s.search_gaps||[]);renderOutcomes(s);renderNextStep(s);renderInsight(s,PANEL_REDESIGN_ENABLED&&rate!=null?rate+"%":solvedValue);}
 function estimateHours(clients){if(!clients)return "0 h";var hours=Math.max(1,Math.round(clients*8/60));return hours+" h";}

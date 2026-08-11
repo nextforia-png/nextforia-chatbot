@@ -103,6 +103,7 @@ function signedSessionCookie(secret, user) {
       CUSTOMER_PUBLIC_SIGNUP_ENABLED: "1",
       CUSTOMER_ACCESS_RESET_CUTOFF: "2026-07-28T01:00:00.000Z",
       CUSTOMER_ACCESS_TEST_MODE: "1",
+      RETARGETING_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_FORCE_SCHEMA_UNAVAILABLE: "0",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_ACCESS_TEST_INVITATIONS: JSON.stringify([
@@ -450,6 +451,16 @@ function signedSessionCookie(secret, user) {
     assert.strictEqual(panelB.business.plan_id, "nextfor-uno");
     assert.strictEqual(panelB.business.assigned_bot_id, "atencion-cliente");
     assert(!JSON.stringify(panelB).includes("Empresa A"));
+
+    response = await fetch(base + "/admin/retargeting?tenant_id=tenant-b", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
+    const retargetingA = await response.json();
+    assert.strictEqual(retargetingA.snapshot.tenant_id, "tenant-a", "retargeting must derive tenant A from its signed membership");
+
+    response = await fetch(base + "/admin/retargeting?tenant_id=tenant-a", { headers: { cookie: userB.cookie } });
+    assert.strictEqual(response.status, 200);
+    const retargetingB = await response.json();
+    assert.strictEqual(retargetingB.snapshot.tenant_id, "tenant-b", "retargeting must derive tenant B from its signed membership");
 
     response = await fetch(base + "/admin/client-onboarding/data?tenant_id=tenant-b", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);

@@ -2138,8 +2138,9 @@ function renderChannelConnections(){
         if(item.disconnect_available)actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';
       }
     }
-    return '<article class="channelConnectCard'+(soon?" comingSoon":"")+(primary?" primaryChannel":"")+(recommended&&!soon?" recommended":"")+'"><span class="channelConnectIcon '+attr(channel)+'">'+esc(channelConnectionInitial(channel))+'</span><div class="channelConnectCopy"><h4>'+esc(item.name||channel)+'</h4><p>'+esc(item.description||"")+'</p>'+account+activation+'</div><div class="channelConnectActions">'+actions+'</div></article>';
+    return '<article class="channelConnectCard'+(soon?" comingSoon":"")+(primary?" primaryChannel":"")+(recommended&&!soon?" recommended":"")+'"><span class="channelConnectIcon '+attr(channel)+'">'+(PANEL_REDESIGN_ENABLED?channelGlyph(channel):esc(channelConnectionInitial(channel)))+'</span><div class="channelConnectCopy"><h4>'+esc(item.name||channel)+'</h4><p>'+esc(item.description||"")+'</p>'+account+activation+'</div><div class="channelConnectActions">'+actions+'</div></article>';
   });
+  if(PANEL_REDESIGN_ENABLED)cards.push('<article class="channelConnectCard comingSoon"><span class="channelConnectIcon calls">☎</span><div class="channelConnectCopy"><h4>Llamadas</h4><p>Atención por voz desde un número de negocio. Se habilitará cuando este canal esté disponible para tu plan.</p><div class="channelAccount">Canal futuro · no realiza llamadas todavía</div></div><div class="channelConnectActions"><span class="channelState">Próximamente</span></div></article>');
   var calendars=payload.appointment_calendar_providers||[payload.appointment_calendar];
   cards.push(renderAppointmentCalendarGroup(calendars,canManage));
   root.innerHTML=cards.join("");

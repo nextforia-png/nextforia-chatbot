@@ -81,6 +81,8 @@ assert(redesigned.includes('<section class="view active" id="panel-orders">'));
 assert(redesigned.includes("Oportunidades de venta"));
 assert(redesigned.includes("4 pasos para quedar listo"));
 assert(redesigned.includes("Personalizar"));
+assert(redesigned.includes("Canal futuro · no realiza llamadas todavía"));
+assert(redesigned.includes("PANEL_REDESIGN_ENABLED?channelGlyph(channel)"));
 for (const filter of ["all", "por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]) {
   assert(
     redesigned.includes('data-order-filter="' + filter + '" onclick="setOrderFilter(this)"'),

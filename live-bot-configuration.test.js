@@ -7,7 +7,11 @@ const {
   normalizeCustomerServiceConfiguration
 } = require("./client-onboarding");
 const { normalizeBotPersonality } = require("./bot-personality");
-const { resolveLiveBotConfiguration } = require("./live-bot-configuration");
+const {
+  configuredGreetingForTurn,
+  liveConfigurationChanged,
+  resolveLiveBotConfiguration
+} = require("./live-bot-configuration");
 
 function liveRecord(tenantId, businessName, instruction) {
   const answers = require("./client-onboarding").cloneDefaults();
@@ -121,5 +125,39 @@ inactive.customer_service_configuration.lifecycle = "draft";
 const inactiveResolved = resolveLiveBotConfiguration(inactive, { tenant_id: "inactive", plan_id: "nextfor-uno" });
 assert.strictEqual(inactiveResolved.active, false, "un setup no aprobado no se puede activar desde Customer Panel");
 assert.deepStrictEqual(inactiveResolved.prompts, []);
+
+assert.strictEqual(liveConfigurationChanged("version-a", "version-b"), true);
+assert.strictEqual(liveConfigurationChanged("version-a", "version-a"), false);
+assert.strictEqual(liveConfigurationChanged("", "version-a"), false);
+assert.strictEqual(configuredGreetingForTurn({
+  active: true,
+  message: "Hola",
+  greeting: "Hola desde Lumen",
+  fingerprint: "version-b",
+  greeted_fingerprint: "version-a",
+  configuration_changed: true
+}), "Hola desde Lumen", "un saludo configurado nuevo debe ser la siguiente respuesta exacta");
+assert.strictEqual(configuredGreetingForTurn({
+  active: true,
+  message: "Hola",
+  greeting: "Hola desde Lumen",
+  fingerprint: "version-b",
+  greeted_fingerprint: "version-b"
+}), "", "no debe repetir el mismo saludo dentro de la conversación");
+assert.strictEqual(configuredGreetingForTurn({
+  active: true,
+  message: "Hola, quiero una cita",
+  greeting: "Hola desde Lumen",
+  fingerprint: "version-b",
+  greeted_fingerprint: "version-a",
+  configuration_changed: true
+}), "", "un mensaje con intención debe seguir el enrutamiento normal");
+
+const applicationSource = require("fs").readFileSync(require("path").join(__dirname, "index.js"), "utf8");
+assert(
+  applicationSource.indexOf("const configuredGreeting = configuredGreetingForTurn") <
+    applicationSource.indexOf("const atlasDecision = coordinateAtlasTurn"),
+  "el saludo por tenant debe aplicarse antes de la aclaración fija de Atlas"
+);
 
 console.log("live-bot-configuration.test.js ok");

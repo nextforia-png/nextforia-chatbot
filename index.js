@@ -121,7 +121,11 @@ const {
   personalityForOnboarding,
   planFeatures
 } = require("./bot-personality");
-const { resolveLiveBotConfiguration } = require("./live-bot-configuration");
+const {
+  configuredGreetingForTurn,
+  liveConfigurationChanged,
+  resolveLiveBotConfiguration
+} = require("./live-bot-configuration");
 const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
 const {
   ROUTES: ATLAS_ROUTES,
@@ -341,7 +345,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v358-human-handoff-notifications";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v359-tenant-live-config-refresh";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -824,6 +828,8 @@ const instagramProfileCache = new Map();
 const customerMemoryCache = new Map();
 const conversationLastActiveAt = new Map();
 const atlasRoutingStates = new Map();
+const conversationConfigurationFingerprints = new Map();
+const conversationGreetingFingerprints = new Map();
 const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
 const processedWhatsAppStatusEventIds = new Set();
@@ -5438,6 +5444,48 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   });
   const usesCustomerServiceBot = liveBotConfiguration.active;
   const isAtlasConversation = usesCustomerServiceBot && usesAppointmentBot;
+  const previousConfigurationFingerprint = conversationConfigurationFingerprints.get(stateKey) || "";
+  const configurationChanged = liveConfigurationChanged(
+    previousConfigurationFingerprint,
+    liveBotConfiguration.fingerprint
+  );
+  if (configurationChanged) {
+    history.length = 0;
+    atlasRoutingStates.delete(stateKey);
+    serviceAreaChecks.delete(stateKey);
+    log("info", "conversation_configuration_refreshed", {
+      tenant_id: tenantId,
+      channel: conversationRuntime.channel
+    });
+  }
+  conversationConfigurationFingerprints.set(stateKey, liveBotConfiguration.fingerprint);
+  const configuredGreeting = configuredGreetingForTurn({
+    active: usesCustomerServiceBot,
+    message: userMessage,
+    greeting: liveBotConfiguration.personality && liveBotConfiguration.personality.greeting &&
+      liveBotConfiguration.personality.greeting.text,
+    fingerprint: liveBotConfiguration.fingerprint,
+    greeted_fingerprint: conversationGreetingFingerprints.get(stateKey),
+    new_session: newSession,
+    configuration_changed: configurationChanged
+  });
+  if (configuredGreeting) {
+    if (isAtlasConversation) {
+      rememberAtlasRoutingDecision(stateKey, {
+        route: ATLAS_ROUTES.CUSTOMER_SERVICE,
+        active_route: ATLAS_ROUTES.CUSTOMER_SERVICE
+      });
+      conversationTurnContext.push("tools", "atlas_route_customer_service");
+    }
+    conversationTurnContext.push("tools", "configured_greeting");
+    history.push({ role: "user", content: userMessage });
+    history.push({ role: "assistant", content: configuredGreeting });
+    conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
+    conversationGreetingFingerprints.set(stateKey, liveBotConfiguration.fingerprint);
+    const sent = await sendBotReply(configuredGreeting);
+    await recordTurn(userId, userMessage, configuredGreeting, sent ? "ok" : "error", conversationRuntime);
+    return;
+  }
   let routeUsesCustomerServiceBot = usesCustomerServiceBot;
   let routeUsesAppointmentBot = usesAppointmentBot;
   if (isAtlasConversation) {

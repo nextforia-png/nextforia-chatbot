@@ -1547,8 +1547,9 @@ ${panelRedesignEnabled ? `
 }
 /* Debe ir al final: neutraliza los layouts históricos de bandeja sin afectar el panel legado. */
 @media(min-width:1321px){
-  body.panel-redesign.conversations-view .inboxShell{display:grid!important;grid-template-columns:384px minmax(0,1fr) 300px!important}
-  body.panel-redesign.conversations-view .listColumn,body.panel-redesign.conversations-view .chatColumn,body.panel-redesign.conversations-view .profileColumn{display:flex!important}
+  body.panel-redesign.conversations-view .inboxShell{display:grid!important;grid-template-columns:384px minmax(0,1fr)!important}
+  body.panel-redesign.conversations-view .listColumn,body.panel-redesign.conversations-view .chatColumn{display:flex!important}
+  body.panel-redesign.conversations-view .profileColumn{display:none!important}
 }
 @media(min-width:761px) and (max-width:1320px){
   body.panel-redesign.conversations-view .inboxShell{display:grid!important;grid-template-columns:384px minmax(0,1fr)!important}
@@ -1563,7 +1564,7 @@ ${panelRedesignEnabled ? `
 }
 @media(min-width:761px){
   body.panel-redesign.conversations-view #panel-inbox{height:100%;min-height:0;overflow:hidden}
-  body.panel-redesign.conversations-view #panel-inbox>.inboxShell{height:100%;min-height:0}
+  body.panel-redesign.conversations-view #panel-inbox>.inboxShell{position:relative;height:100%;min-height:0}
   body.panel-redesign.conversations-view .listColumn,
   body.panel-redesign.conversations-view .profileColumn{min-height:0;overflow:hidden}
   body.panel-redesign.conversations-view .chatColumn{
@@ -1579,11 +1580,42 @@ ${panelRedesignEnabled ? `
   body.panel-redesign.conversations-view .profile{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch}
   body.panel-redesign.conversations-view .messages{height:100%}
   body.panel-redesign.conversations-view .conversationAction{
-    max-height:min(47vh,350px);
-    overflow-y:auto;
-    overscroll-behavior:contain;
-    scrollbar-gutter:stable
+    max-height:none;
+    overflow:visible
   }
+  body.panel-redesign.conversations-view .guidedAction{display:none!important}
+  body.panel-redesign.conversations-view.profile-open .profileColumn{
+    position:absolute;
+    z-index:30;
+    top:0;
+    right:0;
+    bottom:0;
+    display:flex!important;
+    width:min(360px,calc(100% - 384px));
+    height:100%;
+    border-left:1px solid var(--line);
+    background:#fff;
+    box-shadow:-18px 0 42px rgba(10,24,54,.16)
+  }
+  body.panel-redesign.conversations-view.profile-open .profileColumn .profile{padding-top:54px}
+  body.panel-redesign.conversations-view .profileDrawerClose{
+    position:absolute;
+    z-index:2;
+    top:12px;
+    right:14px;
+    width:36px;
+    height:36px;
+    display:grid;
+    place-items:center;
+    border:1px solid var(--line);
+    border-radius:11px;
+    background:#fff;
+    color:var(--slate-500);
+    font-size:21px;
+    line-height:1;
+    cursor:pointer
+  }
+  body.panel-redesign.conversations-view .profileDrawerClose:hover{background:var(--slate-100);color:var(--navy-900)}
 }
 @media(min-width:761px) and (max-height:800px){
   body.panel-redesign.conversations-view .conversationAction{padding:8px 12px 9px}
@@ -1739,7 +1771,7 @@ ${panelRedesignEnabled ? `
             <div class="threads" id="threadList"><div class="empty">Cargando conversaciones...</div></div>
           </section>
           <section class="column chatColumn">
-            <div class="chatHead"><button class="mobileBack" type="button" onclick="closeConversation()">← Chats</button><span class="avatarChannelWrap"><span class="contactAvatar" id="chatAvatar">—</span><span class="channelBadge floating" id="chatChannelBadge" hidden></span></span><div class="chatIdentity"><h3 id="chatTitle">Selecciona una conversación</h3><p id="chatSubtitle">Elige un cliente para ver el historial.</p></div><span class="chatStatusPill" id="chatStatusPill">—</span><button class="chatCloseButton" id="chatCloseButton" type="button" onclick="closeConversation()" aria-label="Cerrar conversación" title="Cerrar conversación">×</button></div>
+            <div class="chatHead"><button class="mobileBack" type="button" onclick="closeConversation()">← Chats</button><span class="avatarChannelWrap"><span class="contactAvatar" id="chatAvatar">—</span><span class="channelBadge floating" id="chatChannelBadge" hidden></span></span><div class="chatIdentity"><h3 id="chatTitle">Selecciona una conversación</h3><p id="chatSubtitle">Elige un cliente para ver el historial.</p></div><span class="chatStatusPill" id="chatStatusPill">—</span>${panelRedesignEnabled ? '<button class="chatCloseButton" id="chatCloseButton" type="button" onclick="window.innerWidth<=760?closeConversation():toggleConversationProfile()" aria-label="Ver información del cliente" aria-controls="conversationProfile" aria-expanded="false" title="Ver información del cliente">×</button>' : '<button class="chatCloseButton" id="chatCloseButton" type="button" onclick="closeConversation()" aria-label="Cerrar conversación" title="Cerrar conversación">×</button>'}</div>
             <div class="messages" id="messages"><div class="empty">Sin conversación seleccionada.</div></div>
             <div class="conversationAction">
               <section class="mobileCustomerNameCard"><h4>Nombre del cliente</h4><input id="mobileCustomerProfileName" maxlength="80" autocomplete="off" placeholder="Escribe el nombre" oninput="markMetaDirty()"><div class="nameSuggestion" id="mobileNameSuggestion" hidden><span>✦ Nextfor sugiere<strong id="mobileSuggestedCustomerName"></strong></span><button type="button" onclick="useSuggestedCustomerName(true)">Usar nombre</button></div><div class="mobileCustomerNameActions"><small id="mobileMetaHint">Confírmalo para recordarlo.</small><button class="ghostBtn" id="mobileSaveMetaBtn" type="button" onclick="saveCustomerMeta()">Guardar</button></div></section>
@@ -1752,7 +1784,7 @@ ${panelRedesignEnabled ? `
               <div class="statusLine" id="chatStatus" aria-live="polite">Listo.</div>
             </div>
           </section>
-          <aside class="column profileColumn"><div class="profile"><div class="profileIdentity"><span class="avatarChannelWrap"><span class="contactAvatar big" id="profileAvatar">—</span><span class="channelBadge floating large" id="profileChannelBadge" hidden></span></span><h3 id="profileName">Selecciona un cliente</h3><p id="profileContact">—</p><button class="copyContact" id="copyBtn" type="button" onclick="copyPhone()">Copiar número</button></div><section class="relationshipCard"><span id="relationshipEyebrow">Relación</span><div><strong id="relationshipValue">—</strong><small id="relationshipLabel"></small></div><p id="relationshipCopy">Selecciona una conversación para ver el valor que la IA está ayudando a construir.</p></section><div class="customerFacts" id="customerFacts"></div><section class="aiUnderstood"><span>✦ Lo que la IA entendió</span><strong id="aiIntent">Selecciona una conversación.</strong><div class="aiChips" id="aiChips"></div></section><section class="nameCard"><h4>Nombre del cliente</h4><input id="customerProfileName" maxlength="80" autocomplete="off" placeholder="Escribe el nombre" oninput="markMetaDirty()"><div class="nameSuggestion" id="nameSuggestion" hidden><span>✦ Nextfor sugiere<strong id="suggestedCustomerName"></strong></span><button type="button" onclick="useSuggestedCustomerName()">Usar nombre</button></div><p>Confírmalo o corrígelo. Nextfor lo recordará en futuras conversaciones.</p></section><section class="noteCard"><h4>Nota interna</h4><textarea id="customerNote" placeholder="Agrega contexto útil para tu equipo…" oninput="markMetaDirty()"></textarea><button class="ghostBtn" id="saveMetaBtn" type="button" onclick="saveCustomerMeta()">Guardar perfil</button><p id="metaHint">Selecciona una conversación.</p></section></div></aside>
+          <aside class="column profileColumn" id="conversationProfile" aria-label="Información del cliente">${panelRedesignEnabled ? '<button class="profileDrawerClose" type="button" onclick="toggleConversationProfile(false)" aria-label="Cerrar información del cliente">×</button>' : ''}<div class="profile"><div class="profileIdentity"><span class="avatarChannelWrap"><span class="contactAvatar big" id="profileAvatar">—</span><span class="channelBadge floating large" id="profileChannelBadge" hidden></span></span><h3 id="profileName">Selecciona un cliente</h3><p id="profileContact">—</p><button class="copyContact" id="copyBtn" type="button" onclick="copyPhone()">Copiar número</button></div><section class="relationshipCard"><span id="relationshipEyebrow">Relación</span><div><strong id="relationshipValue">—</strong><small id="relationshipLabel"></small></div><p id="relationshipCopy">Selecciona una conversación para ver el valor que la IA está ayudando a construir.</p></section><div class="customerFacts" id="customerFacts"></div><section class="aiUnderstood"><span>✦ Lo que la IA entendió</span><strong id="aiIntent">Selecciona una conversación.</strong><div class="aiChips" id="aiChips"></div></section><section class="nameCard"><h4>Nombre del cliente</h4><input id="customerProfileName" maxlength="80" autocomplete="off" placeholder="Escribe el nombre" oninput="markMetaDirty()"><div class="nameSuggestion" id="nameSuggestion" hidden><span>✦ Nextfor sugiere<strong id="suggestedCustomerName"></strong></span><button type="button" onclick="useSuggestedCustomerName()">Usar nombre</button></div><p>Confírmalo o corrígelo. Nextfor lo recordará en futuras conversaciones.</p></section><section class="noteCard"><h4>Nota interna</h4><textarea id="customerNote" placeholder="Agrega contexto útil para tu equipo…" oninput="markMetaDirty()"></textarea><button class="ghostBtn" id="saveMetaBtn" type="button" onclick="saveCustomerMeta()">Guardar perfil</button><p id="metaHint">Selecciona una conversación.</p></section></div></aside>
         </div>
       </section>
 
@@ -2799,7 +2831,7 @@ function showTab(name){
   if(name==="appointments")state.bot="appointments";
   if(name==="summary"||name==="conversations"||name==="orders"||name==="retargeting")state.bot="support";
   syncBotSidebar();
-  document.body.classList.remove("chat-open");
+  document.body.classList.remove("chat-open","profile-open");
   document.body.classList.toggle("conversations-view",name==="conversations");
   document.body.classList.toggle("appointment-view",name==="appointments");
   var supportModule=name==="summary"||name==="conversations"||name==="orders",setupModule=name==="setup"||name==="notifications",retargetingModule=name==="retargeting",appointmentsModule=name==="appointments";
@@ -2987,9 +3019,10 @@ function renderThreads(info){
   var previousGroup="",cards=items.map(function(item){var key=conversationKey(item),status=uiStatus(item),meta=statusMeta(status),nudge=conversationNudge(item),preview=item.last_text||"Sin mensajes",failed=item.last_delivery_status==="failed",group=state.filter==="all"?(status==="you"?"you":"all"):"",heading="";if(group&&group!==previousGroup){heading=group==="you"?'<div class="threadGroupTitle"><span>●</span> Para ti</div>':'<div class="threadGroupTitle all">Todas las conversaciones</div>';previousGroup=group;}var rawUnread=Number(item.unread_count||item.unread||0),unread=isFinite(rawUnread)&&rawUnread>0?'<span class="threadUnread">'+esc(Math.min(99,Math.floor(rawUnread)))+'</span>':"";return heading+'<button type="button" class="thread status-'+status+(key===state.selected?' active':'')+(failed?' deliveryFailed':'')+'" data-key="'+attr(key)+'" onclick="selectConversation(this.dataset.key)" aria-current="'+(key===state.selected?'true':'false')+'"><div class="threadMain"><span class="avatarChannelWrap"><span class="contactAvatar">'+esc(initialsFor(item))+'</span>'+channelBadge(item,true,false)+'</span><div class="threadIdentity"><div class="threadTop"><strong>'+esc(customerDisplay(item))+'</strong><time>'+esc(when(item.last_ts))+'</time></div><div class="threadPreviewRow"><p>'+esc(preview)+'</p>'+unread+'</div></div></div><div class="threadStatus"><span class="statusPill '+status+'">'+meta.icon+esc(meta.label)+'</span>'+(failed?'<small>Meta rechazó el envío</small>':(nudge?'<small>'+esc(nudge)+'</small>':''))+'</div></button>';}).join("");var dataWindow=state.data&&state.data.data_window||{},more=dataWindow.has_more?'<div class="loadOlderRow"><button class="ghostBtn" type="button" onclick="loadOlderConversations()" '+(state.historyLoading?'disabled':'')+'>'+(state.historyLoading?'Cargando…':'Cargar conversaciones anteriores')+'</button></div>':"",empty='<div class="conversationEmpty"><span class="conversationEmptyIcon">'+channelGlyph(state.conversationChannel==="all"?"whatsapp":state.conversationChannel)+'</span><strong>No hay conversaciones aquí</strong><p>Prueba otro estado, canal o término de búsqueda.</p></div>';box.innerHTML=intro+(cards||empty)+more;
 }
 function suggestedReply(item){var tags=item&&item.tags||[],value=((item&&item.last_text)||"").toLowerCase();if(tags.indexOf("garantia")>=0||/garant|reclamo|dañad|incomplet/.test(value))return "Hola, ya revisé tu caso y voy a ayudarte a resolverlo. ¿Me confirmas por favor el número del pedido y una foto del producto?";if(tags.indexOf("envio")>=0||/env[ií]o|pedido|entrega/.test(value))return "¡Hola! Ya revisé tu solicitud 🙌 Te confirmo la opción de envío para que podamos dejar todo listo hoy.";if(tags.indexOf("venta")>=0||/compr|quiero|interesa|disponible/.test(value))return "¡Hola! Ya revisé lo que buscas 🙌 Te confirmo disponibilidad y te ayudo a dejar la compra lista.";return "¡Hola! Soy del equipo de "+PANEL_CONTEXT.businessName+". Ya revisé tu conversación y te ayudo con mucho gusto.";}
-function selectConversation(key){state.selected=key;state.metaDirty=false;var item=findConversation(key);state.draftTags=item?(item.tags||[]).slice():[];state.guidedFor=key;state.guidedDraft=item&&uiStatus(item)==="you"?suggestedReply(item):"";renderThreads();renderChat();document.body.classList.add("chat-open");window.scrollTo(0,0);}
+function selectConversation(key){state.selected=key;state.metaDirty=false;var item=findConversation(key);state.draftTags=item?(item.tags||[]).slice():[];state.guidedFor=key;state.guidedDraft=item&&uiStatus(item)==="you"?suggestedReply(item):"";document.body.classList.remove("profile-open");renderThreads();renderChat();document.body.classList.add("chat-open");window.scrollTo(0,0);}
 function showNeedsYou(){state.filter="you";showTab("conversations");var item=state.conversations.find(function(row){return uiStatus(row)==="you";});if(item)selectConversation(conversationKey(item));}
-function closeConversation(){closeEmojiPickers();state.selected=null;state.metaDirty=false;state.guidedFor=null;state.guidedDraft="";document.body.classList.remove("chat-open");renderThreads();renderChat();window.scrollTo(0,0);}
+function toggleConversationProfile(force){var open=typeof force==="boolean"?force:!document.body.classList.contains("profile-open");if(!findConversation(state.selected))open=false;document.body.classList.toggle("profile-open",open);var button=document.getElementById("chatCloseButton");if(button)button.setAttribute("aria-expanded",open?"true":"false");}
+function closeConversation(){closeEmojiPickers();state.selected=null;state.metaDirty=false;state.guidedFor=null;state.guidedDraft="";document.body.classList.remove("chat-open","profile-open");renderThreads();renderChat();window.scrollTo(0,0);}
 function closeMobileChat(){closeConversation();}
 function aiUnderstanding(item){var tags=item&&item.tags||[],memory=item&&item.memory||{},value=((item&&item.last_text)||"").toLowerCase(),chips=[];if(tags.indexOf("garantia")>=0||/garant|reclamo|dañad|incomplet/.test(value))return {intent:"Reclamo o garantía — necesita seguimiento",chips:["Garantía","Prioridad"]};if(memory.purchase_stage==="confirmed_customer"){chips=["Cliente recurrente","Prioridad"];if((memory.interests||[])[0])chips.push(memory.interests[0]);return {intent:"Cliente con compra verificada — atender con contexto previo",chips:chips};}if(memory.purchase_stage==="payment_pending"||memory.purchase_stage==="order_handoff"){chips=["Cierre prioritario","Seguimiento"];if((memory.interests||[])[0])chips.push(memory.interests[0]);return {intent:"Proceso de compra avanzado — conviene dar seguimiento",chips:chips};}if(item&&item.priority==="high"){chips=["Prioridad","Intención de compra"];if((memory.interests||[])[0])chips.push(memory.interests[0]);return {intent:"Intención clara de compra detectada por la IA",chips:chips};}if(tags.indexOf("pendiente_pago")>=0||/pago|precio|descuento/.test(value))return {intent:"Consulta sobre pago o cierre de compra",chips:["Forma de pago","Seguimiento"]};if(tags.indexOf("envio")>=0||/env[ií]o|pedido|entrega/.test(value))return {intent:"Quiere confirmar envío o estado de pedido",chips:["Envío",channelLabelFor(item)]};if(tags.indexOf("venta")>=0||/compr|quiero|interesa|disponible|regalo/.test(value))return {intent:"Quiere comprar — la IA detectó una oportunidad",chips:["Oportunidad de venta",channelLabelFor(item)]};if(tags.indexOf("revisar")>=0)chips.push("Revisar");chips.push(channelLabelFor(item));return {intent:"Consulta general atendida por la IA",chips:chips};}
 function relationshipData(item){var memory=item&&item.memory||{},messages=(item.messages||[]).filter(function(message){return message.author!=="system";}).length,hasSale=(item.tags||[]).indexOf("venta")>=0;if(memory.purchase_stage==="confirmed_customer")return {eyebrow:"Cliente prioritario",value:"Recurrente",label:"compra verificada",copy:"La IA recuerda su contexto comercial para atenderlo de forma más personal."};if(item&&item.priority==="high")return {eyebrow:"Oportunidad prioritaria",value:"Alta",label:"intención de compra",copy:"La IA conservará el contexto útil y acompañará el proceso con mayor profundidad."};return hasSale?{eyebrow:"Oportunidad de relación",value:"Venta",label:"asistida por la IA",copy:"La IA entendió lo que busca y dejó el contexto listo para que tú cierres 🙌"}:{eyebrow:"Relación en construcción",value:messages,label:messages===1?"mensaje atendido":"mensajes atendidos",copy:"La IA conserva el contexto para que tu equipo no empiece desde cero."};}
@@ -3112,7 +3145,7 @@ function logoutCustomerPanel(){if(DEMO_MODE&&PANEL_REDESIGN_ENABLED){panelToast(
 function restorePanelLayoutFromHistory(){
   var tab=state.tab;
   try{var requested=new URL(location.href).searchParams.get("tab");if(["summary","conversations","appointments","plan","channels","setup","notifications","retargeting","tests"].includes(requested))tab=requested;}catch(_){}
-  document.body.classList.remove("chat-open","conversations-view","appointment-view");
+  document.body.classList.remove("chat-open","profile-open","conversations-view","appointment-view");
   showTab(tab||"summary");
 }
 window.addEventListener("pageshow",function(event){if(event.persisted)restorePanelLayoutFromHistory();});

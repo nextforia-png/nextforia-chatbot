@@ -123,7 +123,13 @@ assert(redesigned.includes('body.panel-redesign.conversations-view #panel-inbox{
 assert(redesigned.includes('body.panel-redesign.conversations-view .threads,'));
 assert(redesigned.includes('flex:1 1 0;min-height:0;max-height:none;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable'));
 assert(redesigned.includes('grid-template-rows:auto minmax(220px,1fr) auto'));
-assert(redesigned.includes('max-height:min(47vh,350px)'));
+assert(redesigned.includes('grid-template-columns:384px minmax(0,1fr)!important'));
+assert(!redesigned.includes('grid-template-columns:384px minmax(0,1fr) 300px!important'));
+assert(redesigned.includes('body.panel-redesign.conversations-view .guidedAction{display:none!important}'));
+assert(redesigned.includes('body.panel-redesign.conversations-view.profile-open .profileColumn'));
+assert(redesigned.includes('function toggleConversationProfile(force)'));
+assert(redesigned.includes('aria-label="Ver información del cliente"'));
+assert(redesigned.includes('class="profileDrawerClose"'));
 assert(redesigned.includes('body.panel-redesign.conversations-view .guidedAction>p{display:none}'));
 assert(redesigned.includes('body.panel-redesign.conversations-view.chat-open .chatColumn{display:grid!important;grid-template-rows:auto minmax(230px,1fr) auto'));
 assert(redesigned.includes('body.panel-redesign.conversations-view.chat-open .conversationAction{max-height:46dvh'));

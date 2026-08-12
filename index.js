@@ -42,6 +42,12 @@ const {
   InMemoryCustomerNotificationStore,
   createCustomerNotificationService
 } = require("./customer-notifications");
+const {
+  CUSTOMER_ORDER_STATE_TOOL,
+  CustomerOrderError,
+  InMemoryCustomerOrderStore,
+  createCustomerOrderService
+} = require("./customer-orders");
 const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
@@ -345,7 +351,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v366-staging-conversation-desktop-focus";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v367-staging-orders-functional";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -425,6 +431,10 @@ const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
+const CUSTOMER_ORDERS_V1_FLAG = String(process.env.CUSTOMER_ORDERS_V1_ENABLED || "").trim();
+const CUSTOMER_ORDERS_V1_ENABLED = CUSTOMER_ORDERS_V1_FLAG === "1" || (
+  CUSTOMER_ORDERS_V1_FLAG !== "0" && process.env.RENDER_SERVICE_NAME === "nextforia-chatbot-staging"
+);
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED =
   process.env.CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED === "1";
@@ -1076,6 +1086,23 @@ const persistentCustomerNotificationStore = {
   }
 };
 
+const persistentCustomerOrderStore = {
+  append: async function (record) {
+    const row = customerNotificationRecord(record, CUSTOMER_ORDER_STATE_TOOL, "CustomerOrderState", "__nextfor_order__:" + record.id);
+    row.ts = record.updated_at || record.created_at || row.ts;
+    row.sourceEventId = "customer-order:" + record.id + ":" + record.revision;
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(row);
+    else conversationLogs.push(row);
+    return record;
+  },
+  listTenant: async function (tenantId, limit) {
+    const rows = await customerNotificationTurns(CUSTOMER_ORDER_STATE_TOOL, tenantId, limit || 5000);
+    return rows.map(function (turn) {
+      return customerNotificationPayloadFromTurn(turn, CUSTOMER_ORDER_STATE_TOOL, "CustomerOrderState");
+    }).filter(Boolean);
+  }
+};
+
 let customerNotificationPushSender = null;
 if (WEB_PUSH_CONFIGURED) {
   webPush.setVapidDetails(WEB_PUSH_VAPID_SUBJECT, WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY);
@@ -1102,6 +1129,16 @@ const customerNotificationService = createCustomerNotificationService({
       tenant_id: notification && notification.tenant_id,
       error: String(error && error.message || error || "unknown").slice(0, 180)
     });
+  }
+});
+const customerOrderService = createCustomerOrderService({
+  store: SUPABASE_ENABLED ? persistentCustomerOrderStore : new InMemoryCustomerOrderStore(),
+  sendTracking: async function (order, trackingNumber) {
+    if (!order.conversation_id) throw new CustomerOrderError("conversation_required", "Este pedido no tiene una conversación asociada.", 409);
+    const message = "Tu pedido #" + order.order_number + " ya tiene guía 🚚\n\nNúmero de guía: " + trackingNumber + "\n\nPuedes guardarla para consultar el avance con la transportadora.";
+    const delivered = await sendText(order.conversation_id, message, { tenant_id: order.tenant_id });
+    if (delivered !== true) throw new CustomerOrderError("tracking_delivery_failed", "No pudimos entregar la guía en el canal del cliente. No se guardó como enviada.", 502);
+    await recordAdminEvent(order.conversation_id, "customer_order_tracking_sent", message, "ok", false, { tenantId: order.tenant_id });
   }
 });
 const metaWebhookInboxStore = CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED && SUPABASE_ENABLED && DATA_ENCRYPTION_KEY
@@ -2807,7 +2844,7 @@ function isShopifySessionStateTurn(turn) {
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
-  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
+  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|CustomerOrderState|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isSuperAdminAccessTurn(turn) ||
@@ -2823,6 +2860,7 @@ function isInternalAdminTurn(turn) {
     tools.includes(CUSTOMER_NOTIFICATION_TOOL) ||
     tools.includes(CUSTOMER_NOTIFICATION_READ_TOOL) ||
     tools.includes(CUSTOMER_PUSH_SUBSCRIPTION_TOOL) ||
+    tools.includes(CUSTOMER_ORDER_STATE_TOOL) ||
     tools.includes(SIGNATURE_TOOL) ||
     tools.includes(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
 }
@@ -5197,7 +5235,7 @@ async function executeSendPaymentLink(userId, input, stateId) {
   return { sent: true, method: input.method, amount, automated: isAutomated, next_action };
 }
 
-async function executeNotifyTeam(userId, stateId) {
+async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
   const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay checkout completo para notificar." };
@@ -5234,9 +5272,40 @@ async function executeNotifyTeam(userId, stateId) {
     "",
     "Pendiente: confirmar pago y despachar pedido."
   ].join("\n");
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const sourceEventId = cleanRuntimeText(runtime && (runtime.source_event_id || runtime.sourceEventId), 500) ||
+    cleanRuntimeText(state.order_source_event_id, 500) || crypto.randomUUID();
+  state.order_source_event_id = sourceEventId;
+  const orderId = state.order_id || customerOrderService.createId({
+    tenant_id: cleanTenant,
+    conversation_id: userId,
+    source_event_id: sourceEventId
+  });
+  state.order_id = orderId;
+  const order = await customerOrderService.create({
+    id: orderId,
+    order_number: "NX-" + orderId.slice(-6).toUpperCase(),
+    tenant_id: cleanTenant,
+    conversation_id: normalizeConversationUserId(userId),
+    channel: conversationChannel(userId),
+    name: d.nombre,
+    phone: d.telefono,
+    id_number: d.cedula,
+    address: d.direccion,
+    items: state.products.map(function (product) {
+      return { name: product.title, qty: 1, price: product.price_amount, product_url: product.product_url };
+    }),
+    shipping: 0,
+    currency,
+    payment: d.metodo_pago,
+    payment_note: "Verifica el pago o comprobante en la conversación antes de preparar.",
+    stage: "por_confirmar",
+    source_event_id: sourceEventId,
+    source: "bot_checkout"
+  });
   await notifyTeam(summary, userId);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
-  return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length };
+  return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length, order_id: order.id };
 }
 
 function customerHandoffNotificationId(tenantId, userId, reason, runtime) {
@@ -5823,7 +5892,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeSendPaymentLink(userId, toolUse.input, stateKey);
                 break;
               case "notify_sale_team":
-                result = await executeNotifyTeam(userId, stateKey);
+                result = await executeNotifyTeam(userId, stateKey, tenantId, conversationRuntime);
                 break;
               case "request_human_handoff":
               conversationTurnContext.set("handoff", true);
@@ -10235,6 +10304,15 @@ function customerBusinessHasAppointmentModule(business) {
   return ["agendamiento", "appointments", "appointment", "duo", "both"].includes(assignedBotId);
 }
 
+function customerBusinessHasOrdersModule(business) {
+  if (!CUSTOMER_ORDERS_V1_ENABLED) return false;
+  const planId = String(business && business.plan_id || "").trim().toLowerCase();
+  if (planId === "nextfor-tempo") return false;
+  if (["nextfor-uno", "nextfor-aura", "nextfor-atlas"].includes(planId)) return true;
+  const assignedBotId = String(business && business.assigned_bot_id || "").trim().toLowerCase();
+  return ["atencion-cliente", "customer-service", "customer_service", "support", "duo", "both"].includes(assignedBotId);
+}
+
 async function customerAppointmentBusinessForPanelAuth(auth) {
   if (!auth || auth.version !== 2) return customerBusinessForAuth(auth);
   try {
@@ -10713,6 +10791,7 @@ function customerPanelCapabilities(role) {
     intervene: level >= DASHBOARD_ROLES.agent,
     respond: level >= DASHBOARD_ROLES.agent,
     manage_notes_tags: level >= DASHBOARD_ROLES.agent,
+    manage_orders: level >= DASHBOARD_ROLES.agent,
     run_tests: level >= DASHBOARD_ROLES.admin,
     run_evaluation: level >= DASHBOARD_ROLES.admin,
     view_operational_settings: level >= DASHBOARD_ROLES.admin,
@@ -15408,6 +15487,65 @@ app.get("/admin/panel/demo-data", (req, res) => {
   res.json(buildCustomerPanelDemoSnapshot());
 });
 
+app.get("/admin/panel/orders-data", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try { business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId)); }
+  catch (_) {}
+  if (!customerBusinessHasOrdersModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
+  try {
+    const orders = await customerOrderService.list(tenantId, 300);
+    res.json({
+      ok: true,
+      source: SUPABASE_ENABLED ? "tenant_supabase" : "memory_test_only",
+      business: { id: business.id, name: business.company_name || business.name },
+      can_manage: !!customerPanelCapabilities(auth.role).manage_orders,
+      orders
+    });
+  } catch (error) {
+    console.error("customer orders list error:", error.message);
+    res.status(503).json({ ok: false, error: "orders_unavailable" });
+  }
+});
+
+app.post("/admin/panel/orders/action", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try { business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId)); }
+  catch (_) {}
+  if (!customerBusinessHasOrdersModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
+  const body = req.body || {};
+  try {
+    const order = await customerOrderService.action(
+      tenantId,
+      body.order_id,
+      body.action,
+      { tracking_number: body.tracking_number },
+      auth.email || auth.username || auth.name || "customer_panel"
+    );
+    res.json({ ok: true, order });
+  } catch (error) {
+    const status = error instanceof CustomerOrderError ? error.status : 503;
+    res.status(status).json({ ok: false, error: error.code || "order_action_failed", message: error.message });
+  }
+});
+
 app.get("/admin/panel/appointments-data", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -16374,7 +16512,7 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
 
 app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
-  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  const requestedTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   const loginTarget = "/admin/panel?tab=" + requestedTab;
   if (!auth.ok) {
     if (CUSTOMER_ACCESS_V2_ENABLED) res.redirect("/admin/login?next=" + encodeURIComponent(loginTarget));
@@ -16416,9 +16554,10 @@ app.get("/admin/panel", async (req, res) => {
   const channelConnectionsVisibleForCustomer = auth.version === 2
     ? customerChannelConnectionsVisibleForBusiness(panelBusinessContext)
     : customerChannelConnectionsVisibleForAuth(auth);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (paymentGateRequired) initialTab = "plan";
   if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "setup";
+  if (initialTab === "orders" && !customerBusinessHasOrdersModule(panelBusinessContext)) initialTab = panelBusinessContext && customerBusinessHasAppointmentModule(panelBusinessContext) ? "appointments" : "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -16432,6 +16571,8 @@ app.get("/admin/panel", async (req, res) => {
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     paymentGateRequired,
     channelConnectionsV1Enabled: channelConnectionsVisibleForCustomer,
+    ordersV1Enabled: customerBusinessHasOrdersModule(panelBusinessContext),
+    ordersPath: "/admin/panel/orders-data",
     setupPath: auth.version === 2 ? null : undefined,
     healthPath: auth.version === 2 ? null : undefined,
     botVersion: BOT_VERSION

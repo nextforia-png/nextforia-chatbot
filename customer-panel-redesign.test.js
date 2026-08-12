@@ -49,7 +49,7 @@ function renderCustomerPanelToString(initialTab) {
   return html;
 }
 
-function renderTenant(planId, initialTab) {
+function renderTenant(planId, initialTab, ordersV1Enabled) {
   process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = "true";
   let html = "";
   const res = {
@@ -63,6 +63,7 @@ function renderTenant(planId, initialTab) {
     initialTab: initialTab || "plan",
     demoMode: false,
     channelConnectionsV1Enabled: true,
+    ordersV1Enabled: ordersV1Enabled !== false,
     botVersion: "v-redesign-test",
     tenantContext: {
       id: "tenant-" + planId,
@@ -185,9 +186,16 @@ const uno = renderTenant("nextfor-uno");
 assert(uno.includes("Nextfor Uno"));
 assert(uno.includes("/admin/assets/lumen-plan-uno.png"));
 assert(uno.includes("1 bot entrenado y listo"));
-assert(!uno.includes('id="nav-orders"'));
-assert(!uno.includes('id="panel-orders"'));
+assert(uno.includes('id="nav-orders"'));
+assert(uno.includes('id="panel-orders"'));
 assert(!uno.includes('id="nav-appointments"'));
+
+const aura = renderTenant("nextfor-aura");
+assert(aura.includes("Nextfor Aura"));
+assert(aura.includes("1 bot entrenado y listo"));
+assert(aura.includes('id="nav-orders"'));
+assert(aura.includes('id="panel-orders"'));
+assert(!aura.includes('id="nav-appointments"'));
 
 const tempo = renderTenant("nextfor-tempo", "summary");
 assert(tempo.includes("Nextfor Tempo"));
@@ -202,7 +210,12 @@ assert(atlas.includes("Nextfor Atlas"));
 assert(atlas.includes("/admin/assets/lumen-plan-atlas.png"));
 assert(atlas.includes("2 bots entrenados y listos"));
 assert(atlas.includes('id="nav-appointments"'));
-assert(!atlas.includes('id="nav-orders"'));
+assert(atlas.includes('id="nav-orders"'));
+
+const auraOrdersOff = renderTenant("nextfor-aura", "orders", false);
+assert(!auraOrdersOff.includes('id="nav-orders"'));
+assert(!auraOrdersOff.includes('id="panel-orders"'));
+assert(redesigned.includes('.ordersView,.panel-redesign .ordersToolbar,.panel-redesign .ordersShell,.panel-redesign .orderListPane,.panel-redesign .orderDetailPane{width:100%;max-width:100%;min-width:0}'));
 
 delete process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED;
 delete process.env.RENDER_SERVICE_NAME;

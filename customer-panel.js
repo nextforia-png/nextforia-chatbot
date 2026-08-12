@@ -1685,6 +1685,57 @@ ${panelRedesignEnabled ? `
   body.panel-redesign.conversations-view.chat-open .composerRow textarea{min-height:42px;padding:9px 11px}
   body.panel-redesign.conversations-view.chat-open .statusLine{min-height:13px;padding-top:2px}
 }
+/* Orders layout repair: preserves the existing data/actions while matching the approved master-detail design. */
+.panel-redesign .ordersToolbar{padding:2px 4px 0;border:0;border-radius:0;background:transparent;box-shadow:none}
+.panel-redesign .ordersContext{gap:7px}.panel-redesign .ordersContext span{font-size:12px}.panel-redesign .ordersContext strong{max-width:720px;font-size:14px;line-height:1.45}
+.panel-redesign .ordersToday{align-self:end}.panel-redesign .ordersToday span{font-size:11px}.panel-redesign .ordersToday strong{font-size:30px;line-height:1.05}
+.panel-redesign .orderFilters{display:flex;gap:10px;width:100%;max-width:100%;padding:0 0 6px;background:transparent;border-radius:0}
+.panel-redesign .orderFilters button{flex:0 0 auto;height:44px;padding:0 17px;border:1.5px solid #D9E2ED;border-radius:999px;background:#fff;color:#172746;font-size:13px;box-shadow:none}
+.panel-redesign .orderFilters button.active{border-color:#0A1836;background:#0A1836;color:#fff;box-shadow:none}.panel-redesign .orderFilters button.active b{background:rgba(255,255,255,.18);color:#fff}
+.panel-redesign .ordersShell{gap:16px;border:0;border-radius:0;background:transparent;box-shadow:none;overflow:hidden}
+.panel-redesign .orderListPane{border:0;background:transparent}.panel-redesign .orderListHead{display:none}
+.panel-redesign .orderRows{height:100%;padding:2px 8px 8px 2px;display:flex;flex-direction:column;gap:11px;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin}
+.panel-redesign .orderRow{flex:0 0 auto;min-height:116px;padding:17px 18px;align-items:flex-start;border:1.5px solid #DCE4EE;border-radius:18px;background:#fff;box-shadow:0 7px 18px rgba(10,24,54,.05)}
+.panel-redesign .orderRow:hover{border-color:#8FD8FB;background:#F9FDFF}.panel-redesign .orderRow.active{border-color:#0EA5EF;background:#fff;box-shadow:0 0 0 3px rgba(14,165,239,.1)}
+.panel-redesign .orderAvatar{width:54px;height:54px;flex-basis:54px;border-radius:15px;font-size:15px}.panel-redesign .orderAvatar i{width:21px;height:21px}
+.panel-redesign .orderRowMain{gap:8px;padding-top:1px}.panel-redesign .orderRowMain>span{align-items:flex-start;gap:10px}.panel-redesign .orderRowMain strong{min-width:0;font-size:14px;line-height:1.28;overflow-wrap:anywhere}.panel-redesign .orderRowMain b{flex:0 0 auto;font-size:14px;line-height:1.28;white-space:nowrap}
+.panel-redesign .orderRowMain small{font-size:11.5px;line-height:1.35}.panel-redesign .orderStage{max-width:100%;min-height:25px;padding:5px 10px;font-size:10.5px;line-height:1.25;white-space:normal}
+.panel-redesign .orderDetailPane{min-width:0;padding:25px 28px 44px;border:1px solid #DCE4EE!important;border-radius:20px;background:#fff;overflow-x:hidden!important;overflow-y:auto!important;box-shadow:0 10px 28px rgba(10,24,54,.07);scrollbar-width:thin}
+.panel-redesign .orderDetailHead{flex-wrap:wrap;row-gap:13px}.panel-redesign .orderDetailHead>div:last-child{flex:0 0 auto}.panel-redesign .orderCustomer{min-width:0}.panel-redesign .orderCustomer>div{min-width:0}.panel-redesign .orderDetailHead h3{max-width:100%;font-size:27px;line-height:1.2;overflow-wrap:anywhere}
+.panel-redesign .orderChatLink{width:auto!important;min-width:108px;height:36px!important;padding:0 13px!important;white-space:nowrap}
+.panel-redesign .orderStepper{margin:26px 4px 14px}.panel-redesign .orderStepper>div{min-width:0}.panel-redesign .orderStepper span{max-width:100%;line-height:1.2;text-align:center;overflow-wrap:anywhere}
+.panel-redesign .orderDetailGrid{grid-template-columns:1fr;gap:12px}.panel-redesign .orderDetailGrid .orderProducts,.panel-redesign .orderDetailGrid .orderDetailCard{height:auto}
+.panel-redesign .orderProducts,.panel-redesign .orderDetailCard,.panel-redesign .orderShippingCard,.panel-redesign .orderTrackingCard{min-width:0;padding:19px;border-radius:15px}
+.panel-redesign .orderProducts>div{align-items:flex-start;padding:9px 0;font-size:13px;line-height:1.35}.panel-redesign .orderProducts>div span{min-width:0;overflow-wrap:anywhere}.panel-redesign .orderProducts>div strong{flex:0 0 auto;white-space:nowrap}.panel-redesign .orderProducts .orderTotal{font-size:17px}
+.panel-redesign .orderPayment strong{display:block;font-size:16px;line-height:1.35;overflow-wrap:anywhere}.panel-redesign .orderPayment p{font-size:12.5px;line-height:1.5}
+.panel-redesign .orderShippingCard>header{align-items:flex-start;flex-wrap:wrap}.panel-redesign .orderShippingCard>header>div{min-width:0}.panel-redesign .orderShippingCard>header>div>strong{font-size:18px;line-height:1.25;overflow-wrap:anywhere}.panel-redesign .orderShippingCard>header button{width:auto!important;height:36px!important;min-width:105px;padding:0 13px!important;white-space:nowrap}
+.panel-redesign .orderShippingGrid{gap:9px;margin-top:15px}.panel-redesign .orderShippingGrid button{width:100%!important;height:auto!important;min-height:70px;padding:12px 54px 12px 13px!important;align-content:center;overflow:hidden}
+.panel-redesign .orderShippingGrid span{font-size:9px;line-height:1.2}.panel-redesign .orderShippingGrid strong{overflow:visible;font-size:12.5px;line-height:1.35;text-overflow:clip;white-space:normal;overflow-wrap:anywhere}.panel-redesign .orderShippingGrid i{right:13px;font-size:9px;white-space:nowrap}
+.panel-redesign .orderTrackingCard{grid-template-columns:minmax(210px,.75fr) minmax(0,1.25fr);gap:18px}.panel-redesign .orderTrackingCard>div:first-child{min-width:0}.panel-redesign .orderTrackingCard strong{line-height:1.35;overflow-wrap:anywhere}.panel-redesign .orderTrackingCard p{font-size:11px;line-height:1.45}
+.panel-redesign .orderTrackingForm{min-width:0;grid-template-columns:minmax(0,1fr) auto;gap:9px}.panel-redesign .orderTrackingForm input{width:100%;height:46px;font-size:13px}.panel-redesign .orderTrackingForm button{width:auto!important;min-width:126px;height:46px!important;padding:0 16px!important;font-size:11px;white-space:nowrap}
+.panel-redesign .orderDetailActions{display:grid;grid-template-columns:1fr;gap:10px;margin-top:16px}.panel-redesign .orderDetailActions button,.panel-redesign .orderDetailActions button.danger{width:100%!important;min-height:50px;height:auto!important;padding:12px 18px!important;line-height:1.25;white-space:normal}.panel-redesign .orderDetailActions button.danger{flex-basis:auto}
+.panel-redesign .orderTransportSoon{height:auto!important;min-height:46px;padding:10px 14px!important;flex-wrap:wrap}.panel-redesign .orderCompleteMessage{min-height:50px}
+.panel-redesign .orderRows::-webkit-scrollbar,.panel-redesign .orderDetailPane::-webkit-scrollbar{width:10px}.panel-redesign .orderRows::-webkit-scrollbar-thumb,.panel-redesign .orderDetailPane::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:99px;background:rgba(100,114,137,.28);background-clip:content-box}.panel-redesign .orderRows::-webkit-scrollbar-thumb:hover,.panel-redesign .orderDetailPane::-webkit-scrollbar-thumb:hover{background-color:rgba(100,114,137,.45)}
+@media(min-width:881px){
+  body.panel-redesign.orders-view .content{padding-bottom:0}
+  body.panel-redesign.orders-view .ordersView{height:100%;grid-template-rows:auto auto minmax(0,1fr);gap:14px;overflow:hidden}
+  body.panel-redesign.orders-view .ordersShell{height:100%!important;min-height:0!important;grid-template-columns:376px minmax(0,1fr);align-items:stretch}
+  body.panel-redesign.orders-view .orderListPane,body.panel-redesign.orders-view .orderDetailPane{height:100%;min-height:0}
+}
+@media(min-width:881px) and (max-width:1080px){body.panel-redesign.orders-view .ordersShell{grid-template-columns:330px minmax(0,1fr)}}
+@media(max-width:880px){
+  .panel-redesign .ordersToolbar{padding:14px 15px;border:1px solid #DFE6F0;border-radius:16px;background:#fff;box-shadow:var(--shadow-soft)}
+  .panel-redesign .ordersToday strong{font-size:22px}.panel-redesign .orderFilters{gap:8px}.panel-redesign .orderFilters button{height:42px;padding:0 14px}
+  .panel-redesign .ordersShell{gap:0;border:1px solid #DFE6F0;border-radius:18px;background:#fff;box-shadow:var(--shadow-soft);overflow:hidden}
+  .panel-redesign .orderListPane{background:#F8FAFC}.panel-redesign .orderRows{height:auto;padding:12px;gap:10px;overflow:visible}.panel-redesign .orderRow{min-height:108px;padding:15px;border-radius:16px}
+  .panel-redesign .orderDetailPane{border:0!important;border-radius:0;background:#fff;box-shadow:none;overflow:visible!important;padding:18px 15px 100px}
+  .panel-redesign .orderDetailHead>div:last-child{width:auto}.panel-redesign .orderDetailGrid,.panel-redesign .orderShippingGrid,.panel-redesign .orderTrackingCard{grid-template-columns:1fr}
+  .panel-redesign .orderTrackingForm{grid-template-columns:1fr}.panel-redesign .orderTrackingForm button{width:100%!important}.panel-redesign .orderDetailActions{grid-template-columns:1fr}
+}
+@media(max-width:520px){
+  .panel-redesign .orderDetailHead{display:grid;grid-template-columns:1fr}.panel-redesign .orderDetailHead>div:last-child{justify-items:start}.panel-redesign .orderChatLink{min-width:0}
+  .panel-redesign .orderShippingGrid{grid-template-columns:1fr}.panel-redesign .orderRowMain>span{display:grid;gap:3px}.panel-redesign .orderRowMain b{font-size:13px}.panel-redesign .orderDetailHead h3{font-size:23px}
+}
 @media(max-width:420px){.panel-redesign .metricRow{grid-template-columns:1fr}.panel-redesign .metric{min-height:150px}}
 @media(prefers-reduced-motion:reduce){.panel-redesign *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
 ` : ""}

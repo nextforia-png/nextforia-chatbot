@@ -216,6 +216,10 @@ const auraOrdersOff = renderTenant("nextfor-aura", "orders", false);
 assert(!auraOrdersOff.includes('id="nav-orders"'));
 assert(!auraOrdersOff.includes('id="panel-orders"'));
 assert(redesigned.includes('.ordersView,.panel-redesign .ordersToolbar,.panel-redesign .ordersShell,.panel-redesign .orderListPane,.panel-redesign .orderDetailPane{width:100%;max-width:100%;min-width:0}'));
+assert(redesigned.includes('Orders layout repair'), 'orders visual repair styles must remain present');
+assert(redesigned.includes('.orderShippingGrid button{width:100%!important;height:auto!important;min-height:70px'), 'shipping fields must grow instead of clipping values');
+assert(redesigned.includes('.orderDetailPane{min-width:0;padding:25px 28px 44px'), 'order detail must keep its independent non-overflowing scroller');
+assert(redesigned.includes('.orderDetailActions{display:grid;grid-template-columns:1fr'), 'order actions must stack without overlapping');
 
 delete process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED;
 delete process.env.RENDER_SERVICE_NAME;

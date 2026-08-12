@@ -70,7 +70,7 @@ function whatsappEmbeddedListenerHarness(panel) {
       whatsappConnecting: true,
       whatsappEmbedded: {
         completing: false,
-        config: { configuration_id: "config-v4" },
+        config: { configuration_id: "config-v4", onboarding_mode: "cloud_api" },
         code: "embedded-code",
         session: null,
         sessionTimer: "session-timer"
@@ -156,6 +156,7 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
       META_APP_ID: "123456789",
       META_APP_SECRET: "channel-e2e-meta-app-secret-value",
       META_WHATSAPP_CONFIG_ID: "channel-e2e-whatsapp-config",
+      META_WHATSAPP_COEXISTENCE_CONFIG_ID: "channel-e2e-whatsapp-coexistence-config",
       META_GRAPH_VERSION: "v23.0",
       SUPABASE_URL: "",
       SUPABASE_KEY: ""
@@ -185,26 +186,27 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(panel.includes('id="connectionHubSummary"'));
     assert(panel.includes('id="channelConnectionCards"'));
     assert(panel.includes('id="commerceConnectorCards"'));
-    assert(panel.includes("Conectar WhatsApp"));
+    assert(panel.includes("Conectar número nuevo"));
+    assert(panel.includes("Conservar mi WhatsApp Business"));
     assert(panel.includes("Cancelar intento"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/attempt"));
     assert(!panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(!panel.includes("activateWhatsApp("));
     assert(panel.includes("if(channel===\"whatsapp\"&&(state.whatsappConnecting||state.whatsappEmbedded))return"));
-    assert(panel.includes("extras:{}"));
-    assert(!panel.includes("sessionInfoVersion"));
+    assert(panel.includes('extras:config.onboarding_mode==="coexistence"?'));
+    assert(panel.includes('sessionInfoVersion:"3"}:{}'));
+    assert(panel.includes('sessionInfoVersion:"3"'));
     assert(panel.includes('"FINISH_ONLY_WABA"'));
     assert(panel.includes('"FINISH_GRANT_ONLY_API_ACCESS"'));
     assert(panel.includes("WHATSAPP_VERIFY_WINDOW_MS=120000"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/verify"));
     assert(panel.includes("metaSdkPromise=null"));
-    assert(!panel.includes("featureType=\"whatsapp_business_app_onboarding\""));
-    assert(panel.includes('connectChannel(&quot;whatsapp&quot;)'));
-    assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
-    assert(!panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
+    assert(panel.includes('featureType:"whatsapp_business_app_onboarding"'));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
     assert(panel.includes('connection&&connection.status==="connected"'));
-    assert(panel.includes('embeddedEvent==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
-    assert(!panel.includes('coexistence:payload.event==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"'));
+    assert(panel.includes('FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'));
+    assert(panel.includes('coexistence:eventMode==="coexistence"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));
     assert(!panel.includes('id="whatsappRegistrationPin"'));
     assert(!panel.includes("JSON.stringify({pin:pin})"));
@@ -227,6 +229,36 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert.strictEqual(finishHarness.context.state.whatsappEmbedded.session.onboarding_event, "FINISH");
     assert.deepStrictEqual(finishHarness.calls.clears, ["session-timer"]);
     assert.strictEqual(finishHarness.calls.completes, 1);
+
+    const coexistenceHarness = whatsappEmbeddedListenerHarness(panel);
+    coexistenceHarness.context.state.whatsappEmbedded.config.onboarding_mode = "coexistence";
+    coexistenceHarness.listener({
+      origin: "https://business.facebook.com",
+      data: {
+        type: "WA_EMBEDDED_SIGNUP",
+        event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+        data: { waba_id: "waba-coexistence", business_id: "business-coexistence" }
+      }
+    });
+    assert.strictEqual(coexistenceHarness.context.state.whatsappEmbedded.session.waba_id, "waba-coexistence");
+    assert.strictEqual(coexistenceHarness.context.state.whatsappEmbedded.session.onboarding_event,
+      "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING");
+    assert.strictEqual(coexistenceHarness.context.state.whatsappEmbedded.session.coexistence, true);
+    assert.strictEqual(coexistenceHarness.context.state.whatsappEmbedded.session.is_wa_login_user, true);
+    assert.strictEqual(coexistenceHarness.calls.completes, 1);
+
+    const modeMismatchHarness = whatsappEmbeddedListenerHarness(panel);
+    modeMismatchHarness.listener({
+      origin: "https://business.facebook.com",
+      data: {
+        type: "WA_EMBEDDED_SIGNUP",
+        event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+        data: { waba_id: "waba-wrong-mode" }
+      }
+    });
+    assert.strictEqual(modeMismatchHarness.context.state.whatsappEmbedded, null);
+    assert.strictEqual(modeMismatchHarness.calls.completes, 0);
+    assert.strictEqual(modeMismatchHarness.calls.messages[0].type, "error");
 
     const finishOnlyWabaHarness = whatsappEmbeddedListenerHarness(panel);
     finishOnlyWabaHarness.listener({
@@ -376,10 +408,11 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
       body: JSON.stringify({ tags: ["vip"], note: "Solo Empresa A", name: "Cliente A" })
     });
     assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.meta.note, "Solo Empresa A");
     response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
-    assert(JSON.stringify(body).includes("Solo Empresa A"));
     response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userB.cookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
@@ -426,6 +459,30 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     });
     assert.strictEqual(response.status, 403);
 
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/attempt", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual((await response.json()).connection.status, "not_connected");
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://nextforia.com",
+        "x-nextforia-panel-origin": "https://nextforia.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "nextforia.com",
+        cookie: ravCustomer.cookie
+      },
+      body: JSON.stringify({ onboarding_mode: "coexistence" })
+    });
+    assert.strictEqual(response.status, 200, "the customer must be able to choose WhatsApp Business coexistence");
+    body = await response.json();
+    assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-coexistence-config");
+    assert.strictEqual(body.embedded_signup.onboarding_mode, "coexistence");
+    assert.strictEqual(body.embedded_signup.flow, "whatsapp_business_app_coexistence");
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/attempt", {
       method: "DELETE",
       headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie }

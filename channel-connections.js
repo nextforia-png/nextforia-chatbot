@@ -291,14 +291,23 @@ function publicConnection(record, options) {
   const attemptStatus = cleanText(safe.onboarding_attempt_status, 80).toLowerCase();
   const attemptTerminal = ["completed", "cancelled"].includes(attemptStatus);
   const attemptActive = safe.channel === "whatsapp" && !!safe.onboarding_attempt_id && !attemptTerminal;
+  const coexistenceConfirmed = safe.channel === "whatsapp" && safe.coexistence_confirmed === true;
+  safe.whatsapp_onboarding_mode = safe.channel === "whatsapp"
+    ? coexistenceConfirmed ? "coexistence" : hasStoredCredentials || attemptActive ? "cloud_api" : null
+    : null;
   safe.onboarding_attempt_active = attemptActive;
   safe.onboarding_attempt_stage = attemptActive ? attemptStatus || "awaiting_meta" : null;
   safe.cancel_attempt_available = attemptActive && (
     !safe.onboarding_attempt_registration_requested_at ||
+    coexistenceConfirmed ||
     ["registration_rejected", "reconciliation_exhausted"].includes(attemptStatus)
   );
   safe.onboarding_attempt_message = attemptActive
-    ? attemptStatus === "registration_rejected"
+    ? coexistenceConfirmed
+      ? attemptStatus === "failed"
+        ? customerActivationError(safe.onboarding_attempt_last_error) || "Meta no pudo terminar la coexistencia. Comprueba la conexión o desconéctala para intentarlo de nuevo."
+        : "Meta está terminando la coexistencia. Tu WhatsApp Business permanece activo y Nextfor solo comprobará la conexión."
+      : attemptStatus === "registration_rejected"
       ? "Meta rechazó el registro de este número. Puedes descartar este intento y conectar un número diferente; Nextfor no repetirá el anterior."
       : attemptStatus === "reconciliation_exhausted"
         ? "No pudimos confirmar este número dentro de la ventana segura. Puedes descartar el intento y conectar un número diferente."
@@ -920,6 +929,7 @@ class InMemoryChannelConnectionStore {
     const cancellable = row && row.onboarding_attempt_id === cleanAttempt &&
       whatsappAttemptRecordIsActive(row) && (
         !row.onboarding_attempt_registration_requested_at ||
+        row.coexistence_confirmed === true ||
         ["registration_rejected", "reconciliation_exhausted"].includes(
           cleanText(row.onboarding_attempt_status, 80).toLowerCase()
         )
@@ -1480,7 +1490,7 @@ class SupabaseChannelConnectionStore {
             channel: "eq.whatsapp",
             onboarding_attempt_id: "eq." + cleanAttempt,
             onboarding_attempt_status: "not.in.(completed,cancelled)",
-            or: "(onboarding_attempt_registration_requested_at.is.null,onboarding_attempt_status.eq.registration_rejected,onboarding_attempt_status.eq.reconciliation_exhausted)"
+            or: "(onboarding_attempt_registration_requested_at.is.null,coexistence_confirmed.eq.true,onboarding_attempt_status.eq.registration_rejected,onboarding_attempt_status.eq.reconciliation_exhausted)"
           },
           headers: Object.assign({ Prefer: "return=representation" }, this.headers),
           timeout: 8000
@@ -2315,14 +2325,30 @@ class MetaChannelProvider {
         session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
         session.is_wa_login_user === true
       );
-      if (onboardingMode !== "cloud_api" || coexistenceEventConfirmed || phone.is_on_biz_app === true) {
+      const isOnBusinessApp = phone.is_on_biz_app === true;
+      if (onboardingMode === "coexistence") {
+        if (!coexistenceEventConfirmed) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_event_required",
+            422,
+            "Meta did not confirm WhatsApp Business App onboarding for this attempt"
+          );
+        }
+        if (!isOnBusinessApp) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_number_required",
+            409,
+            "Coexistence requires a number that remains active in WhatsApp Business App"
+          );
+        }
+      } else if (coexistenceEventConfirmed || isOnBusinessApp) {
         throw new ChannelConnectionError(
-          "whatsapp_business_app_number_not_supported",
+          "whatsapp_onboarding_mode_mismatch",
           409,
-          "This release only accepts a new phone number that is not active in WhatsApp or WhatsApp Business App"
+          "This WhatsApp Business App number must be connected with the coexistence option"
         );
       }
-      if (String(phone.status || "").toUpperCase() === "CONNECTED") {
+      if (onboardingMode === "cloud_api" && String(phone.status || "").toUpperCase() === "CONNECTED") {
         throw new ChannelConnectionError(
           "whatsapp_phone_already_connected",
           409,
@@ -2337,9 +2363,9 @@ class MetaChannelProvider {
         whatsapp_business_account_id: wabaId,
         phone_number_id: phoneNumberId,
         access_token: accessToken,
-        onboarding_mode: "cloud_api",
-        coexistence: false,
-        coexistence_event_confirmed: false
+        onboarding_mode: onboardingMode,
+        coexistence: onboardingMode === "coexistence",
+        coexistence_event_confirmed: onboardingMode === "coexistence" && coexistenceEventConfirmed === true
       };
     } catch (error) {
       if (error instanceof ChannelConnectionError) throw error;
@@ -2920,12 +2946,15 @@ function createChannelConnectionService(options) {
   }
 
   function whatsappCredentialFromCandidate(candidate) {
+    const onboardingMode = cleanWhatsAppOnboardingMode(candidate && candidate.onboarding_mode) ||
+      (candidate && candidate.coexistence === true ? "coexistence" : "cloud_api");
+    const coexistence = onboardingMode === "coexistence" && candidate && candidate.coexistence === true;
     return {
       access_token: cleanText(candidate && candidate.access_token, 4096),
       login_type: null,
-      onboarding_mode: "cloud_api",
-      coexistence: false,
-      coexistence_event_confirmed: false,
+      onboarding_mode: onboardingMode,
+      coexistence,
+      coexistence_event_confirmed: coexistence && candidate.coexistence_event_confirmed === true,
       registration_submitted: candidate && candidate.registration_submitted === true,
       meta_business_id: cleanText(candidate && candidate.meta_business_id, 240) || null,
       whatsapp_business_account_id: cleanText(candidate && candidate.whatsapp_business_account_id, 240),
@@ -3006,6 +3035,7 @@ function createChannelConnectionService(options) {
       credentials_ciphertext: encryptedCredential(credential),
       credential_source: "oauth",
       registration_pin_required: false,
+      coexistence_confirmed: credential.coexistence_event_confirmed === true,
       protected_legacy: false,
       onboarding_attempt_status: "completed",
       onboarding_attempt_updated_at: connectedAt,
@@ -3049,16 +3079,26 @@ function createChannelConnectionService(options) {
         if (!cleanText(input && input.code, 2000)) {
           throw new ChannelConnectionError("invalid_authorization", 422, "Meta authorization code is missing");
         }
+        const requestedOnboardingMode = cleanWhatsAppOnboardingMode(input && input.session && input.session.onboarding_mode) || "cloud_api";
         candidate = await provider.prepareEmbeddedWhatsApp(
           input.code,
-          Object.assign({}, input.session || {}, { onboarding_mode: "cloud_api" }),
+          Object.assign({}, input.session || {}, { onboarding_mode: requestedOnboardingMode }),
           { redirectUri: input.redirect_uri }
         );
-        if (candidate.coexistence === true || candidate.coexistence_event_confirmed === true) {
+        const candidateOnboardingMode = cleanWhatsAppOnboardingMode(candidate && candidate.onboarding_mode) || "cloud_api";
+        if (candidateOnboardingMode !== requestedOnboardingMode) {
           throw new ChannelConnectionError(
-            "whatsapp_business_app_number_not_supported",
+            "whatsapp_onboarding_mode_mismatch",
             409,
-            "Use a new phone number that is not active in WhatsApp Business App"
+            "Meta returned a different WhatsApp onboarding mode than the signed attempt"
+          );
+        }
+        const coexistence = candidateOnboardingMode === "coexistence";
+        if (coexistence && (candidate.coexistence !== true || candidate.coexistence_event_confirmed !== true)) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_event_required",
+            422,
+            "Meta did not confirm WhatsApp Business App coexistence"
           );
         }
         await assertAssetAvailable(tenantId, "whatsapp", candidate);
@@ -3067,19 +3107,27 @@ function createChannelConnectionService(options) {
         const previousRegistrationAt = new Date(record.whatsapp_last_registration_requested_at || 0).getTime();
         const withinRegistrationWindow = Number.isFinite(previousRegistrationAt) &&
           new Date(now()).getTime() - previousRegistrationAt < WHATSAPP_REGISTRATION_COOLDOWN_MS;
-        if (phoneNumberId && phoneNumberId === previousPhoneNumberId && withinRegistrationWindow) {
+        if (!coexistence && phoneNumberId && phoneNumberId === previousPhoneNumberId && withinRegistrationWindow) {
           throw new ChannelConnectionError(
             "whatsapp_activation_rate_limited",
             429,
             "Nextfor already submitted registration for this phone during the last 72 hours"
           );
         }
-        candidate.registration_pin = String(crypto.randomInt(100000, 1000000));
+        if (!coexistence) candidate.registration_pin = String(crypto.randomInt(100000, 1000000));
         candidate.registration_submitted = false;
+        const metaManagedRegistrationAt = coexistence ? iso(now()) : null;
         const bound = await store.bindWhatsAppAttemptAsset(tenantId, attemptId, {
           status: "connecting",
           webhook_status: "not_configured",
-          onboarding_attempt_status: "asset_validated",
+          coexistence_confirmed: coexistence,
+          onboarding_attempt_status: coexistence ? "registered" : "asset_validated",
+          // In coexistence Meta completes registration inside Embedded Signup.
+          // These timestamps make the durable verifier/reconciler treat that
+          // provider-managed step as accepted while Nextfor still never calls
+          // POST /{phone_number_id}/register.
+          onboarding_attempt_registration_requested_at: metaManagedRegistrationAt,
+          onboarding_attempt_registration_accepted_at: metaManagedRegistrationAt,
           onboarding_attempt_phone_number_id: phoneNumberId,
           onboarding_attempt_waba_id: cleanText(candidate.whatsapp_business_account_id, 240),
           onboarding_attempt_ciphertext: encryptedCredential(candidate),
@@ -3095,7 +3143,9 @@ function createChannelConnectionService(options) {
           details: {
             onboarding_attempt_id: attemptId,
             phone_number_suffix: phoneNumberId.slice(-8),
-            waba_suffix: String(candidate.whatsapp_business_account_id || "").slice(-8)
+            waba_suffix: String(candidate.whatsapp_business_account_id || "").slice(-8),
+            onboarding_mode: candidateOnboardingMode,
+            registration_managed_by: coexistence ? "meta_embedded_signup" : "nextfor"
           }
         });
         record = bound && bound.row;
@@ -3241,7 +3291,8 @@ function createChannelConnectionService(options) {
       const alreadyRecorded = latest && ["failed", "registration_rejected", "registration_outcome_unknown"].includes(
         cleanText(latest.onboarding_attempt_status, 80).toLowerCase()
       );
-      const claimedByAnotherCall = latest && latest.onboarding_attempt_registration_requested_at &&
+      const claimedByAnotherCall = latest && latest.coexistence_confirmed !== true &&
+        latest.onboarding_attempt_registration_requested_at &&
         !registrationClaimedByThisCall;
       if (!alreadyRecorded && !claimedByAnotherCall && latest && latest.onboarding_attempt_id === attemptId) {
         await failWhatsAppAttempt(latest, actor, error, "failed");
@@ -3404,6 +3455,7 @@ function createChannelConnectionService(options) {
         }
         const attemptId = cleanText(options && options.attemptId, 100);
         if (!attemptId) throw new ChannelConnectionError("invalid_channel_request", 400, "WhatsApp attempt ID is missing");
+        const onboardingMode = cleanWhatsAppOnboardingMode(options && options.whatsappOnboardingMode) || "cloud_api";
         const startedAt = iso(now());
         await store.beginWhatsAppAttempt(clean.tenantId, attemptId, {
           started_at: startedAt,
@@ -3411,7 +3463,13 @@ function createChannelConnectionService(options) {
         }, {
           action: "whatsapp_onboarding_started",
           actor: actorLabel(actor),
-          details: { onboarding_attempt_id: attemptId, flow: "new_cloud_api_number" }
+          details: {
+            onboarding_attempt_id: attemptId,
+            onboarding_mode: onboardingMode,
+            flow: onboardingMode === "coexistence"
+              ? "whatsapp_business_app_coexistence"
+              : "new_cloud_api_number"
+          }
         });
       } else {
         const legacy = legacyFor(clean.tenantId, clean.channel);
@@ -3707,6 +3765,20 @@ function createChannelConnectionService(options) {
         return publicConnection(record, { superAdmin: true });
       }
       const activeConnectionExists = record.status === "connected" && !!record.credentials_ciphertext;
+      if (record.coexistence_confirmed === true && !activeConnectionExists) {
+        const pendingCredential = onboardingAttemptPayload(record);
+        if (!pendingCredential || !provider || typeof provider.disconnect !== "function") {
+          throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+        }
+        const providerResult = await provider.disconnect("whatsapp", pendingCredential);
+        if (!providerResult || providerResult.ok !== true) {
+          throw new ChannelConnectionError(
+            "disconnect_failed",
+            422,
+            providerResult && providerResult.error || "Meta unsubscribe failed"
+          );
+        }
+      }
       const cancelledAt = iso(now());
       const cancellation = await store.cancelWhatsAppAttempt(
         clean.tenantId,
@@ -3721,6 +3793,7 @@ function createChannelConnectionService(options) {
         phone_number_id: activeConnectionExists ? record.phone_number_id : null,
         credentials_ciphertext: activeConnectionExists ? record.credentials_ciphertext : null,
         credential_source: activeConnectionExists ? record.credential_source : null,
+        coexistence_confirmed: activeConnectionExists ? record.coexistence_confirmed : false,
         onboarding_attempt_status: "cancelled",
         onboarding_attempt_updated_at: cancelledAt,
         onboarding_attempt_phone_number_id: null,
@@ -3819,7 +3892,7 @@ function createChannelConnectionService(options) {
       if (!record) throw new ChannelConnectionError("connection_not_found", 404);
       if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
       if (clean.channel === "whatsapp" && whatsappAttemptIsActive(record)) {
-        if (record.onboarding_attempt_registration_requested_at) {
+        if (record.onboarding_attempt_registration_requested_at && record.coexistence_confirmed !== true) {
           throw new ChannelConnectionError(
             "whatsapp_onboarding_cannot_cancel",
             409,

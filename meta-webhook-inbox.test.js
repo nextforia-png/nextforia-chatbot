@@ -48,6 +48,35 @@ const {
   assert.strictEqual(repeatedStatus.event_id, events[2].event_id, "status retries must be idempotent");
   assert.strictEqual(extractWhatsAppMessageEvents({ object: "page", entry: [] }).length, 0);
 
+  const coexistencePayload = {
+    object: "whatsapp_business_account",
+    entry: [{ changes: [{
+      field: "smb_message_echoes",
+      value: {
+        metadata: { phone_number_id: "phone-coexistence" },
+        message_echoes: [{
+          id: "wamid.business-app-1",
+          from: "573106534553",
+          to: "573001112233",
+          timestamp: "1786200010",
+          type: "text",
+          text: { body: "Respuesta escrita desde la app" }
+        }]
+      }
+    }] }]
+  };
+  const coexistenceEvents = extractWhatsAppMessageEvents(coexistencePayload);
+  assert.strictEqual(coexistenceEvents.length, 1);
+  assert.strictEqual(coexistenceEvents[0].event_id, "whatsapp:echo:wamid.business-app-1");
+  assert.strictEqual(coexistenceEvents[0].payload.event_type, "business_app_echo");
+  assert.strictEqual(coexistenceEvents[0].payload.echo.to, "573001112233");
+  assert.strictEqual(coexistenceEvents[0].ordering_identity, "573001112233");
+  assert.strictEqual(
+    extractWhatsAppMessageEvents(coexistencePayload)[0].event_id,
+    coexistenceEvents[0].event_id,
+    "WhatsApp Business App echo retries must be idempotent"
+  );
+
   let now = new Date("2026-08-08T12:00:00.000Z");
   const store = new InMemoryMetaWebhookInboxStore({ clock: function () { return new Date(now); } });
   events.forEach(function (event, index) {

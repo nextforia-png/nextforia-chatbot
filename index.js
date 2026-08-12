@@ -3179,9 +3179,6 @@ function recordTurn(userId, userMessage, botReply, status, meta) {
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
       null;
-    const eventTools = [tool].concat(Array.isArray(meta && meta.tools) ? meta.tools.map(function (item) {
-      return cleanRuntimeText(item, 100);
-    }).filter(Boolean) : []).filter(function (item, index, items) { return items.indexOf(item) === index; });
     const rec = {
       ts: new Date().toISOString(),
       tenantId,
@@ -3230,6 +3227,9 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
       null;
+    const eventTools = [tool].concat(Array.isArray(meta && meta.tools) ? meta.tools.map(function (item) {
+      return cleanRuntimeText(item, 100);
+    }).filter(Boolean) : []).filter(function (item, index, items) { return items.indexOf(item) === index; });
     const rec = {
       ts: cleanRuntimeText(meta && (meta.sourceAt || meta.source_at), 80) || new Date().toISOString(),
       tenantId,

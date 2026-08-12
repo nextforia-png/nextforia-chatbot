@@ -188,6 +188,9 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(panel.includes('id="commerceConnectorCards"'));
     assert(panel.includes("Conectar número nuevo"));
     assert(panel.includes("Conservar mi WhatsApp Business"));
+    assert(panel.includes("Meta puede exigir al menos 7 días de actividad real"));
+    assert(panel.includes('code==="3441045"'));
+    assert(panel.includes("Meta todavía no habilita coexistencia para este número"));
     assert(panel.includes("Cancelar intento"));
     assert(panel.includes("/admin/panel/channel-connections/whatsapp/attempt"));
     assert(!panel.includes("/admin/panel/channel-connections/whatsapp/activate"));

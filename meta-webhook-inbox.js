@@ -43,18 +43,29 @@ function statusEventIdentifier(destinationId, status) {
     .digest("hex");
 }
 
+function echoEventIdentifier(destinationId, echo) {
+  const supplied = text(echo && echo.id, 500);
+  if (supplied) return "whatsapp:echo:" + supplied;
+  return "whatsapp:echo:sha256:" + crypto.createHash("sha256")
+    .update(text(destinationId, 500) + ":" + JSON.stringify(echo || {}))
+    .digest("hex");
+}
+
 function eventOrderingIdentity(payload) {
   const messageSender = text(payload && payload.message && payload.message.from, 500);
   if (messageSender) return messageSender;
   const statusRecipient = text(payload && payload.status && payload.status.recipient_id, 500);
   if (statusRecipient) return statusRecipient;
   const statusMessage = text(payload && payload.status && payload.status.id, 500);
-  return statusMessage ? "status:" + statusMessage : "unknown";
+  if (statusMessage) return "status:" + statusMessage;
+  const echoRecipient = text(payload && payload.echo && payload.echo.to, 500);
+  return echoRecipient || "unknown";
 }
 
 function expectedEventIdentifier(payload) {
   const destinationId = text(payload && payload.value && payload.value.metadata && payload.value.metadata.phone_number_id, 240);
   if (payload && payload.status) return statusEventIdentifier(destinationId, payload.status);
+  if (payload && payload.echo) return echoEventIdentifier(destinationId, payload.echo);
   return eventIdentifier(destinationId, payload && payload.message);
 }
 
@@ -124,6 +135,19 @@ function extractWhatsAppMessageEvents(body) {
           ordering_identity: text(status.recipient_id, 500) || "status:" + text(status.id, 500),
           payload: { event_type: "status", value, status }
         });
+      }
+      if (String(change && change.field || "") === "smb_message_echoes") {
+        for (const echo of Array.isArray(value && value.message_echoes) ? value.message_echoes : []) {
+          if (!destinationId || !echo) continue;
+          events.push({
+            event_id: echoEventIdentifier(destinationId, echo),
+            channel: "whatsapp",
+            destination_id: destinationId,
+            received_at: new Date().toISOString(),
+            ordering_identity: text(echo.to, 500) || "echo:" + text(echo.id, 500),
+            payload: { event_type: "business_app_echo", value, echo }
+          });
+        }
       }
     }
   }

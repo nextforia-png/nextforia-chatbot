@@ -165,6 +165,16 @@ function expectCode(promise, code) {
   const embeddedExchangeRequests = [];
   const embeddedExchangeAxios = async function (request) {
     embeddedExchangeRequests.push(request);
+    if (request.url.endsWith("/v25.0/waba-coexistence/phone_numbers")) {
+      return { data: { data: [{
+        id: "phone-coexistence",
+        display_phone_number: "+57 310 6534553",
+        verified_name: "NextforIA",
+        is_on_biz_app: true,
+        status: "CONNECTED",
+        platform_type: "CLOUD_API"
+      }] } };
+    }
     if (request.url.endsWith("/v25.0/waba-embedded/phone_numbers")) {
       return { data: { data: [{
         id: "phone-embedded",
@@ -211,12 +221,31 @@ function expectCode(promise, code) {
   });
   assert.strictEqual(embeddedWabaOnlyCandidate.phone_number_id, "phone-embedded");
   assert.strictEqual(embeddedWabaOnlyCandidate.whatsapp_business_account_id, "waba-embedded");
+  const embeddedCoexistenceCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-coexistence",
+    phone_number_id: "phone-coexistence",
+    business_id: "business-coexistence",
+    onboarding_mode: "coexistence",
+    onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    coexistence: true,
+    is_wa_login_user: true
+  });
+  assert.strictEqual(embeddedCoexistenceCandidate.phone_number_id, "phone-coexistence");
+  assert.strictEqual(embeddedCoexistenceCandidate.onboarding_mode, "coexistence");
+  assert.strictEqual(embeddedCoexistenceCandidate.coexistence, true);
+  assert.strictEqual(embeddedCoexistenceCandidate.coexistence_event_confirmed, true);
   await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
     business_id: "business-embedded",
     onboarding_mode: "coexistence",
     onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
-  }), "whatsapp_business_app_number_not_supported");
+  }), "whatsapp_coexistence_number_required");
+  await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-coexistence",
+    phone_number_id: "phone-coexistence",
+    onboarding_mode: "cloud_api",
+    onboarding_event: "FINISH"
+  }), "whatsapp_onboarding_mode_mismatch");
   assert(embeddedExchangeRequests.some(function (request) {
     return request.method === "GET" && request.url.endsWith("/oauth/access_token");
   }));

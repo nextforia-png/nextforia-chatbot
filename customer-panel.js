@@ -1562,15 +1562,44 @@ ${panelRedesignEnabled ? `
   body.panel-redesign.conversations-view .inboxShell{grid-template-columns:310px minmax(0,1fr)!important}
 }
 @media(min-width:761px){
+  body.panel-redesign.conversations-view #panel-inbox{height:100%;min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view #panel-inbox>.inboxShell{height:100%;min-height:0}
   body.panel-redesign.conversations-view .listColumn,
-  body.panel-redesign.conversations-view .chatColumn,
   body.panel-redesign.conversations-view .profileColumn{min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view .chatColumn{
+    display:grid!important;
+    grid-template-rows:auto minmax(220px,1fr) auto;
+    min-height:0;
+    overflow:hidden
+  }
   body.panel-redesign.conversations-view .convListControls,
-  body.panel-redesign.conversations-view .chatHead,
-  body.panel-redesign.conversations-view .conversationAction{flex:0 0 auto}
+  body.panel-redesign.conversations-view .chatHead{flex:0 0 auto}
   body.panel-redesign.conversations-view .threads,
   body.panel-redesign.conversations-view .messages,
   body.panel-redesign.conversations-view .profile{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch}
+  body.panel-redesign.conversations-view .messages{height:100%}
+  body.panel-redesign.conversations-view .conversationAction{
+    max-height:min(47vh,350px);
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    scrollbar-gutter:stable
+  }
+}
+@media(min-width:761px) and (max-height:800px){
+  body.panel-redesign.conversations-view .conversationAction{padding:8px 12px 9px}
+  body.panel-redesign.conversations-view .guidedAction{padding:9px 12px;margin-bottom:8px}
+  body.panel-redesign.conversations-view .guidedAction>p{display:none}
+  body.panel-redesign.conversations-view .guidedAction textarea{min-height:48px;max-height:64px;padding:9px 12px;line-height:1.35}
+  body.panel-redesign.conversations-view .guidedFooter{margin-top:7px;gap:9px}
+  body.panel-redesign.conversations-view .guidedFooter>span{display:none}
+  body.panel-redesign.conversations-view .confirmBtn{min-height:38px}
+  body.panel-redesign.conversations-view .humanControl{padding:8px 10px}
+  body.panel-redesign.conversations-view .handoffSwitch{height:42px}
+  body.panel-redesign.conversations-view .handoffSwitch button{font-size:12.5px}
+  body.panel-redesign.conversations-view .controlBtn{height:36px;min-height:36px}
+  body.panel-redesign.conversations-view .composer{margin-top:8px!important}
+  body.panel-redesign.conversations-view .composerRow textarea{min-height:42px;padding:9px 13px}
+  body.panel-redesign.conversations-view .statusLine{min-height:14px;padding-top:2px}
 }
 @media(max-width:760px){
   body.panel-redesign.conversations-view:not(.chat-open) .inboxShell{display:block!important}
@@ -1578,7 +1607,29 @@ ${panelRedesignEnabled ? `
   body.panel-redesign.conversations-view:not(.chat-open) .chatColumn,body.panel-redesign.conversations-view:not(.chat-open) .profileColumn{display:none!important}
   body.panel-redesign.conversations-view.chat-open .inboxShell{display:block!important}
   body.panel-redesign.conversations-view.chat-open .listColumn,body.panel-redesign.conversations-view.chat-open .profileColumn{display:none!important}
-  body.panel-redesign.conversations-view.chat-open .chatColumn{display:flex!important}
+  body.panel-redesign.conversations-view.chat-open{overflow:hidden}
+  body.panel-redesign.conversations-view.chat-open .main{height:100dvh;min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view.chat-open .content{height:100dvh;min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view.chat-open #panel-inbox,body.panel-redesign.conversations-view.chat-open .inboxShell{height:100%;min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view.chat-open .chatColumn{display:grid!important;grid-template-rows:auto minmax(230px,1fr) auto;height:100%;min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view.chat-open .chatHead{min-height:112px}
+  body.panel-redesign.conversations-view.chat-open .messages{height:100%;min-height:0;overflow-y:auto!important;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  body.panel-redesign.conversations-view.chat-open .conversationAction{max-height:46dvh;overflow-y:auto;overscroll-behavior:contain;padding:8px 10px calc(8px + env(safe-area-inset-bottom))}
+  body.panel-redesign.conversations-view.chat-open .mobileCustomerNameCard{display:none}
+  body.panel-redesign.conversations-view.chat-open .guidedAction{padding:8px 9px;margin-bottom:7px}
+  body.panel-redesign.conversations-view.chat-open .guidedAction>p,body.panel-redesign.conversations-view.chat-open .guidedFooter>span{display:none}
+  body.panel-redesign.conversations-view.chat-open .guidedTitle{gap:7px;font-size:13px}
+  body.panel-redesign.conversations-view.chat-open .guidedTitle span{width:28px;height:28px}
+  body.panel-redesign.conversations-view.chat-open .guidedReplyRow textarea{min-height:48px;max-height:62px;padding:8px 10px}
+  body.panel-redesign.conversations-view.chat-open .guidedFooter{display:flex;gap:7px;margin-top:7px}
+  body.panel-redesign.conversations-view.chat-open .guidedFooter button{min-height:38px}
+  body.panel-redesign.conversations-view.chat-open .humanControl{flex-direction:row;min-height:60px;padding:7px;gap:7px}
+  body.panel-redesign.conversations-view.chat-open .handoffSwitch{flex:0 0 144px;width:144px;height:42px}
+  body.panel-redesign.conversations-view.chat-open .humanControlActions{min-width:0}
+  body.panel-redesign.conversations-view.chat-open .humanControlActions .controlBtn{height:42px;min-height:42px;padding:0 9px;font-size:12px}
+  body.panel-redesign.conversations-view.chat-open .composer{margin-top:7px!important}
+  body.panel-redesign.conversations-view.chat-open .composerRow textarea{min-height:42px;padding:9px 11px}
+  body.panel-redesign.conversations-view.chat-open .statusLine{min-height:13px;padding-top:2px}
 }
 @media(max-width:420px){.panel-redesign .metricRow{grid-template-columns:1fr}.panel-redesign .metric{min-height:150px}}
 @media(prefers-reduced-motion:reduce){.panel-redesign *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}

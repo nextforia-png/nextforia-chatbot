@@ -199,7 +199,7 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(panel.includes("if(channel===\"whatsapp\"&&(state.whatsappConnecting||state.whatsappEmbedded))return"));
     assert(panel.includes('extras:config.onboarding_mode==="coexistence"'));
     assert(panel.includes('sessionInfoVersion:"3"'));
-    assert(panel.includes('features:[{name:"app_only_install"}]'));
+    assert(panel.includes('featureType:"only_waba_sharing"'));
     assert(panel.includes('"FINISH_ONLY_WABA"'));
     assert(panel.includes('"FINISH_GRANT_ONLY_API_ACCESS"'));
     assert(panel.includes("WHATSAPP_VERIFY_WINDOW_MS=120000"));
@@ -258,7 +258,7 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
       origin: "https://business.facebook.com",
       data: {
         type: "WA_EMBEDDED_SIGNUP",
-        event: "FINISH_GRANT_ONLY_API_ACCESS",
+        event: "FINISH_ONLY_WABA",
         data: {
           waba_id: "waba-recovery",
           phone_number_id: "phone-recovery",
@@ -268,7 +268,7 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     });
     assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.waba_id, "waba-recovery");
     assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.onboarding_event,
-      "FINISH_GRANT_ONLY_API_ACCESS");
+      "FINISH_ONLY_WABA");
     assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.coexistence, true);
     assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.app_only_install, true);
     assert.strictEqual(recoveryHarness.calls.completes, 1);

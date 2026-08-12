@@ -45,6 +45,14 @@ function candidate(phone, waba) {
   };
 }
 
+function coexistenceCandidate(phone, waba) {
+  return Object.assign(candidate(phone, waba), {
+    onboarding_mode: "coexistence",
+    coexistence: true,
+    coexistence_event_confirmed: true
+  });
+}
+
 function providerFor(options) {
   const settings = options || {};
   return {
@@ -532,6 +540,171 @@ function providerFor(options) {
   await expectCode(service.begin("tenant-a", "whatsapp", "owner-a@example.com", "new-state", {
     attemptId: "attempt-b"
   }), "active_connection_must_be_disconnected");
+
+  const coexistenceStore = new InMemoryChannelConnectionStore();
+  let coexistencePreparations = 0;
+  let coexistenceRegistrations = 0;
+  let coexistenceSubscriptions = 0;
+  let coexistenceVerifications = 0;
+  const coexistenceService = createChannelConnectionService({
+    store: coexistenceStore,
+    provider: providerFor({
+      onPrepare: function (session) {
+        coexistencePreparations++;
+        assert.strictEqual(session.onboarding_mode, "coexistence");
+        assert.strictEqual(session.onboarding_event, "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING");
+        return coexistenceCandidate(session.phone_number_id, session.waba_id);
+      },
+      onRegister: function () {
+        coexistenceRegistrations++;
+        assert.fail("coexistence must never call POST /register");
+      },
+      onSubscribe: function () {
+        coexistenceSubscriptions++;
+        return { ok: true };
+      },
+      onVerify: function (asset) {
+        coexistenceVerifications++;
+        assert.strictEqual(asset.coexistence, true);
+        return { ok: true, account_label: asset.account_label };
+      }
+    }),
+    encryptionKey,
+    now,
+    whatsappVerificationChecks: 1,
+    whatsappVerificationIntervalMs: 0
+  });
+  await coexistenceService.begin(
+    "tenant-coexistence",
+    "whatsapp",
+    "owner@example.com",
+    "signed-coexistence-state",
+    { attemptId: "attempt-coexistence", whatsappOnboardingMode: "coexistence" }
+  );
+  const coexistenceConnected = await coexistenceService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-coexistence",
+    actor: "owner@example.com",
+    attempt_id: "attempt-coexistence",
+    code: "oauth-coexistence",
+    session: {
+      waba_id: "waba-coexistence",
+      phone_number_id: "phone-coexistence",
+      onboarding_mode: "coexistence",
+      onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+      coexistence: true,
+      is_wa_login_user: true
+    }
+  });
+  assert.strictEqual(coexistenceConnected.connection.status, "connected");
+  assert.strictEqual(coexistenceConnected.connection.whatsapp_onboarding_mode, "coexistence");
+  assert.strictEqual(coexistenceConnected.connection.disconnect_available, true);
+  assert.strictEqual(coexistencePreparations, 1);
+  assert.strictEqual(coexistenceRegistrations, 0);
+  assert.strictEqual(coexistenceSubscriptions, 1);
+  assert.strictEqual(coexistenceVerifications, 1);
+  assert.strictEqual(coexistenceStore.whatsappRegistrationLedger.length, 0,
+    "Meta-managed coexistence must not consume Nextfor's /register ledger");
+  const storedCoexistence = await coexistenceStore.get("tenant-coexistence", "whatsapp");
+  assert.strictEqual(storedCoexistence.coexistence_confirmed, true);
+  assert.strictEqual(storedCoexistence.whatsapp_last_registration_phone_number_id, null);
+  const coexistenceCredential = JSON.parse(decryptStoredText(storedCoexistence.credentials_ciphertext, encryptionKey));
+  assert.strictEqual(coexistenceCredential.onboarding_mode, "coexistence");
+  assert.strictEqual(coexistenceCredential.coexistence, true);
+  assert.strictEqual(coexistenceCredential.coexistence_event_confirmed, true);
+  const duplicateCoexistence = await coexistenceService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-coexistence",
+    actor: "owner@example.com",
+    attempt_id: "attempt-coexistence",
+    code: "duplicate-oauth-coexistence",
+    session: {
+      waba_id: "waba-coexistence",
+      phone_number_id: "phone-coexistence",
+      onboarding_mode: "coexistence",
+      onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+    }
+  });
+  assert.strictEqual(duplicateCoexistence.connection.status, "connected");
+  assert.strictEqual(coexistencePreparations, 1, "duplicate coexistence callback must not exchange OAuth again");
+  assert.strictEqual(coexistenceRegistrations, 0);
+
+  const pendingCoexistenceStore = new InMemoryChannelConnectionStore();
+  let pendingCoexistenceDisconnects = 0;
+  const pendingCoexistenceService = createChannelConnectionService({
+    store: pendingCoexistenceStore,
+    provider: providerFor({
+      onPrepare: function (session) { return coexistenceCandidate(session.phone_number_id, session.waba_id); },
+      onRegister: function () { assert.fail("pending coexistence must never call /register"); },
+      onVerify: function () {
+        return { ok: false, pending: true, error: "Meta is still completing WhatsApp Business App onboarding" };
+      },
+      onDisconnect: function () {
+        pendingCoexistenceDisconnects++;
+        return { ok: true };
+      }
+    }),
+    encryptionKey,
+    now,
+    whatsappVerificationChecks: 1,
+    whatsappVerificationIntervalMs: 0
+  });
+  await pendingCoexistenceService.begin("tenant-pending-coexistence", "whatsapp", "owner@example.com", "state", {
+    attemptId: "attempt-pending-coexistence",
+    whatsappOnboardingMode: "coexistence"
+  });
+  const pendingCoexistence = await pendingCoexistenceService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-pending-coexistence",
+    actor: "owner@example.com",
+    attempt_id: "attempt-pending-coexistence",
+    code: "oauth-pending-coexistence",
+    session: {
+      waba_id: "waba-pending-coexistence",
+      phone_number_id: "phone-pending-coexistence",
+      onboarding_mode: "coexistence",
+      onboarding_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+    }
+  });
+  assert.strictEqual(pendingCoexistence.connection.status, "connecting");
+  assert.strictEqual(pendingCoexistence.connection.cancel_attempt_available, true);
+  assert.strictEqual(pendingCoexistence.connection.whatsapp_onboarding_mode, "coexistence");
+  const cancelledPendingCoexistence = await pendingCoexistenceService.discardWhatsAppAttempt(
+    "tenant-pending-coexistence",
+    "owner@example.com"
+  );
+  assert.strictEqual(cancelledPendingCoexistence.status, "not_connected");
+  assert.strictEqual(pendingCoexistenceDisconnects, 1,
+    "cancelling a pending coexistence attempt must first remove Nextfor's WABA subscription");
+  assert.strictEqual(pendingCoexistenceStore.whatsappRegistrationLedger.length, 0);
+
+  const modeMismatchStore = new InMemoryChannelConnectionStore();
+  const modeMismatchService = createChannelConnectionService({
+    store: modeMismatchStore,
+    provider: providerFor({
+      onPrepare: function (session) {
+        return coexistenceCandidate(session.phone_number_id, session.waba_id);
+      },
+      onRegister: function () { assert.fail("a mode mismatch must fail before /register"); }
+    }),
+    encryptionKey,
+    now,
+    whatsappVerificationChecks: 1,
+    whatsappVerificationIntervalMs: 0
+  });
+  await modeMismatchService.begin("tenant-mode-mismatch", "whatsapp", "owner@example.com", "state", {
+    attemptId: "attempt-mode-mismatch",
+    whatsappOnboardingMode: "cloud_api"
+  });
+  await expectCode(modeMismatchService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-mode-mismatch",
+    actor: "owner@example.com",
+    attempt_id: "attempt-mode-mismatch",
+    code: "oauth-mode-mismatch",
+    session: {
+      waba_id: "waba-mode-mismatch",
+      phone_number_id: "phone-mode-mismatch",
+      onboarding_mode: "cloud_api",
+      onboarding_event: "FINISH"
+    }
+  }), "whatsapp_onboarding_mode_mismatch");
 
   const restartStore = new InMemoryChannelConnectionStore();
   let restartRegistrations = 0;

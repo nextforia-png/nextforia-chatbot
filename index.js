@@ -345,7 +345,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v359-tenant-live-config-refresh";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v360-whatsapp-coexistence";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -541,6 +541,9 @@ const IG_VERIFY_TOKEN = process.env.IG_VERIFY_TOKEN || VERIFY_TOKEN;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v26.0";
 const META_APP_ID = String(process.env.META_APP_ID || "").trim();
 const META_WHATSAPP_CONFIG_ID = String(process.env.META_WHATSAPP_CONFIG_ID || "").trim();
+const META_WHATSAPP_COEXISTENCE_CONFIG_ID = String(
+  process.env.META_WHATSAPP_COEXISTENCE_CONFIG_ID || META_WHATSAPP_CONFIG_ID
+).trim();
 const META_WHATSAPP_BUSINESS_ACCOUNT_ID = String(
   process.env.META_WHATSAPP_BUSINESS_ACCOUNT_ID || process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || ""
 ).trim();
@@ -3213,6 +3216,7 @@ function recordTurn(userId, userMessage, botReply, status, meta) {
 
 function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) {
   try {
+    const requirePersistence = meta && (meta.requirePersistence === true || meta.require_persistence === true);
     const handoffState = typeof handoffOverride === "boolean" ? handoffOverride : !["admin_release", "admin_resolve"].includes(tool);
     const cleanUserId = normalizeConversationUserId(userId) || userId;
     const explicitTenantId = cleanTenantId(meta && (meta.tenantId || meta.tenant_id));
@@ -3223,25 +3227,33 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
     const phoneNumberId = cleanRuntimeText(meta && (meta.phoneNumberId || meta.phone_number_id), 240) ||
       cleanRuntimeText(remembered && remembered.phoneNumberId, 240) ||
       null;
+    const eventTools = [tool].concat(Array.isArray(meta && meta.tools) ? meta.tools.map(function (item) {
+      return cleanRuntimeText(item, 100);
+    }).filter(Boolean) : []).filter(function (item, index, items) { return items.indexOf(item) === index; });
     const rec = {
-      ts: new Date().toISOString(),
+      ts: cleanRuntimeText(meta && (meta.sourceAt || meta.source_at), 80) || new Date().toISOString(),
       tenantId,
       phoneNumberId,
       channel: conversationChannel(cleanUserId),
       userId: cleanUserId,
       userMessage: "",
       botReply: String(message || "").slice(0, 1000),
-      tools: [tool],
+      tools: eventTools,
       zeroResultQueries: [],
       handoff: handoffState,
       rating: null,
-      numTools: 1,
-      status: status || "ok"
+      numTools: eventTools.length,
+      status: status || "ok",
+      sourceEventId: cleanRuntimeText(meta && (meta.sourceEventId || meta.source_event_id), 500) || null
     };
-    conversationLogs.push(rec);
-    if (conversationLogs.length > 100) conversationLogs.shift();
-    return supabaseInsert(rec);
-  } catch (e) { console.error("recordAdminEvent error:", e.message); }
+    rememberConversationTurn(rec);
+    return requirePersistence ? supabaseInsertStrict(rec) : supabaseInsert(rec);
+  } catch (e) {
+    console.error("recordAdminEvent error:", e.message);
+    return meta && (meta.requirePersistence === true || meta.require_persistence === true)
+      ? Promise.reject(e)
+      : Promise.resolve(false);
+  }
 }
 
 function describeInboundMessage(message) {
@@ -5866,7 +5878,9 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
   const value = payload && payload.value;
   const message = payload && payload.message;
   const deliveryStatus = payload && payload.status;
+  const businessAppEcho = payload && payload.echo;
   if (value && deliveryStatus) return processWhatsAppStatusInboxEvent(value, deliveryStatus, inboxRow);
+  if (value && businessAppEcho) return processWhatsAppBusinessAppEcho(value, businessAppEcho, inboxRow);
   if (!value || !message) {
     const invalid = new Error("invalid_whatsapp_webhook_event");
     invalid.permanent = true;
@@ -6017,6 +6031,71 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
     }
   }
   return { tenant_id: destination.tenantId };
+}
+
+function whatsappBusinessAppEchoText(echo) {
+  const type = cleanRuntimeText(echo && echo.type, 80).toLowerCase();
+  if (type === "text") return cleanRuntimeText(echo && echo.text && echo.text.body, 1000);
+  if (type === "image") return "[Imagen enviada desde WhatsApp Business]";
+  if (type === "audio" || type === "voice") return "[Audio enviado desde WhatsApp Business]";
+  if (type === "video") return "[Video enviado desde WhatsApp Business]";
+  if (type === "document") return "[Documento enviado desde WhatsApp Business]";
+  if (type === "sticker") return "[Sticker enviado desde WhatsApp Business]";
+  if (type === "location") return "[Ubicación enviada desde WhatsApp Business]";
+  if (type === "revoke") return "[Mensaje eliminado desde WhatsApp Business]";
+  if (type === "edit") return "[Mensaje editado desde WhatsApp Business]";
+  return "[Mensaje enviado desde WhatsApp Business]";
+}
+
+async function processWhatsAppBusinessAppEcho(value, echo, inboxRow) {
+  const destination = await resolveWhatsAppDestinationRuntime(value);
+  if (!destination.ok) {
+    const rejected = new Error(destination.reason || "business_app_echo_destination_rejected");
+    rejected.permanent = ["ambiguous_destination_owner", "destination_asset_mismatch"].includes(destination.reason);
+    throw rejected;
+  }
+  const recipientId = normalizeConversationUserId(echo && echo.to);
+  const messageId = cleanRuntimeText(echo && echo.id, 500);
+  if (!recipientId || !messageId) {
+    const invalid = new Error("whatsapp_business_app_echo_identity_missing");
+    invalid.permanent = true;
+    throw invalid;
+  }
+  const timestampSeconds = Number(echo && echo.timestamp);
+  const sourceAt = Number.isFinite(timestampSeconds) && timestampSeconds > 0
+    ? new Date(timestampSeconds * 1000).toISOString()
+    : new Date().toISOString();
+  rememberConversationRuntime(recipientId, destination);
+  addHumanHandoff(recipientId, destination.tenantId);
+  await recordRetargetingSignal(
+    destination.tenantId,
+    recipientId,
+    "handoff",
+    "whatsapp-business-app:" + messageId,
+    "whatsapp_business_app"
+  );
+  await recordAdminEvent(
+    recipientId,
+    "admin_send_message",
+    "[Humano] " + whatsappBusinessAppEchoText(echo),
+    "ok",
+    true,
+    {
+      tenant_id: destination.tenantId,
+      phone_number_id: destination.phoneNumberId,
+      source_event_id: messageId,
+      source_at: sourceAt,
+      require_persistence: !!inboxRow,
+      tools: ["whatsapp_business_app_echo"]
+    }
+  );
+  log("info", "whatsapp_business_app_echo_recorded", {
+    tenant_id: destination.tenantId,
+    message_id_suffix: messageId.slice(-16),
+    recipient_suffix: String(recipientId).slice(-8),
+    message_type: cleanRuntimeText(echo && echo.type, 80) || "unknown"
+  });
+  return { tenant_id: destination.tenantId, business_app_echo: true };
 }
 
 async function processWhatsAppStatusInboxEvent(value, status, inboxRow) {
@@ -14128,6 +14207,9 @@ function channelConnectionErrorResponse(res, error) {
     "existing_asset_credentials_required",
     "whatsapp_onboarding_attempt_active",
     "whatsapp_business_app_number_not_supported",
+    "whatsapp_coexistence_event_required",
+    "whatsapp_coexistence_number_required",
+    "whatsapp_onboarding_mode_mismatch",
     "whatsapp_phone_already_connected",
     "whatsapp_onboarding_cannot_cancel",
     "whatsapp_activation_retired",
@@ -14153,7 +14235,13 @@ function channelConnectionErrorResponse(res, error) {
         : problem.code === "whatsapp_onboarding_attempt_active"
           ? "Ya hay una conexión de WhatsApp en curso. Cancélala antes de empezar otra."
         : problem.code === "whatsapp_business_app_number_not_supported"
-          ? "Por ahora conecta un número nuevo que no esté activo en WhatsApp ni en WhatsApp Business."
+          ? "Elige Conservar mi WhatsApp Business para usar ese número en coexistencia."
+        : problem.code === "whatsapp_coexistence_event_required"
+          ? "Meta no confirmó la coexistencia. Vuelve a empezar y elige Conservar mi WhatsApp Business."
+        : problem.code === "whatsapp_coexistence_number_required"
+          ? "La coexistencia solo funciona con un número activo en la app WhatsApp Business."
+        : problem.code === "whatsapp_onboarding_mode_mismatch"
+          ? "Ese número requiere la otra opción de conexión. Cancela el intento y elige Conservar mi WhatsApp Business."
         : problem.code === "whatsapp_phone_already_connected"
           ? "Ese número ya está activo en WhatsApp Cloud API. Para esta conexión usa un número nuevo."
         : problem.code === "whatsapp_onboarding_cannot_cancel"
@@ -14261,6 +14349,8 @@ app.get("/admin/panel/channel-connections", async (req, res) => {
         : [],
       meta_authorization_available: {
         whatsapp: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && publicWhatsAppOnboardingReady() && channelConnectionService.providerConfigured("whatsapp"),
+        whatsapp_coexistence: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && publicWhatsAppOnboardingReady() &&
+          channelConnectionService.providerConfigured("whatsapp") && !!META_WHATSAPP_COEXISTENCE_CONFIG_ID,
         instagram: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("instagram"),
         messenger: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("messenger")
       }
@@ -14288,7 +14378,17 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   const channel = cleanChannel(req.params.channel);
   const tenantId = customerChannelTenantForAuth(auth);
   try {
-    const whatsappOnboardingMode = channel === "whatsapp" ? "cloud_api" : "";
+    const requestedWhatsAppMode = cleanRuntimeText(req.body && req.body.onboarding_mode, 40).toLowerCase();
+    const whatsappOnboardingMode = channel === "whatsapp"
+      ? requestedWhatsAppMode === "coexistence" ? "coexistence" : "cloud_api"
+      : "";
+    if (channel === "whatsapp" && requestedWhatsAppMode &&
+        !["cloud_api", "coexistence"].includes(requestedWhatsAppMode)) {
+      throw new ChannelConnectionError("invalid_channel_request", 400, "Unsupported WhatsApp onboarding mode");
+    }
+    if (whatsappOnboardingMode === "coexistence" && !META_WHATSAPP_COEXISTENCE_CONFIG_ID) {
+      throw new ChannelConnectionError("channel_oauth_not_configured", 503, "WhatsApp coexistence configuration is missing");
+    }
     const whatsappAttemptId = channel === "whatsapp" ? crypto.randomUUID() : "";
     const redirectUri = channelConnectionOAuthRedirectUrlForRequest(req, channel);
     const state = createOAuthState(DASHBOARD_SESSION_SECRET, {
@@ -14304,18 +14404,23 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
     });
     const authorizationUrl = await channelConnectionService.begin(tenantId, channel, auth, state, {
       redirectUri,
-      attemptId: whatsappAttemptId
+      attemptId: whatsappAttemptId,
+      whatsappOnboardingMode
     });
     if (channel === "whatsapp") {
       res.json({
         ok: true,
         embedded_signup: {
           app_id: META_APP_ID,
-          configuration_id: META_WHATSAPP_CONFIG_ID,
+          configuration_id: whatsappOnboardingMode === "coexistence"
+            ? META_WHATSAPP_COEXISTENCE_CONFIG_ID
+            : META_WHATSAPP_CONFIG_ID,
           graph_version: META_GRAPH_VERSION,
           oauth_state: state,
-          onboarding_mode: "cloud_api",
-          flow: "new_cloud_api_number"
+          onboarding_mode: whatsappOnboardingMode,
+          flow: whatsappOnboardingMode === "coexistence"
+            ? "whatsapp_business_app_coexistence"
+            : "new_cloud_api_number"
         }
       });
       return;
@@ -14351,7 +14456,7 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
   }
   try {
     const embeddedSession = Object.assign({}, req.body && req.body.session || {}, {
-      onboarding_mode: "cloud_api"
+      onboarding_mode: state.whatsapp_onboarding_mode || "cloud_api"
     });
     const result = await channelConnectionService.completeEmbeddedWhatsApp({
       tenant_id: tenantId,
@@ -14366,6 +14471,7 @@ app.post("/admin/panel/channel-connections/whatsapp/complete", async (req, res) 
       tenant_id: tenantId,
       status: result.connection && result.connection.status,
       webhook_status: result.connection && result.connection.webhook_status,
+      onboarding_mode: embeddedSession.onboarding_mode,
       onboarding_event: cleanRuntimeText(embeddedSession.onboarding_event, 100) || null
     });
     res.json({ ok: true, connection: result.connection });
@@ -16333,7 +16439,7 @@ app.get("/admin/panel-demo", (req, res) => {
     channelConnectionsV1Enabled: true,
     channelConnectionsDemo: {
       ok: true,
-      meta_authorization_available: { whatsapp: true, instagram: true, messenger: true },
+      meta_authorization_available: { whatsapp: true, whatsapp_coexistence: true, instagram: true, messenger: true },
       channels: [
         {
           id: "whatsapp",
@@ -16869,10 +16975,13 @@ async function buildAdminHealthResult() {
       ),
       meta_authorization_available: channelConnectionService ? {
         whatsapp: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && publicWhatsAppOnboardingReady() && channelConnectionService.providerConfigured("whatsapp"),
+        whatsapp_coexistence: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && publicWhatsAppOnboardingReady() &&
+          channelConnectionService.providerConfigured("whatsapp") && !!META_WHATSAPP_COEXISTENCE_CONFIG_ID,
         instagram: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("instagram"),
         messenger: CHANNEL_CONNECTIONS_MUTATIONS_ENABLED && channelConnectionService.providerConfigured("messenger")
       } : {
         whatsapp: false,
+        whatsapp_coexistence: false,
         instagram: false,
         messenger: false
       }

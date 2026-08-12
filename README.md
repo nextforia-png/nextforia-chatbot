@@ -61,6 +61,7 @@ Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento po
 | `META_APP_SECRET` | App Secret de Meta para validar la firma `X-Hub-Signature-256` de WhatsApp, Instagram y Messenger |
 | `META_APP_ID` | App ID usada por los flujos oficiales de autorización Meta del Customer Panel |
 | `META_WHATSAPP_CONFIG_ID` | Configuration ID de WhatsApp Embedded Signup creado para NextforIA |
+| `META_WHATSAPP_COEXISTENCE_CONFIG_ID` | Configuration ID de Embedded Signup con coexistencia para conservar WhatsApp Business App; usa `META_WHATSAPP_CONFIG_ID` si se omite |
 | `MESSENGER_APP_SECRET` | Alias heredado de `META_APP_SECRET` |
 | `MESSENGER_GRAPH_BASE_URL` | Host de Graph API para Messenger (default: `https://graph.facebook.com`) |
 | `META_GRAPH_VERSION` | Versión de Graph API para WhatsApp, Instagram y Messenger (default: `v26.0`) |

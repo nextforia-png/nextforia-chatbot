@@ -143,6 +143,17 @@ async function waitForJson(url, predicate, timeoutMs) {
     "dedicated delivery must fail closed when the durable inbox is unavailable");
   assert.match(source, /message_statuses: \{ sent: 0, delivered: 0, read: 0, failed: 0 \}/);
   assert.match(source, /processWhatsAppStatusInboxEvent\(value, deliveryStatus, inboxRow\)/);
+  assert.match(source, /processWhatsAppBusinessAppEcho\(value, businessAppEcho, inboxRow\)/);
+  const echoHandlerStart = source.indexOf("async function processWhatsAppBusinessAppEcho");
+  const echoHandlerEnd = source.indexOf("\nasync function processWhatsAppStatusInboxEvent", echoHandlerStart);
+  assert(echoHandlerStart >= 0 && echoHandlerEnd > echoHandlerStart);
+  const echoHandler = source.slice(echoHandlerStart, echoHandlerEnd);
+  assert.match(echoHandler, /addHumanHandoff\(recipientId, destination\.tenantId\)/,
+    "a reply from WhatsApp Business App must pause the bot for that tenant conversation");
+  assert.match(echoHandler, /recordAdminEvent\([\s\S]*?require_persistence: !!inboxRow/,
+    "a Business App echo must be durably visible in the Customer Panel before inbox completion");
+  assert.doesNotMatch(echoHandler, /handleConversation|sendText\(/,
+    "a Business App echo is an outbound human reply and must never trigger another bot response");
   assert.doesNotMatch(source, /\[WhatsAppDeliveryStatus\]/,
     "delivery receipts are operational events and must not become visible conversation turns");
   assert.match(source, /if \(e && e\.whatsappDeliveryFailure\) throw e;/,
@@ -167,6 +178,10 @@ async function waitForJson(url, predicate, timeoutMs) {
     "a retryable text failure must persist outbound_pending before inbox retry");
   assert.match(source, /turn\.status === "outbound_pending" \? "pending"/);
   assert.match(panelSource, /Pendiente de reintento/);
+  assert.match(panelSource, /Conservar mi WhatsApp Business/);
+  assert.match(panelSource, /featureType:"whatsapp_business_app_onboarding"/);
+  assert.match(panelSource, /FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING/);
+  assert.match(connectionSource, /registration_managed_by: coexistence \? "meta_embedded_signup" : "nextfor"/);
 
   const port = await availablePort();
   const base = "http://127.0.0.1:" + port;
@@ -236,7 +251,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v359-tenant-live-config-refresh"));
+    assert((await response.text()).includes("NextforIA Chatbot v360-whatsapp-coexistence"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

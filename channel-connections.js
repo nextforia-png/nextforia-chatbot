@@ -65,7 +65,12 @@ function cleanWhatsAppRegistrationPin(value) {
 
 function cleanWhatsAppOnboardingMode(value) {
   const mode = cleanText(value, 40).toLowerCase();
-  return mode === "coexistence" || mode === "cloud_api" ? mode : "";
+  return mode === "coexistence" || mode === "coexistence_recovery" || mode === "cloud_api" ? mode : "";
+}
+
+function whatsappMetaManagedOnboardingMode(value) {
+  const mode = cleanWhatsAppOnboardingMode(value);
+  return mode === "coexistence" || mode === "coexistence_recovery";
 }
 
 function decodeWhatsAppProfileImage(value) {
@@ -2330,6 +2335,8 @@ class MetaChannelProvider {
         session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
         session.is_wa_login_user === true
       );
+      const appOnlyRecoveryConfirmed = session &&
+        session.onboarding_event === "FINISH_GRANT_ONLY_API_ACCESS";
       const isOnBusinessApp = phone.is_on_biz_app === true;
       if (onboardingMode === "coexistence") {
         if (!coexistenceEventConfirmed) {
@@ -2346,7 +2353,22 @@ class MetaChannelProvider {
             "Coexistence requires a number that remains active in WhatsApp Business App"
           );
         }
-      } else if (coexistenceEventConfirmed || isOnBusinessApp) {
+      } else if (onboardingMode === "coexistence_recovery") {
+        if (!appOnlyRecoveryConfirmed) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_event_required",
+            422,
+            "Meta did not confirm app-only access for this recovery attempt"
+          );
+        }
+        if (!isOnBusinessApp) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_number_required",
+            409,
+            "Recovery requires a number that remains active in WhatsApp Business App"
+          );
+        }
+      } else if (coexistenceEventConfirmed || appOnlyRecoveryConfirmed || isOnBusinessApp) {
         throw new ChannelConnectionError(
           "whatsapp_onboarding_mode_mismatch",
           409,
@@ -2369,8 +2391,9 @@ class MetaChannelProvider {
         phone_number_id: phoneNumberId,
         access_token: accessToken,
         onboarding_mode: onboardingMode,
-        coexistence: onboardingMode === "coexistence",
-        coexistence_event_confirmed: onboardingMode === "coexistence" && coexistenceEventConfirmed === true
+        coexistence: whatsappMetaManagedOnboardingMode(onboardingMode),
+        coexistence_event_confirmed: whatsappMetaManagedOnboardingMode(onboardingMode) &&
+          (coexistenceEventConfirmed === true || appOnlyRecoveryConfirmed === true)
       };
     } catch (error) {
       if (error instanceof ChannelConnectionError) throw error;
@@ -2953,7 +2976,8 @@ function createChannelConnectionService(options) {
   function whatsappCredentialFromCandidate(candidate) {
     const onboardingMode = cleanWhatsAppOnboardingMode(candidate && candidate.onboarding_mode) ||
       (candidate && candidate.coexistence === true ? "coexistence" : "cloud_api");
-    const coexistence = onboardingMode === "coexistence" && candidate && candidate.coexistence === true;
+    const coexistence = whatsappMetaManagedOnboardingMode(onboardingMode) &&
+      candidate && candidate.coexistence === true;
     return {
       access_token: cleanText(candidate && candidate.access_token, 4096),
       login_type: null,
@@ -3098,7 +3122,7 @@ function createChannelConnectionService(options) {
             "Meta returned a different WhatsApp onboarding mode than the signed attempt"
           );
         }
-        const coexistence = candidateOnboardingMode === "coexistence";
+        const coexistence = whatsappMetaManagedOnboardingMode(candidateOnboardingMode);
         if (coexistence && (candidate.coexistence !== true || candidate.coexistence_event_confirmed !== true)) {
           throw new ChannelConnectionError(
             "whatsapp_coexistence_event_required",
@@ -3473,6 +3497,8 @@ function createChannelConnectionService(options) {
             onboarding_mode: onboardingMode,
             flow: onboardingMode === "coexistence"
               ? "whatsapp_business_app_coexistence"
+              : onboardingMode === "coexistence_recovery"
+                ? "whatsapp_business_app_recovery"
               : "new_cloud_api_number"
           }
         });

@@ -1561,6 +1561,17 @@ ${panelRedesignEnabled ? `
 @media(min-width:761px) and (max-width:1000px){
   body.panel-redesign.conversations-view .inboxShell{grid-template-columns:310px minmax(0,1fr)!important}
 }
+@media(min-width:761px){
+  body.panel-redesign.conversations-view .listColumn,
+  body.panel-redesign.conversations-view .chatColumn,
+  body.panel-redesign.conversations-view .profileColumn{min-height:0;overflow:hidden}
+  body.panel-redesign.conversations-view .convListControls,
+  body.panel-redesign.conversations-view .chatHead,
+  body.panel-redesign.conversations-view .conversationAction{flex:0 0 auto}
+  body.panel-redesign.conversations-view .threads,
+  body.panel-redesign.conversations-view .messages,
+  body.panel-redesign.conversations-view .profile{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable;-webkit-overflow-scrolling:touch}
+}
 @media(max-width:760px){
   body.panel-redesign.conversations-view:not(.chat-open) .inboxShell{display:block!important}
   body.panel-redesign.conversations-view:not(.chat-open) .listColumn{display:flex!important}

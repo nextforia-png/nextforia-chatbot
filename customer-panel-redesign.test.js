@@ -119,6 +119,8 @@ assert(redesigned.includes('onkeydown="conversationComposerKeydown(event)"'));
 assert(redesigned.includes('class="threadGroupTitle"'));
 assert(redesigned.includes('channel-call'));
 assert(redesigned.includes('body.panel-redesign.conversations-view .listColumn'));
+assert(redesigned.includes('body.panel-redesign.conversations-view .threads,'));
+assert(redesigned.includes('flex:1 1 0;min-height:0;max-height:none;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable'));
 const responseCard = redesigned.match(/<article class="card metric"><div class="metricTop"><span class="metricLabel">Tiempo de[\s\S]*?<\/article>/);
 assert(responseCard, "response time card must render");
 assert(!responseCard[0].includes("openSummaryMetric"), "response time must remain informational");

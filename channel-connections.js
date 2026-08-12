@@ -2335,8 +2335,10 @@ class MetaChannelProvider {
         session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
         session.is_wa_login_user === true
       );
-      const appOnlyRecoveryConfirmed = session &&
-        session.onboarding_event === "FINISH_GRANT_ONLY_API_ACCESS";
+      const appOnlyRecoveryConfirmed = onboardingMode === "coexistence_recovery" && session && [
+        "FINISH_ONLY_WABA",
+        "FINISH_GRANT_ONLY_API_ACCESS"
+      ].includes(session.onboarding_event);
       const isOnBusinessApp = phone.is_on_biz_app === true;
       if (onboardingMode === "coexistence") {
         if (!coexistenceEventConfirmed) {

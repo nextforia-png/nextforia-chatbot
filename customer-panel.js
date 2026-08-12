@@ -2173,7 +2173,7 @@ function launchWhatsAppEmbeddedSignup(config){
       extras:config.onboarding_mode==="coexistence"
         ?{setup:{},featureType:"whatsapp_business_app_onboarding",sessionInfoVersion:"3"}
         :config.onboarding_mode==="coexistence_recovery"
-          ?{version:"v3",features:[{name:"app_only_install"}]}
+          ?{setup:{},featureType:"only_waba_sharing",sessionInfoVersion:"3"}
           :{}
     });
   }).catch(function(){
@@ -2188,7 +2188,7 @@ window.addEventListener("message",function(event){
   var embeddedEvent=String(payload.event||"").toUpperCase();
   if(whatsappEmbeddedCloudFinishEvent(embeddedEvent)||whatsappEmbeddedCoexistenceFinishEvent(embeddedEvent)||whatsappEmbeddedRecoveryFinishEvent(embeddedEvent)){
     var session=payload.data||{};
-    var expectedMode=state.whatsappEmbedded.config&&state.whatsappEmbedded.config.onboarding_mode||"cloud_api",eventMode=whatsappEmbeddedCoexistenceFinishEvent(embeddedEvent)?"coexistence":whatsappEmbeddedRecoveryFinishEvent(embeddedEvent)?"coexistence_recovery":"cloud_api";
+    var expectedMode=state.whatsappEmbedded.config&&state.whatsappEmbedded.config.onboarding_mode||"cloud_api",eventMode=whatsappEmbeddedCoexistenceFinishEvent(embeddedEvent)?"coexistence":whatsappEmbeddedRecoveryFinishEvent(embeddedEvent)||embeddedEvent==="FINISH_ONLY_WABA"&&expectedMode==="coexistence_recovery"?"coexistence_recovery":"cloud_api";
     if(expectedMode!==eventMode){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta terminó con un tipo de conexión distinto al elegido. Cancela el intento y vuelve a empezar.","error");loadChannelConnections(true);return;}
     if(!session.waba_id){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta no devolvió la cuenta de WhatsApp seleccionada. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);return;}
     state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:session.phone_number_id?String(session.phone_number_id):"",business_id:session.business_id?String(session.business_id):"",onboarding_event:embeddedEvent,coexistence:eventMode!=="cloud_api",is_wa_login_user:eventMode==="coexistence",app_only_install:eventMode==="coexistence_recovery"};

@@ -4,7 +4,7 @@ Este procedimiento publica el onboarding autoservicio de WhatsApp incluido en
 `v360-whatsapp-coexistence`. El release autorizado es:
 
 ```text
-CODE_SHA: b7b9bd3bc181e7e6874beff5326057b1c7679eaa
+CODE_SHA: cad88c7b7e817efbd54c5a56350b9b100e8783c8
 BOT_VERSION: v360-whatsapp-coexistence
 ```
 
@@ -21,7 +21,7 @@ La apertura requiere el E2E completo de la sección **Validación E2E**.
 Antes de empezar, registrar en el ticket de cambio:
 
 ```text
-CODE_SHA=b7b9bd3bc181e7e6874beff5326057b1c7679eaa
+CODE_SHA=cad88c7b7e817efbd54c5a56350b9b100e8783c8
 RUNBOOK_COMMIT_SHA=<commit que solo agrega/corrige este documento>
 PREVIOUS_DEPLOY_ID=<deployment actualmente sano>
 PREVIOUS_SHA=<SHA actualmente sano>
@@ -420,7 +420,7 @@ having count(distinct tenant_id) > 1;
 ## 6. Verificar v360 con las mutaciones cerradas
 
 Conservar `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0` y desplegar manualmente el
-`CODE_SHA` exacto `b7b9bd3bc181e7e6874beff5326057b1c7679eaa`.
+`CODE_SHA` exacto `cad88c7b7e817efbd54c5a56350b9b100e8783c8`.
 No crear todavía `CHANNEL_CONNECTIONS_V1_ENABLED` ni encender el store dedicado.
 
 Esperar a que **todas** las instancias terminen el reemplazo. En cada instancia

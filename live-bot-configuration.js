@@ -142,6 +142,30 @@ function stableFingerprint(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function greetingOnlyMessage(value) {
+  return /^(?:hola|holi|hey|hello|buen(?:os|as)?\s+(?:d[ií]as|tardes|noches))[!¡?¿.,\s]*$/i
+    .test(String(value || "").trim());
+}
+
+function liveConfigurationChanged(previousFingerprint, nextFingerprint) {
+  const previous = String(previousFingerprint || "").trim();
+  const next = String(nextFingerprint || "").trim();
+  return !!(previous && next && previous !== next);
+}
+
+function configuredGreetingForTurn(options) {
+  options = options || {};
+  const greeting = String(options.greeting || "").trim();
+  const fingerprint = String(options.fingerprint || "").trim();
+  const greetedFingerprint = String(options.greeted_fingerprint || "").trim();
+  const eligible = options.active === true && greeting && greetingOnlyMessage(options.message);
+  if (!eligible) return "";
+  if (options.new_session === true || options.configuration_changed === true || fingerprint !== greetedFingerprint) {
+    return greeting;
+  }
+  return "";
+}
+
 function resolveLiveBotConfiguration(record, options) {
   options = options || {};
   const tenantId = String(options.tenant_id || record && record.tenant_id || "").trim().toLowerCase();
@@ -175,9 +199,12 @@ function resolveLiveBotConfiguration(record, options) {
 
 module.exports = {
   canonicalCustomerServiceConfiguration,
+  configuredGreetingForTurn,
   customerServiceApproved,
   customerServiceContracted,
   effectiveCustomerServiceConfiguration,
+  greetingOnlyMessage,
+  liveConfigurationChanged,
   resolveLiveBotConfiguration,
   stableFingerprint
 };

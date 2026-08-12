@@ -188,6 +188,7 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(panel.includes('id="commerceConnectorCards"'));
     assert(panel.includes("Conectar número nuevo"));
     assert(panel.includes("Conservar mi WhatsApp Business"));
+    assert(panel.includes("Recuperar conexión existente"));
     assert(panel.includes("Meta puede exigir al menos 7 días de actividad real"));
     assert(panel.includes('code==="3441045"'));
     assert(panel.includes("Meta todavía no habilita coexistencia para este número"));
@@ -196,9 +197,9 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(!panel.includes("/admin/panel/channel-connections/whatsapp/activate"));
     assert(!panel.includes("activateWhatsApp("));
     assert(panel.includes("if(channel===\"whatsapp\"&&(state.whatsappConnecting||state.whatsappEmbedded))return"));
-    assert(panel.includes('extras:config.onboarding_mode==="coexistence"?'));
-    assert(panel.includes('sessionInfoVersion:"3"}:{}'));
+    assert(panel.includes('extras:config.onboarding_mode==="coexistence"'));
     assert(panel.includes('sessionInfoVersion:"3"'));
+    assert(panel.includes('features:[{name:"app_only_install"}]'));
     assert(panel.includes('"FINISH_ONLY_WABA"'));
     assert(panel.includes('"FINISH_GRANT_ONLY_API_ACCESS"'));
     assert(panel.includes("WHATSAPP_VERIFY_WINDOW_MS=120000"));
@@ -206,10 +207,11 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert(panel.includes("metaSdkPromise=null"));
     assert(panel.includes('featureType:"whatsapp_business_app_onboarding"'));
     assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence&quot;)'));
+    assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;coexistence_recovery&quot;)'));
     assert(panel.includes('connectChannel(&quot;whatsapp&quot;,&quot;cloud_api&quot;)'));
     assert(panel.includes('connection&&connection.status==="connected"'));
     assert(panel.includes('FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING'));
-    assert(panel.includes('coexistence:eventMode==="coexistence"'));
+    assert(panel.includes('coexistence:eventMode!=="cloud_api"'));
     assert(!panel.includes("scheduleWhatsAppActivationCheck"));
     assert(!panel.includes('id="whatsappRegistrationPin"'));
     assert(!panel.includes("JSON.stringify({pin:pin})"));
@@ -249,6 +251,27 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert.strictEqual(coexistenceHarness.context.state.whatsappEmbedded.session.coexistence, true);
     assert.strictEqual(coexistenceHarness.context.state.whatsappEmbedded.session.is_wa_login_user, true);
     assert.strictEqual(coexistenceHarness.calls.completes, 1);
+
+    const recoveryHarness = whatsappEmbeddedListenerHarness(panel);
+    recoveryHarness.context.state.whatsappEmbedded.config.onboarding_mode = "coexistence_recovery";
+    recoveryHarness.listener({
+      origin: "https://business.facebook.com",
+      data: {
+        type: "WA_EMBEDDED_SIGNUP",
+        event: "FINISH_GRANT_ONLY_API_ACCESS",
+        data: {
+          waba_id: "waba-recovery",
+          phone_number_id: "phone-recovery",
+          business_id: "business-recovery"
+        }
+      }
+    });
+    assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.waba_id, "waba-recovery");
+    assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.onboarding_event,
+      "FINISH_GRANT_ONLY_API_ACCESS");
+    assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.coexistence, true);
+    assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.app_only_install, true);
+    assert.strictEqual(recoveryHarness.calls.completes, 1);
 
     const modeMismatchHarness = whatsappEmbeddedListenerHarness(panel);
     modeMismatchHarness.listener({
@@ -486,6 +509,30 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-coexistence-config");
     assert.strictEqual(body.embedded_signup.onboarding_mode, "coexistence");
     assert.strictEqual(body.embedded_signup.flow, "whatsapp_business_app_coexistence");
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/attempt", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie }
+    });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual((await response.json()).connection.status, "not_connected");
+
+    response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://nextforia.com",
+        "x-nextforia-panel-origin": "https://nextforia.com",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "nextforia.com",
+        cookie: ravCustomer.cookie
+      },
+      body: JSON.stringify({ onboarding_mode: "coexistence_recovery" })
+    });
+    assert.strictEqual(response.status, 200, "the customer must be able to recover an existing coexistence grant");
+    body = await response.json();
+    assert.strictEqual(body.embedded_signup.configuration_id, "channel-e2e-whatsapp-coexistence-config");
+    assert.strictEqual(body.embedded_signup.onboarding_mode, "coexistence_recovery");
+    assert.strictEqual(body.embedded_signup.flow, "whatsapp_business_app_recovery");
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/attempt", {
       method: "DELETE",
       headers: { "content-type": "application/json", origin: base, cookie: ravCustomer.cookie }

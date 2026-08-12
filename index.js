@@ -345,7 +345,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v360-whatsapp-coexistence";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v361-whatsapp-coexistence-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -14380,13 +14380,16 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   try {
     const requestedWhatsAppMode = cleanRuntimeText(req.body && req.body.onboarding_mode, 40).toLowerCase();
     const whatsappOnboardingMode = channel === "whatsapp"
-      ? requestedWhatsAppMode === "coexistence" ? "coexistence" : "cloud_api"
+      ? requestedWhatsAppMode === "coexistence" || requestedWhatsAppMode === "coexistence_recovery"
+        ? requestedWhatsAppMode
+        : "cloud_api"
       : "";
     if (channel === "whatsapp" && requestedWhatsAppMode &&
-        !["cloud_api", "coexistence"].includes(requestedWhatsAppMode)) {
+        !["cloud_api", "coexistence", "coexistence_recovery"].includes(requestedWhatsAppMode)) {
       throw new ChannelConnectionError("invalid_channel_request", 400, "Unsupported WhatsApp onboarding mode");
     }
-    if (whatsappOnboardingMode === "coexistence" && !META_WHATSAPP_COEXISTENCE_CONFIG_ID) {
+    if (["coexistence", "coexistence_recovery"].includes(whatsappOnboardingMode) &&
+        !META_WHATSAPP_COEXISTENCE_CONFIG_ID) {
       throw new ChannelConnectionError("channel_oauth_not_configured", 503, "WhatsApp coexistence configuration is missing");
     }
     const whatsappAttemptId = channel === "whatsapp" ? crypto.randomUUID() : "";
@@ -14412,7 +14415,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
         ok: true,
         embedded_signup: {
           app_id: META_APP_ID,
-          configuration_id: whatsappOnboardingMode === "coexistence"
+          configuration_id: ["coexistence", "coexistence_recovery"].includes(whatsappOnboardingMode)
             ? META_WHATSAPP_COEXISTENCE_CONFIG_ID
             : META_WHATSAPP_CONFIG_ID,
           graph_version: META_GRAPH_VERSION,
@@ -14420,6 +14423,8 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
           onboarding_mode: whatsappOnboardingMode,
           flow: whatsappOnboardingMode === "coexistence"
             ? "whatsapp_business_app_coexistence"
+            : whatsappOnboardingMode === "coexistence_recovery"
+              ? "whatsapp_business_app_recovery"
             : "new_cloud_api_number"
         }
       });

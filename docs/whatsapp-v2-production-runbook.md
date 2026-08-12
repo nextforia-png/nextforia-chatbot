@@ -1,11 +1,11 @@
 # WhatsApp v2/v360: runbook ejecutable de Producción en Render Free
 
 Este procedimiento publica el onboarding autoservicio de WhatsApp incluido en
-`v360-whatsapp-coexistence`. El release autorizado es:
+`v361-whatsapp-coexistence-recovery`. El release autorizado es:
 
 ```text
 CODE_SHA: cad88c7b7e817efbd54c5a56350b9b100e8783c8
-BOT_VERSION: v360-whatsapp-coexistence
+BOT_VERSION: v361-whatsapp-coexistence-recovery
 ```
 
 `CODE_SHA` identifica el código ejecutable aprobado y no cambia cuando este
@@ -427,7 +427,7 @@ Esperar a que **todas** las instancias terminen el reemplazo. En cada instancia
 deben aparecer:
 
 ```text
-NextforIA Chatbot v360-whatsapp-coexistence ... running on port ...
+NextforIA Chatbot v361-whatsapp-coexistence-recovery ... running on port ...
 Meta channel delivery: encrypted tenant connections only
 ```
 
@@ -441,7 +441,7 @@ curl -fsS "https://api.nextforia.com/admin/health"
 Gate provisional:
 
 ```text
-bot.version == v360-whatsapp-coexistence
+bot.version == v361-whatsapp-coexistence-recovery
 status == running
 customer_setup.meta_oauth_ready == false (esperado con mutaciones cerradas)
 ```
@@ -485,7 +485,7 @@ curl -fsS "https://api.nextforia.com/admin/health"
 Gate obligatorio:
 
 ```text
-bot.version == v360-whatsapp-coexistence
+bot.version == v361-whatsapp-coexistence-recovery
 customer_setup.channel_storage_ready == true
 customer_setup.meta_oauth_ready == false
 status == running

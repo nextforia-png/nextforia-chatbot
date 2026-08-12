@@ -65,7 +65,12 @@ function cleanWhatsAppRegistrationPin(value) {
 
 function cleanWhatsAppOnboardingMode(value) {
   const mode = cleanText(value, 40).toLowerCase();
-  return mode === "coexistence" || mode === "cloud_api" ? mode : "";
+  return mode === "coexistence" || mode === "coexistence_recovery" || mode === "cloud_api" ? mode : "";
+}
+
+function whatsappMetaManagedOnboardingMode(value) {
+  const mode = cleanWhatsAppOnboardingMode(value);
+  return mode === "coexistence" || mode === "coexistence_recovery";
 }
 
 function decodeWhatsAppProfileImage(value) {
@@ -409,10 +414,11 @@ function publicConnection(record, options) {
 function createOAuthState(secret, input, now) {
   const key = String(secret || "");
   if (key.length < 32) throw new ChannelConnectionError("channel_oauth_not_configured", 503, "OAuth state secret is missing");
+  const channel = cleanChannel(input && input.channel);
   const payload = Buffer.from(JSON.stringify({
     v: 2,
     tenant_id: cleanTenantId(input && input.tenant_id),
-    channel: cleanChannel(input && input.channel),
+    channel,
     actor_id: cleanText(input && input.actor_id, 200),
     actor: cleanText(input && input.actor, 200),
     redirect_uri: cleanText(input && input.redirect_uri, 500),
@@ -425,7 +431,11 @@ function createOAuthState(secret, input, now) {
       ? cleanText(input && input.whatsapp_attempt_id, 100)
       : "",
     nonce: crypto.randomBytes(24).toString("base64url"),
-    exp: Number(now || Date.now()) + 10 * 60 * 1000
+    // WhatsApp Embedded Signup can require switching to the phone, importing
+    // history and renewing Meta's short-lived access code. Keep the signed,
+    // actor/tenant/attempt-bound state alive for that human flow without
+    // extending the shorter OAuth window used by the other Meta channels.
+    exp: Number(now || Date.now()) + (channel === "whatsapp" ? 60 : 10) * 60 * 1000
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", key).update("channel-oauth." + payload).digest("base64url");
   return payload + "." + signature;
@@ -2325,6 +2335,8 @@ class MetaChannelProvider {
         session.onboarding_event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING" ||
         session.is_wa_login_user === true
       );
+      const appOnlyRecoveryConfirmed = session &&
+        session.onboarding_event === "FINISH_GRANT_ONLY_API_ACCESS";
       const isOnBusinessApp = phone.is_on_biz_app === true;
       if (onboardingMode === "coexistence") {
         if (!coexistenceEventConfirmed) {
@@ -2341,7 +2353,22 @@ class MetaChannelProvider {
             "Coexistence requires a number that remains active in WhatsApp Business App"
           );
         }
-      } else if (coexistenceEventConfirmed || isOnBusinessApp) {
+      } else if (onboardingMode === "coexistence_recovery") {
+        if (!appOnlyRecoveryConfirmed) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_event_required",
+            422,
+            "Meta did not confirm app-only access for this recovery attempt"
+          );
+        }
+        if (!isOnBusinessApp) {
+          throw new ChannelConnectionError(
+            "whatsapp_coexistence_number_required",
+            409,
+            "Recovery requires a number that remains active in WhatsApp Business App"
+          );
+        }
+      } else if (coexistenceEventConfirmed || appOnlyRecoveryConfirmed || isOnBusinessApp) {
         throw new ChannelConnectionError(
           "whatsapp_onboarding_mode_mismatch",
           409,
@@ -2364,8 +2391,9 @@ class MetaChannelProvider {
         phone_number_id: phoneNumberId,
         access_token: accessToken,
         onboarding_mode: onboardingMode,
-        coexistence: onboardingMode === "coexistence",
-        coexistence_event_confirmed: onboardingMode === "coexistence" && coexistenceEventConfirmed === true
+        coexistence: whatsappMetaManagedOnboardingMode(onboardingMode),
+        coexistence_event_confirmed: whatsappMetaManagedOnboardingMode(onboardingMode) &&
+          (coexistenceEventConfirmed === true || appOnlyRecoveryConfirmed === true)
       };
     } catch (error) {
       if (error instanceof ChannelConnectionError) throw error;
@@ -2948,7 +2976,8 @@ function createChannelConnectionService(options) {
   function whatsappCredentialFromCandidate(candidate) {
     const onboardingMode = cleanWhatsAppOnboardingMode(candidate && candidate.onboarding_mode) ||
       (candidate && candidate.coexistence === true ? "coexistence" : "cloud_api");
-    const coexistence = onboardingMode === "coexistence" && candidate && candidate.coexistence === true;
+    const coexistence = whatsappMetaManagedOnboardingMode(onboardingMode) &&
+      candidate && candidate.coexistence === true;
     return {
       access_token: cleanText(candidate && candidate.access_token, 4096),
       login_type: null,
@@ -3093,7 +3122,7 @@ function createChannelConnectionService(options) {
             "Meta returned a different WhatsApp onboarding mode than the signed attempt"
           );
         }
-        const coexistence = candidateOnboardingMode === "coexistence";
+        const coexistence = whatsappMetaManagedOnboardingMode(candidateOnboardingMode);
         if (coexistence && (candidate.coexistence !== true || candidate.coexistence_event_confirmed !== true)) {
           throw new ChannelConnectionError(
             "whatsapp_coexistence_event_required",
@@ -3468,6 +3497,8 @@ function createChannelConnectionService(options) {
             onboarding_mode: onboardingMode,
             flow: onboardingMode === "coexistence"
               ? "whatsapp_business_app_coexistence"
+              : onboardingMode === "coexistence_recovery"
+                ? "whatsapp_business_app_recovery"
               : "new_cloud_api_number"
           }
         });

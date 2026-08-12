@@ -50,6 +50,8 @@ function expectCode(promise, code) {
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).return_mode, "popup");
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).whatsapp_onboarding_mode, "cloud_api");
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).whatsapp_attempt_id, "attempt-a");
+  assert.strictEqual(readOAuthState(stateSecret, popupState, 30 * 60 * 1000).whatsapp_attempt_id, "attempt-a");
+  assert.strictEqual(readOAuthState(stateSecret, popupState, 61 * 60 * 1000), null);
   assert.strictEqual(readOAuthState(stateSecret, state.slice(0, -1) + "x", 2000), null);
   assert.strictEqual(readOAuthState(stateSecret, state, 11 * 60 * 1000), null);
 
@@ -234,6 +236,24 @@ function expectCode(promise, code) {
   assert.strictEqual(embeddedCoexistenceCandidate.onboarding_mode, "coexistence");
   assert.strictEqual(embeddedCoexistenceCandidate.coexistence, true);
   assert.strictEqual(embeddedCoexistenceCandidate.coexistence_event_confirmed, true);
+  const embeddedRecoveryCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-coexistence",
+    phone_number_id: "phone-coexistence",
+    business_id: "business-coexistence",
+    onboarding_mode: "coexistence_recovery",
+    onboarding_event: "FINISH_GRANT_ONLY_API_ACCESS",
+    app_only_install: true
+  });
+  assert.strictEqual(embeddedRecoveryCandidate.phone_number_id, "phone-coexistence");
+  assert.strictEqual(embeddedRecoveryCandidate.onboarding_mode, "coexistence_recovery");
+  assert.strictEqual(embeddedRecoveryCandidate.coexistence, true);
+  assert.strictEqual(embeddedRecoveryCandidate.coexistence_event_confirmed, true);
+  await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-coexistence",
+    phone_number_id: "phone-coexistence",
+    onboarding_mode: "coexistence_recovery",
+    onboarding_event: "FINISH"
+  }), "whatsapp_coexistence_event_required");
   await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
     business_id: "business-embedded",

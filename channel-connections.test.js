@@ -241,7 +241,7 @@ function expectCode(promise, code) {
     phone_number_id: "phone-coexistence",
     business_id: "business-coexistence",
     onboarding_mode: "coexistence_recovery",
-    onboarding_event: "FINISH_ONLY_WABA",
+    onboarding_event: "FINISH_GRANT_ONLY_API_ACCESS",
     app_only_install: true
   });
   assert.strictEqual(embeddedRecoveryCandidate.phone_number_id, "phone-coexistence");

@@ -2173,7 +2173,7 @@ function launchWhatsAppEmbeddedSignup(config){
       extras:config.onboarding_mode==="coexistence"
         ?{setup:{},featureType:"whatsapp_business_app_onboarding",sessionInfoVersion:"3"}
         :config.onboarding_mode==="coexistence_recovery"
-          ?{setup:{},featureType:"only_waba_sharing",sessionInfoVersion:"3"}
+          ?{features:[{name:"app_only_install"}]}
           :{}
     });
   }).catch(function(){

@@ -409,10 +409,11 @@ function publicConnection(record, options) {
 function createOAuthState(secret, input, now) {
   const key = String(secret || "");
   if (key.length < 32) throw new ChannelConnectionError("channel_oauth_not_configured", 503, "OAuth state secret is missing");
+  const channel = cleanChannel(input && input.channel);
   const payload = Buffer.from(JSON.stringify({
     v: 2,
     tenant_id: cleanTenantId(input && input.tenant_id),
-    channel: cleanChannel(input && input.channel),
+    channel,
     actor_id: cleanText(input && input.actor_id, 200),
     actor: cleanText(input && input.actor, 200),
     redirect_uri: cleanText(input && input.redirect_uri, 500),
@@ -425,7 +426,11 @@ function createOAuthState(secret, input, now) {
       ? cleanText(input && input.whatsapp_attempt_id, 100)
       : "",
     nonce: crypto.randomBytes(24).toString("base64url"),
-    exp: Number(now || Date.now()) + 10 * 60 * 1000
+    // WhatsApp Embedded Signup can require switching to the phone, importing
+    // history and renewing Meta's short-lived access code. Keep the signed,
+    // actor/tenant/attempt-bound state alive for that human flow without
+    // extending the shorter OAuth window used by the other Meta channels.
+    exp: Number(now || Date.now()) + (channel === "whatsapp" ? 60 : 10) * 60 * 1000
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", key).update("channel-oauth." + payload).digest("base64url");
   return payload + "." + signature;

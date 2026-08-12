@@ -50,6 +50,8 @@ function expectCode(promise, code) {
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).return_mode, "popup");
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).whatsapp_onboarding_mode, "cloud_api");
   assert.strictEqual(readOAuthState(stateSecret, popupState, 2000).whatsapp_attempt_id, "attempt-a");
+  assert.strictEqual(readOAuthState(stateSecret, popupState, 30 * 60 * 1000).whatsapp_attempt_id, "attempt-a");
+  assert.strictEqual(readOAuthState(stateSecret, popupState, 61 * 60 * 1000), null);
   assert.strictEqual(readOAuthState(stateSecret, state.slice(0, -1) + "x", 2000), null);
   assert.strictEqual(readOAuthState(stateSecret, state, 11 * 60 * 1000), null);
 

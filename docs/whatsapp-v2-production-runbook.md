@@ -1,11 +1,11 @@
-# WhatsApp v2/v360: runbook ejecutable de Producción en Render Free
+# WhatsApp v2/v368: runbook ejecutable de Producción en Render Free
 
 Este procedimiento publica el onboarding autoservicio de WhatsApp incluido en
-`v360-whatsapp-coexistence`. El release autorizado es:
+`v368-whatsapp-coexistence`. El release autorizado es:
 
 ```text
 CODE_SHA: b7b9bd3bc181e7e6874beff5326057b1c7679eaa
-BOT_VERSION: v360-whatsapp-coexistence
+BOT_VERSION: v368-whatsapp-coexistence
 ```
 
 `CODE_SHA` identifica el código ejecutable aprobado y no cambia cuando este
@@ -54,7 +54,7 @@ Roles mínimos:
 
 El estado conocido de Producción es el servicio
 `srv-d7kkqqbeo5us73de2500`, plan **Free**, una sola instancia y Auto-Deploy
-**Off**. v360 conserva `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED`: al ponerlo en
+**Off**. v368 conserva `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED`: al ponerlo en
 `0`, todos los connect/select/verify/disconnect y callbacks OAuth quedan
 cerrados, mientras los webhooks y runtimes ya conectados permanecen activos.
 Esta es la barrera gratuita usada durante los tres reemplazos de instancia.
@@ -74,7 +74,7 @@ y [secuencia de deploy/restart](https://render.com/docs/deploys).
 2. Un `phone_number_id` o WABA activo/no terminal pertenece a un solo tenant.
 3. `whatsapp_registration_claims` se escribe antes del único intento de
    `POST /{phone_number_id}/register`. Meta no ofrece idempotency key: si el
-   proceso cae después del envío, v360 reconcilia, pero no repite `/register`
+   proceso cae después del envío, v368 reconcilia, pero no repite `/register`
    durante 72 horas.
 4. Un webhook firmado se confirma con HTTP 200 solo después de persistir todos
    sus mensajes/estados en `meta_webhook_events`.
@@ -171,7 +171,7 @@ las credenciales y payloads ya cifrados. Confirmar además en Meta:
 
 Inventariar por nombre y presencia —sin imprimir valores— estas pistas antiguas.
 No retirarlas todavía: su eliminación se hace con el gate de mutaciones cerrado
-en la sección 7, después de probar el owner tenant-scoped cifrado. v360 las ignora y emite
+en la sección 7, después de probar el owner tenant-scoped cifrado. v368 las ignora y emite
 `environment_channel_ownership_hints_ignored`, pero no deben quedar como un
 respaldo aparente:
 
@@ -217,7 +217,7 @@ automáticamente durante este release.
    obliga a detener el procedimiento y resolverlo antes del corte; no borrar ni
    reasignar filas para hacer pasar el gate.
 3. Confirmar que el servicio sigue con una sola instancia Free y Auto-Deploy
-   Off. Agregar únicamente el gate operativo y desplegar v360:
+   Off. Agregar únicamente el gate operativo y desplegar v368:
 
    ```text
    CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0
@@ -228,7 +228,7 @@ automáticamente durante este release.
    ausente/false. Esperar que el deployment nuevo esté `live` y que el anterior
    haya terminado.
 4. Confirmar desde Internet que `/admin/health` sigue `running`, que el bot es
-   v360 y que `customer_setup.meta_oauth_ready=false`. Los webhooks no deben
+   v368 y que `customer_setup.meta_oauth_ready=false`. Los webhooks no deben
    responder 503: los canales existentes continúan activos; únicamente las
    mutaciones devuelven `channel_connections_maintenance`/Retry-After.
 5. Confirmar en Deploys/Logs que no queda el deployment anterior.
@@ -248,7 +248,7 @@ automáticamente durante este release.
 
    Si la tabla aún no existe, esta comprobación se repite después de migrar.
 
-Gate: bot v360 `live`, mutaciones cerradas, runtimes/webhooks existentes sanos,
+Gate: bot v368 `live`, mutaciones cerradas, runtimes/webhooks existentes sanos,
 ninguna instancia antigua recibiendo solicitudes y cero eventos `processing`.
 
 ## 4. Backup y preflight de ownership
@@ -311,7 +311,7 @@ Gates:
 
 ## 5. Aplicar y verificar migraciones
 
-Con `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0` y v360 confirmado `live`, aplicar
+Con `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0` y v368 confirmado `live`, aplicar
 en Supabase Producción:
 
 1. `docs/migrations/20260726_channel_connections_v1_up.sql`, solamente si la
@@ -375,7 +375,7 @@ select has_table_privilege('service_role',
 Todas las relaciones deben existir y todos los booleanos deben ser `true`.
 No ejecutar `select public.meta_webhook_inbox_ready_v1()` desde SQL Editor: la
 función falla correctamente con `SERVICE_ROLE_REQUIRED` fuera de una solicitud
-autenticada como `service_role`. El preflight runtime de v360 es quien prueba esa
+autenticada como `service_role`. El preflight runtime de v368 es quien prueba esa
 RPC con el rol correcto.
 
 Repetir las consultas de ownership incorporando intentos v2; ambas deben dar
@@ -417,7 +417,7 @@ group by asset_id
 having count(distinct tenant_id) > 1;
 ```
 
-## 6. Verificar v360 con las mutaciones cerradas
+## 6. Verificar v368 con las mutaciones cerradas
 
 Conservar `CHANNEL_CONNECTIONS_MUTATIONS_ENABLED=0` y desplegar manualmente el
 `CODE_SHA` exacto `b7b9bd3bc181e7e6874beff5326057b1c7679eaa`.
@@ -427,7 +427,7 @@ Esperar a que **todas** las instancias terminen el reemplazo. En cada instancia
 deben aparecer:
 
 ```text
-NextforIA Chatbot v360-whatsapp-coexistence ... running on port ...
+NextforIA Chatbot v368-whatsapp-coexistence ... running on port ...
 Meta channel delivery: encrypted tenant connections only
 ```
 
@@ -441,7 +441,7 @@ curl -fsS "https://api.nextforia.com/admin/health"
 Gate provisional:
 
 ```text
-bot.version == v360-whatsapp-coexistence
+bot.version == v368-whatsapp-coexistence
 status == running
 customer_setup.meta_oauth_ready == false (esperado con mutaciones cerradas)
 ```
@@ -485,7 +485,7 @@ curl -fsS "https://api.nextforia.com/admin/health"
 Gate obligatorio:
 
 ```text
-bot.version == v360-whatsapp-coexistence
+bot.version == v368-whatsapp-coexistence
 customer_setup.channel_storage_ready == true
 customer_setup.meta_oauth_ready == false
 status == running
@@ -524,7 +524,7 @@ cualquier `dead_letter` y no borrarla.
 
 ## 8. Abrir el alta pública sin exponer fleet incompatible
 
-Antes de abrir, la instancia debe ejecutar v360 con el store dedicado en `1` y
+Antes de abrir, la instancia debe ejecutar v368 con el store dedicado en `1` y
 las mutaciones siguen cerradas. Cambiar:
 
 ```text
@@ -557,7 +557,7 @@ Verificar desde Internet:
 curl -fsS https://api.nextforia.com/admin/health
 ```
 
-Debe mostrar v360, `channel_storage_ready=true`, `meta_oauth_ready=true` y
+Debe mostrar v368, `channel_storage_ready=true`, `meta_oauth_ready=true` y
 `status=running`. Antes de conectar un número, `/whatsapp/health` puede responder
 503 con `status=not_configured`; eso es esperado y no demuestra un fallo del
 store. Tampoco es evidencia de E2E.
@@ -707,7 +707,7 @@ Gates finales:
 
 Si Meta devuelve `131042`, el bot de entrada puede recibir, pero la salida queda
 bloqueada. El gate falla: agregar un método de pago válido, enviar un mensaje
-nuevo y esperar un status `delivered`/`read` más reciente. v360 mantiene
+nuevo y esperar un status `delivered`/`read` más reciente. v368 mantiene
 `webhook_status=outbound_billing_blocked` hasta esa evidencia posterior; no
 limpiar el campo manualmente.
 
@@ -744,13 +744,13 @@ Este es el rollback preferido ante cualquier anomalía de onboarding:
    CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=1
    ```
 
-2. Redesplegar el mismo SHA v360 y esperar el reemplazo de la instancia Free.
+2. Redesplegar el mismo SHA v368 y esperar el reemplazo de la instancia Free.
 3. Repetir los gates de store/inbox y confirmar que los webhooks existentes
    siguen respondiendo.
 
 Resultado: el botón de alta queda cerrado; conexiones tenant-scoped existentes,
 webhooks, inbox, reintentos y respuestas siguen usando el store durable. Nunca
-poner `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=0` mientras v360 siga
+poner `CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED=0` mientras v368 siga
 atendiendo conexiones creadas por v2.
 
 ## Rollback de aplicación
@@ -764,7 +764,7 @@ roll-forward.
 Para un SHA compatible:
 
 1. Aplicar primero el kill switch
-   (`MUTATIONS_ENABLED=0`, `DEDICATED_STORE_ENABLED=1`) en v360.
+   (`MUTATIONS_ENABLED=0`, `DEDICATED_STORE_ENABLED=1`) en v368.
 2. Esperar que la instancia Free nueva esté `live` y la anterior haya terminado.
 3. Esperar `processing_now=0` dos veces con 30 s de separación.
 4. Desplegar el SHA compatible conocido manteniendo el store durable en `1` y

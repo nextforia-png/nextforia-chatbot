@@ -20,6 +20,8 @@ assert.strictEqual(page.status, 200);
 assert.match(page.headers["content-type"], /text\/html/);
 assert.match(page.html, /id="email" type="email"/);
 assert.match(page.html, /JSON\.stringify\(\{email:/);
+assert.match(page.html, /clearPanelBrowserState/);
+assert.match(page.html, /nextfor-integration-result/);
 assert.doesNotMatch(page.html, /id="username"/);
 assert.doesNotMatch(page.html, /Crear una cuenta nueva/);
 assert.match(page.html, /Crea tu cuenta/);

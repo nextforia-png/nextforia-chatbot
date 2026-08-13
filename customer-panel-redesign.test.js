@@ -5,7 +5,7 @@ const renderCustomerPanel = require("./customer-panel");
 const botConfiguration = require("./customer-bot-configuration");
 
 function render(flag, initialTab) {
-  process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = flag ? "true" : "false";
+  process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = flag ? "true" : "0";
   let html = "";
   const res = {
     status: function (code) { assert.strictEqual(code, 200); return this; },
@@ -181,6 +181,14 @@ const stagingDefault = renderStagingDefault();
 assert(stagingDefault.includes('<body class="panel-redesign">'));
 assert(stagingDefault.includes('id="nav-orders"'));
 
+// Production carried the old review-era literal `false`.  A successful code
+// deploy must still serve the approved v2 panel; only `0` is the rollback.
+process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = "false";
+const migratedProductionFlag = renderTenant("nextfor-aura", "summary", true);
+assert(migratedProductionFlag.includes('<body class="panel-redesign">'));
+assert(migratedProductionFlag.includes('id="nav-orders"'));
+assert(migratedProductionFlag.includes("Oportunidades de venta"));
+
 const uno = renderTenant("nextfor-uno");
 assert(uno.includes("Nextfor Uno"));
 assert(uno.includes("/admin/assets/lumen-plan-uno.png"));
@@ -209,6 +217,10 @@ assert(atlas.includes("/admin/assets/lumen-plan-atlas.png"));
 assert(atlas.includes("2 bots entrenados y listos"));
 assert(atlas.includes('id="nav-appointments"'));
 assert(atlas.includes('id="nav-orders"'));
+const atlasSupportLabel = atlas.match(/id="bot-support"[\s\S]*?<strong>([^<]+)<\/strong>/);
+const atlasAppointmentLabel = atlas.match(/id="bot-appointments"[\s\S]*?<strong>([^<]+)<\/strong>/);
+assert.strictEqual(atlasSupportLabel && atlasSupportLabel[1], "Atención al cliente");
+assert.strictEqual(atlasAppointmentLabel && atlasAppointmentLabel[1], "Agendamiento");
 
 const auraOrdersOff = renderTenant("nextfor-aura", "orders", false);
 assert(!auraOrdersOff.includes('id="nav-orders"'));

@@ -345,7 +345,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v362-tenant-whatsapp-profile-sync";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v363-actionable-whatsapp-profile-message";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -10087,7 +10087,7 @@ async function applyTenantWhatsAppBusinessProfile(tenantId, personality, actor) 
         bot_applied: true,
         onboarding_mode: "coexistence",
         phone_number_suffix: result.phone_number_suffix || null,
-        message: "El bot ya usa estos cambios. Este número conserva WhatsApp Business en el celular, así que Meta exige terminar la foto, la descripción y el nombre público desde esa app."
+        message: "Bot actualizado. Para cambiar foto, nombre y descripción pública, abre WhatsApp Business en el celular y ve a Configuración → Herramientas para la empresa → Perfil de empresa. Meta puede revisar el nombre."
       };
     }
     return {

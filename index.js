@@ -351,7 +351,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v374-production-panel-module-derivation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v375-production-customer-orders-enabled";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -432,11 +432,11 @@ const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
 const CUSTOMER_ORDERS_V1_FLAG = String(process.env.CUSTOMER_ORDERS_V1_ENABLED || "").trim();
-const CUSTOMER_ORDERS_V1_ENABLED = CUSTOMER_ORDERS_V1_FLAG === "1" || (
-  CUSTOMER_ORDERS_V1_FLAG !== "0" && (
-    CUSTOMER_ACCESS_V2_GATE || process.env.RENDER_SERVICE_NAME === "nextforia-chatbot-staging"
-  )
-);
+// The customer orders module is part of the approved support-bot panel. Keep it
+// enabled by default in every environment and retain an explicit emergency
+// rollback. Plan and tenant authorization remain enforced server-side by
+// customerBusinessHasOrdersModule and the authenticated order routes.
+const CUSTOMER_ORDERS_V1_ENABLED = CUSTOMER_ORDERS_V1_FLAG !== "0";
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED =
   process.env.CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED === "1";

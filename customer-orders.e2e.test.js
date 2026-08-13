@@ -60,9 +60,11 @@ async function login(base, email, password) {
     env: Object.assign({}, process.env, {
       PORT: String(port),
       NODE_ENV: "test",
-      RENDER_SERVICE_NAME: "nextforia-chatbot-staging",
-      CUSTOMER_ORDERS_V1_ENABLED: "1",
-      CUSTOMER_ACCESS_V2_ENABLED: "1",
+      RENDER_SERVICE_NAME: "nextforia-chatbot",
+      CUSTOMER_ORDERS_V1_ENABLED: "",
+      // Production can auto-enable access v2 without the legacy flag being the
+      // literal string "1". Orders must not disappear in that valid setup.
+      CUSTOMER_ACCESS_V2_ENABLED: "",
       CUSTOMER_ACCESS_TEST_MODE: "1",
       CUSTOMER_ACCESS_TEST_USERS: JSON.stringify(fixtures),
       CUSTOMER_PANEL_BASE_URL: "https://customer-panel.staging.example",

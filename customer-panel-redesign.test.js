@@ -155,6 +155,10 @@ assert(redesigned.includes("openProfileSection('channels')"));
 assert(redesigned.includes("openProfileSection('setup')"));
 assert(redesigned.includes("openProfileSection('notifications')"));
 assert(!redesigned.includes("undefinedNotificaciones"));
+assert(
+  redesigned.indexOf('id="nav-notifications"') < redesigned.indexOf('<div class="footTitle">Cuenta</div>'),
+  "notifications must be the last bot navigation item, before the account submenu"
+);
 assert(!redesigned.includes('id="usagePct"'), "the approved plan redesign must not show chat consumption");
 assert(!redesigned.includes("Paquetes de rescate"), "unpublished rescue packages must not be shown as a product");
 assert(!redesigned.includes("Programa de referidos"), "an unimplemented referral program must not be presented as active");

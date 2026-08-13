@@ -42,6 +42,12 @@ const {
   InMemoryCustomerNotificationStore,
   createCustomerNotificationService
 } = require("./customer-notifications");
+const {
+  CUSTOMER_ORDER_STATE_TOOL,
+  CustomerOrderError,
+  InMemoryCustomerOrderStore,
+  createCustomerOrderService
+} = require("./customer-orders");
 const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
@@ -345,7 +351,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v361-whatsapp-coexistence-recovery";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v373-production-customer-panel-functional";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -425,6 +431,12 @@ const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
+const CUSTOMER_ORDERS_V1_FLAG = String(process.env.CUSTOMER_ORDERS_V1_ENABLED || "").trim();
+const CUSTOMER_ORDERS_V1_ENABLED = CUSTOMER_ORDERS_V1_FLAG === "1" || (
+  CUSTOMER_ORDERS_V1_FLAG !== "0" && (
+    CUSTOMER_ACCESS_V2_GATE || process.env.RENDER_SERVICE_NAME === "nextforia-chatbot-staging"
+  )
+);
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED =
   process.env.CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED === "1";
@@ -649,6 +661,24 @@ const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
 const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
+const SUPABASE_STATE_CACHE_TTL_MS = boundedEnvInt("SUPABASE_STATE_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
+const CUSTOMER_CONFIGURATION_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_CONFIGURATION_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
+const CUSTOMER_PANEL_PAGE_SIZE = boundedEnvInt("CUSTOMER_PANEL_PAGE_SIZE", 100, 25, 200);
+const CUSTOMER_PANEL_MAX_PAGE_SIZE = 200;
+const CUSTOMER_PANEL_INTERNAL_STATE_TOOLS = Object.freeze([
+  DASHBOARD_CUSTOMER_USER_TOOL,
+  SUPER_ADMIN_ACCESS_TOOL,
+  BOT_SETUP_TOOL,
+  CLIENT_ONBOARDING_TOOL,
+  CUSTOMER_SETUP_QUESTIONNAIRE_TOOL,
+  LEGACY_CLIENT_VISIBILITY_TOOL,
+  RETARGETING_EVENT_TOOL,
+  CHANNEL_CONNECTION_STATE_TOOL,
+  SHOPIFY_SESSION_STATE_TOOL,
+  SIGNATURE_TOOL,
+  APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL
+]);
+const CUSTOMER_PANEL_TURN_COLUMNS = "id,ts,tenant_id,phone_number_id,channel,user_id,user_message,bot_reply,tools,zero_result_queries,handoff,rating,num_tools,status,eval";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
 const RETARGETING_TEST_MODE = process.env.RETARGETING_TEST_MODE === "1" && process.env.NODE_ENV !== "production";
 const RETARGETING_APPROVED_TEMPLATES = new Set((process.env.RETARGETING_APPROVED_TEMPLATES || "").split(",").map(function (value) { return value.trim(); }).filter(Boolean));
@@ -960,6 +990,7 @@ const clientOnboardingCacheByTenant = new Map();
 const clientOnboardingScopeConflictByKey = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
+const latestToolStateCache = new Map();
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
@@ -1060,6 +1091,23 @@ const persistentCustomerNotificationStore = {
   }
 };
 
+const persistentCustomerOrderStore = {
+  append: async function (record) {
+    const row = customerNotificationRecord(record, CUSTOMER_ORDER_STATE_TOOL, "CustomerOrderState", "__nextfor_order__:" + record.id);
+    row.ts = record.updated_at || record.created_at || row.ts;
+    row.sourceEventId = "customer-order:" + record.id + ":" + record.revision;
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(row);
+    else conversationLogs.push(row);
+    return record;
+  },
+  listTenant: async function (tenantId, limit) {
+    const rows = await customerNotificationTurns(CUSTOMER_ORDER_STATE_TOOL, tenantId, limit || 5000);
+    return rows.map(function (turn) {
+      return customerNotificationPayloadFromTurn(turn, CUSTOMER_ORDER_STATE_TOOL, "CustomerOrderState");
+    }).filter(Boolean);
+  }
+};
+
 let customerNotificationPushSender = null;
 if (WEB_PUSH_CONFIGURED) {
   webPush.setVapidDetails(WEB_PUSH_VAPID_SUBJECT, WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY);
@@ -1086,6 +1134,16 @@ const customerNotificationService = createCustomerNotificationService({
       tenant_id: notification && notification.tenant_id,
       error: String(error && error.message || error || "unknown").slice(0, 180)
     });
+  }
+});
+const customerOrderService = createCustomerOrderService({
+  store: SUPABASE_ENABLED ? persistentCustomerOrderStore : new InMemoryCustomerOrderStore(),
+  sendTracking: async function (order, trackingNumber) {
+    if (!order.conversation_id) throw new CustomerOrderError("conversation_required", "Este pedido no tiene una conversación asociada.", 409);
+    const message = "Tu pedido #" + order.order_number + " ya tiene guía 🚚\n\nNúmero de guía: " + trackingNumber + "\n\nPuedes guardarla para consultar el avance con la transportadora.";
+    const delivered = await sendText(order.conversation_id, message, { tenant_id: order.tenant_id });
+    if (delivered !== true) throw new CustomerOrderError("tracking_delivery_failed", "No pudimos entregar la guía en el canal del cliente. No se guardó como enviada.", 502);
+    await recordAdminEvent(order.conversation_id, "customer_order_tracking_sent", message, "ok", false, { tenantId: order.tenant_id });
   }
 });
 const metaWebhookInboxStore = CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED && SUPABASE_ENABLED && DATA_ENCRYPTION_KEY
@@ -1212,7 +1270,7 @@ const appendOnlyChannelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHAN
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyChannelConnectionTurn).find(Boolean) || null;
       },
       loadAll: async function () {
-        const rows = await supabaseFetchToolRecent(CHANNEL_CONNECTION_STATE_TOOL, 3000, { allTenants: true });
+        const rows = await supabaseFetchLatestToolStates(CHANNEL_CONNECTION_STATE_TOOL);
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyChannelConnectionTurn).filter(Boolean);
       },
       loadAllStrict: async function () {
@@ -1247,6 +1305,7 @@ const appendOnlyChannelConnectionStore = CHANNEL_CONNECTIONS_V1_VISIBLE && !CHAN
           status: "ok",
           eval: { skip: true, reason: CHANNEL_CONNECTION_STATE_TOOL }
         });
+        invalidateChannelRuntimeCache();
       }
     })
   : null;
@@ -1375,7 +1434,7 @@ const appendOnlyAppointmentCalendarStore = SUPABASE_ENABLED && process.env.NODE_
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyAppointmentCalendarTurn).find(Boolean) || null;
       },
       loadAll: async function () {
-        const rows = await supabaseFetchToolRecent(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL, 3000, { allTenants: true });
+        const rows = await supabaseFetchLatestToolStates(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
         return (rows || []).map(normalizeTurnRow).map(parseAppendOnlyAppointmentCalendarTurn).filter(Boolean);
       },
       append: async function (recordId, record, event) {
@@ -1606,7 +1665,7 @@ function connectionRuntimeFromRecord(record) {
 async function loadChannelRuntimeRows(force) {
   await channelConnectionBootstrapPromise;
   const now = Date.now();
-  if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < 15000) return channelRuntimeCache;
+  if (!force && channelRuntimeCache.loaded_at && now - channelRuntimeCache.loaded_at < SUPABASE_STATE_CACHE_TTL_MS) return channelRuntimeCache;
   const rows = [];
   if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionStore && typeof channelConnectionStore.listAll === "function") {
     try {
@@ -2301,6 +2360,7 @@ async function supabaseInsert(rec) {
       }, SB_HEADERS),
       timeout: 8000
     });
+    invalidateLatestToolStateCache(rec.tools, rec.tenantId);
   } catch (e) { console.error("supabaseInsert error:", e.response ? JSON.stringify(e.response.data).slice(0,200) : e.message); }
 }
 async function supabaseInsertStrict(rec) {
@@ -2326,6 +2386,88 @@ async function supabaseInsertStrict(rec) {
     }, SB_HEADERS),
     timeout: 8000
   });
+  invalidateLatestToolStateCache(rec.tools, rec.tenantId);
+}
+function latestToolStateCacheKey(toolName, tenantId) {
+  return String(toolName || "") + "\u001f" + (cleanTenantId(tenantId) || "*");
+}
+function invalidateLatestToolStateCache(tools, tenantId) {
+  (Array.isArray(tools) ? tools : []).forEach(function (toolName) {
+    latestToolStateCache.delete(latestToolStateCacheKey(toolName, tenantId));
+    latestToolStateCache.delete(latestToolStateCacheKey(toolName, null));
+  });
+}
+async function supabaseFetchLatestToolStates(toolName, options) {
+  if (!SUPABASE_ENABLED) return null;
+  options = options || {};
+  const tenantId = cleanTenantId(options.tenantId);
+  const cacheKey = latestToolStateCacheKey(toolName, tenantId);
+  const cached = latestToolStateCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.loaded_at < SUPABASE_STATE_CACHE_TTL_MS) return cached.rows.slice();
+  try {
+    const response = await axios.post(SUPABASE_URL + "/rest/v1/rpc/platform_latest_conversation_tool_states_v1", {
+      p_tool: String(toolName || ""),
+      p_tenant_id: tenantId || null
+    }, {
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length || process.env.NODE_ENV !== "test") {
+      latestToolStateCache.set(cacheKey, { loaded_at: Date.now(), rows: rows.slice() });
+      return rows;
+    }
+    throw Object.assign(new Error("test_rpc_unavailable"), { response: { status: 404, data: { code: "PGRST202" } } });
+  } catch (error) {
+    const status = error && error.response && error.response.status;
+    const code = error && error.response && error.response.data && error.response.data.code;
+    if (status !== 404 && code !== "PGRST202") throw error;
+    const rows = await supabaseFetchToolRecent(toolName, 3000, tenantId ? { tenantId } : { allTenants: true });
+    latestToolStateCache.set(cacheKey, { loaded_at: Date.now(), rows: (rows || []).slice() });
+    return rows || [];
+  }
+}
+async function supabaseFetchCustomerPanelPage(limit, options) {
+  if (!SUPABASE_ENABLED) return null;
+  options = options || {};
+  const tenantId = cleanTenantId(options.tenantId);
+  if (!tenantId) return [];
+  const before = options.before && Number.isFinite(Date.parse(options.before)) ? new Date(options.before).toISOString() : null;
+  try {
+    const response = await axios.post(SUPABASE_URL + "/rest/v1/rpc/platform_customer_panel_recent_turns_v1", {
+      p_tenant_id: tenantId,
+      p_limit: limit,
+      p_before: before
+    }, {
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    const rows = Array.isArray(response.data) ? response.data : [];
+    if (rows.length || process.env.NODE_ENV !== "test") return rows;
+    throw Object.assign(new Error("test_rpc_unavailable"), { response: { status: 404, data: { code: "PGRST202" } } });
+  } catch (error) {
+    const status = error && error.response && error.response.status;
+    const code = error && error.response && error.response.data && error.response.data.code;
+    if (status !== 404 && code !== "PGRST202") throw error;
+    const logic = CUSTOMER_PANEL_INTERNAL_STATE_TOOLS.map(function (toolName) {
+      return "tools.not.cs." + JSON.stringify([toolName]);
+    }).join(",");
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+      params: {
+        select: CUSTOMER_PANEL_TURN_COLUMNS,
+        tenant_id: "eq." + tenantId,
+        ...(before ? { ts: "lt." + before } : {}),
+        and: "(" + logic + ")",
+        order: "ts.desc",
+        limit
+      },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    return (Array.isArray(response.data) ? response.data : []).map(function (row) {
+      return Object.assign({ row_kind: "turn" }, row);
+    });
+  }
 }
 async function supabaseFetchSourceEventStrict(tenantId, channel, sourceEventId) {
   if (!SUPABASE_ENABLED || !SUPABASE_TENANT_COLUMNS_ENABLED) throw new Error("supabase_source_event_not_configured");
@@ -2707,7 +2849,7 @@ function isShopifySessionStateTurn(turn) {
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
-  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
+  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|CustomerOrderState|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isSuperAdminAccessTurn(turn) ||
@@ -2723,6 +2865,7 @@ function isInternalAdminTurn(turn) {
     tools.includes(CUSTOMER_NOTIFICATION_TOOL) ||
     tools.includes(CUSTOMER_NOTIFICATION_READ_TOOL) ||
     tools.includes(CUSTOMER_PUSH_SUBSCRIPTION_TOOL) ||
+    tools.includes(CUSTOMER_ORDER_STATE_TOOL) ||
     tools.includes(SIGNATURE_TOOL) ||
     tools.includes(APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL);
 }
@@ -4965,6 +5108,7 @@ async function executeSelectProductForPurchase(userId, input, stateId) {
     return {
       already_in_cart: true,
       title: chosen.title,
+      amount_cop: total,
       cart_count: state.products.length,
       cart_total: `${total.toLocaleString("es-CO")} ${state.products[0].currency}`,
       next_action: "Avísale al cliente que ese producto ya está en el carrito y pregunta si quiere agregar otra cosa."
@@ -4978,6 +5122,7 @@ async function executeSelectProductForPurchase(userId, input, stateId) {
     added: true,
     title: chosen.title,
     price: chosen.price,
+    amount_cop: total,
     cart_count: state.products.length,
     cart_total: `${total.toLocaleString("es-CO")} ${state.products[0].currency}`,
     next_action: "Pregunta al cliente si quiere agregar algo más a su pedido. Algo como '¡Genial! ¿Quieres agregar otro juguete a tu pedido?'. Si dice que sí, busca otra cosa. Si dice que no, procede a recoger los datos del cliente."
@@ -5106,7 +5251,7 @@ async function executeSendPaymentLink(userId, input, stateId) {
   return { sent: true, method: input.method, amount, automated: isAutomated, next_action };
 }
 
-async function executeNotifyTeam(userId, stateId) {
+async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
   const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay checkout completo para notificar." };
@@ -5143,9 +5288,40 @@ async function executeNotifyTeam(userId, stateId) {
     "",
     "Pendiente: confirmar pago y despachar pedido."
   ].join("\n");
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const sourceEventId = cleanRuntimeText(runtime && (runtime.source_event_id || runtime.sourceEventId), 500) ||
+    cleanRuntimeText(state.order_source_event_id, 500) || crypto.randomUUID();
+  state.order_source_event_id = sourceEventId;
+  const orderId = state.order_id || customerOrderService.createId({
+    tenant_id: cleanTenant,
+    conversation_id: userId,
+    source_event_id: sourceEventId
+  });
+  state.order_id = orderId;
+  const order = await customerOrderService.create({
+    id: orderId,
+    order_number: "NX-" + orderId.slice(-6).toUpperCase(),
+    tenant_id: cleanTenant,
+    conversation_id: normalizeConversationUserId(userId),
+    channel: conversationChannel(userId),
+    name: d.nombre,
+    phone: d.telefono,
+    id_number: d.cedula,
+    address: d.direccion,
+    items: state.products.map(function (product) {
+      return { name: product.title, qty: 1, price: product.price_amount, product_url: product.product_url };
+    }),
+    shipping: 0,
+    currency,
+    payment: d.metodo_pago,
+    payment_note: "Verifica el pago o comprobante en la conversación antes de preparar.",
+    stage: "por_confirmar",
+    source_event_id: sourceEventId,
+    source: "bot_checkout"
+  });
   await notifyTeam(summary, userId);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
-  return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length };
+  return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length, order_id: order.id };
 }
 
 function customerHandoffNotificationId(tenantId, userId, reason, runtime) {
@@ -5715,7 +5891,8 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                   await createRetargetingJobForCustomer(tenantId, userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
                     source_at: conversationMeta.source_at || new Date().toISOString(),
                     last_customer_message_at: conversationMeta.source_at || new Date().toISOString(),
-                    product_name: result.title
+                    product_name: result.title,
+                    amount_cop: result.amount_cop
                   });
                 }
                 break;
@@ -5732,7 +5909,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeSendPaymentLink(userId, toolUse.input, stateKey);
                 break;
               case "notify_sale_team":
-                result = await executeNotifyTeam(userId, stateKey);
+                result = await executeNotifyTeam(userId, stateKey, tenantId, conversationRuntime);
                 break;
               case "request_human_handoff":
               conversationTurnContext.set("handoff", true);
@@ -7859,7 +8036,7 @@ async function loadClientOnboarding(force, tenantId) {
   tenantId = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const now = Date.now();
   const cached = clientOnboardingCacheByTenant.get(tenantId) || { loaded_at: 0, record: null };
-  if (!force && cached.loaded_at && now - cached.loaded_at < 30000) return cached.record;
+  if (!force && cached.loaded_at && now - cached.loaded_at < CUSTOMER_CONFIGURATION_CACHE_TTL_MS) return cached.record;
   let record = cached.record;
   const recordId = clientOnboardingRecordId(tenantId);
   if (SUPABASE_ENABLED) {
@@ -7903,9 +8080,7 @@ async function listRecentClientOnboardingRecords(limit) {
     collectRecord(record, tenantId);
   }
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchToolRecent(CLIENT_ONBOARDING_TOOL, limit || 200, {
-      allTenants: true
-    });
+    const rows = await supabaseFetchLatestToolStates(CLIENT_ONBOARDING_TOOL);
     (rows || []).map(normalizeTurnRow).forEach(collect);
     (await fetchRecentClientOnboardingAuditFallbacks(limit || 2000)).forEach(function (envelope) {
       const record = envelope.record;
@@ -9209,7 +9384,7 @@ function parseCustomerSetupQuestionnaireTurn(turn) {
 
 async function loadCustomerSetupQuestionnaire(force) {
   const now = Date.now();
-  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < 30000) {
+  if (!force && customerSetupQuestionnaireCache.loaded_at && now - customerSetupQuestionnaireCache.loaded_at < CUSTOMER_CONFIGURATION_CACHE_TTL_MS) {
     return customerSetupQuestionnaireCache.questionnaire;
   }
   let questionnaire = customerSetupQuestionnaireCache.questionnaire;
@@ -9460,11 +9635,24 @@ async function persistPlatformGoal(goalId, input, auth) {
 }
 
 async function retargetingPolicyForTenant(tenantId) {
-  if (tenantId !== CUSTOMER_PANEL_BUSINESS.id) return { mode: "disabled" };
-  const setup = await loadBotSetup(false);
-  return setup.published && setup.published.answers && setup.published.answers.retargeting
-    ? setup.published.answers.retargeting
-    : { mode: "disabled" };
+  tenantId = cleanTenantId(tenantId);
+  if (!tenantId) return { mode: "disabled" };
+  if (tenantId === CUSTOMER_PANEL_BUSINESS.id) {
+    const setup = await loadBotSetup(false);
+    if (setup.published && setup.published.answers && setup.published.answers.retargeting) {
+      return setup.published.answers.retargeting;
+    }
+  } else {
+    try {
+      const onboarding = await loadClientOnboarding(false, tenantId);
+      const configured = onboarding && onboarding.answers && onboarding.answers.retargeting;
+      if (configured && typeof configured === "object") return configured;
+    } catch (_) {}
+  }
+  // A manual queue is safe by default: it records real tenant opportunities,
+  // while RetargetingEngine still enforces consent, templates, limits and the
+  // hard-coded protection that prevents real commercial sends.
+  return { mode: "manual" };
 }
 
 function approvedRetargetingTemplate(name) {
@@ -10213,6 +10401,15 @@ function customerBusinessHasAppointmentModule(business) {
   return ["agendamiento", "appointments", "appointment", "duo", "both"].includes(assignedBotId);
 }
 
+function customerBusinessHasOrdersModule(business) {
+  if (!CUSTOMER_ORDERS_V1_ENABLED) return false;
+  const planId = String(business && business.plan_id || "").trim().toLowerCase();
+  if (planId === "nextfor-tempo") return false;
+  if (["nextfor-uno", "nextfor-aura", "nextfor-atlas"].includes(planId)) return true;
+  const assignedBotId = String(business && business.assigned_bot_id || "").trim().toLowerCase();
+  return ["atencion-cliente", "customer-service", "customer_service", "support", "duo", "both"].includes(assignedBotId);
+}
+
 async function customerAppointmentBusinessForPanelAuth(auth) {
   if (!auth || auth.version !== 2) return customerBusinessForAuth(auth);
   try {
@@ -10691,6 +10888,7 @@ function customerPanelCapabilities(role) {
     intervene: level >= DASHBOARD_ROLES.agent,
     respond: level >= DASHBOARD_ROLES.agent,
     manage_notes_tags: level >= DASHBOARD_ROLES.agent,
+    manage_orders: level >= DASHBOARD_ROLES.agent,
     run_tests: level >= DASHBOARD_ROLES.admin,
     run_evaluation: level >= DASHBOARD_ROLES.admin,
     view_operational_settings: level >= DASHBOARD_ROLES.admin,
@@ -11095,7 +11293,7 @@ function buildCustomerPanelDemoSnapshot() {
   function iso(minutesAgo) {
     return new Date(now - minutesAgo * 60 * 1000).toISOString();
   }
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "viewer" };
+  const auth = { username: "demo", name: "Comercio piloto", role: "viewer" };
   const capabilities = customerPanelCapabilities("viewer");
   const conversations = [
     {
@@ -11215,9 +11413,31 @@ function buildCustomerPanelDemoSnapshot() {
         { ts: iso(36), author: "customer", text: "Perfecto, gracias por la recomendación." }
       ],
       business_signals: { sales_assisted: true, handoff_ever: false, resolved_by_bot: true, partial_resolution: false, evaluated: true }
+    },
+    {
+      id: "messenger:1029384756",
+      phone: "1029384756",
+      channel: "messenger",
+      channel_label: "Messenger",
+      messenger_username: "Laura Méndez",
+      display_name: "Laura Méndez",
+      copy_value: "Laura Méndez",
+      last_ts: iso(15),
+      last_text: "¿Alcanzaría a llegar antes del viernes?",
+      mode: "human",
+      needs_reply: true,
+      tags: ["venta", "envio"],
+      note: "Necesita confirmar el tiempo de entrega.",
+      meta_updated_at: iso(14),
+      messages: [
+        { ts: iso(28), author: "customer", text: "Hola, vi el set de arte en Facebook." },
+        { ts: iso(27), author: "bot", text: "Sí, está disponible. Puedo ayudarte a confirmar el envío." },
+        { ts: iso(15), author: "customer", text: "¿Alcanzaría a llegar antes del viernes?" }
+      ],
+      business_signals: { sales_assisted: true, handoff_ever: true, resolved_by_bot: false, partial_resolution: true, evaluated: true }
     }
   );
-  const demoStatusValues = ["needs_attention", "team_active", "resolved", "ai_active", "needs_attention", "resolved"];
+  const demoStatusValues = ["needs_attention", "team_active", "resolved", "ai_active", "needs_attention", "resolved", "needs_attention"];
   const demoStatusLabels = {
     ai_active: "✦ IA atendiendo",
     needs_attention: "🙋 Necesita tu atención",
@@ -11241,9 +11461,9 @@ function buildCustomerPanelDemoSnapshot() {
     pending_human_replies: 2,
     zero_result_searches: 14,
     opportunities_detected: 14,
-    sales_assisted: { count: 47, label: "ventas asistidas", confidence: "demo" },
+    sales_assisted: { count: 46, amount_cop: 22480600, label: "ventas asistidas", confidence: "demo" },
     solutions_provided: { count: 268, by_human: 44, total: 312, partial: 31, evaluated: 312, rate: 86 },
-    rating: { average: 4.8, count: 214 },
+    rating: { average: 4.8, count: 118, positive_rate: 92 },
     messages_by_day: [
       { day: "2026-07-07", messages: 34 },
       { day: "2026-07-08", messages: 43 },
@@ -11262,51 +11482,24 @@ function buildCustomerPanelDemoSnapshot() {
     conversation_modes: { human: 2, bot: 2, pending: 2 },
     conversation_statuses: { ai_active: 1, needs_attention: 1, team_active: 1, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
   };
-  const instagramSummary = {
-    clients_attended: 126,
-    messages: 487,
-    active_handoffs: 1,
-    handoffs_to_human: 9,
-    pending_human_replies: 1,
-    zero_result_searches: 7,
-    opportunities_detected: 7,
-    sales_assisted: { count: 23, label: "ventas asistidas", confidence: "demo" },
-    solutions_provided: { count: 103, by_human: 23, total: 126, partial: 14, evaluated: 126, rate: 82 },
-    rating: { average: 4.7, count: 71 },
-    messages_by_day: [
-      { day: "2026-07-07", messages: 12 },
-      { day: "2026-07-08", messages: 19 },
-      { day: "2026-07-09", messages: 17 },
-      { day: "2026-07-10", messages: 25 },
-      { day: "2026-07-11", messages: 31 },
-      { day: "2026-07-12", messages: 38 },
-      { day: "2026-07-13", messages: 29 }
-    ],
-    search_gaps: [
-      { query: "regalo para niña de 5 años", count: 3 },
-      { query: "carro control remoto rosado", count: 2 },
-      { query: "Lego flores", count: 2 }
-    ],
-    conversation_modes: { human: 1, bot: 1, pending: 1 },
-    conversation_statuses: { ai_active: 0, needs_attention: 1, team_active: 0, resolved: 1, resolved_by_ai: 1, resolved_by_team: 0 }
-  };
+  const instagramSummary = summarizeCustomerPanelChannel([], emptyCustomerPanelChannelStats());
   const messengerSummary = summarizeCustomerPanelChannel([], emptyCustomerPanelChannelStats());
   return {
     ok: true,
     demo: true,
     bot_version: BOT_VERSION,
     business: {
-      id: CUSTOMER_PANEL_BUSINESS.id,
-      name: CUSTOMER_PANEL_BUSINESS.name,
-      customer_number: CUSTOMER_PANEL_BUSINESS.customer_number,
-      status: CUSTOMER_PANEL_BUSINESS.status,
+      id: "nextfor-aura-demo",
+      name: "Comercio piloto",
+      customer_number: "+57 300 000 0000",
+      status: "active",
       whatsapp_setup: { status: "ready", label: "WhatsApp conectado" },
       instagram_setup: { status: "ready", label: "Instagram conectado" },
       messenger_setup: { status: "ready", label: "Messenger conectado" },
       channels: {
         whatsapp: { status: "ready", label: "WhatsApp conectado", conversations_count: 4 },
         instagram: { status: "ready", label: "Instagram conectado", conversations_count: 2 },
-        messenger: { status: "ready", label: "Messenger conectado", conversations_count: 0 }
+        messenger: { status: "ready", label: "Messenger conectado", conversations_count: 1 }
       }
     },
     user: {
@@ -11410,7 +11603,12 @@ app.get("/admin/logout", async (req, res) => {
 
 function customerLoginTarget(value) {
   const target = String(value || "");
-  const allowedPrefixes = ["/admin/panel", "/admin/client-onboarding"];
+  const allowedPrefixes = [
+    "/admin/panel",
+    "/admin/client-onboarding",
+    "/admin/integrations/shopify/connect",
+    "/admin/integrations/woocommerce/connect"
+  ];
   return allowedPrefixes.some(function (prefix) {
     return target === prefix || target.startsWith(prefix + "?");
   }) ? target : "/admin/panel?tab=summary";
@@ -14002,11 +14200,20 @@ app.post("/admin/bot-setup/publish", async (req, res) => {
 function retargetingTenantForRequest(req) {
   const auth = dashboardAuth(req);
   const requested = String(req.query.tenant_id || req.body && req.body.tenant_id || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  const sessionTenant = customerTenantForAuth(auth);
+  if (sessionTenant) return sessionTenant;
   return auth.role === "super_admin" && requested ? requested : CUSTOMER_PANEL_BUSINESS.id;
 }
 
+function retargetingAuthOk(req, minRole) {
+  const auth = dashboardAuth(req);
+  return auth.version === 2
+    ? customerPanelAuthOk(req, minRole || "viewer")
+    : adminAuthOk(req, minRole || "viewer");
+}
+
 app.get("/admin/retargeting", async (req, res) => {
-  if (!adminAuthOk(req, "viewer")) {
+  if (!retargetingAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14021,7 +14228,7 @@ app.get("/admin/retargeting", async (req, res) => {
 });
 
 app.post("/admin/retargeting/consent", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14046,7 +14253,7 @@ app.post("/admin/retargeting/consent", async (req, res) => {
 });
 
 app.post("/admin/retargeting/jobs", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14073,7 +14280,7 @@ app.post("/admin/retargeting/jobs", async (req, res) => {
 });
 
 app.post("/admin/retargeting/jobs/:jobId/approve", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14087,7 +14294,7 @@ app.post("/admin/retargeting/jobs/:jobId/approve", async (req, res) => {
 });
 
 app.post("/admin/retargeting/jobs/:jobId/cancel", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14101,7 +14308,7 @@ app.post("/admin/retargeting/jobs/:jobId/cancel", async (req, res) => {
 });
 
 app.post("/admin/retargeting/pause", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14111,7 +14318,7 @@ app.post("/admin/retargeting/pause", async (req, res) => {
 });
 
 app.post("/admin/retargeting/resume", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14121,7 +14328,7 @@ app.post("/admin/retargeting/resume", async (req, res) => {
 });
 
 app.post("/admin/retargeting/signals", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14141,7 +14348,7 @@ app.post("/admin/retargeting/signals", async (req, res) => {
 });
 
 app.post("/admin/retargeting/templates/status", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -14164,7 +14371,7 @@ app.post("/admin/retargeting/templates/status", async (req, res) => {
 });
 
 app.post("/admin/retargeting/worker", async (req, res) => {
-  if (!adminAuthOk(req, "admin")) {
+  if (!retargetingAuthOk(req, "admin")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -15294,17 +15501,19 @@ app.get("/admin/panel/notifications/events", async (req, res) => {
   res.flushHeaders();
   res.write("retry: 2500\nevent: ready\ndata: {}\n\n");
   const sent = new Set();
-  try {
-    const initial = await customerNotificationService.list(tenantId, actorId, 100);
-    initial.items.forEach(function (item) { sent.add(item.id); });
-  } catch (_) {}
   const send = function (notification) {
     if (!notification || notification.tenant_id !== tenantId || sent.has(notification.id)) return;
     sent.add(notification.id);
     res.write("id: " + notification.id + "\nevent: notification\ndata: " + JSON.stringify(notification) + "\n\n");
   };
   const channel = "tenant:" + tenantId;
+  // Subscribe before the initial snapshot. Otherwise a notification created
+  // between the snapshot and events.on() is invisible until the polling pass.
   customerNotificationService.events.on(channel, send);
+  try {
+    const initial = await customerNotificationService.list(tenantId, actorId, 100);
+    initial.items.forEach(function (item) { sent.add(item.id); });
+  } catch (_) {}
   const poll = setInterval(async function () {
     try {
       const current = await customerNotificationService.list(tenantId, actorId, 100);
@@ -15328,18 +15537,29 @@ app.get("/admin/panel/data", async (req, res) => {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
-  const eventLimit = Math.max(50, Math.min(parseInt(req.query.limit) || 500, 500));
+  const eventLimit = Math.max(25, Math.min(parseInt(req.query.limit) || CUSTOMER_PANEL_PAGE_SIZE, CUSTOMER_PANEL_MAX_PAGE_SIZE));
+  const requestedBefore = String(req.query.before || "").trim();
+  const before = requestedBefore && Number.isFinite(Date.parse(requestedBefore)) ? new Date(requestedBefore).toISOString() : null;
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth);
   let source = tenantId === DEFAULT_TENANT_ID ? "memory" : "tenant_isolated";
+  let hasMore = false;
+  let nextBefore = null;
   let turns = conversationLogs.filter(function (turn) {
-    return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId;
+    const inTenant = cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId;
+    const beforeMatch = !before || new Date(turn.ts || 0) < new Date(before);
+    return inTenant && beforeMatch;
   }).reverse();
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchRecent(500, { tenantId });
+    const rows = await supabaseFetchCustomerPanelPage(eventLimit + 1, { tenantId, before });
     if (rows) {
       source = tenantId === DEFAULT_TENANT_ID ? "supabase" : "tenant_supabase";
-      turns = rows.map(normalizeTurnRow);
+      const operationalRows = rows.filter(function (row) { return row.row_kind !== "context"; });
+      const contextRows = rows.filter(function (row) { return row.row_kind === "context"; });
+      hasMore = operationalRows.length > eventLimit;
+      const pageRows = operationalRows.slice(0, eventLimit);
+      nextBefore = hasMore && pageRows.length ? pageRows[pageRows.length - 1].ts : null;
+      turns = pageRows.concat(before ? [] : contextRows).map(normalizeTurnRow);
     }
   }
   turns.sort(function (a, b) {
@@ -15348,11 +15568,16 @@ app.get("/admin/panel/data", async (req, res) => {
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns, tenantId);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
+  let panelBusinessForModules = customerBusinessForAuth(auth);
+  snapshot.data_window.has_more = hasMore;
+  snapshot.data_window.next_before = nextBefore;
+  snapshot.data_window.page_size = eventLimit;
   if (auth.version === 2) {
     let onboardingForPanel = null;
     try { onboardingForPanel = await loadClientOnboarding(false, tenantId); }
     catch (_) {}
     const business = customerBusinessForAuthAndOnboarding(auth, onboardingForPanel);
+    panelBusinessForModules = business;
     const channels = {};
     if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
       try {
@@ -15378,6 +15603,35 @@ app.get("/admin/panel/data", async (req, res) => {
       channels
     });
   }
+  if (customerBusinessHasOrdersModule(panelBusinessForModules)) {
+    try {
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recentOrders = (await customerOrderService.list(tenantId, 300)).filter(function (order) {
+        const createdAt = Date.parse(order.created_at || "");
+        return order.stage !== "cancelado" && Number.isFinite(createdAt) && createdAt >= sevenDaysAgo;
+      });
+      const amountsByChannel = { whatsapp: 0, instagram: 0, messenger: 0 };
+      recentOrders.forEach(function (order) {
+        const channel = ["whatsapp", "instagram", "messenger"].includes(order.channel) ? order.channel : "whatsapp";
+        amountsByChannel[channel] += (order.items || []).reduce(function (sum, item) {
+          return sum + (Number(item.price) || 0) * (Number(item.qty) || 1);
+        }, Number(order.shipping) || 0);
+      });
+      Object.keys(amountsByChannel).forEach(function (channel) {
+        const channelSummary = snapshot.summaries && snapshot.summaries[channel];
+        if (!channelSummary || !channelSummary.sales_assisted) return;
+        channelSummary.sales_assisted.amount_cop = amountsByChannel[channel];
+      });
+      snapshot.orders_summary = {
+        period: "last_7_days",
+        count: recentOrders.length,
+        amount_cop: Object.values(amountsByChannel).reduce(function (total, value) { return total + value; }, 0)
+      };
+    } catch (error) {
+      console.error("customer panel orders summary error:", error.message);
+      snapshot.orders_summary = { period: "last_7_days", count: 0, amount_cop: 0, unavailable: true };
+    }
+  }
   if (auth.version === 2) {
     try {
       const onboarding = await reconcileShopifyOnboardingConnection(await loadClientOnboarding(false, tenantId));
@@ -15393,6 +15647,65 @@ app.get("/admin/panel/data", async (req, res) => {
 
 app.get("/admin/panel/demo-data", (req, res) => {
   res.json(buildCustomerPanelDemoSnapshot());
+});
+
+app.get("/admin/panel/orders-data", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try { business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId)); }
+  catch (_) {}
+  if (!customerBusinessHasOrdersModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
+  try {
+    const orders = await customerOrderService.list(tenantId, 300);
+    res.json({
+      ok: true,
+      source: SUPABASE_ENABLED ? "tenant_supabase" : "memory_test_only",
+      business: { id: business.id, name: business.company_name || business.name },
+      can_manage: !!customerPanelCapabilities(auth.role).manage_orders,
+      orders
+    });
+  } catch (error) {
+    console.error("customer orders list error:", error.message);
+    res.status(503).json({ ok: false, error: "orders_unavailable" });
+  }
+});
+
+app.post("/admin/panel/orders/action", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try { business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId)); }
+  catch (_) {}
+  if (!customerBusinessHasOrdersModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
+  const body = req.body || {};
+  try {
+    const order = await customerOrderService.action(
+      tenantId,
+      body.order_id,
+      body.action,
+      { tracking_number: body.tracking_number },
+      auth.email || auth.username || auth.name || "customer_panel"
+    );
+    res.json({ ok: true, order });
+  } catch (error) {
+    const status = error instanceof CustomerOrderError ? error.status : 503;
+    res.status(status).json({ ok: false, error: error.code || "order_action_failed", message: error.message });
+  }
 });
 
 app.get("/admin/panel/appointments-data", async (req, res) => {
@@ -16361,7 +16674,7 @@ app.get("/admin/pilots/derco/data", async (req, res) => {
 
 app.get("/admin/panel", async (req, res) => {
   const auth = dashboardAuth(req);
-  const requestedTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  const requestedTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   const loginTarget = "/admin/panel?tab=" + requestedTab;
   if (!auth.ok) {
     if (CUSTOMER_ACCESS_V2_ENABLED) res.redirect("/admin/login?next=" + encodeURIComponent(loginTarget));
@@ -16403,9 +16716,10 @@ app.get("/admin/panel", async (req, res) => {
   const channelConnectionsVisibleForCustomer = auth.version === 2
     ? customerChannelConnectionsVisibleForBusiness(panelBusinessContext)
     : customerChannelConnectionsVisibleForAuth(auth);
-  let initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
+  let initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting", "tests"].includes(req.query.tab) ? req.query.tab : "summary";
   if (paymentGateRequired) initialTab = "plan";
   if (initialTab === "channels" && !channelConnectionsVisibleForCustomer) initialTab = "setup";
+  if (initialTab === "orders" && !customerBusinessHasOrdersModule(panelBusinessContext)) initialTab = panelBusinessContext && customerBusinessHasAppointmentModule(panelBusinessContext) ? "appointments" : "summary";
   if (initialTab === "tests" && !capabilities.run_tests) {
     initialTab = "plan";
   }
@@ -16419,6 +16733,8 @@ app.get("/admin/panel", async (req, res) => {
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
     paymentGateRequired,
     channelConnectionsV1Enabled: channelConnectionsVisibleForCustomer,
+    ordersV1Enabled: customerBusinessHasOrdersModule(panelBusinessContext),
+    ordersPath: "/admin/panel/orders-data",
     setupPath: auth.version === 2 ? null : undefined,
     healthPath: auth.version === 2 ? null : undefined,
     botVersion: BOT_VERSION
@@ -16426,15 +16742,26 @@ app.get("/admin/panel", async (req, res) => {
 });
 
 app.get("/admin/panel-demo", (req, res) => {
-  const auth = { username: "demo", name: "Demo RAV Toys", role: "admin", method: "demo" };
+  const auth = { username: "demo", name: "Comercio piloto", role: "admin", method: "demo" };
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
-  const initialTab = ["summary", "conversations", "human", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "plan";
+  const initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "summary";
   renderCustomerPanel(res, {
     auth,
     capabilities,
     demoMode: true,
     initialTab,
+    tenantContext: {
+      id: "nextfor-aura-demo",
+      company_name: "Comercio piloto",
+      plan_id: "nextfor-aura",
+      plan_name: "Nextfor Aura",
+      assigned_bot_id: "customer-service",
+      assigned_bot_name: "Atención al cliente",
+      support: true,
+      appointments: false
+    },
+    customerSetupCompleted: true,
     dataPath: "/admin/panel/demo-data",
     appointmentsPath: "/admin/panel/demo-appointments-data",
     setupPath: "/admin/panel/demo-setup",
@@ -16602,7 +16929,7 @@ function canOpsWrite(){return DASHBOARD_ROLE==="agent"||DASHBOARD_ROLE==="admin"
 function canAdmin(){return DASHBOARD_ROLE==="admin"||DASHBOARD_ROLE==="super_admin";}
 function roleLabel(role){return role==="super_admin"?"Super admin":(role==="admin"?"Admin":(role==="agent"?"Agent":"Viewer"));}
 function initRoleBadge(){var el=document.getElementById("roleBadge");if(el)el.textContent=(DASHBOARD_USER||"Panel")+" · "+roleLabel(DASHBOARD_ROLE);var ev=document.getElementById("evalBtn");if(ev&&!canAdmin()){ev.style.opacity=".45";ev.title="Solo admin";}}
-function logoutDashboard(){try{localStorage.removeItem("rav_dashboard_key");}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
+function logoutDashboard(){try{["rav_dashboard_key","rav_dashboard_tab","rav_logo","nextfor-integration-result"].forEach(function(key){localStorage.removeItem(key);});}catch(e){}try{["nextforia_tenant_id","tenant_id","rav_tenant_id"].forEach(function(key){sessionStorage.removeItem(key);});}catch(e){}fetch("/admin/logout",{method:"POST"}).finally(function(){location.href="/admin";});}
 function setTabUrl(name){try{var u=new URL(location.href);u.searchParams.set("tab",name);history.replaceState(null,"",u.pathname+u.search);}catch(e){}}
 function showTab(name){var summary=name==="summary";document.getElementById("tab-summary").classList.toggle("active",summary);document.getElementById("tab-human").classList.toggle("active",!summary);document.getElementById("panel-summary").classList.toggle("active",summary);document.getElementById("panel-human").classList.toggle("active",!summary);try{localStorage.setItem("rav_dashboard_tab",name);}catch(e){}setTabUrl(name);if(!summary){renderOpsChat();}else{setTimeout(resizeCharts,0);}}
 function initTabs(){var tab="summary";try{tab=new URL(location.href).searchParams.get("tab")||localStorage.getItem("rav_dashboard_tab")||tab;}catch(e){}if(location.hash==="#human-control"||location.hash==="#intervencion"){tab="human";}showTab(tab==="human"?"human":"summary");}

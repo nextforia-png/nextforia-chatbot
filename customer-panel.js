@@ -1505,7 +1505,7 @@ ${panelRedesignEnabled ? `
 .panel-redesign.conversations-view .threads{padding:0 6px 12px!important}
 .panel-redesign.conversations-view .threadGroupTitle{padding:8px 10px 5px!important}
 .panel-redesign.conversations-view .threadGroupTitle.all{padding-top:10px!important}
-.panel-redesign.conversations-view .thread{min-height:62px!important;margin:0!important;padding:8px 9px 8px 11px!important;border-radius:10px!important;border-bottom:1px solid #EDF1F6!important}
+.panel-redesign.conversations-view .thread{height:auto!important;min-height:62px!important;margin:0!important;padding:8px 9px 8px 11px!important;border-radius:10px!important;border-bottom:1px solid #EDF1F6!important}
 .panel-redesign.conversations-view .thread:before{top:9px!important;bottom:9px!important}
 .panel-redesign.conversations-view .threadMain{gap:9px!important}
 .panel-redesign.conversations-view .contactAvatar{width:38px!important;height:38px!important;border-radius:11px!important;font-size:12px!important}

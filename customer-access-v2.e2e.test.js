@@ -76,10 +76,10 @@ async function login(base, username, password) {
 
   try {
     await waitForServer(child, port);
-    const adminCookie = await login(base, "admin@legacy.example", "admin-test-password", "username");
-    const agentCookie = await login(base, "agent@legacy.example", "agent-test-password", "username");
-    const viewerCookie = await login(base, "viewer@legacy.example", "viewer-test-password", "username");
-    const superCookie = await login(base, "platform@nextforia.example", "platform-test-password", "username");
+    const adminCookie = await login(base, "admin@legacy.example", "admin-test-password");
+    const agentCookie = await login(base, "agent@legacy.example", "agent-test-password");
+    const viewerCookie = await login(base, "viewer@legacy.example", "viewer-test-password");
+    const superCookie = await login(base, "platform@nextforia.example", "platform-test-password");
     let response = await fetch(base + "/admin/customer-access/catalogs");
     assert.strictEqual(response.status, 401, "anonymous users cannot read platform catalogs");
     response = await fetch(base + "/admin/customer-access/catalogs", { headers: { cookie: adminCookie } });

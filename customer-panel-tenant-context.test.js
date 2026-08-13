@@ -35,7 +35,7 @@ assert(tenantA.includes('id="bot-support"'));
 assert(!tenantA.includes('id="bot-appointments"'));
 assert(!tenantA.includes('id="navAppointments"'));
 assert(!tenantA.includes('id="panel-appointments"'));
-assert(tenantA.includes("1 bot activo"));
+assert(tenantA.includes("1 bot entrenado y listo"));
 assert(tenantA.includes("Atención al cliente · Plan Nextfor Aura"));
 assert(tenantA.includes("Versión v-test-panel"));
 assert(tenantA.includes("Configuración de tu bot"));
@@ -72,7 +72,7 @@ const staleCombinedBot = render({
   tenantContext: { id: "tenant-c", company_name: "Empresa C", plan_id: "nextfor-aura", assigned_bot_id: "both", status: "live" }
 });
 assert(staleCombinedBot.includes("Atención al cliente · Plan Nextfor Aura"));
-assert(staleCombinedBot.includes("1 bot activo"));
+assert(staleCombinedBot.includes("1 bot entrenado y listo"));
 assert(!staleCombinedBot.includes('id="bot-appointments"'));
 assert(!staleCombinedBot.includes('id="mobile-bot-appointments"'));
 assert(!staleCombinedBot.includes('id="mnav-appointments"'));
@@ -80,6 +80,17 @@ assert(!staleCombinedBot.includes('id="mnav-appointment-chats"'));
 assert(!staleCombinedBot.includes('id="navAppointments"'));
 assert(!staleCombinedBot.includes('id="panel-appointments"'));
 assert(staleCombinedBot.includes('INITIAL_TAB="summary"'));
+
+const atlas = render({
+  tenantContext: { id: "tenant-atlas", company_name: "Empresa Atlas", plan_id: "nextfor-atlas", assigned_bot_id: "both", status: "live" },
+  ordersV1Enabled: true
+});
+assert(atlas.includes('id="bot-support"'));
+assert(atlas.includes('id="bot-appointments"'));
+assert(atlas.includes('id="nav-orders"'));
+assert(atlas.includes("Oportunidades de venta"));
+assert(atlas.includes('<strong>Atención al cliente</strong><span>Chatbot 24/7</span>'));
+assert(atlas.includes('<strong>Agendamiento</strong><span>Citas y recordatorios</span>'));
 
 const escaped = render({
   tenantContext: { id: "unsafe", company_name: "<script>alert(1)</script>", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }

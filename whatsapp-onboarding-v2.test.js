@@ -627,6 +627,61 @@ function providerFor(options) {
   assert.strictEqual(coexistencePreparations, 1, "duplicate coexistence callback must not exchange OAuth again");
   assert.strictEqual(coexistenceRegistrations, 0);
 
+  const recoveryStore = new InMemoryChannelConnectionStore();
+  let recoveryRegistrations = 0;
+  const recoveryService = createChannelConnectionService({
+    store: recoveryStore,
+    provider: providerFor({
+      onPrepare: function (session) {
+        assert.strictEqual(session.onboarding_mode, "coexistence_recovery");
+        assert.strictEqual(session.onboarding_event, "FINISH_GRANT_ONLY_API_ACCESS");
+        return Object.assign(coexistenceCandidate(session.phone_number_id, session.waba_id), {
+          onboarding_mode: "coexistence_recovery"
+        });
+      },
+      onRegister: function () {
+        recoveryRegistrations++;
+        assert.fail("app-only recovery must never call POST /register");
+      },
+      onSubscribe: function () { return { ok: true }; },
+      onVerify: function (asset) {
+        assert.strictEqual(asset.coexistence, true);
+        return { ok: true, account_label: asset.account_label };
+      }
+    }),
+    encryptionKey,
+    now,
+    whatsappVerificationChecks: 1,
+    whatsappVerificationIntervalMs: 0
+  });
+  await recoveryService.begin(
+    "tenant-recovery",
+    "whatsapp",
+    "owner@example.com",
+    "signed-recovery-state",
+    { attemptId: "attempt-recovery", whatsappOnboardingMode: "coexistence_recovery" }
+  );
+  const recoveryConnected = await recoveryService.completeEmbeddedWhatsApp({
+    tenant_id: "tenant-recovery",
+    actor: "owner@example.com",
+    attempt_id: "attempt-recovery",
+    code: "oauth-recovery",
+    session: {
+      waba_id: "waba-recovery",
+      phone_number_id: "phone-recovery",
+      onboarding_mode: "coexistence_recovery",
+      onboarding_event: "FINISH_GRANT_ONLY_API_ACCESS",
+      app_only_install: true
+    }
+  });
+  assert.strictEqual(recoveryConnected.connection.status, "connected");
+  assert.strictEqual(recoveryConnected.connection.whatsapp_onboarding_mode, "coexistence");
+  assert.strictEqual(recoveryRegistrations, 0);
+  assert.strictEqual(recoveryStore.whatsappRegistrationLedger.length, 0);
+  const storedRecovery = await recoveryStore.get("tenant-recovery", "whatsapp");
+  assert.strictEqual(storedRecovery.coexistence_confirmed, true);
+  assert.strictEqual(storedRecovery.whatsapp_last_registration_phone_number_id, null);
+
   const pendingCoexistenceStore = new InMemoryChannelConnectionStore();
   let pendingCoexistenceDisconnects = 0;
   const pendingCoexistenceService = createChannelConnectionService({

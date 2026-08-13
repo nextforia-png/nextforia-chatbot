@@ -48,6 +48,7 @@ const {
   InMemoryCustomerOrderStore,
   createCustomerOrderService
 } = require("./customer-orders");
+const { buildDailyClientActivity } = require("./customer-panel-activity");
 const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
@@ -351,7 +352,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v372-actionable-whatsapp-profile-message";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v379-notifications-bot-navigation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -432,9 +433,11 @@ const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
 const CUSTOMER_ORDERS_V1_FLAG = String(process.env.CUSTOMER_ORDERS_V1_ENABLED || "").trim();
-const CUSTOMER_ORDERS_V1_ENABLED = CUSTOMER_ORDERS_V1_FLAG === "1" || (
-  CUSTOMER_ORDERS_V1_FLAG !== "0" && process.env.RENDER_SERVICE_NAME === "nextforia-chatbot-staging"
-);
+// The customer orders module is part of the approved support-bot panel. Keep it
+// enabled by default in every environment and retain an explicit emergency
+// rollback. Plan and tenant authorization remain enforced server-side by
+// customerBusinessHasOrdersModule and the authenticated order routes.
+const CUSTOMER_ORDERS_V1_ENABLED = CUSTOMER_ORDERS_V1_FLAG !== "0";
 const CHANNEL_CONNECTIONS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CHANNEL_CONNECTIONS_TEST_MODE === "1";
 const CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED =
   process.env.CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED === "1";
@@ -866,6 +869,8 @@ const processedMetaEventIds = new Set();
 const processedWhatsAppStatusEventIds = new Set();
 const recentManagedInstagramOutbound = new Map();
 const inboundMessageWindows = new Map();
+const adminMessageDeliveryRequests = new Map();
+const ADMIN_MESSAGE_IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
 const instagramRuntimeState = {
   webhook_requests: 0,
   inbound_messages: 0,
@@ -989,6 +994,7 @@ const clientOnboardingScopeConflictByKey = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 const latestToolStateCache = new Map();
+const customerPanelActivityCache = new Map();
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
@@ -2466,6 +2472,60 @@ async function supabaseFetchCustomerPanelPage(limit, options) {
       return Object.assign({ row_kind: "turn" }, row);
     });
   }
+}
+async function loadCustomerPanelActivityRows(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  if (!cleanTenant) return { rows: [], source: "unavailable", complete: false };
+  const cached = customerPanelActivityCache.get(cleanTenant);
+  if (cached && Date.now() - cached.loaded_at < 60 * 1000) return cached.value;
+  const since = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  let value;
+  if (!SUPABASE_ENABLED) {
+    value = {
+      rows: conversationLogs.filter(function (row) {
+        return cleanTenantId(row.tenantId || row.tenant_id) === cleanTenant && Date.parse(row.ts || "") >= Date.parse(since);
+      }),
+      source: "memory_7d",
+      complete: true
+    };
+  } else {
+    const rows = [];
+    const pageSize = 1000;
+    const maxRows = 20000;
+    let offset = 0;
+    let complete = true;
+    try {
+      while (offset < maxRows) {
+        const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+          params: {
+            select: "ts,tenant_id,channel,user_id,user_message,tools",
+            tenant_id: "eq." + cleanTenant,
+            ts: "gte." + since,
+            order: "ts.asc",
+            limit: pageSize,
+            offset
+          },
+          headers: SB_HEADERS,
+          timeout: 8000
+        });
+        const page = Array.isArray(response.data) ? response.data : [];
+        rows.push.apply(rows, page);
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+      if (rows.length >= maxRows) complete = false;
+      value = {
+        rows: rows.map(function (row) { return normalizeTurnRow(row); }).filter(function (row) { return !isInternalAdminTurn(row); }),
+        source: complete ? "supabase_7d" : "supabase_partial_7d",
+        complete
+      };
+    } catch (error) {
+      console.error("customer panel activity query error:", error.message);
+      value = { rows: [], source: "unavailable", complete: false };
+    }
+  }
+  customerPanelActivityCache.set(cleanTenant, { loaded_at: Date.now(), value });
+  return value;
 }
 async function supabaseFetchSourceEventStrict(tenantId, channel, sourceEventId) {
   if (!SUPABASE_ENABLED || !SUPABASE_TENANT_COLUMNS_ENABLED) throw new Error("supabase_source_event_not_configured");
@@ -5106,6 +5166,7 @@ async function executeSelectProductForPurchase(userId, input, stateId) {
     return {
       already_in_cart: true,
       title: chosen.title,
+      amount_cop: total,
       cart_count: state.products.length,
       cart_total: `${total.toLocaleString("es-CO")} ${state.products[0].currency}`,
       next_action: "Avísale al cliente que ese producto ya está en el carrito y pregunta si quiere agregar otra cosa."
@@ -5119,6 +5180,7 @@ async function executeSelectProductForPurchase(userId, input, stateId) {
     added: true,
     title: chosen.title,
     price: chosen.price,
+    amount_cop: total,
     cart_count: state.products.length,
     cart_total: `${total.toLocaleString("es-CO")} ${state.products[0].currency}`,
     next_action: "Pregunta al cliente si quiere agregar algo más a su pedido. Algo como '¡Genial! ¿Quieres agregar otro juguete a tu pedido?'. Si dice que sí, busca otra cosa. Si dice que no, procede a recoger los datos del cliente."
@@ -5887,7 +5949,8 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                   await createRetargetingJobForCustomer(tenantId, userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
                     source_at: conversationMeta.source_at || new Date().toISOString(),
                     last_customer_message_at: conversationMeta.source_at || new Date().toISOString(),
-                    product_name: result.title
+                    product_name: result.title,
+                    amount_cop: result.amount_cop
                   });
                 }
                 break;
@@ -9630,11 +9693,24 @@ async function persistPlatformGoal(goalId, input, auth) {
 }
 
 async function retargetingPolicyForTenant(tenantId) {
-  if (tenantId !== CUSTOMER_PANEL_BUSINESS.id) return { mode: "disabled" };
-  const setup = await loadBotSetup(false);
-  return setup.published && setup.published.answers && setup.published.answers.retargeting
-    ? setup.published.answers.retargeting
-    : { mode: "disabled" };
+  tenantId = cleanTenantId(tenantId);
+  if (!tenantId) return { mode: "disabled" };
+  if (tenantId === CUSTOMER_PANEL_BUSINESS.id) {
+    const setup = await loadBotSetup(false);
+    if (setup.published && setup.published.answers && setup.published.answers.retargeting) {
+      return setup.published.answers.retargeting;
+    }
+  } else {
+    try {
+      const onboarding = await loadClientOnboarding(false, tenantId);
+      const configured = onboarding && onboarding.answers && onboarding.answers.retargeting;
+      if (configured && typeof configured === "object") return configured;
+    } catch (_) {}
+  }
+  // A manual queue is safe by default: it records real tenant opportunities,
+  // while RetargetingEngine still enforces consent, templates, limits and the
+  // hard-coded protection that prevents real commercial sends.
+  return { mode: "manual" };
 }
 
 function approvedRetargetingTemplate(name) {
@@ -11262,6 +11338,10 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     instagram: summarizeCustomerPanelChannel(instagramConversations, channelStats.instagram),
     messenger: summarizeCustomerPanelChannel(messengerConversations, channelStats.messenger)
   };
+  const recentActivity = buildDailyClientActivity(operationalTurns, { days: 7, timeZone: "America/Bogota" });
+  Object.keys(recentActivity.by_channel).forEach(function (channel) {
+    if (summaries[channel]) summaries[channel].clients_by_day = recentActivity.by_channel[channel];
+  });
   const whatsappSetup = customerPanelWhatsappSetup();
   const instagramSetup = customerPanelInstagramSetup();
   const messengerSetup = customerPanelMessengerSetup();
@@ -11297,6 +11377,13 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       returned_event_limit: turnLimit,
       from: minTs ? new Date(minTs).toISOString() : null,
       to: maxTs ? new Date(maxTs).toISOString() : null
+    },
+    activity_window: {
+      source: "recent_page",
+      complete: false,
+      days: recentActivity.days,
+      time_zone: recentActivity.time_zone,
+      metric: recentActivity.metric
     },
     summary: summaries.whatsapp,
     summaries,
@@ -11490,6 +11577,15 @@ function buildCustomerPanelDemoSnapshot() {
       { day: "2026-07-12", messages: 88 },
       { day: "2026-07-13", messages: 61 }
     ],
+    clients_by_day: [
+      { day: "2026-07-07", clients: 34 },
+      { day: "2026-07-08", clients: 43 },
+      { day: "2026-07-09", clients: 58 },
+      { day: "2026-07-10", clients: 37 },
+      { day: "2026-07-11", clients: 74 },
+      { day: "2026-07-12", clients: 88 },
+      { day: "2026-07-13", clients: 61 }
+    ],
     search_gaps: [
       { query: "Lego Technic Ferrari Daytona SP3", count: 5 },
       { query: "Barbie astronauta edición especial", count: 4 },
@@ -11505,6 +11601,13 @@ function buildCustomerPanelDemoSnapshot() {
     ok: true,
     demo: true,
     bot_version: BOT_VERSION,
+    activity_window: {
+      source: "demo",
+      complete: true,
+      days: ["2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10", "2026-07-11", "2026-07-12", "2026-07-13"],
+      time_zone: "America/Bogota",
+      metric: "unique_clients_per_day"
+    },
     business: {
       id: "nextfor-aura-demo",
       name: "Comercio piloto",
@@ -12526,23 +12629,7 @@ app.post("/admin/takeover/:userId", async (req, res) => {
   res.json({ ok: true, userId, handoff: true });
 });
 
-app.post("/admin/send-message", async (req, res) => {
-  if (!conversationActionAuthOk(req, "agent")) {
-    res.status(401).json({ ok: false, error: "unauthorized" });
-    return;
-  }
-  const userId = normalizeConversationUserId(req.body && req.body.userId);
-  const text = String(req.body && req.body.text || "").trim();
-  if (!userId || !text) {
-    res.status(400).json({ ok: false, error: "missing_user_or_text" });
-    return;
-  }
-  if (text.length > 1200) {
-    res.status(400).json({ ok: false, error: "message_too_long" });
-    return;
-  }
-  const auth = dashboardAuth(req);
-  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+async function executeAdminMessageDelivery(userId, text, tenantMeta, actor, clientRequestId) {
   const sent = await sendText(userId, text, tenantMeta);
   if (!sent) {
     await recordAdminEvent(
@@ -12553,20 +12640,87 @@ app.post("/admin/send-message", async (req, res) => {
       false,
       tenantMeta
     );
-    res.status(502).json({
-      ok: false,
-      error: "channel_delivery_failed",
-      message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
-      userId,
-      handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
-      meta_sent: false
-    });
-    return;
+    return {
+      status: 502,
+      body: {
+        ok: false,
+        error: "channel_delivery_failed",
+        message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
+        userId,
+        handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
+        meta_sent: false,
+        request_id: clientRequestId || null
+      }
+    };
   }
   addHumanHandoff(userId, tenantMeta.tenant_id);
-  await recordRetargetingSignal(tenantMeta.tenant_id, userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
+  await recordRetargetingSignal(
+    tenantMeta.tenant_id,
+    userId,
+    "handoff",
+    "admin-message:" + (clientRequestId || Date.now()),
+    actor || "admin"
+  );
   await recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, "ok", undefined, tenantMeta);
-  res.json({ ok: true, userId, handoff: true, meta_sent: true });
+  return {
+    status: 200,
+    body: { ok: true, userId, handoff: true, meta_sent: true, request_id: clientRequestId || null }
+  };
+}
+
+function executeAdminMessageDeliveryOnce(userId, text, tenantMeta, actor, clientRequestId) {
+  if (!clientRequestId) return executeAdminMessageDelivery(userId, text, tenantMeta, actor, null);
+  const key = [tenantMeta.tenant_id, userId, clientRequestId].join("\u001f");
+  const existing = adminMessageDeliveryRequests.get(key);
+  if (existing) {
+    if (existing.text !== text) {
+      return Promise.resolve({
+        status: 409,
+        body: { ok: false, error: "message_request_conflict", message: "Actualiza el panel y vuelve a enviar." }
+      });
+    }
+    return existing.promise;
+  }
+  const entry = { text, promise: null };
+  entry.promise = executeAdminMessageDelivery(userId, text, tenantMeta, actor, clientRequestId);
+  adminMessageDeliveryRequests.set(key, entry);
+  const cleanup = setTimeout(function () {
+    if (adminMessageDeliveryRequests.get(key) === entry) adminMessageDeliveryRequests.delete(key);
+  }, ADMIN_MESSAGE_IDEMPOTENCY_TTL_MS);
+  if (cleanup && typeof cleanup.unref === "function") cleanup.unref();
+  return entry.promise;
+}
+
+app.post("/admin/send-message", async (req, res) => {
+  if (!conversationActionAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = normalizeConversationUserId(req.body && req.body.userId);
+  const text = String(req.body && req.body.text || "").trim();
+  const clientRequestId = cleanRuntimeText(req.body && (req.body.clientRequestId || req.body.client_request_id), 100);
+  if (!userId || !text) {
+    res.status(400).json({ ok: false, error: "missing_user_or_text" });
+    return;
+  }
+  if (text.length > 1200) {
+    res.status(400).json({ ok: false, error: "message_too_long" });
+    return;
+  }
+  if (clientRequestId && !/^[A-Za-z0-9._:-]{8,100}$/.test(clientRequestId)) {
+    res.status(400).json({ ok: false, error: "invalid_message_request_id" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+  const result = await executeAdminMessageDeliveryOnce(
+    userId,
+    text,
+    tenantMeta,
+    auth.name || "admin",
+    clientRequestId
+  );
+  res.status(result.status).json(result.body);
 });
 
 app.get("/admin/customer-meta", async (req, res) => {
@@ -14609,13 +14763,16 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
   try {
     const requestedWhatsAppMode = cleanRuntimeText(req.body && req.body.onboarding_mode, 40).toLowerCase();
     const whatsappOnboardingMode = channel === "whatsapp"
-      ? requestedWhatsAppMode === "coexistence" ? "coexistence" : "cloud_api"
+      ? requestedWhatsAppMode === "coexistence" || requestedWhatsAppMode === "coexistence_recovery"
+        ? requestedWhatsAppMode
+        : "cloud_api"
       : "";
     if (channel === "whatsapp" && requestedWhatsAppMode &&
-        !["cloud_api", "coexistence"].includes(requestedWhatsAppMode)) {
+        !["cloud_api", "coexistence", "coexistence_recovery"].includes(requestedWhatsAppMode)) {
       throw new ChannelConnectionError("invalid_channel_request", 400, "Unsupported WhatsApp onboarding mode");
     }
-    if (whatsappOnboardingMode === "coexistence" && !META_WHATSAPP_COEXISTENCE_CONFIG_ID) {
+    if (["coexistence", "coexistence_recovery"].includes(whatsappOnboardingMode) &&
+        !META_WHATSAPP_COEXISTENCE_CONFIG_ID) {
       throw new ChannelConnectionError("channel_oauth_not_configured", 503, "WhatsApp coexistence configuration is missing");
     }
     const whatsappAttemptId = channel === "whatsapp" ? crypto.randomUUID() : "";
@@ -14641,7 +14798,7 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
         ok: true,
         embedded_signup: {
           app_id: META_APP_ID,
-          configuration_id: whatsappOnboardingMode === "coexistence"
+          configuration_id: ["coexistence", "coexistence_recovery"].includes(whatsappOnboardingMode)
             ? META_WHATSAPP_COEXISTENCE_CONFIG_ID
             : META_WHATSAPP_CONFIG_ID,
           graph_version: META_GRAPH_VERSION,
@@ -14649,6 +14806,8 @@ app.post("/admin/panel/channel-connections/:channel/connect", async (req, res) =
           onboarding_mode: whatsappOnboardingMode,
           flow: whatsappOnboardingMode === "coexistence"
             ? "whatsapp_business_app_coexistence"
+            : whatsappOnboardingMode === "coexistence_recovery"
+              ? "whatsapp_business_app_recovery"
             : "new_cloud_api_number"
         }
       });
@@ -15585,6 +15744,25 @@ app.get("/admin/panel/data", async (req, res) => {
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns, tenantId);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
+  try {
+    const activityRows = await loadCustomerPanelActivityRows(tenantId);
+    if (activityRows.rows.length || activityRows.complete) {
+      const activity = buildDailyClientActivity(activityRows.rows, { days: 7, timeZone: "America/Bogota" });
+      Object.keys(activity.by_channel).forEach(function (channel) {
+        if (snapshot.summaries[channel]) snapshot.summaries[channel].clients_by_day = activity.by_channel[channel];
+      });
+      snapshot.activity_window = {
+        source: activityRows.source,
+        complete: activityRows.complete,
+        days: activity.days,
+        time_zone: activity.time_zone,
+        metric: activity.metric
+      };
+    }
+  } catch (error) {
+    console.error("customer panel activity snapshot error:", error.message);
+  }
+  let panelBusinessForModules = customerBusinessForAuth(auth);
   snapshot.data_window.has_more = hasMore;
   snapshot.data_window.next_before = nextBefore;
   snapshot.data_window.page_size = eventLimit;
@@ -15593,6 +15771,7 @@ app.get("/admin/panel/data", async (req, res) => {
     try { onboardingForPanel = await loadClientOnboarding(false, tenantId); }
     catch (_) {}
     const business = customerBusinessForAuthAndOnboarding(auth, onboardingForPanel);
+    panelBusinessForModules = business;
     const channels = {};
     if (CHANNEL_CONNECTIONS_V1_VISIBLE && channelConnectionService) {
       try {
@@ -15617,6 +15796,35 @@ app.get("/admin/panel/data", async (req, res) => {
       messenger_setup: channels.messenger || { status: "pending", label: "Messenger pendiente" },
       channels
     });
+  }
+  if (customerBusinessHasOrdersModule(panelBusinessForModules)) {
+    try {
+      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const recentOrders = (await customerOrderService.list(tenantId, 300)).filter(function (order) {
+        const createdAt = Date.parse(order.created_at || "");
+        return order.stage !== "cancelado" && Number.isFinite(createdAt) && createdAt >= sevenDaysAgo;
+      });
+      const amountsByChannel = { whatsapp: 0, instagram: 0, messenger: 0 };
+      recentOrders.forEach(function (order) {
+        const channel = ["whatsapp", "instagram", "messenger"].includes(order.channel) ? order.channel : "whatsapp";
+        amountsByChannel[channel] += (order.items || []).reduce(function (sum, item) {
+          return sum + (Number(item.price) || 0) * (Number(item.qty) || 1);
+        }, Number(order.shipping) || 0);
+      });
+      Object.keys(amountsByChannel).forEach(function (channel) {
+        const channelSummary = snapshot.summaries && snapshot.summaries[channel];
+        if (!channelSummary || !channelSummary.sales_assisted) return;
+        channelSummary.sales_assisted.amount_cop = amountsByChannel[channel];
+      });
+      snapshot.orders_summary = {
+        period: "last_7_days",
+        count: recentOrders.length,
+        amount_cop: Object.values(amountsByChannel).reduce(function (total, value) { return total + value; }, 0)
+      };
+    } catch (error) {
+      console.error("customer panel orders summary error:", error.message);
+      snapshot.orders_summary = { period: "last_7_days", count: 0, amount_cop: 0, unavailable: true };
+    }
   }
   if (auth.version === 2) {
     try {

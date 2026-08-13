@@ -400,7 +400,8 @@ class RetargetingEngine {
       policy,
       context: {
         preferred_name: cleanText(input.context && input.context.preferred_name, 60),
-        product_name: cleanText(input.context && input.context.product_name, 120)
+        product_name: cleanText(input.context && input.context.product_name, 120),
+        amount_cop: Math.max(0, Math.round(Number(input.context && input.context.amount_cop) || 0))
       },
       preview: "",
       blockers,

@@ -5,7 +5,7 @@ const renderCustomerPanel = require("./customer-panel");
 const botConfiguration = require("./customer-bot-configuration");
 
 function render(flag, initialTab) {
-  process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = flag ? "true" : "false";
+  process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = flag ? "true" : "0";
   let html = "";
   const res = {
     status: function (code) { assert.strictEqual(code, 200); return this; },
@@ -110,13 +110,22 @@ assert(redesigned.includes('function isSalesAssistedConversation(item)'));
 assert(redesigned.includes('function isPendingSalesClosing(item)'));
 assert(redesigned.includes('class="activityValue"'));
 assert(redesigned.includes('.activityValue{position:absolute'));
+assert(redesigned.includes('renderActivity(s.clients_by_day||[],state.data.activity_window||{})'));
+assert(!redesigned.includes('[34,43,58,37,74,88,61]'), "summary must never invent chart values");
+assert(!redesigned.includes('+18% vs. período anterior'), "summary must not invent a period comparison");
+assert(redesigned.includes('Conversation density repair'));
+assert(redesigned.includes('.panel-redesign.conversations-view .thread{height:auto!important;min-height:62px!important'));
+assert(redesigned.includes('body.conversations-view:not(.chat-open) .thread{height:100%'), "the regression fixture must keep proving the production empty-selection rule exists");
 assert(redesigned.includes('conversationChannel:"all"'));
 assert(redesigned.includes('function setConversationChannel(channel)'));
 assert(redesigned.includes('data-conversation-channel="'));
 assert(redesigned.includes('aria-label="Quién responde esta conversación"'));
 assert(redesigned.includes('id="handoffAiBtn"'));
 assert(redesigned.includes('id="handoffHumanBtn"'));
-assert(redesigned.includes('onkeydown="conversationComposerKeydown(event)"'));
+assert(!redesigned.includes('id="replyText" maxlength="1200" rows="1" placeholder="La IA está respondiendo — toma el control para escribir" oninput="updateReplyCount()" onkeydown='));
+assert(redesigned.includes('reply.addEventListener("keydown",conversationComposerKeydown)'));
+assert(redesigned.includes('if(replySendInFlight)return;'));
+assert(redesigned.includes('clientRequestId:outboundMessageRequestId()'));
 assert(redesigned.includes('class="threadGroupTitle"'));
 assert(redesigned.includes('channel-call'));
 assert(redesigned.includes('body.panel-redesign.conversations-view .listColumn'));
@@ -146,6 +155,10 @@ assert(redesigned.includes("openProfileSection('channels')"));
 assert(redesigned.includes("openProfileSection('setup')"));
 assert(redesigned.includes("openProfileSection('notifications')"));
 assert(!redesigned.includes("undefinedNotificaciones"));
+assert(
+  redesigned.indexOf('id="nav-notifications"') < redesigned.indexOf('<div class="footTitle">Cuenta</div>'),
+  "notifications must be the last bot navigation item, before the account submenu"
+);
 assert(!redesigned.includes('id="usagePct"'), "the approved plan redesign must not show chat consumption");
 assert(!redesigned.includes("Paquetes de rescate"), "unpublished rescue packages must not be shown as a product");
 assert(!redesigned.includes("Programa de referidos"), "an unimplemented referral program must not be presented as active");
@@ -160,9 +173,8 @@ for (const match of redesignedMarkup.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/but
   );
 }
 
-assert(botConfiguration.clientScript.includes('DEMO_MODE&&PANEL_REDESIGN_ENABLED'));
-assert(botConfiguration.clientScript.includes('nx_demo_personality_v1'));
-assert(botConfiguration.clientScript.includes('Todo guardado en la demo'));
+assert(botConfiguration.clientScript.includes('loadBotPersonality'));
+assert(botConfiguration.clientScript.includes('saveBotConfiguration'));
 
 const legacy = render(false, "orders");
 assert(!legacy.includes('<body class="panel-redesign">'));
@@ -173,6 +185,7 @@ assert(!legacy.includes("4 pasos para quedar listo"));
 assert(!legacy.includes('id="panelActionToast"'));
 assert(!legacy.includes('id="handoffAiBtn"'));
 assert(!legacy.includes('onkeydown="conversationComposerKeydown(event)"'));
+assert(legacy.includes('reply.addEventListener("keydown",conversationComposerKeydown)'));
 assert(!legacy.split("<script>")[0].includes('data-conversation-channel="'));
 assert(legacy.includes('<button class="ghostBtn" type="button">Mantener plan actual</button>'));
 assert(legacy.includes('>Comprar chats adicionales</button>'));
@@ -181,6 +194,19 @@ assert(legacy.includes('>Ver promoción</button>'));
 const stagingDefault = renderStagingDefault();
 assert(stagingDefault.includes('<body class="panel-redesign">'));
 assert(stagingDefault.includes('id="nav-orders"'));
+const redesignedPlan = render(true, "plan");
+assert(redesignedPlan.includes('<body class="panel-redesign">'), "Mi plan must retain its redesign styles");
+const redesignedChannels = render(true, "channels");
+assert(redesignedChannels.includes('<body class="panel-redesign">'), "Conectar canales must retain its redesign styles");
+assert(redesigned.includes('["summary","conversations","orders","retargeting","plan","channels"].includes(name)'));
+
+// Production carried the old review-era literal `false`.  A successful code
+// deploy must still serve the approved v2 panel; only `0` is the rollback.
+process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = "false";
+const migratedProductionFlag = renderTenant("nextfor-aura", "summary", true);
+assert(migratedProductionFlag.includes('<body class="panel-redesign">'));
+assert(migratedProductionFlag.includes('id="nav-orders"'));
+assert(migratedProductionFlag.includes("Oportunidades de venta"));
 
 const uno = renderTenant("nextfor-uno");
 assert(uno.includes("Nextfor Uno"));
@@ -199,11 +225,10 @@ assert(!aura.includes('id="nav-appointments"'));
 
 const tempo = renderTenant("nextfor-tempo", "summary");
 assert(tempo.includes("Nextfor Tempo"));
-assert(tempo.includes("/admin/assets/lumen-plan-tempo.png"));
-assert(tempo.includes("1 bot entrenado y listo"));
 assert(tempo.includes('id="nav-appointments"'));
 assert(tempo.includes('<section class="view active" id="panel-appointments">'));
 assert(!tempo.includes('id="nav-orders"'));
+assert(!tempo.includes('<body class="panel-redesign">'), "appointment-only tenants keep the production appointment shell");
 
 const atlas = renderTenant("nextfor-atlas");
 assert(atlas.includes("Nextfor Atlas"));
@@ -211,6 +236,10 @@ assert(atlas.includes("/admin/assets/lumen-plan-atlas.png"));
 assert(atlas.includes("2 bots entrenados y listos"));
 assert(atlas.includes('id="nav-appointments"'));
 assert(atlas.includes('id="nav-orders"'));
+const atlasSupportLabel = atlas.match(/id="bot-support"[\s\S]*?<strong>([^<]+)<\/strong>/);
+const atlasAppointmentLabel = atlas.match(/id="bot-appointments"[\s\S]*?<strong>([^<]+)<\/strong>/);
+assert.strictEqual(atlasSupportLabel && atlasSupportLabel[1], "Atención al cliente");
+assert.strictEqual(atlasAppointmentLabel && atlasAppointmentLabel[1], "Agendamiento");
 
 const auraOrdersOff = renderTenant("nextfor-aura", "orders", false);
 assert(!auraOrdersOff.includes('id="nav-orders"'));

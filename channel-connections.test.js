@@ -661,10 +661,12 @@ function expectCode(promise, code) {
     }), encryptionKey)
   });
   let syncedProfileImage = null;
+  let profileUpdateCalls = 0;
   const profileSyncService = createChannelConnectionService({
     store: profileSyncStore,
     provider: {
       updateWhatsAppBusinessProfile: async function (credential, input) {
+        profileUpdateCalls++;
         assert.strictEqual(credential.phone_number_id, "profile-phone");
         assert.strictEqual(credential.access_token, "profile-token");
         syncedProfileImage = input.image;
@@ -694,6 +696,28 @@ function expectCode(promise, code) {
   assert.strictEqual(syncedProfile.address_applied, true);
   assert.strictEqual(syncedProfileImage.mime_type, "image/jpeg");
   assert.strictEqual(syncedProfileImage.bytes.toString(), "profile-image");
+  assert.strictEqual(profileUpdateCalls, 1);
+  await profileSyncStore.upsert({
+    tenant_id: "tenant-coexistence",
+    channel: "whatsapp",
+    status: "connected",
+    webhook_status: "subscribed",
+    phone_number_id: "coexistence-phone",
+    coexistence_confirmed: true,
+    credentials_ciphertext: encryptStoredText(JSON.stringify({
+      phone_number_id: "coexistence-phone",
+      access_token: "coexistence-token",
+      onboarding_mode: "coexistence"
+    }), encryptionKey)
+  });
+  const coexistenceProfile = await profileSyncService.syncWhatsAppBusinessProfile("tenant-coexistence", {
+    avatar_url: "data:image/jpeg;base64," + Buffer.from("coexistence-image").toString("base64"),
+    description: "Perfil de coexistencia"
+  }, "owner@coexistence.example");
+  assert.strictEqual(coexistenceProfile.status, "manual_app_required");
+  assert.strictEqual(coexistenceProfile.onboarding_mode, "coexistence");
+  assert.strictEqual(coexistenceProfile.profile_verified, false);
+  assert.strictEqual(profileUpdateCalls, 1, "coexistence must not call the Cloud API profile updater");
   await expectCode(profileSyncService.syncWhatsAppBusinessProfile("tenant-missing", {
     avatar_url: "data:image/jpeg;base64," + Buffer.from("profile-image").toString("base64")
   }, "owner@profile.example"), "whatsapp_profile_not_connected");

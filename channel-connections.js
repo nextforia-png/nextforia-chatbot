@@ -3713,6 +3713,20 @@ function createChannelConnectionService(options) {
         throw new ChannelConnectionError("whatsapp_profile_not_connected", 409);
       }
       if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
+      const onboardingMode = publicConnection(record, { superAdmin: true }).whatsapp_onboarding_mode || "cloud_api";
+      if (onboardingMode === "coexistence") {
+        return {
+          ok: false,
+          status: "manual_app_required",
+          profile_verified: false,
+          onboarding_mode: onboardingMode,
+          picture_requested: !!cleanText(profile && profile.avatar_url, 8 * 1024 * 1024),
+          description_requested: Object.prototype.hasOwnProperty.call(profile || {}, "description"),
+          address_requested: Object.prototype.hasOwnProperty.call(profile || {}, "address"),
+          phone_number_suffix: String(record.phone_number_id || "").slice(-8),
+          synced_by: actorLabel(actor)
+        };
+      }
       const credential = credentialPayload(record);
       if (!credential || !provider || typeof provider.updateWhatsAppBusinessProfile !== "function") {
         throw new ChannelConnectionError("existing_asset_credentials_required", 409);
@@ -3731,6 +3745,7 @@ function createChannelConnectionService(options) {
         ok: true,
         status: "applied",
         profile_verified: true,
+        onboarding_mode: onboardingMode,
         picture_present: result.picture_present === true,
         description_applied: result.description_applied === true,
         address_applied: result.address_applied === true,

@@ -5461,7 +5461,42 @@ async function executeCheckAppointmentAvailability(tenantId, input, actor) {
     return { ok: false, error: "invalid_appointment_datetime" };
   }
   const result = await appointmentCalendarService.checkAvailability(tenantId, parsed.toISOString(), durationMinutes, actor);
-  return Object.assign({ ok: true }, result);
+  let timeZone = cleanRuntimeText(result && result.primary_time_zone, 120) || "America/Bogota";
+  let requestedLabel;
+  let currentLabel;
+  try {
+    const formatter = new Intl.DateTimeFormat("es-CO", {
+      timeZone,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    requestedLabel = formatter.format(parsed);
+    currentLabel = formatter.format(new Date());
+  } catch (_) {
+    timeZone = "America/Bogota";
+    const formatter = new Intl.DateTimeFormat("es-CO", {
+      timeZone,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    requestedLabel = formatter.format(parsed);
+    currentLabel = formatter.format(new Date());
+  }
+  return Object.assign({ ok: true }, result, {
+    date_context: {
+      current_time: currentLabel,
+      requested_time: requestedLabel,
+      time_zone: timeZone
+    }
+  });
 }
 
 async function executeBookAppointment(userId, tenantId, input, actor) {

@@ -12,7 +12,7 @@ function cleanTenantId(value) {
 
 function appointmentPromptHash(configuration) {
   return crypto.createHash("sha256")
-    .update(cleanText(configuration && configuration.system_prompt, 200000))
+    .update(cleanText(configuration && configuration.system_prompt, 200000) + "\n\n" + appointmentToolPrompt())
     .digest("hex");
 }
 
@@ -290,18 +290,14 @@ function appointmentFirstMessage(configuration) {
 
 function appointmentToolPrompt() {
   return [
-    "REGLAS OBLIGATORIAS DE HERRAMIENTAS:",
-    "- Antes de ofrecer o confirmar un horario, usa la herramienta de disponibilidad.",
-    "- Solo confirma una reserva cuando la herramienta de agendamiento responda ok=true.",
-    "- Para cancelar o reprogramar, identifica una sola cita, confirma la intención del cliente y usa la herramienta correspondiente.",
-    "- Solo confirma una cancelación o reprogramación cuando la herramienta responda ok=true.",
-    "- Si una herramienta falla o devuelve varias coincidencias, no inventes el resultado: solicita el dato faltante o deriva a una persona.",
-    "- Nunca reveles identificadores internos, tokens, errores técnicos ni datos de otros clientes."
-  ].join("\n");
-}
-
-function appointmentToolPrompt() {
-  return [
+    "CONTEXTO TEMPORAL Y MEMORIA DE LA CONVERSACIÓN:",
+    "- La fecha y hora actual real es {{system__time}}. La hora UTC es {{system__time_utc}} y la zona informada es {{system__timezone}}.",
+    "- Nunca adivines el mes, la fecha ni el día de la semana. Para cualquier horario solicitado, usa la herramienta de disponibilidad y repite exactamente la fecha normalizada que devuelve.",
+    "- Trata toda la conversación como un solo formulario acumulativo: conserva cada dato que el cliente ya entregó, incluso si dio varios en un mismo mensaje.",
+    "- Nunca vuelvas a pedir un dato ya entregado. Pregunta únicamente los campos obligatorios que todavía falten. Si el cliente corrige un dato, reemplaza el anterior.",
+    "- Antes de reservar, resume los datos reunidos una sola vez para confirmación; no los solicites de nuevo.",
+    "- Si una herramienta reporta un campo faltante, pide solamente ese campo.",
+    "",
     "REGLAS OBLIGATORIAS DE HERRAMIENTAS:",
     "- Antes de ofrecer o confirmar un horario, usa la herramienta de disponibilidad.",
     "- Solo confirma una reserva cuando la herramienta de agendamiento responda ok=true.",

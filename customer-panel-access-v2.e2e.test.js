@@ -380,7 +380,7 @@ function signedSessionCookie(secret, user) {
     assert(!shellA.includes('id="bot-appointments"'), "tenant A must not receive the unassigned appointments bot switch");
     assert(!shellA.includes('id="navAppointments"'), "tenant A must not receive appointments navigation");
     assert(!shellA.includes('id="panel-appointments"'), "tenant A must not receive appointments panel markup");
-    assert(shellA.includes("1 bot activo"));
+    assert(shellA.includes("1 bot entrenado y listo"));
     assert(shellA.includes('id="nav-logout"'));
     assert(shellA.includes('id="nav-notifications"'));
     assert(shellA.includes('id="panel-notifications"'));
@@ -414,7 +414,7 @@ function signedSessionCookie(secret, user) {
     assert(!shellB.includes('id="navAppointments"'));
     assert(!shellB.includes('id="panel-appointments"'));
     assert(shellB.includes('id="bot-support"'), "tenant B must receive the assigned support bot switch");
-    assert(shellB.includes("1 bot activo"));
+    assert(shellB.includes("1 bot entrenado y listo"));
     assert(shellB.includes('INITIAL_TAB="summary"'), "chatbot-only tenants must open summary");
     assert(!shellB.includes(">RAV Toys<"));
     assert(!shellB.includes(">Empresa A<"));

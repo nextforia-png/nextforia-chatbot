@@ -352,7 +352,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v377-production-conversation-density-repair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v378-human-message-deduplication";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -869,6 +869,8 @@ const processedMetaEventIds = new Set();
 const processedWhatsAppStatusEventIds = new Set();
 const recentManagedInstagramOutbound = new Map();
 const inboundMessageWindows = new Map();
+const adminMessageDeliveryRequests = new Map();
+const ADMIN_MESSAGE_IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
 const instagramRuntimeState = {
   webhook_requests: 0,
   inbound_messages: 0,
@@ -12627,23 +12629,7 @@ app.post("/admin/takeover/:userId", async (req, res) => {
   res.json({ ok: true, userId, handoff: true });
 });
 
-app.post("/admin/send-message", async (req, res) => {
-  if (!conversationActionAuthOk(req, "agent")) {
-    res.status(401).json({ ok: false, error: "unauthorized" });
-    return;
-  }
-  const userId = normalizeConversationUserId(req.body && req.body.userId);
-  const text = String(req.body && req.body.text || "").trim();
-  if (!userId || !text) {
-    res.status(400).json({ ok: false, error: "missing_user_or_text" });
-    return;
-  }
-  if (text.length > 1200) {
-    res.status(400).json({ ok: false, error: "message_too_long" });
-    return;
-  }
-  const auth = dashboardAuth(req);
-  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+async function executeAdminMessageDelivery(userId, text, tenantMeta, actor, clientRequestId) {
   const sent = await sendText(userId, text, tenantMeta);
   if (!sent) {
     await recordAdminEvent(
@@ -12654,20 +12640,87 @@ app.post("/admin/send-message", async (req, res) => {
       false,
       tenantMeta
     );
-    res.status(502).json({
-      ok: false,
-      error: "channel_delivery_failed",
-      message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
-      userId,
-      handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
-      meta_sent: false
-    });
-    return;
+    return {
+      status: 502,
+      body: {
+        ok: false,
+        error: "channel_delivery_failed",
+        message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
+        userId,
+        handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
+        meta_sent: false,
+        request_id: clientRequestId || null
+      }
+    };
   }
   addHumanHandoff(userId, tenantMeta.tenant_id);
-  await recordRetargetingSignal(tenantMeta.tenant_id, userId, "handoff", "admin-message:" + Date.now(), auth.name || "admin");
+  await recordRetargetingSignal(
+    tenantMeta.tenant_id,
+    userId,
+    "handoff",
+    "admin-message:" + (clientRequestId || Date.now()),
+    actor || "admin"
+  );
   await recordAdminEvent(userId, "admin_send_message", "[Humano] " + text, "ok", undefined, tenantMeta);
-  res.json({ ok: true, userId, handoff: true, meta_sent: true });
+  return {
+    status: 200,
+    body: { ok: true, userId, handoff: true, meta_sent: true, request_id: clientRequestId || null }
+  };
+}
+
+function executeAdminMessageDeliveryOnce(userId, text, tenantMeta, actor, clientRequestId) {
+  if (!clientRequestId) return executeAdminMessageDelivery(userId, text, tenantMeta, actor, null);
+  const key = [tenantMeta.tenant_id, userId, clientRequestId].join("\u001f");
+  const existing = adminMessageDeliveryRequests.get(key);
+  if (existing) {
+    if (existing.text !== text) {
+      return Promise.resolve({
+        status: 409,
+        body: { ok: false, error: "message_request_conflict", message: "Actualiza el panel y vuelve a enviar." }
+      });
+    }
+    return existing.promise;
+  }
+  const entry = { text, promise: null };
+  entry.promise = executeAdminMessageDelivery(userId, text, tenantMeta, actor, clientRequestId);
+  adminMessageDeliveryRequests.set(key, entry);
+  const cleanup = setTimeout(function () {
+    if (adminMessageDeliveryRequests.get(key) === entry) adminMessageDeliveryRequests.delete(key);
+  }, ADMIN_MESSAGE_IDEMPOTENCY_TTL_MS);
+  if (cleanup && typeof cleanup.unref === "function") cleanup.unref();
+  return entry.promise;
+}
+
+app.post("/admin/send-message", async (req, res) => {
+  if (!conversationActionAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = normalizeConversationUserId(req.body && req.body.userId);
+  const text = String(req.body && req.body.text || "").trim();
+  const clientRequestId = cleanRuntimeText(req.body && (req.body.clientRequestId || req.body.client_request_id), 100);
+  if (!userId || !text) {
+    res.status(400).json({ ok: false, error: "missing_user_or_text" });
+    return;
+  }
+  if (text.length > 1200) {
+    res.status(400).json({ ok: false, error: "message_too_long" });
+    return;
+  }
+  if (clientRequestId && !/^[A-Za-z0-9._:-]{8,100}$/.test(clientRequestId)) {
+    res.status(400).json({ ok: false, error: "invalid_message_request_id" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantMeta = { tenant_id: customerTenantForAuth(auth) || DEFAULT_TENANT_ID };
+  const result = await executeAdminMessageDeliveryOnce(
+    userId,
+    text,
+    tenantMeta,
+    auth.name || "admin",
+    clientRequestId
+  );
+  res.status(result.status).json(result.body);
 });
 
 app.get("/admin/customer-meta", async (req, res) => {

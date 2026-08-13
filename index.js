@@ -122,6 +122,14 @@ const {
   normalizeMemory
 } = require("./customer-intelligence");
 const {
+  PROFILE_FIELDS: CUSTOMER_CONTACT_PROFILE_FIELDS,
+  mergeCustomerContactProfile,
+  normalizeCustomerContactProfile,
+  profilePatchFromAppointment,
+  profilePatchFromCheckoutField,
+  profilePatchFromOrder
+} = require("./customer-contact-profile");
+const {
   buildBotPersonalityPrompt,
   maxTokensForPersonality,
   normalizeBotPersonality,
@@ -353,7 +361,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v381-tenant-outbound-isolation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v382-customer-contact-profiles";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -628,6 +636,7 @@ const MAX_CONVERSATION_HISTORY = Math.max(
 );
 const CUSTOMER_MEMORY_TOOL = "customer_memory_v1";
 const CUSTOMER_MEMORY_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_MEMORY_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 24 * 60 * 60 * 1000);
+const CUSTOMER_META_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_META_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 24 * 60 * 60 * 1000);
 const CONVERSATION_SESSION_TIMEOUT_MS = boundedEnvInt("CONVERSATION_SESSION_TIMEOUT_MS", 6 * 60 * 60 * 1000, 15 * 60 * 1000, 7 * 24 * 60 * 60 * 1000);
 const MAX_INBOUND_TEXT_LENGTH = boundedEnvInt("MAX_INBOUND_TEXT_LENGTH", 4000, 256, 12000);
 const SHOPIFY_STORE_DOMAIN = configuredPublicHostname(process.env.SHOPIFY_STORE_DOMAIN);
@@ -861,6 +870,9 @@ const conversationLogs = [];
 const shopifySessionMemory = new Map();
 const instagramProfileCache = new Map();
 const customerMemoryCache = new Map();
+const customerMetaCache = new Map();
+const customerMetaLocks = new Map();
+const customerIdentityProfilesEnsured = new Set();
 const conversationLastActiveAt = new Map();
 const atlasRoutingStates = new Map();
 const conversationConfigurationFingerprints = new Map();
@@ -2582,7 +2594,11 @@ async function supabaseFetchUserToolRecent(userId, toolName, limit, options) {
       timeout: 8000
     });
     return r.data;
-  } catch (e) { console.error("supabaseFetchUserToolRecent error:", e.message); return null; }
+  } catch (e) {
+    console.error("supabaseFetchUserToolRecent error:", e.message);
+    if (options && options.strict) throw e;
+    return null;
+  }
 }
 async function supabaseFetchToolRecent(toolName, limit, options) {
   if (!SUPABASE_ENABLED) return null;
@@ -2951,6 +2967,27 @@ function normalizeCustomerName(name) {
     .slice(0, 80);
 }
 
+function normalizeCustomerMeta(meta) {
+  const value = meta && typeof meta === "object" ? meta : {};
+  const profile = normalizeCustomerContactProfile(value.profile && typeof value.profile === "object"
+    ? Object.assign({}, value, value.profile)
+    : value);
+  profile.name = normalizeCustomerName(profile.name);
+  return Object.assign(profile, {
+    version: 2,
+    tags: normalizeCustomerTags(value.tags),
+    note: normalizeCustomerNote(value.note),
+    profile_source: cleanRuntimeText(value.profile_source, 80) || null
+  });
+}
+
+function customerContactProfileView(meta) {
+  const normalized = normalizeCustomerMeta(meta);
+  const profile = { version: normalized.version };
+  CUSTOMER_CONTACT_PROFILE_FIELDS.forEach(function (field) { profile[field] = normalized[field]; });
+  return profile;
+}
+
 function normalizeConversationUserId(value) {
   const raw = String(value || "").trim();
   const instagram = /^ig:/i.test(raw);
@@ -3066,12 +3103,7 @@ function parseCustomerMetaTurn(turn) {
   const raw = String(turn.botReply || "").replace(/^\[Meta\]\s*/, "");
   try {
     const parsed = JSON.parse(raw);
-    return {
-      tags: normalizeCustomerTags(parsed.tags),
-      note: normalizeCustomerNote(parsed.note),
-      name: normalizeCustomerName(parsed.name),
-      updated_at: turn.ts || null
-    };
+    return Object.assign(normalizeCustomerMeta(parsed), { updated_at: turn.ts || null });
   } catch (e) {
     return null;
   }
@@ -3097,7 +3129,7 @@ function parseCustomerMemoryTurn(turn) {
   const raw = String(turn.botReply || "").replace(/^\[CustomerMemory\]\s*/, "");
   try {
     const memory = normalizeMemory(JSON.parse(raw));
-    return isMeaningfulMemory(memory) ? { user_id: userId, memory } : null;
+    return { user_id: userId, memory };
   } catch (_) {
     return null;
   }
@@ -3114,10 +3146,10 @@ function customerMemoriesFromTurns(turns) {
   return memories;
 }
 
-function recordCustomerMemory(userId, memory, tenantId) {
+function recordCustomerMemory(userId, memory, tenantId, options) {
   const cleanUserId = normalizeConversationUserId(userId);
   const normalized = normalizeMemory(memory);
-  if (!cleanUserId || !isMeaningfulMemory(normalized)) return null;
+  if (!cleanUserId || (!isMeaningfulMemory(normalized) && !(options && options.force))) return null;
   const explicitTenantId = cleanTenantId(tenantId);
   const remembered = cachedConversationRuntime(cleanUserId, explicitTenantId);
   const memoryTenantId = explicitTenantId || cleanTenantId(remembered && remembered.tenantId) || DEFAULT_TENANT_ID;
@@ -3278,31 +3310,123 @@ function queueInstagramProfileRefreshes(turns, tenantId) {
   userIds.slice(0, 10).forEach(function (userId) { refreshInstagramProfile(userId, tenantId); });
 }
 
-function recordCustomerMeta(userId, meta, tenantId) {
+async function loadCustomerMeta(userId, tenantId) {
+  const cleanUserId = normalizeConversationUserId(userId);
   const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
-  const payload = {
-    tags: normalizeCustomerTags(meta && meta.tags),
-    note: normalizeCustomerNote(meta && meta.note),
-    name: normalizeCustomerName(meta && meta.name)
-  };
-  const rec = {
-    ts: new Date().toISOString(),
-    tenantId: cleanTenant,
-    userId,
-    userMessage: "",
-    botReply: "[Meta] " + JSON.stringify(payload),
-    tools: [CUSTOMER_META_TOOL],
-    zeroResultQueries: [],
-    handoff: false,
-    rating: null,
-    numTools: 1,
-    status: "ok",
-    eval: { skip: true, reason: CUSTOMER_META_TOOL }
-  };
-  conversationLogs.push(rec);
-  if (conversationLogs.length > 100) conversationLogs.shift();
-  supabaseInsert(rec);
-  return { ...payload, updated_at: rec.ts };
+  if (!cleanUserId) return normalizeCustomerMeta({});
+  const cacheKey = tenantConversationStateKey(cleanUserId, cleanTenant);
+  const cached = customerMetaCache.get(cacheKey);
+  if (!SUPABASE_ENABLED && cached && Date.now() - cached.loaded_at < CUSTOMER_META_CACHE_TTL_MS) return cached.meta;
+
+  let turns = conversationLogs.filter(function (turn) {
+    return normalizeConversationUserId(turn.userId) === cleanUserId &&
+      cleanTenantId(turn.tenantId || turn.tenant_id) === cleanTenant &&
+      isCustomerMetaTurn(turn);
+  });
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchUserToolRecent(cleanUserId, CUSTOMER_META_TOOL, 1, {
+      tenantId: cleanTenant,
+      strict: true
+    });
+    if (rows && rows.length) turns = rows.map(normalizeTurnRow);
+  }
+  const meta = customerMetaFromTurns(turns)[cleanUserId] || normalizeCustomerMeta({});
+  customerMetaCache.set(cacheKey, { meta, loaded_at: Date.now() });
+  return meta;
+}
+
+function customerMetaPatch(value) {
+  const input = value && typeof value === "object" ? value : {};
+  const nested = input.profile && typeof input.profile === "object" ? input.profile : {};
+  const patch = {};
+  CUSTOMER_CONTACT_PROFILE_FIELDS.forEach(function (field) {
+    if (Object.prototype.hasOwnProperty.call(input, field)) patch[field] = input[field];
+    else if (Object.prototype.hasOwnProperty.call(nested, field)) patch[field] = nested[field];
+  });
+  return patch;
+}
+
+function customerMetaChanged(current, next) {
+  const cleanCurrent = Object.assign({}, normalizeCustomerMeta(current));
+  const cleanNext = Object.assign({}, normalizeCustomerMeta(next));
+  delete cleanCurrent.updated_at;
+  delete cleanNext.updated_at;
+  return JSON.stringify(cleanCurrent) !== JSON.stringify(cleanNext);
+}
+
+async function saveCustomerMeta(userId, meta, tenantId, options) {
+  const cleanUserId = normalizeConversationUserId(userId);
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  if (!cleanUserId) throw new Error("missing_customer_user_id");
+  const settings = options || {};
+  const lockKey = tenantConversationStateKey(cleanUserId, cleanTenant);
+  const previous = customerMetaLocks.get(lockKey) || Promise.resolve();
+  const operation = previous.catch(function () {}).then(async function () {
+    const current = await loadCustomerMeta(cleanUserId, cleanTenant);
+    const contactPatch = customerMetaPatch(meta);
+    if (settings.onlyIfEmpty === true) {
+      CUSTOMER_CONTACT_PROFILE_FIELDS.forEach(function (field) {
+        if (current[field]) delete contactPatch[field];
+      });
+    }
+    const contactMerge = mergeCustomerContactProfile(current, contactPatch, {
+      allowClear: settings.allowClear === true
+    });
+    if (contactMerge.invalid_fields.length) {
+      const error = new Error("invalid_customer_profile_fields:" + contactMerge.invalid_fields.join(","));
+      error.code = "invalid_customer_profile_fields";
+      error.fields = contactMerge.invalid_fields;
+      error.status = 400;
+      throw error;
+    }
+    const input = meta && typeof meta === "object" ? meta : {};
+    const next = Object.assign({}, current, contactMerge.profile);
+    if (Object.prototype.hasOwnProperty.call(input, "tags")) next.tags = normalizeCustomerTags(input.tags);
+    if (Object.prototype.hasOwnProperty.call(input, "note")) next.note = normalizeCustomerNote(input.note);
+    next.version = 2;
+    if (contactMerge.changed) next.profile_source = cleanRuntimeText(settings.source, 80) || "customer_panel";
+    const payload = normalizeCustomerMeta(next);
+    if (!customerMetaChanged(current, payload)) return Object.assign({}, current, {
+      changed_fields: [],
+      profile: customerContactProfileView(current)
+    });
+
+    const rec = {
+      ts: new Date().toISOString(),
+      tenantId: cleanTenant,
+      channel: conversationChannel(cleanUserId),
+      userId: cleanUserId,
+      userMessage: "",
+      botReply: "[Meta] " + JSON.stringify(payload),
+      tools: [CUSTOMER_META_TOOL],
+      zeroResultQueries: [],
+      handoff: false,
+      rating: null,
+      numTools: 1,
+      status: "ok",
+      eval: { skip: true, reason: CUSTOMER_META_TOOL }
+    };
+    if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+    conversationLogs.push(rec);
+    if (conversationLogs.length > 100) conversationLogs.shift();
+    const saved = Object.assign({}, payload, {
+      updated_at: rec.ts,
+      changed_fields: contactMerge.changed_fields,
+      profile: customerContactProfileView(payload)
+    });
+    customerMetaCache.set(lockKey, { meta: saved, loaded_at: Date.now() });
+    return saved;
+  });
+  customerMetaLocks.set(lockKey, operation);
+  try {
+    return await operation;
+  } finally {
+    if (customerMetaLocks.get(lockKey) === operation) customerMetaLocks.delete(lockKey);
+  }
+}
+
+async function recordCustomerMeta(userId, meta, tenantId, options) {
+  return saveCustomerMeta(userId, meta, tenantId, options);
 }
 
 function inferHandoffStates(turns, activeUsers) {
@@ -4067,6 +4191,37 @@ const APPOINTMENT_TOOLS = [
   },
   TOOLS.find(function (tool) { return tool.name === "request_human_handoff"; })
 ].filter(Boolean);
+
+const CUSTOMER_PROFILE_TOOL = {
+  name: "save_customer_profile",
+  description: "Guarda o corrige datos que el cliente acaba de compartir explícitamente. Llámala en el mismo turno cuando entregue nombre, teléfono, correo, dirección o datos de envío. No inventes ni deduzcas datos y no guardes información que pertenezca a otra persona.",
+  input_schema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Nombre del cliente, solo si lo dijo o confirmó." },
+      phone: { type: "string", description: "Teléfono de contacto explícitamente entregado o confirmado." },
+      email: { type: "string", description: "Correo electrónico explícitamente entregado o confirmado." },
+      address: { type: "string", description: "Dirección principal de entrega." },
+      address_line_2: { type: "string", description: "Apartamento, oficina, torre u otro complemento." },
+      neighborhood: { type: "string", description: "Barrio o sector de entrega." },
+      city: { type: "string", description: "Ciudad o municipio de entrega." },
+      state: { type: "string", description: "Departamento, estado o provincia." },
+      postal_code: { type: "string", description: "Código postal." },
+      country: { type: "string", description: "País de entrega." },
+      id_number: { type: "string", description: "Documento solicitado para el pedido, solo con autorización del cliente." },
+      delivery_instructions: { type: "string", description: "Indicaciones de entrega dadas por el cliente." }
+    },
+    minProperties: 1,
+    additionalProperties: false
+  }
+};
+
+const CUSTOMER_PROFILE_OPERATIONAL_PROMPT = [
+  "PERFIL PRIVADO DEL CLIENTE:",
+  "- Cuando el cliente diga o corrija su nombre, teléfono, correo, dirección o datos de envío, usa save_customer_profile en ese mismo turno.",
+  "- Guarda únicamente datos expresos del cliente. Nunca inventes ni completes por deducción.",
+  "- No menciones la base de datos ni repitas documentos o datos sensibles salvo que sea indispensable para confirmar una operación solicitada."
+].join("\n");
 
 const APPOINTMENT_OPERATIONAL_PROMPT = [
   "REGLAS OPERATIVAS DEL CANAL DE CITAS:",
@@ -5054,6 +5209,29 @@ async function executeSendShippingInfo(userId) {
   return { sent: true };
 }
 
+async function executeSaveCustomerProfile(userId, tenantId, input, source) {
+  const patch = customerMetaPatch(input);
+  const saved = await saveCustomerMeta(userId, patch, tenantId, {
+    allowClear: false,
+    source: source || "bot_conversation"
+  });
+  if (saved.name) {
+    const currentMemory = normalizeMemory(await loadCustomerMemory(userId, tenantId));
+    if (currentMemory.preferred_name !== saved.name) {
+      recordCustomerMemory(userId, Object.assign({}, currentMemory, {
+        preferred_name: saved.name,
+        updated_at: new Date().toISOString()
+      }), tenantId);
+    }
+  }
+  const profile = customerContactProfileView(saved);
+  return {
+    saved: true,
+    saved_fields: saved.changed_fields || [],
+    available_fields: CUSTOMER_CONTACT_PROFILE_FIELDS.filter(function (field) { return !!profile[field]; })
+  };
+}
+
 async function executeLookupOrderStatus(userId, input, tenantId) {
   const result = await lookupOrderStatus(input || {});
   log("info", "order_status_lookup", {
@@ -5244,7 +5422,7 @@ async function executeRemoveProductFromPurchase(userId, input, stateId) {
   };
 }
 
-async function executeSaveCheckoutField(userId, input, stateId) {
+async function executeSaveCheckoutField(userId, input, stateId, tenantId) {
   const key = operationalStateKey(userId, stateId);
   if (!checkouts.has(key)) checkouts.set(key, { data: {} });
   const state = checkouts.get(key);
@@ -5256,6 +5434,13 @@ async function executeSaveCheckoutField(userId, input, stateId) {
   }
   state.data[input.field] = input.value;
   checkouts.set(key, state);
+  const profilePatch = profilePatchFromCheckoutField(input.field, input.value);
+  if (Object.keys(profilePatch).length) {
+    await saveCustomerMeta(userId, profilePatch, tenantId, {
+      allowClear: false,
+      source: "bot_checkout"
+    });
+  }
   const missing = CHECKOUT_FIELDS.filter(f => !state.data[f]);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Saved field ${input.field}. Missing: ${missing.join(",") || "none"}`);
   return {
@@ -5375,6 +5560,10 @@ async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
     source_event_id: sourceEventId,
     source: "bot_checkout"
   });
+  await saveCustomerMeta(userId, profilePatchFromOrder(order), cleanTenant, {
+    allowClear: false,
+    source: "bot_order"
+  });
   await notifyTeam(summary, userId);
   console.log(`[Checkout ${maskedIdentifier(userId)}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
   return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length, order_id: order.id };
@@ -5482,11 +5671,22 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   if (!availability.available) {
     return { ok: false, error: "appointment_slot_unavailable", busy: availability.busy };
   }
+  const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
+  const appointmentProfile = profilePatchFromAppointment({
+    customer_name: input && input.customer_name,
+    customer_phone: cleanRuntimeText(input && input.customer_phone, 80),
+    customer_email: input && input.customer_email
+  });
+  if (normalizeConversationUserId(userId)) {
+    await saveCustomerMeta(userId, appointmentProfile, tenantId, {
+      allowClear: false,
+      source: "appointment_booking"
+    });
+  }
   const conversationId = "chat_" + crypto.createHash("sha256")
     .update([tenantId, userId, startsAt.toISOString(), cleanRuntimeText(input && input.consultation_reason, 1000)].join("|"))
     .digest("hex")
     .slice(0, 32);
-  const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
   let row = await appointmentRegistry.upsert({
     tenant_id: tenantId,
     conversation_id: conversationId,
@@ -5781,6 +5981,9 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   let conversationTools = ravOperationalToolsAllowed
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
+  if (!conversationTools.some(function (tool) { return tool.name === CUSTOMER_PROFILE_TOOL.name; })) {
+    conversationTools.push(CUSTOMER_PROFILE_TOOL);
+  }
   if (routeUsesAppointmentBot) {
     APPOINTMENT_TOOLS.forEach(function (tool) {
       if (tool && !conversationTools.some(function (current) { return current.name === tool.name; })) conversationTools.push(tool);
@@ -5832,6 +6035,30 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     checkout: checkouts.get(stateKey),
     now: new Date().toISOString()
   }, tenantId);
+  const identityProfileKey = tenantConversationStateKey(userId, tenantId);
+  const identityProfilePatch = {};
+  if (!customerIdentityProfilesEnsured.has(identityProfileKey) && conversationChannel(userId) === "whatsapp") {
+    identityProfilePatch.phone = "+" + conversationExternalId(userId);
+  }
+  if (!customerIdentityProfilesEnsured.has(identityProfileKey) && customerMemory && customerMemory.preferred_name) {
+    identityProfilePatch.name = customerMemory.preferred_name;
+  }
+  if (Object.keys(identityProfilePatch).length) {
+    try {
+      await saveCustomerMeta(userId, identityProfilePatch, tenantId, {
+        allowClear: false,
+        onlyIfEmpty: true,
+        source: "conversation_identity"
+      });
+      customerIdentityProfilesEnsured.add(identityProfileKey);
+    } catch (error) {
+      log("warn", "customer_profile_identity_sync_failed", {
+        tenant_id: tenantId,
+        channel: conversationChannel(userId),
+        error: String(error.message || "profile_sync_failed").slice(0, 160)
+      });
+    }
+  }
   history.push({ role: "user", content: userMessage });
 
   let adaptiveBudget = adaptiveConversationBudget({
@@ -5857,6 +6084,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
           max_tokens: adaptiveBudget.maxTokens,
           system: [
         { type: "text", text: conversationSystemPrompt, cache_control: { type: "ephemeral" } },
+        { type: "text", text: CUSTOMER_PROFILE_OPERATIONAL_PROMPT, cache_control: { type: "ephemeral" } },
         ...tenantConfigurationPrompts.map(function (prompt) { return { type: "text", text: prompt, cache_control: { type: "ephemeral" } }; }),
         ...(botPersonalityPrompt ? [{ type: "text", text: botPersonalityPrompt, cache_control: { type: "ephemeral" } }] : []),
         ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
@@ -5959,7 +6187,10 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeRemoveProductFromPurchase(userId, toolUse.input, stateKey);
                 break;
               case "save_checkout_field":
-                result = await executeSaveCheckoutField(userId, toolUse.input, stateKey);
+                result = await executeSaveCheckoutField(userId, toolUse.input, stateKey, tenantId);
+                break;
+              case "save_customer_profile":
+                result = await executeSaveCustomerProfile(userId, tenantId, toolUse.input, "bot_conversation");
                 break;
               case "send_payment_link":
                 result = await executeSendPaymentLink(userId, toolUse.input, stateKey);
@@ -11260,6 +11491,7 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
   const conversations = Object.keys(groups).map(function (userId) {
     const group = groups[userId];
     const meta = metaByCustomer[userId] || { tags: [], note: "", name: "", updated_at: null };
+    const customerProfile = customerContactProfileView(meta);
     const memory = normalizeMemory(memoriesByCustomer[userId]);
     const active = !!(states[userId] && states[userId].active);
     const tags = normalizeCustomerTags(meta.tags);
@@ -11295,6 +11527,10 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       messenger_username: null,
       display_name: displayName,
       customer_name: savedCustomerName || null,
+      customer_profile: customerProfile,
+      contact_phone: customerProfile.phone || null,
+      customer_email: customerProfile.email || null,
+      shipping_address: customerProfile.address || null,
       suggested_name: suggestedCustomerName && suggestedCustomerName !== savedCustomerName ? suggestedCustomerName : null,
       copy_value: copyValue,
       last_ts: group.last_ts,
@@ -12727,9 +12963,13 @@ app.get("/admin/customer-meta", async (req, res) => {
     return;
   }
   const limit = Math.min(parseInt(req.query.limit) || 500, 1000);
-  let turns = conversationLogs.slice();
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
+  let turns = conversationLogs.filter(function (turn) {
+    return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId && isCustomerMetaTurn(turn);
+  });
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchRecent(limit);
+    const rows = await supabaseFetchToolRecent(CUSTOMER_META_TOOL, limit, { tenantId });
     if (rows) turns = rows.map(normalizeTurnRow);
   }
   res.json({
@@ -12752,21 +12992,31 @@ app.post("/admin/customer-meta/:userId", async (req, res) => {
   }
   const auth = dashboardAuth(req);
   const tenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
-  const meta = recordCustomerMeta(userId, {
-    tags: req.body && req.body.tags,
-    note: req.body && req.body.note,
-    name: req.body && req.body.name
-  }, tenantId);
-  if (meta.name) {
-    const currentMemory = normalizeMemory(await loadCustomerMemory(userId, tenantId));
-    if (currentMemory.preferred_name !== meta.name) {
-      recordCustomerMemory(userId, Object.assign({}, currentMemory, {
-        preferred_name: meta.name,
-        updated_at: new Date().toISOString()
-      }), tenantId);
+  const input = req.body && typeof req.body === "object" ? req.body : {};
+  try {
+    const meta = await recordCustomerMeta(userId, input, tenantId, {
+      allowClear: true,
+      source: "customer_panel"
+    });
+    const nameWasProvided = Object.prototype.hasOwnProperty.call(input, "name") ||
+      !!(input.profile && Object.prototype.hasOwnProperty.call(input.profile, "name"));
+    if (nameWasProvided) {
+      const currentMemory = normalizeMemory(await loadCustomerMemory(userId, tenantId));
+      if (currentMemory.preferred_name !== meta.name) {
+        recordCustomerMemory(userId, Object.assign({}, currentMemory, {
+          preferred_name: meta.name,
+          updated_at: new Date().toISOString()
+        }), tenantId, { force: true });
+      }
     }
+    res.json({ ok: true, userId, meta, profile: meta.profile });
+  } catch (error) {
+    res.status(error && error.status || 503).json({
+      ok: false,
+      error: error && error.code || "customer_profile_not_saved",
+      invalid_fields: error && error.fields || undefined
+    });
   }
-  res.json({ ok: true, userId, meta });
 });
 
 app.get("/admin/client-onboarding-demo", (req, res) => {

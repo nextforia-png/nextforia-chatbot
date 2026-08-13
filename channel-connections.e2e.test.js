@@ -431,18 +431,41 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     response = await fetch(base + "/admin/customer-meta/ig%3A123456789", {
       method: "POST",
       headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
-      body: JSON.stringify({ tags: ["vip"], note: "Solo Empresa A", name: "Cliente A" })
+      body: JSON.stringify({
+        tags: ["vip"],
+        note: "Solo Empresa A",
+        name: "Cliente A",
+        phone: "+573011112233",
+        email: "cliente.a@example.com",
+        address: "Calle privada 123",
+        city: "Bogotá",
+        delivery_instructions: "Entregar en recepción"
+      })
     });
     assert.strictEqual(response.status, 200);
     body = await response.json();
     assert.strictEqual(body.meta.note, "Solo Empresa A");
+    assert.strictEqual(body.meta.profile.email, "cliente.a@example.com");
+    assert.strictEqual(body.meta.profile.city, "Bogotá");
+
+    response = await fetch(base + "/admin/customer-meta/ig%3A123456789", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, cookie: userA.cookie },
+      body: JSON.stringify({ note: "Nota actualizada sin borrar el perfil" })
+    });
+    assert.strictEqual(response.status, 200);
+    body = await response.json();
+    assert.strictEqual(body.meta.profile.email, "cliente.a@example.com", "partial panel updates must preserve bot-captured profile fields");
+    assert.strictEqual(body.meta.profile.address, "Calle privada 123");
     response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userA.cookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
+    assert(JSON.stringify(body).includes("cliente.a@example.com"), "tenant A panel must receive its customer profile");
     response = await fetch(base + "/admin/panel/data?limit=500", { headers: { cookie: userB.cookie } });
     assert.strictEqual(response.status, 200);
     body = await response.json();
-    assert(!JSON.stringify(body).includes("Solo Empresa A"), "tenant metadata must not leak across companies");
+    assert(!JSON.stringify(body).includes("cliente.a@example.com"), "customer profiles must not leak across companies");
+    assert(!JSON.stringify(body).includes("Calle privada 123"), "shipping data must remain tenant isolated");
 
     response = await fetch(base + "/admin/panel/channel-connections/whatsapp/connect", {
       method: "POST",

@@ -134,6 +134,7 @@ const {
   resolveLiveBotConfiguration
 } = require("./live-bot-configuration");
 const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
+const { applyTenantOutboundPolicy } = require("./tenant-outbound-policy");
 const {
   ROUTES: ATLAS_ROUTES,
   botCapabilitiesForRoute: atlasBotCapabilitiesForRoute,
@@ -352,7 +353,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v380-official-whatsapp-icon";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v381-tenant-outbound-isolation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -4559,30 +4560,27 @@ function splitMetaMessageText(value, maxLength) {
 }
 
 async function sendText(to, text, options) {
-  // INTERCEPTOR (v33.5): blindaje a prueba del modelo, corre tras la generación.
-  // (A) EXCUSAS TÉCNICAS — INCONDICIONAL: este bot JAMÁS debe decirle al cliente que tiene
-  //     un problema/técnico/despiste/lío. Si aparece, reemplazamos TODO el mensaje por una
-  //     respuesta de buen servicio que reconoce que no tenemos eso y ofrece otras opciones.
-  // (B) LINK DE CATÁLOGO VACÍO — solo cuando la búsqueda del turno dio 0 resultados.
+  const recipient = parseChannelRecipient(to);
+  let deliveryRuntime = options || cachedConversationRuntime(to, null);
   const turnContextActive = conversationTurnContext.isActive();
   const zeroSearchActive = turnContextActive && conversationTurnContext.get("zeroSearchActive");
-  if (typeof text === "string") {
-    const excusePattern = /t[eé]cnic|despist|inconvenient|se me complic|un (peque[nñ]o )?l[ií]o|dificultad(es)?|no (puedo|logro) (mostrar|cargar|acceder|ver el cat)|(?<!sin |ning[uú]n |no hay )problem/i;
-    if (excusePattern.test(text)) {
-      log("warn", "blocked_technical_excuse", { to, original: text.slice(0, 140) });
-      text = "En este momento no tengo ese exacto en el catálogo, pero con muchísimo gusto te ayudo a encontrar algo perfecto 💛 Cuéntame: ¿qué edad tiene tu peque y qué tipo de juguete le gusta? Así te muestro las mejores opciones que sí tenemos ✨";
-      if (turnContextActive) conversationTurnContext.set("zeroSearchActive", false);
-    } else if (zeroSearchActive) {
-      const emptyCatalogLink = /https?:\/\/[^\s]*ravtoys\.com\/search\?q=[^\s]*/i;
-      if (emptyCatalogLink.test(text)) {
-        log("warn", "blocked_empty_catalog_link", { to, original: text.slice(0, 140) });
-        text = "En este momento no tengo eso exacto, pero con gusto te ayudo a encontrar algo ideal 💛 Cuéntame qué edad tiene tu peque y qué tipo de juguete busca, y te muestro las mejores opciones que tenemos ✨";
-        conversationTurnContext.set("zeroSearchActive", false);
-      }
-    }
+  const policyTenantId = cleanTenantId(options && (options.tenantId || options.tenant_id)) ||
+    cleanTenantId(deliveryRuntime && (deliveryRuntime.tenantId || deliveryRuntime.tenant_id));
+  const outboundPolicy = applyTenantOutboundPolicy({
+    text,
+    bot_generated: turnContextActive,
+    business_tools_profile: isRavTenantId(policyTenantId) ? "rav" : "",
+    zero_search_active: zeroSearchActive
+  });
+  if (outboundPolicy.transformed) {
+    log("warn", "tenant_outbound_policy_applied", {
+      tenant_id: policyTenantId,
+      reason: outboundPolicy.reason,
+      destination: maskedIdentifier(to)
+    });
+    text = outboundPolicy.text;
+    conversationTurnContext.set("zeroSearchActive", false);
   }
-  const recipient = parseChannelRecipient(to);
-  let deliveryRuntime = options || (recipient.channel === "whatsapp" ? cachedConversationRuntime(to, null) : null);
   try {
     if (recipient.channel === "instagram") {
       const runtime = await outboundRuntimeForConversation(to, options);
@@ -6088,12 +6086,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
               console.error("Failed to send credit alert:", alertErr.message);
             }
       await recordTurn(userId, userMessage, "[error interno]", "error", conversationRuntime);
-      await sendBotReply("Ups, tuve un problemita técnico 😅 ¿Puedes repetir?");
+      await sendBotReply("No pude completar esa solicitud en este intento. Por favor, inténtalo nuevamente.");
       return;
     }
   }
   await recordTurn(userId, userMessage, "[fallback: sin respuesta del modelo]", "fallback", conversationRuntime);
-  await sendBotReply("Me enredé un poco 😅 ¿Qué buscas exactamente?");
+  await sendBotReply("Necesito que reformules tu solicitud brevemente para poder ayudarte correctamente.");
 }
 
 // ─── WEBHOOK ─────────────────────────────────────────────────────────────────
@@ -6878,7 +6876,7 @@ app.post("/instagram/webhook", async (req, res) => {
           if (await humanControlActiveFor(userId, destination.tenantId)) {
             await recordHumanPausedInbound(userId, { type: "instagram_attachment", attachments: event.message.attachments }, destination);
           } else {
-            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
+            await sendText(userId, "Recibí tu archivo. Escríbeme qué necesitas y descríbeme brevemente qué información debo revisar.", destination);
           }
         }
       }
@@ -6962,7 +6960,7 @@ app.post("/messenger/webhook", async (req, res) => {
           if (await humanControlActiveFor(userId, destination.tenantId)) {
             await recordHumanPausedInbound(userId, { type: "messenger_attachment", attachments: event.message.attachments }, destination);
           } else {
-            await sendText(userId, "Recibí tu archivo 😊 Por ahora puedo ayudarte mejor si me escribes qué necesitas o me compartes el enlace del producto.", destination);
+            await sendText(userId, "Recibí tu archivo. Escríbeme qué necesitas y descríbeme brevemente qué información debo revisar.", destination);
           }
         }
       }

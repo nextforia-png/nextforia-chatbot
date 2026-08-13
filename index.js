@@ -48,6 +48,7 @@ const {
   InMemoryCustomerOrderStore,
   createCustomerOrderService
 } = require("./customer-orders");
+const { buildDailyClientActivity } = require("./customer-panel-activity");
 const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
 const {
@@ -351,7 +352,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v375-production-customer-orders-enabled";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v376-production-panel-regression-repair";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -991,6 +992,7 @@ const clientOnboardingScopeConflictByKey = new Map();
 const setupReviewDeletedTenantIdsMemory = new Set();
 let customerSetupQuestionnaireCache = { loaded_at: 0, questionnaire: null };
 const latestToolStateCache = new Map();
+const customerPanelActivityCache = new Map();
 let legacyClientVisibilityCache = { loaded_at: 0, hidden_ids: [] };
 const retargetingMemoryEvents = new Map();
 const retargetingEventCache = new Map();
@@ -2468,6 +2470,60 @@ async function supabaseFetchCustomerPanelPage(limit, options) {
       return Object.assign({ row_kind: "turn" }, row);
     });
   }
+}
+async function loadCustomerPanelActivityRows(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  if (!cleanTenant) return { rows: [], source: "unavailable", complete: false };
+  const cached = customerPanelActivityCache.get(cleanTenant);
+  if (cached && Date.now() - cached.loaded_at < 60 * 1000) return cached.value;
+  const since = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  let value;
+  if (!SUPABASE_ENABLED) {
+    value = {
+      rows: conversationLogs.filter(function (row) {
+        return cleanTenantId(row.tenantId || row.tenant_id) === cleanTenant && Date.parse(row.ts || "") >= Date.parse(since);
+      }),
+      source: "memory_7d",
+      complete: true
+    };
+  } else {
+    const rows = [];
+    const pageSize = 1000;
+    const maxRows = 20000;
+    let offset = 0;
+    let complete = true;
+    try {
+      while (offset < maxRows) {
+        const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE, {
+          params: {
+            select: "ts,tenant_id,channel,user_id,user_message,tools",
+            tenant_id: "eq." + cleanTenant,
+            ts: "gte." + since,
+            order: "ts.asc",
+            limit: pageSize,
+            offset
+          },
+          headers: SB_HEADERS,
+          timeout: 8000
+        });
+        const page = Array.isArray(response.data) ? response.data : [];
+        rows.push.apply(rows, page);
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+      if (rows.length >= maxRows) complete = false;
+      value = {
+        rows: rows.map(function (row) { return normalizeTurnRow(row); }).filter(function (row) { return !isInternalAdminTurn(row); }),
+        source: complete ? "supabase_7d" : "supabase_partial_7d",
+        complete
+      };
+    } catch (error) {
+      console.error("customer panel activity query error:", error.message);
+      value = { rows: [], source: "unavailable", complete: false };
+    }
+  }
+  customerPanelActivityCache.set(cleanTenant, { loaded_at: Date.now(), value });
+  return value;
 }
 async function supabaseFetchSourceEventStrict(tenantId, channel, sourceEventId) {
   if (!SUPABASE_ENABLED || !SUPABASE_TENANT_COLUMNS_ENABLED) throw new Error("supabase_source_event_not_configured");
@@ -11280,6 +11336,10 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
     instagram: summarizeCustomerPanelChannel(instagramConversations, channelStats.instagram),
     messenger: summarizeCustomerPanelChannel(messengerConversations, channelStats.messenger)
   };
+  const recentActivity = buildDailyClientActivity(operationalTurns, { days: 7, timeZone: "America/Bogota" });
+  Object.keys(recentActivity.by_channel).forEach(function (channel) {
+    if (summaries[channel]) summaries[channel].clients_by_day = recentActivity.by_channel[channel];
+  });
   const whatsappSetup = customerPanelWhatsappSetup();
   const instagramSetup = customerPanelInstagramSetup();
   const messengerSetup = customerPanelMessengerSetup();
@@ -11315,6 +11375,13 @@ function buildCustomerPanelSnapshot(rawTurns, metaByCustomer, source, auth, turn
       returned_event_limit: turnLimit,
       from: minTs ? new Date(minTs).toISOString() : null,
       to: maxTs ? new Date(maxTs).toISOString() : null
+    },
+    activity_window: {
+      source: "recent_page",
+      complete: false,
+      days: recentActivity.days,
+      time_zone: recentActivity.time_zone,
+      metric: recentActivity.metric
     },
     summary: summaries.whatsapp,
     summaries,
@@ -11508,6 +11575,15 @@ function buildCustomerPanelDemoSnapshot() {
       { day: "2026-07-12", messages: 88 },
       { day: "2026-07-13", messages: 61 }
     ],
+    clients_by_day: [
+      { day: "2026-07-07", clients: 34 },
+      { day: "2026-07-08", clients: 43 },
+      { day: "2026-07-09", clients: 58 },
+      { day: "2026-07-10", clients: 37 },
+      { day: "2026-07-11", clients: 74 },
+      { day: "2026-07-12", clients: 88 },
+      { day: "2026-07-13", clients: 61 }
+    ],
     search_gaps: [
       { query: "Lego Technic Ferrari Daytona SP3", count: 5 },
       { query: "Barbie astronauta edición especial", count: 4 },
@@ -11523,6 +11599,13 @@ function buildCustomerPanelDemoSnapshot() {
     ok: true,
     demo: true,
     bot_version: BOT_VERSION,
+    activity_window: {
+      source: "demo",
+      complete: true,
+      days: ["2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10", "2026-07-11", "2026-07-12", "2026-07-13"],
+      time_zone: "America/Bogota",
+      metric: "unique_clients_per_day"
+    },
     business: {
       id: "nextfor-aura-demo",
       name: "Comercio piloto",
@@ -15608,6 +15691,24 @@ app.get("/admin/panel/data", async (req, res) => {
   const metaByCustomer = customerMetaFromTurns(turns);
   queueInstagramProfileRefreshes(turns, tenantId);
   const snapshot = buildCustomerPanelSnapshot(turns, metaByCustomer, source, auth, eventLimit);
+  try {
+    const activityRows = await loadCustomerPanelActivityRows(tenantId);
+    if (activityRows.rows.length || activityRows.complete) {
+      const activity = buildDailyClientActivity(activityRows.rows, { days: 7, timeZone: "America/Bogota" });
+      Object.keys(activity.by_channel).forEach(function (channel) {
+        if (snapshot.summaries[channel]) snapshot.summaries[channel].clients_by_day = activity.by_channel[channel];
+      });
+      snapshot.activity_window = {
+        source: activityRows.source,
+        complete: activityRows.complete,
+        days: activity.days,
+        time_zone: activity.time_zone,
+        metric: activity.metric
+      };
+    }
+  } catch (error) {
+    console.error("customer panel activity snapshot error:", error.message);
+  }
   let panelBusinessForModules = customerBusinessForAuth(auth);
   snapshot.data_window.has_more = hasMore;
   snapshot.data_window.next_before = nextBefore;

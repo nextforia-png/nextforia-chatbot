@@ -110,6 +110,11 @@ assert(redesigned.includes('function isSalesAssistedConversation(item)'));
 assert(redesigned.includes('function isPendingSalesClosing(item)'));
 assert(redesigned.includes('class="activityValue"'));
 assert(redesigned.includes('.activityValue{position:absolute'));
+assert(redesigned.includes('renderActivity(s.clients_by_day||[],state.data.activity_window||{})'));
+assert(!redesigned.includes('[34,43,58,37,74,88,61]'), "summary must never invent chart values");
+assert(!redesigned.includes('+18% vs. período anterior'), "summary must not invent a period comparison");
+assert(redesigned.includes('Conversation density repair'));
+assert(redesigned.includes('.panel-redesign.conversations-view .thread{min-height:62px!important'));
 assert(redesigned.includes('conversationChannel:"all"'));
 assert(redesigned.includes('function setConversationChannel(channel)'));
 assert(redesigned.includes('data-conversation-channel="'));
@@ -180,6 +185,11 @@ assert(legacy.includes('>Ver promoción</button>'));
 const stagingDefault = renderStagingDefault();
 assert(stagingDefault.includes('<body class="panel-redesign">'));
 assert(stagingDefault.includes('id="nav-orders"'));
+const redesignedPlan = render(true, "plan");
+assert(redesignedPlan.includes('<body class="panel-redesign">'), "Mi plan must retain its redesign styles");
+const redesignedChannels = render(true, "channels");
+assert(redesignedChannels.includes('<body class="panel-redesign">'), "Conectar canales must retain its redesign styles");
+assert(redesigned.includes('["summary","conversations","orders","retargeting","plan","channels"].includes(name)'));
 
 // Production carried the old review-era literal `false`.  A successful code
 // deploy must still serve the approved v2 panel; only `0` is the rollback.

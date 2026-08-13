@@ -84,6 +84,9 @@ assert(redesigned.includes("4 pasos para quedar listo"));
 assert(redesigned.includes("Personalizar"));
 assert(redesigned.includes("Canal futuro · no realiza llamadas todavía"));
 assert(redesigned.includes("PANEL_REDESIGN_ENABLED?channelGlyph(channel)"));
+assert(redesigned.includes('if(channel==="whatsapp")return \'<svg viewBox="0 0 24 24" fill="currentColor"'));
+assert(redesigned.includes('id="previewPhoneIcon"><svg'));
+assert(!redesigned.includes('id="previewPhoneIcon">◉'));
 for (const filter of ["all", "por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]) {
   assert(
     redesigned.includes('data-order-filter="' + filter + '" onclick="setOrderFilter(this)"'),

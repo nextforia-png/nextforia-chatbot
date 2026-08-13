@@ -1032,7 +1032,7 @@ function createAppointmentCalendarConnectionService(options) {
       }
       try {
         const provider = providerFor(record.provider);
-        return await withFreshCredential(record, actor, function (credential) {
+        const result = await withFreshCredential(record, actor, function (credential) {
           return provider.checkAvailability(
             credential,
             record.availability_calendar_ids && record.availability_calendar_ids.length
@@ -1041,6 +1041,9 @@ function createAppointmentCalendarConnectionService(options) {
             startsAt,
             durationMinutes
           );
+        });
+        return Object.assign({}, result, {
+          primary_time_zone: cleanText(record.primary_time_zone, 120) || "America/Bogota"
         });
       } catch (error) {
         if (error instanceof AppointmentCalendarError) throw error;

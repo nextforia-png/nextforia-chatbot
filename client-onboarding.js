@@ -909,6 +909,7 @@ function buildAppointmentSystemPrompt(configuration) {
     ["Pagos para reservar", config.booking_payment_details]
   ]);
   addConfigurationSection(lines, "CALENDARIO Y CANALES", [
+    ["Zona horaria del negocio", config.time_zone],
     ["Proveedor de calendario", config.calendar_provider],
     ["Correo/calendario", config.calendar_email],
     ["WhatsApp", config.whatsapp_number],
@@ -976,6 +977,7 @@ function normalizeAppointmentConfiguration(input, meta) {
     cancellation_policy: text(source.cancellation_policy, 5000),
     no_show_policy: text(source.no_show_policy, 3000),
     booking_payment_details: text(source.booking_payment_details, 3000),
+    time_zone: text(source.time_zone, 120) || "America/Bogota",
     calendar_provider: text(source.calendar_provider, 80),
     calendar_email: text(source.calendar_email, 180).toLowerCase(),
     whatsapp_number: text(source.whatsapp_number, 80),
@@ -1055,6 +1057,7 @@ function generateAppointmentConfiguration(input, meta) {
     cancellation_policy: appointment.cancellation_policy,
     no_show_policy: appointment.no_show_policy,
     booking_payment_details: appointment.booking_payment_details || appointment.booking_payment_required,
+    time_zone: appointment.time_zone || "America/Bogota",
     calendar_provider: appointment.calendar_provider,
     calendar_email: appointment.calendar_email,
     whatsapp_number: answers.meta.whatsapp_number,

@@ -47,6 +47,9 @@ assert.match(draft.endpoint, /\/v1\/convai\/agents\/agent_a$/);
 assert.strictEqual(draft.payload.conversation_config.agent.language, "es");
 assert.match(draft.payload.conversation_config.agent.first_message, /Luciana/);
 assert.match(draft.payload.conversation_config.agent.prompt.prompt, /APPOINTMENT BOT/);
+assert.match(draft.payload.conversation_config.agent.prompt.prompt, /\{\{system__time\}\}/);
+assert.match(draft.payload.conversation_config.agent.prompt.prompt, /Nunca vuelvas a pedir un dato ya entregado/);
+assert.match(draft.payload.conversation_config.agent.prompt.prompt, /repite exactamente la fecha normalizada/);
 assert.doesNotMatch(JSON.stringify(draft.payload), /CUSTOMER-SERVICE-ONLY-SECRET/);
 const nonDuplicatedIdentity = buildElevenLabsAppointmentAgentPayload({
   tenant_id: "nextforia",

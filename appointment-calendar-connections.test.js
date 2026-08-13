@@ -116,6 +116,7 @@ assert.match(authUrl, /access_type=offline/);
   const availability = await service.checkAvailability("grupo-derco", "2026-07-29T15:00:00.000Z", 45, "super_admin");
   assert.strictEqual(availability.available, true);
   assert.strictEqual(availability.ends_at, "2026-07-29T15:45:00.000Z");
+  assert.strictEqual(availability.primary_time_zone, "America/Bogota");
   const synced = await service.syncAppointment("grupo-derco", {
     tenant_id: "grupo-derco",
     conversation_id: "conv-derco-1",

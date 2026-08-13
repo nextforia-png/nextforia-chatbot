@@ -10268,6 +10268,16 @@ async function applyTenantWhatsAppBusinessProfile(tenantId, personality, actor) 
       profile,
       actor
     );
+    if (result && result.status === "manual_app_required") {
+      return {
+        status: "manual_app_required",
+        applied: false,
+        bot_applied: true,
+        onboarding_mode: "coexistence",
+        phone_number_suffix: result.phone_number_suffix || null,
+        message: "Bot actualizado. Para cambiar foto, nombre y descripción pública, abre WhatsApp Business en el celular y ve a Configuración → Herramientas para la empresa → Perfil de empresa. Meta puede revisar el nombre."
+      };
+    }
     return {
       status: "applied",
       applied: true,
@@ -10293,6 +10303,31 @@ async function applyTenantWhatsAppBusinessProfile(tenantId, personality, actor) 
         : "El bot recibió los cambios, pero Meta no confirmó el perfil de WhatsApp. Reintenta."
     };
   }
+}
+
+function storedWhatsAppProfileSync(sync, updatedAt) {
+  const allowed = ["applied", "manual_app_required", "pending_connection", "failed"];
+  if (!sync || !allowed.includes(sync.status)) return null;
+  return {
+    status: sync.status,
+    applied: sync.applied === true,
+    bot_applied: sync.bot_applied === true,
+    onboarding_mode: String(sync.onboarding_mode || "").trim().slice(0, 40) || null,
+    picture_present: sync.picture_present === true,
+    description_applied: sync.description_applied === true,
+    address_applied: sync.address_applied === true,
+    phone_number_suffix: String(sync.phone_number_suffix || "").trim().slice(-8) || null,
+    message: String(sync.message || "").trim().slice(0, 500),
+    updated_at: updatedAt || new Date().toISOString()
+  };
+}
+
+async function persistWhatsAppProfileSync(record, tenantId, sync) {
+  const stored = storedWhatsAppProfileSync(sync);
+  if (!stored) return;
+  record.whatsapp_profile_sync = stored;
+  record.updated_at = stored.updated_at;
+  await appendClientOnboardingRecord(record, tenantId);
 }
 
 async function updateCustomerTenantName(tenantId, companyName) {
@@ -13800,6 +13835,7 @@ app.put("/admin/panel/account-profile", async (req, res) => {
     const whatsappProfileSync = logoDataUrl && logoDataUrl !== previousLogo
       ? await applyTenantWhatsAppBusinessProfile(tenantId, personality, auth)
       : { status: "unchanged", applied: false };
+    await persistWhatsAppProfileSync(record, tenantId, whatsappProfileSync);
     try {
       await updateCustomerTenantName(tenantId, businessName);
     } catch (error) {
@@ -13884,7 +13920,8 @@ app.get("/admin/panel/bot-personality", async (req, res) => {
       applied_at: liveConfiguration.applied_at,
       plan_id: planId,
       features: planFeatures(planId),
-      personality: liveConfiguration.personality
+      personality: liveConfiguration.personality,
+      whatsapp_profile_sync: onboarding && onboarding.whatsapp_profile_sync || null
     });
   } catch (error) {
     console.error("bot personality load error:", error.message);
@@ -13971,6 +14008,7 @@ app.put("/admin/panel/bot-personality", async (req, res) => {
     const whatsappProfileSync = JSON.stringify(nextWhatsAppProfile) !== JSON.stringify(previousWhatsAppProfile)
       ? await applyTenantWhatsAppBusinessProfile(tenantId, verifiedLiveConfiguration.personality, auth)
       : { status: "unchanged", applied: false };
+    await persistWhatsAppProfileSync(verifiedRecord, tenantId, whatsappProfileSync);
     res.json({
       ok: true,
       active: true,
@@ -14013,8 +14051,10 @@ app.post("/admin/panel/bot-personality/whatsapp-profile-sync", async (req, res) 
       return;
     }
     const sync = await applyTenantWhatsAppBusinessProfile(tenantId, liveConfiguration.personality, auth);
+    await persistWhatsAppProfileSync(onboarding, tenantId, sync);
     const success = sync.status === "applied";
-    res.status(success ? 200 : sync.status === "pending_connection" ? 409 : 502).json({
+    const manual = sync.status === "manual_app_required";
+    res.status(success ? 200 : manual ? 202 : sync.status === "pending_connection" ? 409 : 502).json({
       ok: success,
       applied: liveConfiguration.active,
       whatsapp_profile_sync: sync,

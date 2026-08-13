@@ -114,7 +114,8 @@ assert(redesigned.includes('renderActivity(s.clients_by_day||[],state.data.activ
 assert(!redesigned.includes('[34,43,58,37,74,88,61]'), "summary must never invent chart values");
 assert(!redesigned.includes('+18% vs. período anterior'), "summary must not invent a period comparison");
 assert(redesigned.includes('Conversation density repair'));
-assert(redesigned.includes('.panel-redesign.conversations-view .thread{min-height:62px!important'));
+assert(redesigned.includes('.panel-redesign.conversations-view .thread{height:auto!important;min-height:62px!important'));
+assert(redesigned.includes('body.conversations-view:not(.chat-open) .thread{height:100%'), "the regression fixture must keep proving the production empty-selection rule exists");
 assert(redesigned.includes('conversationChannel:"all"'));
 assert(redesigned.includes('function setConversationChannel(channel)'));
 assert(redesigned.includes('data-conversation-channel="'));

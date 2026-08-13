@@ -10138,6 +10138,7 @@ async function persistWhatsAppProfileSync(record, tenantId, sync) {
   const stored = storedWhatsAppProfileSync(sync);
   if (!stored) return;
   record.whatsapp_profile_sync = stored;
+  record.updated_at = stored.updated_at;
   await appendClientOnboardingRecord(record, tenantId);
 }
 

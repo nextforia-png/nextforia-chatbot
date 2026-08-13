@@ -28,7 +28,7 @@ assert.ok(!chatbotOnly.includes('id="panel-appointments"'), "la release inicial 
 // ── Tenant de Atención: arranca en Resumen ──
 const atencion = renderPanel({ id: "a", company_name: "Empresa A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" });
 assert.strictEqual(pick(atencion, /id="pageTitle">([^<]*)</), "Resumen");
-assert.strictEqual(pick(atencion, /id="pageSubtitle">([^<]*)</), "Resultados de Atención al cliente · Últimos 7 días");
+assert.strictEqual(pick(atencion, /id="pageSubtitle">([^<]*)</), "Lo que tu Nextfor hizo por ti · últimos 7 días");
 assert.strictEqual(activeView(atencion), "panel-summary");
 assert.ok(!/<div class="toolbar" style="display:none">/.test(atencion), "en Resumen la toolbar sí se muestra");
 

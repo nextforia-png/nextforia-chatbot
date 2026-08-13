@@ -100,9 +100,13 @@ module.exports = function renderCustomerPanel(res, options) {
   // tenants that contracted Customer Service. Appointment-only tenants retain
   // their current shell and behavior.
   const panelRedesignFlag = String(process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED || "").trim().toLowerCase();
-  const panelRedesignEnabled = (demoMode || panelContext.support) && (panelRedesignFlag
-    ? panelRedesignFlag === "true"
-    : process.env.CUSTOMER_ACCESS_V2_ENABLED === "1" || process.env.RENDER_SERVICE_NAME === "nextforia-chatbot-staging");
+  // The approved support panel is now the production Customer Panel for v2
+  // tenants.  Older environments used the literal value "false" while the
+  // redesign was being reviewed in Staging; keeping that stale value as an
+  // opt-out makes a successful production deploy render the legacy modules.
+  // Preserve one explicit emergency rollback value ("0") and keep the legacy
+  // non-tenant panel untouched.
+  const panelRedesignEnabled = (demoMode || (panelContext.v2 && panelContext.support)) && panelRedesignFlag !== "0";
   const botVersion = options.botVersion || "dev";
   const paymentGateRequired = !!options.paymentGateRequired;
   const channelConnectionsV1Enabled = !!options.channelConnectionsV1Enabled && !paymentGateRequired;
@@ -143,8 +147,11 @@ module.exports = function renderCustomerPanel(res, options) {
   const emojiButtons = ["😀", "😂", "🥰", "😍", "😊", "😉", "😄", "🙌", "👍", "👌", "👏", "🙏", "🎉", "❤️", "💙", "💚", "🔥", "✨", "⭐", "✅", "🤝", "💬", "🛍️", "🎁", "📦", "🚚", "💳", "💰", "📍", "⏰", "☎️", "👋"].map(function (emoji) {
     return '<button type="button" data-emoji="' + emoji + '" onclick="insertEmoji(this.dataset.emoji)" aria-label="Insertar ' + emoji + '">' + emoji + '</button>';
   }).join("");
-  const supportBotName = panelContext.v2 ? panelContext.assignedBotName : "Atención al cliente";
-  const appointmentBotName = panelContext.v2 ? panelContext.assignedBotName : "Agendamiento";
+  // A combined entitlement means two independently operated modules.  Never
+  // reuse the combined plan label for both cards: it makes each module look as
+  // if it contains the other one and breaks the navigation mental model.
+  const supportBotName = "Atención al cliente";
+  const appointmentBotName = "Agendamiento";
   const supportBotButton = !paymentGateRequired && panelContext.support ? '<button class="botCard active" id="bot-support" type="button" onclick="selectBot(\'support\')"><span class="botIcon">' + PANEL_ICONS.bot + '</span><span class="botMeta"><strong>' + escapeHtml(supportBotName) + '</strong><span>Chatbot 24/7</span></span><span class="botDot"></span></button>' : "";
   const appointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button class="botCard" id="bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botIcon">' + PANEL_ICONS.calendar + '</span><span class="botMeta"><strong>' + escapeHtml(appointmentBotName) + '</strong><span>Citas y recordatorios</span></span><span class="botDot"></span></button>' : "";
   const mobileSupportBotButton = !paymentGateRequired && panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";

@@ -60,6 +60,8 @@ assert(!auraHtml.includes("URL.createObjectURL(file)"));
 assert(auraHtml.includes('canvas.toDataURL("image/jpeg"'));
 assert(auraHtml.includes("/whatsapp-profile-sync"));
 assert(auraHtml.includes("Bot y WhatsApp actualizados"));
+assert(auraHtml.includes("Bot aplicado · termina el perfil en la app"));
+assert(auraHtml.includes('sync.status==="manual_app_required"'));
 assert(auraHtml.includes("Bot aplicado · WhatsApp no actualizado"));
 assert(auraHtml.includes("loadBotSetup();loadBotPersonality(false)"));
 assert(auraHtml.includes("Versión v-config-test"));

@@ -1792,12 +1792,12 @@ ${panelRedesignEnabled ? `
       ${panelContext.support ? `<button class="navItem" id="nav-retargeting" type="button" onclick="showTab('retargeting')"><span class="navIcon">${PANEL_ICONS.gift}</span><span>${panelRedesignEnabled ? "Oportunidades de venta" : "Seguimientos"}</span><span class="navBadge" id="navRtgCount"></span></button>` : ""}
     </nav>
     ${appointmentNav}
+    ${paymentGateRequired ? "" : notificationsNav}
     <div class="sidebarFoot">
       <div class="footTitle">Cuenta</div>
       ${planNav}
       ${channelsNav}
       ${paymentGateRequired ? "" : `<button class="navItem" id="nav-setup" type="button" onclick="showTab('setup')"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Configuración</span></button>`}
-      ${paymentGateRequired ? "" : notificationsNav}
       ${auth.role === "super_admin" ? `<a class="navItem" href="/admin/super-admin?view=channels"><span class="navIcon">${PANEL_ICONS.settings}</span><span>Volver a Super Admin</span></a>` : ""}
       <a class="navItem logoutItem" id="nav-logout" href="/admin/logout" onclick="clearCustomerPanelStorage()"><span class="navIcon">${PANEL_ICONS.logout}</span><span>Cerrar Sesión</span></a>
       <div class="whatsappCard">

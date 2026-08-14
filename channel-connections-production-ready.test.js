@@ -128,6 +128,8 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(source, /checkouts\.delete\(tenantConversationStateKey\(userId, tenantId\)\)/);
   assert.match(source, /recordRetargetingSignal\(\s*destination\.tenantId,\s*from,/,
     "WhatsApp webhook signals must use the resolved tenant, never the RAV default");
+  assert.match(source, /"whatsapp_sender_unresolved"[\s\S]*?tenant_id: destination\.tenantId[\s\S]*?destination_suffix/,
+    "unresolved WhatsApp senders must produce tenant-scoped operational telemetry");
   assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ig:/,
     "Instagram webhook signals must use the resolved tenant");
   assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ms:/,
@@ -251,7 +253,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v384-whatsapp-coexistence-sender"));
+    assert((await response.text()).includes("NextforIA Chatbot v385-whatsapp-tenant-webhook-guard"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

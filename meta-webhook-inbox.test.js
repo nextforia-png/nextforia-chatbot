@@ -87,6 +87,29 @@ const {
   assert.strictEqual(processedContactSender, "573001112233");
   assert.strictEqual((await contactFallbackStore.list())[0].status, "completed");
 
+  const multiTenantPayload = {
+    object: "whatsapp_business_account",
+    entry: [
+      { changes: [{ value: {
+        metadata: { phone_number_id: "tenant-a-phone" },
+        contacts: [{ wa_id: "573001110001" }],
+        messages: [{ id: "wamid.tenant-a", type: "text", text: { body: "Hola A" } }]
+      } }] },
+      { changes: [{ value: {
+        metadata: { phone_number_id: "tenant-b-phone" },
+        contacts: [{ wa_id: "573002220002" }],
+        messages: [{ id: "wamid.tenant-b", type: "text", text: { body: "Hola B" } }]
+      } }] }
+    ]
+  };
+  const multiTenantEvents = extractWhatsAppMessageEvents(multiTenantPayload);
+  assert.deepStrictEqual(multiTenantEvents.map(function (event) {
+    return [event.destination_id, event.ordering_identity, event.payload.message.from];
+  }), [
+    ["tenant-a-phone", "573001110001", "573001110001"],
+    ["tenant-b-phone", "573002220002", "573002220002"]
+  ], "sender recovery must remain isolated by each tenant destination");
+
   const coexistencePayload = {
     object: "whatsapp_business_account",
     entry: [{ changes: [{

@@ -1765,7 +1765,7 @@ ${panelRedesignEnabled ? `
 ` : ""}
 </style>
 </head>
-<body${panelRedesignEnabled && ["summary", "conversations", "orders", "retargeting", "plan", "channels"].includes(initialTab) ? ' class="panel-redesign"' : ""}>
+<body${panelRedesignEnabled && ["summary", "conversations", "orders", "retargeting", "notifications", "plan", "channels"].includes(initialTab) ? ' class="panel-redesign"' : ""}>
 <div class="app">
   <header class="mobileTop">
     <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1><span id="mobileBrandBusinessName">${escapeHtml(panelContext.businessName)}</span></h1><p>con <span>Nextfor IA</span></p></div></div>
@@ -2934,7 +2934,7 @@ function showTab(name){
   if(PANEL_CONTEXT.v2&&name==="appointments"&&!PANEL_CONTEXT.appointments)name="summary";
   if(PANEL_CONTEXT.v2&&["summary","conversations","orders","retargeting"].includes(name)&&!PANEL_CONTEXT.support)name="appointments";
   state.tab=name;
-  document.body.classList.toggle("panel-redesign",PANEL_REDESIGN_ENABLED&&["summary","conversations","orders","retargeting","plan","channels"].includes(name));
+  document.body.classList.toggle("panel-redesign",PANEL_REDESIGN_ENABLED&&["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name));
   if(name==="conversations"&&DEMO_MODE&&PANEL_REDESIGN_ENABLED&&window.innerWidth>760&&!state.selected&&state.conversations[0])state.selected=conversationKey(state.conversations[0]);
   if(name==="appointments")state.bot="appointments";
   if(name==="summary"||name==="conversations"||name==="orders"||name==="retargeting")state.bot="support";

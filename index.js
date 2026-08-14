@@ -222,6 +222,7 @@ const {
   classifyWhatsAppDeliveryError,
   createMetaWebhookInbox,
   extractWhatsAppMessageEvents,
+  whatsappMessageSender,
   whatsappDeliveryFailure
 } = require("./meta-webhook-inbox");
 const {
@@ -363,7 +364,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v382-customer-contact-profiles";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v384-whatsapp-coexistence-sender";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -6441,7 +6442,7 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
     rejected.permanent = ["ambiguous_destination_owner", "destination_asset_mismatch"].includes(destination.reason);
     throw rejected;
   }
-  const from = message.from;
+  const from = whatsappMessageSender(value, message);
   if (!from) {
     const missingSender = new Error("whatsapp_sender_missing");
     missingSender.permanent = true;

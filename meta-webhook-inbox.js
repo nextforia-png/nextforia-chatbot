@@ -107,6 +107,17 @@ function whatsappDeliveryFailure(error) {
   return failure;
 }
 
+function whatsappMessageSender(value, message) {
+  const directSender = text(message && message.from, 500);
+  if (directSender) return directSender;
+  const contactSenders = Array.from(new Set(
+    (Array.isArray(value && value.contacts) ? value.contacts : [])
+      .map(function (contact) { return text(contact && contact.wa_id, 500); })
+      .filter(Boolean)
+  ));
+  return contactSenders.length === 1 ? contactSenders[0] : "";
+}
+
 function extractWhatsAppMessageEvents(body) {
   if (!body || body.object !== "whatsapp_business_account") return [];
   const events = [];
@@ -116,13 +127,17 @@ function extractWhatsAppMessageEvents(body) {
       const destinationId = text(value && value.metadata && value.metadata.phone_number_id, 240);
       for (const message of Array.isArray(value && value.messages) ? value.messages : []) {
         if (!destinationId || !message) continue;
+        const sender = whatsappMessageSender(value, message);
+        const normalizedMessage = sender && !text(message.from, 500)
+          ? Object.assign({}, message, { from: sender })
+          : message;
         events.push({
-          event_id: eventIdentifier(destinationId, message),
+          event_id: eventIdentifier(destinationId, normalizedMessage),
           channel: "whatsapp",
           destination_id: destinationId,
           received_at: new Date().toISOString(),
-          ordering_identity: text(message.from, 500),
-          payload: { event_type: "message", value, message }
+          ordering_identity: sender,
+          payload: { event_type: "message", value, message: normalizedMessage }
         });
       }
       for (const status of Array.isArray(value && value.statuses) ? value.statuses : []) {
@@ -558,5 +573,6 @@ module.exports = {
   createMetaWebhookInbox,
   eventOrderingIdentity,
   extractWhatsAppMessageEvents,
+  whatsappMessageSender,
   whatsappDeliveryFailure
 };

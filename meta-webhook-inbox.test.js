@@ -7,6 +7,7 @@ const {
   classifyWhatsAppDeliveryError,
   createMetaWebhookInbox,
   extractWhatsAppMessageEvents,
+  whatsappMessageSender,
   whatsappDeliveryFailure
 } = require("./meta-webhook-inbox");
 
@@ -47,6 +48,44 @@ const {
   const repeatedStatus = extractWhatsAppMessageEvents(payload)[2];
   assert.strictEqual(repeatedStatus.event_id, events[2].event_id, "status retries must be idempotent");
   assert.strictEqual(extractWhatsAppMessageEvents({ object: "page", entry: [] }).length, 0);
+
+  const contactFallbackPayload = {
+    object: "whatsapp_business_account",
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: "phone-coexistence-customer" },
+      contacts: [{ wa_id: "573001112233", profile: { name: "Cliente" } }],
+      messages: [{ id: "wamid.contact-fallback", type: "text", text: { body: "Hola" } }]
+    } }] }]
+  };
+  const contactFallbackEvent = extractWhatsAppMessageEvents(contactFallbackPayload)[0];
+  assert.strictEqual(contactFallbackEvent.ordering_identity, "573001112233");
+  assert.strictEqual(contactFallbackEvent.payload.message.from, "573001112233");
+  assert.strictEqual(
+    whatsappMessageSender(contactFallbackEvent.payload.value, { id: "stored-without-from" }),
+    "573001112233",
+    "durably stored coexistence events can resolve the unique contact sender"
+  );
+  assert.strictEqual(
+    whatsappMessageSender({ contacts: [{ wa_id: "sender-a" }, { wa_id: "sender-b" }] }, {}),
+    "",
+    "ambiguous contact lists must never guess a sender"
+  );
+  const contactFallbackStore = new InMemoryMetaWebhookInboxStore();
+  await contactFallbackStore.enqueue([contactFallbackEvent]);
+  let processedContactSender = "";
+  const contactFallbackInbox = createMetaWebhookInbox({
+    store: contactFallbackStore,
+    owner: "worker-contact-fallback",
+    interval_ms: 60000,
+    processEvent: async function (storedPayload) {
+      processedContactSender = whatsappMessageSender(storedPayload.value, storedPayload.message);
+      return { tenant_id: "tenant-contact-fallback" };
+    }
+  });
+  await contactFallbackInbox.drain();
+  contactFallbackInbox.stop();
+  assert.strictEqual(processedContactSender, "573001112233");
+  assert.strictEqual((await contactFallbackStore.list())[0].status, "completed");
 
   const coexistencePayload = {
     object: "whatsapp_business_account",

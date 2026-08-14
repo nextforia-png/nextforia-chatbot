@@ -8,6 +8,8 @@ assert(configurationUi.markup.includes("Tu bot ya está atendiendo. Ahora afína
 assert(configurationUi.markup.includes('href="/admin/client-onboarding?edit=1"'));
 assert(configurationUi.markup.includes("El cuestionario que llenaste en el setup"));
 assert(configurationUi.markup.includes("Guardar y aplicar cambios"));
+assert(configurationUi.markup.includes('id="nxDirectPromptInput"'));
+assert(configurationUi.markup.includes("Instrucción directa para tu bot"));
 assert(configurationUi.markup.includes("siguiente respuesta del bot"));
 assert(configurationUi.styles.includes("@media(max-width:860px)"));
 assert(configurationUi.clientScript.includes('["shipping","Datos para un envío","Con Aura o Atlas"]'));
@@ -15,6 +17,8 @@ assert(configurationUi.clientScript.includes('["reminders","Recordatorio de cita
 assert(configurationUi.clientScript.includes("nxConfigSaveSequence+=1"));
 assert(configurationUi.clientScript.includes("result.applied!==true"));
 assert(configurationUi.clientScript.includes("Cambios aplicados al bot"));
+assert(configurationUi.clientScript.includes("state.personality.custom_instructions=field.value"));
+assert(configurationUi.clientScript.includes('directPrompt.value=state.personality.custom_instructions||""'));
 assert(configurationUi.clientScript.includes('typeof payload.can_edit==="boolean"'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));

@@ -146,7 +146,7 @@ assert(redesigned.includes('class="profileDrawerClose"'));
 assert(redesigned.includes('body.panel-redesign.conversations-view .guidedAction>p{display:none}'));
 assert(redesigned.includes('body.panel-redesign.conversations-view.chat-open .chatColumn{display:grid!important;grid-template-rows:auto minmax(230px,1fr) auto'));
 assert(redesigned.includes('body.panel-redesign.conversations-view.chat-open .conversationAction{max-height:46dvh'));
-assert(redesigned.includes('body.panel-redesign.conversations-view.chat-open .mobileCustomerNameCard{display:none}'));
+assert(redesigned.includes('body.panel-redesign.conversations-view.chat-open .mobileCustomerNameCard{display:block}'));
 const responseCard = redesigned.match(/<article class="card metric"><div class="metricTop"><span class="metricLabel">Tiempo de[\s\S]*?<\/article>/);
 assert(responseCard, "response time card must render");
 assert(!responseCard[0].includes("openSummaryMetric"), "response time must remain informational");

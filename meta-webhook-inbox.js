@@ -7,6 +7,7 @@ const crypto = require("crypto");
 // 72-hour inbox window. The age boundary remains the authoritative limit.
 const MAX_EVENT_ATTEMPTS = 160;
 const MAX_EVENT_AGE_MS = 72 * 60 * 60 * 1000;
+const RECOVERABLE_INTERNAL_ERROR_PREFIX = "recoverable_internal:";
 
 function text(value, maximum) {
   const clean = String(value || "").trim();
@@ -105,6 +106,15 @@ function whatsappDeliveryFailure(error) {
   failure.meta_subcode = classification.meta_subcode;
   failure.error_type = classification.error_type;
   return failure;
+}
+
+function recoverableInternalError(error) {
+  return !!(error && error.recoverAfterFix === true);
+}
+
+function storedProcessingError(error, recoverAfterFix) {
+  const message = text(error && error.message || error, 500) || "processing_failed";
+  return recoverAfterFix ? text(RECOVERABLE_INTERNAL_ERROR_PREFIX + message, 500) : message;
 }
 
 function whatsappMessageSender(value, message) {
@@ -266,8 +276,20 @@ class InMemoryMetaWebhookInboxStore {
       : new Date(this.clock().getTime() + Math.max(1000, Number(options && options.delay_ms) || 1000)).toISOString();
     row.lease_owner = null;
     row.lease_until = null;
-    row.last_error = text(error && error.message || error, 500) || "processing_failed";
+    row.last_error = storedProcessingError(error, options && options.recover_after_fix === true);
     return true;
+  }
+
+  async wakeRecoverable() {
+    const now = this.clock();
+    let recovered = 0;
+    for (const row of this.rows.values()) {
+      if (row.status !== "pending" || !String(row.last_error || "").startsWith(RECOVERABLE_INTERNAL_ERROR_PREFIX)) continue;
+      if (row.attempts >= MAX_EVENT_ATTEMPTS || Date.parse(row.received_at) <= now.getTime() - MAX_EVENT_AGE_MS) continue;
+      row.next_attempt_at = now.toISOString();
+      recovered++;
+    }
+    return recovered;
   }
 
   async list() {
@@ -424,7 +446,7 @@ class SupabaseMetaWebhookInboxStore {
         : new Date(this.clock().getTime() + Math.max(1000, Number(options && options.delay_ms) || 1000)).toISOString(),
       lease_owner: null,
       lease_until: null,
-      last_error: text(error && error.message || error, 500) || "processing_failed"
+      last_error: storedProcessingError(error, options && options.recover_after_fix === true)
     };
     const response = await this.http.patch(
       this.url + "/rest/v1/meta_webhook_events",
@@ -436,6 +458,26 @@ class SupabaseMetaWebhookInboxStore {
       }
     );
     return Array.isArray(response.data) && response.data.length === 1;
+  }
+
+  async wakeRecoverable() {
+    const now = this.clock();
+    const response = await this.http.patch(
+      this.url + "/rest/v1/meta_webhook_events",
+      { next_attempt_at: now.toISOString(), updated_at: now.toISOString() },
+      {
+        params: {
+          select: "event_id",
+          status: "eq.pending",
+          last_error: "like." + RECOVERABLE_INTERNAL_ERROR_PREFIX + "*",
+          attempts: "lt." + MAX_EVENT_ATTEMPTS,
+          received_at: "gt." + new Date(now.getTime() - MAX_EVENT_AGE_MS).toISOString()
+        },
+        headers: Object.assign({}, this.headers, { Prefer: "return=representation" }),
+        timeout: 8000
+      }
+    );
+    return Array.isArray(response.data) ? response.data.length : 0;
   }
 }
 
@@ -509,20 +551,33 @@ function createMetaWebhookInbox(options) {
             await renewLease(row);
             const completed = await store.complete(row.event_id, owner, result || {});
             if (completed !== true) throw leaseLost(row.event_id);
+            if (Number(row.attempts) > 1) {
+              log("info", "meta_webhook_event_recovered", {
+                event_id_suffix: String(row.event_id || "").slice(-16),
+                attempts: row.attempts,
+                tenant_id: text(result && result.tenant_id, 240) || null
+              });
+            }
           } finally {
             clearInterval(heartbeat);
           }
         } catch (error) {
           if (error && error.leaseLost) throw error;
-          const permanent = error && error.permanent === true || Number(row.attempts) >= MAX_EVENT_ATTEMPTS;
+          const recoveryPending = recoverableInternalError(error) && Number(row.attempts) < MAX_EVENT_ATTEMPTS;
+          const permanent = !recoveryPending && (error && error.permanent === true || Number(row.attempts) >= MAX_EVENT_ATTEMPTS);
           const exponent = Math.min(10, Math.max(0, Number(row.attempts) - 1));
           const delayMs = Math.min(30 * 60 * 1000, 1000 * Math.pow(2, exponent));
-          const failed = await store.fail(row.event_id, owner, error, { permanent, delay_ms: delayMs });
+          const failed = await store.fail(row.event_id, owner, error, {
+            permanent,
+            delay_ms: delayMs,
+            recover_after_fix: recoveryPending
+          });
           if (failed !== true) throw leaseLost(row.event_id);
           log("warn", "meta_webhook_event_failed", {
             event_id_suffix: String(row.event_id || "").slice(-16),
             attempts: row.attempts,
             permanent,
+            recovery_pending: recoveryPending,
             error: text(error && error.message, 240)
           });
         }
@@ -545,7 +600,14 @@ function createMetaWebhookInbox(options) {
     if (timer || stopped) return;
     timer = setInterval(kick, intervalMs);
     if (timer.unref) timer.unref();
-    kick();
+    Promise.resolve(typeof store.wakeRecoverable === "function" ? store.wakeRecoverable() : 0)
+      .then(function (count) {
+        if (count) log("info", "meta_webhook_recovery_woken", { event_count: count });
+      })
+      .catch(function (error) {
+        log("warn", "meta_webhook_recovery_wake_failed", { error: text(error && error.message, 240) });
+      })
+      .finally(kick);
   }
 
   function stop() {
@@ -560,6 +622,13 @@ function createMetaWebhookInbox(options) {
       kick();
       return result;
     },
+    wakeRecoverable: async function () {
+      if (typeof store.wakeRecoverable !== "function") return 0;
+      const count = await store.wakeRecoverable();
+      if (count) log("info", "meta_webhook_recovery_woken", { event_count: count });
+      kick();
+      return count;
+    },
     drain,
     start,
     stop
@@ -573,6 +642,7 @@ module.exports = {
   createMetaWebhookInbox,
   eventOrderingIdentity,
   extractWhatsAppMessageEvents,
+  recoverableInternalError,
   whatsappMessageSender,
   whatsappDeliveryFailure
 };

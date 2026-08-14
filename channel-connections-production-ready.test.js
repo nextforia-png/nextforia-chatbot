@@ -130,6 +130,8 @@ async function waitForJson(url, predicate, timeoutMs) {
     "WhatsApp webhook signals must use the resolved tenant, never the RAV default");
   assert.match(source, /"whatsapp_sender_unresolved"[\s\S]*?tenant_id: destination\.tenantId[\s\S]*?destination_suffix/,
     "unresolved WhatsApp senders must produce tenant-scoped operational telemetry");
+  assert.match(source, /missingSender\.recoverAfterFix = true/,
+    "an internal sender parsing failure must remain queued for the corrected release");
   assert.match(
     source,
     /const from = whatsappMessageSender\(value, message\);[\s\S]*?if \(type === "text"\)[\s\S]*?await handleConversation\(from, messageText, \{[\s\S]*?tenant_id: destination\.tenantId/,
@@ -263,7 +265,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v386-customer-panel-notifications-nav"));
+    assert((await response.text()).includes("NextforIA Chatbot v387-automatic-recovered-message-replies"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

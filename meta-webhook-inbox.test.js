@@ -7,6 +7,7 @@ const {
   classifyWhatsAppDeliveryError,
   createMetaWebhookInbox,
   extractWhatsAppMessageEvents,
+  recoverableInternalError,
   whatsappMessageSender,
   whatsappDeliveryFailure
 } = require("./meta-webhook-inbox");
@@ -257,6 +258,105 @@ const {
   assert.strictEqual(paymentRow.status, "pending", "Meta billing failures must remain recoverable beyond the old 48-attempt limit");
   paymentInbox.stop();
 
+  const recoveryNow = new Date("2026-08-14T15:00:00.000Z");
+  const recoveryStore = new InMemoryMetaWebhookInboxStore({ clock: function () { return new Date(recoveryNow); } });
+  const recoveryEvent = extractWhatsAppMessageEvents({
+    object: "whatsapp_business_account",
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: "phone-recovery-tenant-a" },
+      contacts: [{ wa_id: "573003574709" }],
+      messages: [{ id: "wamid.recovery-after-fix", type: "text", text: { body: "Hola" } }]
+    } }] }]
+  })[0];
+  recoveryEvent.received_at = recoveryNow.toISOString();
+  await recoveryStore.enqueue([recoveryEvent]);
+  let bugFixed = false;
+  let recoveredReplies = 0;
+  const recoveryLogs = [];
+  const recoveryInbox = createMetaWebhookInbox({
+    store: recoveryStore,
+    owner: "worker-recovery-before-fix",
+    interval_ms: 60000,
+    log: function (level, event, details) { recoveryLogs.push({ level, event, details }); },
+    processEvent: async function (storedPayload) {
+      if (!bugFixed) {
+        const internal = new Error("sender_parser_bug");
+        internal.permanent = true;
+        internal.recoverAfterFix = true;
+        throw internal;
+      }
+      assert.strictEqual(storedPayload.message.from, "573003574709");
+      assert.strictEqual(storedPayload.value.metadata.phone_number_id, "phone-recovery-tenant-a");
+      recoveredReplies++;
+      return { tenant_id: "tenant-a" };
+    }
+  });
+  assert.strictEqual(recoverableInternalError({ recoverAfterFix: true }), true);
+  await recoveryInbox.drain();
+  let recoveryRow = recoveryStore.rows.get(recoveryEvent.event_id);
+  assert.strictEqual(recoveryRow.status, "pending", "internal bugs must preserve the customer message for a later code fix");
+  assert.match(recoveryRow.last_error, /^recoverable_internal:sender_parser_bug$/);
+  assert.strictEqual(recoveredReplies, 0);
+  assert.strictEqual(recoveryLogs[0].details.recovery_pending, true);
+
+  recoveryRow.next_attempt_at = new Date(recoveryNow.getTime() + 30 * 60 * 1000).toISOString();
+  bugFixed = true;
+  assert.strictEqual(await recoveryInbox.wakeRecoverable(), 1, "a corrected release must wake the message immediately");
+  await recoveryInbox.drain();
+  recoveryRow = recoveryStore.rows.get(recoveryEvent.event_id);
+  assert.strictEqual(recoveryRow.status, "completed");
+  assert.strictEqual(recoveryRow.tenant_id, "tenant-a");
+  assert.strictEqual(recoveredReplies, 1, "the fixed bot must answer the preserved message exactly once");
+  assert(recoveryLogs.some(function (entry) {
+    return entry.event === "meta_webhook_event_recovered" && entry.details.tenant_id === "tenant-a";
+  }), "the recovered customer response must be observable without exposing message content");
+
+  const restartedRecoveryInbox = createMetaWebhookInbox({
+    store: recoveryStore,
+    owner: "worker-recovery-after-restart",
+    interval_ms: 60000,
+    processEvent: async function () { recoveredReplies++; }
+  });
+  await restartedRecoveryInbox.drain();
+  assert.strictEqual(recoveredReplies, 1, "a restart must not answer a completed recovery twice");
+  recoveryInbox.stop();
+  restartedRecoveryInbox.stop();
+
+  const securityStore = new InMemoryMetaWebhookInboxStore({ clock: function () { return new Date(recoveryNow); } });
+  const securityEvent = Object.assign({}, recoveryEvent, { event_id: "whatsapp:wamid.security-block" });
+  securityEvent.payload = Object.assign({}, recoveryEvent.payload, {
+    message: Object.assign({}, recoveryEvent.payload.message, { id: "wamid.security-block" })
+  });
+  await securityStore.enqueue([securityEvent]);
+  const securityInbox = createMetaWebhookInbox({
+    store: securityStore,
+    owner: "worker-security-block",
+    interval_ms: 60000,
+    processEvent: async function () {
+      const blocked = new Error("ambiguous_destination_owner");
+      blocked.permanent = true;
+      throw blocked;
+    }
+  });
+  await securityInbox.drain();
+  assert.strictEqual(securityStore.rows.get(securityEvent.event_id).status, "dead_letter");
+  assert.strictEqual(await securityInbox.wakeRecoverable(), 0, "security failures must never be replayed automatically");
+  securityInbox.stop();
+
+  let startupWakeCalls = 0;
+  const startupInbox = createMetaWebhookInbox({
+    store: {
+      wakeRecoverable: async function () { startupWakeCalls++; return 0; },
+      claim: async function () { return null; }
+    },
+    owner: "worker-startup-wake",
+    interval_ms: 60000,
+    processEvent: async function () {}
+  });
+  startupInbox.start();
+  assert.strictEqual(startupWakeCalls, 1, "every corrected release must wake recoverable messages during startup");
+  startupInbox.stop();
+
   const migrationSource = require("fs").readFileSync(
     require("path").join(__dirname, "docs/migrations/20260808_whatsapp_onboarding_v2_up.sql"),
     "utf8"
@@ -279,7 +379,7 @@ const {
     },
     async patch(url, body, config) {
       httpCalls.push({ method: "patch", url, body, config });
-      return { data: [{ event_id: config.params.event_id.replace(/^eq\./, "") }] };
+      return { data: [{ event_id: config.params.event_id ? config.params.event_id.replace(/^eq\./, "") : "wamid.recoverable" }] };
     }
   };
   const encrypt = function (value) { return "enc:v1:" + Buffer.from(value).toString("base64url"); };
@@ -333,6 +433,16 @@ const {
   assert.strictEqual(completion.body.status, "completed");
   assert.strictEqual(completion.body.tenant_id, "tenant-production");
   assert.strictEqual(completion.body.payload_ciphertext, null);
+
+  const recoverableWakeCount = await supabaseStore.wakeRecoverable();
+  assert.strictEqual(recoverableWakeCount, 1);
+  const wakeCall = httpCalls.filter(function (call) {
+    return call.method === "patch" && call.config.params && call.config.params.last_error;
+  }).pop();
+  assert.strictEqual(wakeCall.config.params.status, "eq.pending");
+  assert.strictEqual(wakeCall.config.params.select, "event_id");
+  assert.strictEqual(wakeCall.config.params.last_error, "like.recoverable_internal:*");
+  assert.strictEqual(wakeCall.config.params.attempts, "lt.160");
 
   claimedPayload = Object.assign({}, claimedPayload, { destination_id: "wrong-phone" });
   await assert.rejects(

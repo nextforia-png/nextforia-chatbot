@@ -2792,6 +2792,19 @@ function trustedWhatsAppEmbeddedOrigin(origin){
     return source.protocol==="https:"&&(hostname==="facebook.com"||hostname.endsWith(".facebook.com"));
   }catch(_){return false;}
 }
+function discardUnboundWhatsAppAttempt(message){
+  var pending=state.whatsappEmbedded;
+  if(!pending||pending.completing)return false;
+  if(pending.sessionTimer){clearTimeout(pending.sessionTimer);pending.sessionTimer=null;}
+  stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;
+  renderChannelConnections();setChannelConnectionMessage(message||"Meta no devolvió la autorización completa. Ya puedes volver a intentar.","error");
+  api("/admin/panel/channel-connections/whatsapp/attempt",{method:"DELETE"}).then(function(){
+    state.channelConnections=null;loadChannelConnections(true);
+  }).catch(function(){
+    state.channelConnections=null;loadChannelConnections(true);
+  });
+  return true;
+}
 function whatsappEmbeddedErrorMessage(payload){
   var detail=String(payload&&payload.data&&(payload.data.error_message||payload.data.message)||"").toLowerCase();
   var code=String(payload&&payload.data&&(payload.data.error_code||payload.data.code)||"");
@@ -2803,9 +2816,7 @@ function armWhatsAppEmbeddedCompletionTimer(pending){
   if(!pending||pending.completing||pending.sessionTimer)return;
   pending.sessionTimer=setTimeout(function(){
     if(state.whatsappEmbedded!==pending||pending.completing)return;
-    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;
-    setChannelConnectionMessage("Meta no devolvió la autorización completa del número. Cancela el intento y empieza de nuevo.","error");
-    loadChannelConnections(true);
+    discardUnboundWhatsAppAttempt("Meta no devolvió la autorización completa del número. El intento se limpió de forma segura; vuelve a abrir la conexión.");
   },WHATSAPP_EMBEDDED_COMPLETION_TIMEOUT_MS);
 }
 function whatsappEmbeddedCloudFinishEvent(eventName){
@@ -2813,6 +2824,14 @@ function whatsappEmbeddedCloudFinishEvent(eventName){
 }
 function whatsappEmbeddedCoexistenceFinishEvent(eventName){return String(eventName||"").toUpperCase()==="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING";}
 function whatsappEmbeddedRecoveryFinishEvent(eventName){return String(eventName||"").toUpperCase()==="FINISH_GRANT_ONLY_API_ACCESS";}
+function whatsappEmbeddedEventMode(eventName,expectedMode){
+  var name=String(eventName||"").toUpperCase(),mode=String(expectedMode||"cloud_api").toLowerCase();
+  if(whatsappEmbeddedCoexistenceFinishEvent(name))return"coexistence";
+  if(whatsappEmbeddedRecoveryFinishEvent(name))return"coexistence_recovery";
+  if(name==="FINISH"&&(mode==="coexistence"||mode==="coexistence_recovery"))return mode;
+  if(name==="FINISH_ONLY_WABA"&&mode==="coexistence_recovery")return"coexistence_recovery";
+  return whatsappEmbeddedCloudFinishEvent(name)?"cloud_api":"";
+}
 function launchWhatsAppEmbeddedSignup(config){
   stopWhatsAppVerification({clearExhausted:true});
   state.whatsappEmbedded={config:config,code:null,session:null,completing:false};
@@ -2822,7 +2841,7 @@ function launchWhatsAppEmbeddedSignup(config){
     FB.login(function(response){
       var pending=state.whatsappEmbedded,code=response&&response.authResponse&&response.authResponse.code;
       if(!pending)return;
-      if(!code){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("La autorización de Meta no se completó. Puedes cancelar el intento y empezar de nuevo.","error");loadChannelConnections(true);return;}
+      if(!code){discardUnboundWhatsAppAttempt("La autorización de Meta no se completó. El intento se limpió de forma segura; vuelve a intentarlo.");return;}
       pending.code=code;
       armWhatsAppEmbeddedCompletionTimer(pending);
       setChannelConnectionMessage("Meta autorizó la cuenta. Terminando la conexión…");completeWhatsAppEmbeddedSignup();
@@ -2837,7 +2856,7 @@ function launchWhatsAppEmbeddedSignup(config){
           :{}
     });
   }).catch(function(){
-    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("No pudimos abrir la conexión segura de Meta. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);
+    discardUnboundWhatsAppAttempt("No pudimos abrir la conexión segura de Meta. El intento se limpió de forma segura; vuelve a intentarlo.");
   });
 }
 window.addEventListener("message",function(event){
@@ -2845,20 +2864,20 @@ window.addEventListener("message",function(event){
   var payload=event.data;
   if(typeof payload==="string"){try{payload=JSON.parse(payload);}catch(_){return;}}
   if(!payload||payload.type!=="WA_EMBEDDED_SIGNUP"||!state.whatsappEmbedded)return;
-  var embeddedEvent=String(payload.event||"").toUpperCase();
-  if(whatsappEmbeddedCloudFinishEvent(embeddedEvent)||whatsappEmbeddedCoexistenceFinishEvent(embeddedEvent)||whatsappEmbeddedRecoveryFinishEvent(embeddedEvent)){
-    var session=payload.data||{};
-    var expectedMode=state.whatsappEmbedded.config&&state.whatsappEmbedded.config.onboarding_mode||"cloud_api",eventMode=whatsappEmbeddedCoexistenceFinishEvent(embeddedEvent)?"coexistence":whatsappEmbeddedRecoveryFinishEvent(embeddedEvent)||embeddedEvent==="FINISH_ONLY_WABA"&&expectedMode==="coexistence_recovery"?"coexistence_recovery":"cloud_api";
-    if(expectedMode!==eventMode){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta terminó con un tipo de conexión distinto al elegido. Cancela el intento y vuelve a empezar.","error");loadChannelConnections(true);return;}
-    if(!session.waba_id){stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta no devolvió la cuenta de WhatsApp seleccionada. Cancela el intento y empieza de nuevo.","error");loadChannelConnections(true);return;}
-    state.whatsappEmbedded.session={waba_id:String(session.waba_id),phone_number_id:session.phone_number_id?String(session.phone_number_id):"",business_id:session.business_id?String(session.business_id):"",onboarding_event:embeddedEvent,coexistence:eventMode!=="cloud_api",is_wa_login_user:eventMode==="coexistence",app_only_install:eventMode==="coexistence_recovery"};
+  var envelope=payload.data&&typeof payload.data==="object"?payload.data:{},embeddedEvent=String(payload.event||envelope.event||"").toUpperCase(),session=envelope.data&&typeof envelope.data==="object"?envelope.data:envelope;
+  var expectedMode=state.whatsappEmbedded.config&&state.whatsappEmbedded.config.onboarding_mode||"cloud_api",eventMode=whatsappEmbeddedEventMode(embeddedEvent,expectedMode);
+  if(eventMode){
+    var wabaId=session.waba_id||session.whatsapp_business_account_id,phoneId=session.phone_number_id||session.phone_id,businessId=session.business_id||session.business_manager_id;
+    if(expectedMode!==eventMode){discardUnboundWhatsAppAttempt("Meta terminó con un tipo de conexión distinto al elegido. El intento se limpió; vuelve a empezar.");return;}
+    if(!wabaId){discardUnboundWhatsAppAttempt("Meta no devolvió la cuenta de WhatsApp seleccionada. El intento se limpió; vuelve a empezar.");return;}
+    state.whatsappEmbedded.session={waba_id:String(wabaId),phone_number_id:phoneId?String(phoneId):"",business_id:businessId?String(businessId):"",onboarding_event:embeddedEvent,coexistence:eventMode!=="cloud_api",is_wa_login_user:eventMode==="coexistence",app_only_install:eventMode==="coexistence_recovery"};
     if(state.whatsappEmbedded.sessionTimer){clearTimeout(state.whatsappEmbedded.sessionTimer);state.whatsappEmbedded.sessionTimer=null;}
     if(!state.whatsappEmbedded.code)armWhatsAppEmbeddedCompletionTimer(state.whatsappEmbedded);
     completeWhatsAppEmbeddedSignup();
   }else if(embeddedEvent==="CANCEL"||embeddedEvent==="ERROR"){
-    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage(whatsappEmbeddedErrorMessage(payload),"error");loadChannelConnections(true);
+    discardUnboundWhatsAppAttempt(whatsappEmbeddedErrorMessage(payload));
   }else if(embeddedEvent.startsWith("FINISH")){
-    stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;setChannelConnectionMessage("Meta terminó con un tipo de conexión que todavía no es compatible. Cancela el intento y vuelve a empezar.","error");loadChannelConnections(true);
+    discardUnboundWhatsAppAttempt("Meta terminó con un tipo de conexión que todavía no es compatible. El intento se limpió; vuelve a empezar.");
   }
 });
 function connectChannel(channel,onboardingMode){

@@ -130,6 +130,16 @@ async function waitForJson(url, predicate, timeoutMs) {
     "WhatsApp webhook signals must use the resolved tenant, never the RAV default");
   assert.match(source, /"whatsapp_sender_unresolved"[\s\S]*?tenant_id: destination\.tenantId[\s\S]*?destination_suffix/,
     "unresolved WhatsApp senders must produce tenant-scoped operational telemetry");
+  assert.match(
+    source,
+    /const from = whatsappMessageSender\(value, message\);[\s\S]*?if \(type === "text"\)[\s\S]*?await handleConversation\(from, messageText, \{[\s\S]*?tenant_id: destination\.tenantId/,
+    "the recovered inbound sender must remain the exact text-conversation and reply recipient"
+  );
+  assert.match(
+    source,
+    /receipt\.pending_reply[\s\S]*?sendText: function \(outboundText\) \{ return sendText\(from, outboundText, destination\); \}/,
+    "a resumed reply must return to the same recovered sender and tenant destination"
+  );
   assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ig:/,
     "Instagram webhook signals must use the resolved tenant");
   assert.match(source, /recordRetargetingSignal\(destination\.tenantId, userId,[\s\S]*?ms:/,

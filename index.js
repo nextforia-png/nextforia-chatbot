@@ -142,6 +142,8 @@ const {
   resolveLiveBotConfiguration
 } = require("./live-bot-configuration");
 const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
+const { applyAnthropicCachePolicy } = require("./anthropic-cache-policy");
+const { RuntimeIncidentMonitor } = require("./runtime-incident-monitor");
 const { applyTenantOutboundPolicy } = require("./tenant-outbound-policy");
 const {
   ROUTES: ATLAS_ROUTES,
@@ -846,6 +848,7 @@ const conversations = new Map();
 const humanHandoff = new Set();
 const pendingRatings = new Set();
 let lastCreditAlert = 0;  // timestamp del último aviso de saldo bajo (anti-spam)
+const runtimeIncidentMonitor = new RuntimeIncidentMonitor();
 const searchCache = new Map();  // {query: {result, ts}} — evita búsquedas duplicadas en <5min
 const zeroResultAlerts = new Map();  // {query: timestamp} — anti-spam de alertas de 0 resultados
 
@@ -5163,6 +5166,41 @@ async function notifyTeam(text, excludePhone) {
   return { sent, total: NOTIFICATION_PHONES.length };
 }
 
+async function recordAnthropicRuntimeFailure(error, tenantId, channel) {
+  const incident = runtimeIncidentMonitor.failure("anthropic", tenantId, error);
+  log("error", "conversation_provider_failure", {
+    provider: incident.provider,
+    tenant_id: incident.tenant_id,
+    channel: cleanRuntimeText(channel, 40) || "unknown",
+    error_type: incident.error_type,
+    error_message: incident.error_message,
+    status: incident.status,
+    consecutive_failures: incident.consecutive_failures,
+    retryable: ![400, 401, 403, 404, 422].includes(incident.status)
+  });
+  if (!incident.should_alert) return incident;
+  try {
+    await notifyTeam([
+      "⚠️ *ALERTA DE BOT NEXTFOR IA*",
+      "",
+      "Proveedor: Anthropic",
+      `Cliente: ${incident.tenant_id}`,
+      `Canal: ${cleanRuntimeText(channel, 40) || "unknown"}`,
+      `Error: ${incident.error_type}`,
+      `Fallos en 5 minutos: ${incident.consecutive_failures}`,
+      "",
+      "Revisar Bandeja de operación y logs de producción."
+    ].join("\n"), null);
+  } catch (alertError) {
+    log("error", "conversation_provider_alert_failed", {
+      provider: "anthropic",
+      tenant_id: incident.tenant_id,
+      error: cleanRuntimeText(alertError && alertError.message, 160) || "alert_failed"
+    });
+  }
+  return incident;
+}
+
 // ─── EXECUTORS ───────────────────────────────────────────────────────────────
 
 function operationalStateKey(userId, stateId) {
@@ -6112,23 +6150,29 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   let lastSearchResultsThisTurn = null;
   for (let iteration = 0; iteration < 8; iteration++) {
     try {
+      const cachedPrompt = applyAnthropicCachePolicy({
+        staticSystem: [
+          { type: "text", text: conversationSystemPrompt },
+          { type: "text", text: CUSTOMER_PROFILE_OPERATIONAL_PROMPT },
+          ...tenantConfigurationPrompts.map(function (prompt) { return { type: "text", text: prompt }; }),
+          ...(botPersonalityPrompt ? [{ type: "text", text: botPersonalityPrompt }] : [])
+        ],
+        dynamicSystem: [
+          ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
+          ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
+          ...(pendingRatings.has(stateKey) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
+          ...(cartContextFor(userId, stateKey) ? [{ type: "text", text: cartContextFor(userId, stateKey) }] : []),
+          ...(memoryContext ? [{ type: "text", text: memoryContext }] : [])
+        ],
+        tools: conversationTools
+      });
       const response = await axios.post(
         "https://api.anthropic.com/v1/messages",
         {
           model: "claude-sonnet-4-5-20250929",
           max_tokens: adaptiveBudget.maxTokens,
-          system: [
-        { type: "text", text: conversationSystemPrompt, cache_control: { type: "ephemeral" } },
-        { type: "text", text: CUSTOMER_PROFILE_OPERATIONAL_PROMPT, cache_control: { type: "ephemeral" } },
-        ...tenantConfigurationPrompts.map(function (prompt) { return { type: "text", text: prompt, cache_control: { type: "ephemeral" } }; }),
-        ...(botPersonalityPrompt ? [{ type: "text", text: botPersonalityPrompt, cache_control: { type: "ephemeral" } }] : []),
-        ...(onboardingConversationContext ? [{ type: "text", text: onboardingConversationContext }] : []),
-        ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
-        ...(pendingRatings.has(stateKey) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
-        ...(cartContextFor(userId, stateKey) ? [{ type: "text", text: cartContextFor(userId, stateKey) }] : []),
-        ...(memoryContext ? [{ type: "text", text: memoryContext }] : [])
-      ],
-          tools: conversationTools.map((t, i) => i === conversationTools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t),
+          system: cachedPrompt.system,
+          tools: cachedPrompt.tools,
           messages: workingHistory.slice(-adaptiveBudget.historyMessages),
         },
         {
@@ -6142,6 +6186,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       );
 
       const stopReason = response.data.stop_reason;
+      runtimeIncidentMonitor.success("anthropic", tenantId);
       trackAnthropicUsage(response.data?.usage);
       botStats.anthropic.budgetTiers[adaptiveBudget.tier] = (botStats.anthropic.budgetTiers[adaptiveBudget.tier] || 0) + 1;
       const content = response.data.content;
@@ -6331,8 +6376,8 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
         throw err;
       }
       if (err && err.conversationPersistenceFailure) throw err;
-      console.error("Claude error:", err.response?.data || err.message);
-            botStats.anthropic.failedCalls++;
+      botStats.anthropic.failedCalls++;
+      await recordAnthropicRuntimeFailure(err, tenantId, conversationRuntime.channel);
             // Detectar credit_balance_too_low y alertar al equipo (anti-spam: 1 cada 30 min)
             try {
               const errType = err.response?.data?.error?.type;
@@ -17870,6 +17915,7 @@ async function buildAdminHealthResult() {
   }
   result.checks.shopify_admin_api = SHOPIFY_ADMIN_TOKEN ? "key_present_not_tested" : "missing_key";
   result.checks.anthropic_api = ANTHROPIC_API_KEY ? "key_present_not_tested_to_save_credits" : "missing_key";
+  result.checks.anthropic_runtime = runtimeIncidentMonitor.health("anthropic");
   if (SUPABASE_ENABLED) {
     try {
       const r = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_TABLE + "?select=id&limit=1", { headers: SB_HEADERS, timeout: 8000 });
@@ -17885,6 +17931,7 @@ async function buildAdminHealthResult() {
     : appointmentStorageHealth.error || "not_configured";
   const blockers = [];
   if (!result.env.anthropic_key_present) blockers.push("missing_anthropic_key");
+  if (!result.checks.anthropic_runtime.ok) blockers.push("anthropic_runtime_failures");
   if (!whatsappHealthRuntime) blockers.push("missing_tenant_whatsapp_connection");
   if (result.checks.meta_whatsapp !== "ok") blockers.push("meta_whatsapp_not_ok");
   if (result.checks.shopify_storefront !== "ok") blockers.push("shopify_storefront_not_ok");

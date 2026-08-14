@@ -77,6 +77,9 @@ function renderTenant(planId, initialTab, ordersV1Enabled) {
 
 const redesigned = render(true, "orders");
 assert(redesigned.includes('<body class="panel-redesign">'));
+const redesignedNotifications = render(true, "notifications");
+assert(redesignedNotifications.includes('<body class="panel-redesign">'), "notifications must keep the approved redesigned sidebar state");
+assert(redesigned.includes('["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name)'), "client navigation must preserve the redesign when notifications is selected");
 assert(redesigned.includes('id="nav-orders"'));
 assert(redesigned.includes('<section class="view active" id="panel-orders">'));
 assert(redesigned.includes("Oportunidades de venta"));
@@ -201,7 +204,7 @@ const redesignedPlan = render(true, "plan");
 assert(redesignedPlan.includes('<body class="panel-redesign">'), "Mi plan must retain its redesign styles");
 const redesignedChannels = render(true, "channels");
 assert(redesignedChannels.includes('<body class="panel-redesign">'), "Conectar canales must retain its redesign styles");
-assert(redesigned.includes('["summary","conversations","orders","retargeting","plan","channels"].includes(name)'));
+assert(redesigned.includes('["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name)'));
 
 // Production carried the old review-era literal `false`.  A successful code
 // deploy must still serve the approved v2 panel; only `0` is the rollback.

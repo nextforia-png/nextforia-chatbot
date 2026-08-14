@@ -364,7 +364,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v384-whatsapp-coexistence-sender";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v385-whatsapp-tenant-webhook-guard";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -6444,6 +6444,23 @@ async function processWhatsAppInboxEvent(payload, inboxRow) {
   }
   const from = whatsappMessageSender(value, message);
   if (!from) {
+    whatsappRuntimeState.last_error_at = new Date().toISOString();
+    whatsappRuntimeState.last_error_stage = "resolve_sender";
+    whatsappRuntimeState.last_error_message = "whatsapp_sender_missing";
+    whatsappRuntimeState.last_skip_reason = "whatsapp_sender_missing";
+    whatsappRuntimeState.runtime_source = destination.source || "channel_connection";
+    whatsappRuntimeState.tenant_id = destination.tenantId;
+    whatsappRuntimeState.phone_number_suffix = String(destination.phoneNumberId || "").slice(-8) || null;
+    log("error", "whatsapp_sender_unresolved", {
+      tenant_id: destination.tenantId,
+      destination_suffix: String(destination.phoneNumberId || "").slice(-8) || null,
+      message_id_suffix: String(message.id || "").slice(-16) || null,
+      contact_sender_count: Array.from(new Set(
+        (Array.isArray(value.contacts) ? value.contacts : [])
+          .map(function (contact) { return cleanRuntimeText(contact && contact.wa_id, 500); })
+          .filter(Boolean)
+      )).length
+    });
     const missingSender = new Error("whatsapp_sender_missing");
     missingSender.permanent = true;
     throw missingSender;

@@ -8,7 +8,8 @@ const {
   InMemoryChannelConnectionStore,
   MigratingChannelConnectionStore,
   SupabaseChannelConnectionStore,
-  createChannelConnectionService
+  createChannelConnectionService,
+  publicConnection
 } = require("./channel-connections");
 
 function expectCode(promise, code) {
@@ -86,6 +87,31 @@ function providerFor(options) {
 (async function run() {
   const encryptionKey = crypto.randomBytes(32);
   const now = function () { return new Date("2026-08-08T23:00:00.000Z"); };
+
+  const freshAwaitingMeta = publicConnection({
+    tenant_id: "tenant-fresh-awaiting-meta",
+    channel: "whatsapp",
+    status: "connecting",
+    onboarding_attempt_id: "attempt-fresh-awaiting-meta",
+    onboarding_attempt_status: "awaiting_meta",
+    onboarding_attempt_started_at: "2026-08-08T22:59:00.000Z"
+  }, { now: now() });
+  assert.strictEqual(freshAwaitingMeta.status, "connecting");
+  assert.strictEqual(freshAwaitingMeta.onboarding_attempt_stage, "awaiting_meta");
+
+  const staleAwaitingMeta = publicConnection({
+    tenant_id: "tenant-stale-awaiting-meta",
+    channel: "whatsapp",
+    status: "connecting",
+    onboarding_attempt_id: "attempt-stale-awaiting-meta",
+    onboarding_attempt_status: "awaiting_meta",
+    onboarding_attempt_started_at: "2026-08-08T22:55:00.000Z"
+  }, { now: now() });
+  assert.strictEqual(staleAwaitingMeta.status, "needs_attention");
+  assert.strictEqual(staleAwaitingMeta.onboarding_attempt_stage, "authorization_incomplete");
+  assert.strictEqual(staleAwaitingMeta.cancel_attempt_available, true);
+  assert(staleAwaitingMeta.onboarding_attempt_message.includes("Meta no devolvió"));
+  assert(staleAwaitingMeta.onboarding_attempt_message.includes("no registró ni modificó"));
 
   const cutoverPrimary = new InMemoryChannelConnectionStore();
   const cutoverFallback = new InMemoryChannelConnectionStore();

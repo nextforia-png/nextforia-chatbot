@@ -6,6 +6,7 @@ const { decryptStoredText, encryptStoredText, safeEqualText } = require("./secur
 const SUPPORTED_CHANNELS = ["whatsapp", "instagram", "messenger"];
 const CONNECTION_STATUSES = ["not_connected", "connecting", "connected", "needs_attention", "disconnected"];
 const WHATSAPP_REGISTRATION_COOLDOWN_MS = 72 * 60 * 60 * 1000;
+const WHATSAPP_EMBEDDED_RESULT_STALE_MS = 2 * 60 * 1000;
 const WHATSAPP_OUTBOUND_BILLING_BLOCKED = "outbound_billing_blocked";
 const WHATSAPP_OUTBOUND_BILLING_ERROR = "Meta bloqueó las respuestas de WhatsApp (131042): agrega un método de pago válido en WhatsApp Manager.";
 const CHANNEL_CATALOG = Object.freeze([
@@ -296,19 +297,32 @@ function publicConnection(record, options) {
   const attemptStatus = cleanText(safe.onboarding_attempt_status, 80).toLowerCase();
   const attemptTerminal = ["completed", "cancelled"].includes(attemptStatus);
   const attemptActive = safe.channel === "whatsapp" && !!safe.onboarding_attempt_id && !attemptTerminal;
+  const attemptStartedMs = Date.parse(safe.onboarding_attempt_started_at || "");
+  const publicNowMs = new Date(options && options.now || Date.now()).getTime();
+  const authorizationIncomplete = attemptActive &&
+    (!attemptStatus || attemptStatus === "awaiting_meta") &&
+    !safe.onboarding_attempt_registration_requested_at &&
+    !safe.onboarding_attempt_phone_number_id &&
+    !safe.onboarding_attempt_waba_id &&
+    Number.isFinite(attemptStartedMs) && Number.isFinite(publicNowMs) &&
+    publicNowMs - attemptStartedMs >= WHATSAPP_EMBEDDED_RESULT_STALE_MS;
   const coexistenceConfirmed = safe.channel === "whatsapp" && safe.coexistence_confirmed === true;
   safe.whatsapp_onboarding_mode = safe.channel === "whatsapp"
     ? coexistenceConfirmed ? "coexistence" : hasStoredCredentials || attemptActive ? "cloud_api" : null
     : null;
   safe.onboarding_attempt_active = attemptActive;
-  safe.onboarding_attempt_stage = attemptActive ? attemptStatus || "awaiting_meta" : null;
+  safe.onboarding_attempt_stage = attemptActive
+    ? authorizationIncomplete ? "authorization_incomplete" : attemptStatus || "awaiting_meta"
+    : null;
   safe.cancel_attempt_available = attemptActive && (
     !safe.onboarding_attempt_registration_requested_at ||
     coexistenceConfirmed ||
     ["registration_rejected", "reconciliation_exhausted"].includes(attemptStatus)
   );
   safe.onboarding_attempt_message = attemptActive
-    ? coexistenceConfirmed
+    ? authorizationIncomplete
+      ? "Meta no devolvió la cuenta o el número elegido. Cancela este intento y vuelve a abrir la conexión; Nextfor no registró ni modificó ningún número."
+    : coexistenceConfirmed
       ? attemptStatus === "failed"
         ? customerActivationError(safe.onboarding_attempt_last_error) || "Meta no pudo terminar la coexistencia. Comprueba la conexión o desconéctala para intentarlo de nuevo."
         : "Meta está terminando la coexistencia. Tu WhatsApp Business permanece activo y Nextfor solo comprobará la conexión."
@@ -324,6 +338,7 @@ function publicConnection(record, options) {
         ? "No repetiremos el registro. Estamos comprobando con Meta si el número quedó conectado."
         : "Nextfor está terminando y verificando la conexión sin repetir el registro del número."
     : null;
+  if (authorizationIncomplete) safe.status = "needs_attention";
   const allowProtectedReconnect = !!(options && options.allowProtectedReconnect);
   const reconnectAllowed = !safe.protected_legacy || allowProtectedReconnect;
   const coexistencePending = safe.channel === "whatsapp" &&

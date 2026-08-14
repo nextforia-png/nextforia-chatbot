@@ -56,14 +56,19 @@ function whatsappEmbeddedListenerHarness(panel) {
   const end = panel.indexOf("\nfunction connectChannel", start);
   assert(start >= 0 && end > start, "the rendered panel must contain the Embedded Signup listener");
   let listener = null;
-  const calls = { clears: [], completes: 0, loads: [], messages: [], stops: [] };
+  const calls = { clears: [], completes: 0, loads: [], messages: [], requests: [], stops: [] };
   const context = {
     JSON,
     String,
     URL,
+    api: function (url, options) {
+      calls.requests.push({ url, options });
+      return Promise.resolve({});
+    },
     clearTimeout: function (timer) { calls.clears.push(timer); },
     completeWhatsAppEmbeddedSignup: function () { calls.completes++; },
     loadChannelConnections: function (force) { calls.loads.push(force); },
+    renderChannelConnections: function () {},
     setChannelConnectionMessage: function (message, type) { calls.messages.push({ message, type }); },
     state: {
       channelConnections: { cached: true },
@@ -273,6 +278,51 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert.strictEqual(recoveryHarness.context.state.whatsappEmbedded.session.app_only_install, true);
     assert.strictEqual(recoveryHarness.calls.completes, 1);
 
+    const genericRecoveryHarness = whatsappEmbeddedListenerHarness(panel);
+    genericRecoveryHarness.context.state.whatsappEmbedded.config.onboarding_mode = "coexistence_recovery";
+    genericRecoveryHarness.listener({
+      origin: "https://business.facebook.com",
+      data: {
+        type: "WA_EMBEDDED_SIGNUP",
+        event: "FINISH",
+        data: {
+          waba_id: "waba-generic-recovery",
+          phone_number_id: "phone-generic-recovery",
+          business_id: "business-generic-recovery"
+        }
+      }
+    });
+    assert.strictEqual(genericRecoveryHarness.context.state.whatsappEmbedded.session.waba_id,
+      "waba-generic-recovery");
+    assert.strictEqual(genericRecoveryHarness.context.state.whatsappEmbedded.session.onboarding_event, "FINISH");
+    assert.strictEqual(genericRecoveryHarness.context.state.whatsappEmbedded.session.app_only_install, true);
+    assert.strictEqual(genericRecoveryHarness.calls.completes, 1,
+      "a v4 generic FINISH must complete the signed recovery mode selected by the customer");
+
+    const nestedRecoveryHarness = whatsappEmbeddedListenerHarness(panel);
+    nestedRecoveryHarness.context.state.whatsappEmbedded.config.onboarding_mode = "coexistence_recovery";
+    nestedRecoveryHarness.listener({
+      origin: "https://www.facebook.com",
+      data: JSON.stringify({
+        type: "WA_EMBEDDED_SIGNUP",
+        data: {
+          event: "FINISH_GRANT_ONLY_API_ACCESS",
+          data: {
+            whatsapp_business_account_id: "waba-nested-recovery",
+            phone_id: "phone-nested-recovery",
+            business_manager_id: "business-nested-recovery"
+          }
+        }
+      })
+    });
+    assert.strictEqual(nestedRecoveryHarness.context.state.whatsappEmbedded.session.waba_id,
+      "waba-nested-recovery");
+    assert.strictEqual(nestedRecoveryHarness.context.state.whatsappEmbedded.session.phone_number_id,
+      "phone-nested-recovery");
+    assert.strictEqual(nestedRecoveryHarness.context.state.whatsappEmbedded.session.business_id,
+      "business-nested-recovery");
+    assert.strictEqual(nestedRecoveryHarness.calls.completes, 1);
+
     const modeMismatchHarness = whatsappEmbeddedListenerHarness(panel);
     modeMismatchHarness.listener({
       origin: "https://business.facebook.com",
@@ -285,6 +335,9 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
     assert.strictEqual(modeMismatchHarness.context.state.whatsappEmbedded, null);
     assert.strictEqual(modeMismatchHarness.calls.completes, 0);
     assert.strictEqual(modeMismatchHarness.calls.messages[0].type, "error");
+    assert.strictEqual(modeMismatchHarness.calls.requests[0].url,
+      "/admin/panel/channel-connections/whatsapp/attempt");
+    assert.strictEqual(modeMismatchHarness.calls.requests[0].options.method, "DELETE");
 
     const finishOnlyWabaHarness = whatsappEmbeddedListenerHarness(panel);
     finishOnlyWabaHarness.listener({
@@ -313,18 +366,25 @@ function renderConnectionHubForOnboarding(panel, onboarding) {
       origin: "https://web.facebook.com",
       data: { type: "WA_EMBEDDED_SIGNUP", event: "CANCEL", data: { current_step: "phone_number" } }
     });
+    await Promise.resolve();
+    await Promise.resolve();
     assert.strictEqual(cancelHarness.context.state.whatsappEmbedded, null);
     assert.strictEqual(cancelHarness.context.state.whatsappConnecting, false);
     assert.strictEqual(cancelHarness.context.state.channelConnections, null);
     assert.strictEqual(cancelHarness.calls.loads.length, 1);
     assert.strictEqual(cancelHarness.calls.loads[0], true);
     assert.strictEqual(cancelHarness.calls.messages[0].type, "error");
+    assert.strictEqual(cancelHarness.calls.requests[0].url,
+      "/admin/panel/channel-connections/whatsapp/attempt");
+    assert.strictEqual(cancelHarness.calls.requests[0].options.method, "DELETE");
 
     const errorHarness = whatsappEmbeddedListenerHarness(panel);
     errorHarness.listener({
       origin: "https://www.facebook.com",
       data: { type: "WA_EMBEDDED_SIGNUP", event: "ERROR", data: { error_message: "Number already linked" } }
     });
+    await Promise.resolve();
+    await Promise.resolve();
     assert.strictEqual(errorHarness.context.state.whatsappEmbedded, null);
     assert.strictEqual(errorHarness.context.state.whatsappConnecting, false);
     assert.strictEqual(errorHarness.calls.loads.length, 1);

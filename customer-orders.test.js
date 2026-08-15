@@ -42,7 +42,10 @@ async function rejectsCode(promise, code) {
   assert.strictEqual((await service.list("tenant-b")).length, 0);
   await rejectsCode(service.get("tenant-b", "ord-a"), "order_not_found");
 
-  const paid = await service.action("tenant-a", "ord-a", "confirm_payment", {}, "agent@example.com");
+  const paid = await service.action("tenant-a", "ord-a", "confirm_payment", {
+    tracking_number: "",
+    tracking_url: ""
+  }, "agent@example.com");
   assert.strictEqual(paid.stage, "pagado");
   await rejectsCode(service.action("tenant-a", "ord-a", "confirm_payment", {}, "agent@example.com"), "invalid_transition");
   const preparing = await service.action("tenant-a", "ord-a", "start_preparation", {}, "agent@example.com");

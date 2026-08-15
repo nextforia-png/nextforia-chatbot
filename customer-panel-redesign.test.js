@@ -91,11 +91,16 @@ assert(redesigned.includes('["human_handoff_required","customer_order_created"].
 assert(redesigned.includes('<section class="view active" id="panel-orders">'));
 assert(redesigned.includes('id="orderTrackingUrlInput"'));
 assert(redesigned.includes('placeholder="https://transportadora.com/rastrear"'));
-assert(redesigned.includes('tracking_url:trackingUrlValue'));
+assert(redesigned.includes('payload.tracking_url=trackingUrlValue'));
+assert(redesigned.includes('function orderActionPayload(order,action,trackingValue,trackingUrlValue)'));
+assert(redesigned.includes('if(action==="send_tracking"||action==="save_tracking_draft"){payload.tracking_number=trackingValue;payload.tracking_url=trackingUrlValue;}'));
+assert(redesigned.includes('JSON.stringify(orderActionPayload(order,action,trackingValue,trackingUrlValue))'));
+assert(redesigned.includes('Pago confirmado. Puedes agregar la guía cuando esté lista.'));
+assert(redesigned.includes('La guía no es necesaria para confirmar. Puedes agregarla después.'));
+assert(redesigned.includes('detail.insertBefore(actions,shippingCard)'));
 assert(redesigned.includes('Guía y enlace entregados al cliente y guardados.'));
 assert(redesigned.includes('save_tracking_draft'));
 assert(redesigned.includes('Guardar guía y enlace'));
-assert(redesigned.includes('Nextfor no los enviará hasta confirmar el pago.'));
 assert(redesigned.includes("Oportunidades de venta"));
 assert(redesigned.includes("4 pasos para quedar listo"));
 assert(redesigned.includes("Personalizar"));

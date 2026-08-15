@@ -18,8 +18,8 @@ async function rejectsCode(promise, code) {
   const deliveries = [];
   const service = createCustomerOrderService({
     store: new InMemoryCustomerOrderStore(),
-    sendTracking: async function (order, tracking) {
-      deliveries.push({ tenant_id: order.tenant_id, conversation_id: order.conversation_id, tracking });
+    sendTracking: async function (order, tracking, trackingUrl) {
+      deliveries.push({ tenant_id: order.tenant_id, conversation_id: order.conversation_id, tracking, tracking_url: trackingUrl });
     }
   });
   const base = {
@@ -48,9 +48,21 @@ async function rejectsCode(promise, code) {
   const preparing = await service.action("tenant-a", "ord-a", "start_preparation", {}, "agent@example.com");
   assert.strictEqual(preparing.stage, "preparacion");
   await rejectsCode(service.action("tenant-a", "ord-a", "mark_sent", {}, "agent@example.com"), "tracking_required");
-  const tracked = await service.action("tenant-a", "ord-a", "send_tracking", { tracking_number: "CO123" }, "agent@example.com");
+  await rejectsCode(service.action("tenant-a", "ord-a", "send_tracking", { tracking_number: "CO123" }, "agent@example.com"), "tracking_url_required");
+  await rejectsCode(service.action("tenant-a", "ord-a", "send_tracking", { tracking_number: "CO123", tracking_url: "http://transportadora.example/rastrear/CO123" }, "agent@example.com"), "tracking_url_invalid");
+  assert.deepStrictEqual(deliveries, []);
+  const tracked = await service.action("tenant-a", "ord-a", "send_tracking", {
+    tracking_number: "CO123",
+    tracking_url: "https://transportadora.example/rastrear/CO123"
+  }, "agent@example.com");
   assert.strictEqual(tracked.tracking_number, "CO123");
-  assert.deepStrictEqual(deliveries, [{ tenant_id: "tenant-a", conversation_id: "ig:customer-a", tracking: "CO123" }]);
+  assert.strictEqual(tracked.tracking_url, "https://transportadora.example/rastrear/CO123");
+  assert.deepStrictEqual(deliveries, [{
+    tenant_id: "tenant-a",
+    conversation_id: "ig:customer-a",
+    tracking: "CO123",
+    tracking_url: "https://transportadora.example/rastrear/CO123"
+  }]);
   const sent = await service.action("tenant-a", "ord-a", "mark_sent", {}, "agent@example.com");
   assert.strictEqual(sent.stage, "enviado");
   await rejectsCode(service.action("tenant-a", "ord-a", "cancel", {}, "agent@example.com"), "invalid_transition");

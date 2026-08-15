@@ -1273,9 +1273,9 @@ const customerNotificationService = createCustomerNotificationService({
 });
 const customerOrderService = createCustomerOrderService({
   store: SUPABASE_ENABLED ? persistentCustomerOrderStore : new InMemoryCustomerOrderStore(),
-  sendTracking: async function (order, trackingNumber) {
+  sendTracking: async function (order, trackingNumber, trackingUrl) {
     if (!order.conversation_id) throw new CustomerOrderError("conversation_required", "Este pedido no tiene una conversación asociada.", 409);
-    const message = "Tu pedido #" + order.order_number + " ya tiene guía 🚚\n\nNúmero de guía: " + trackingNumber + "\n\nPuedes guardarla para consultar el avance con la transportadora.";
+    const message = "Tu pedido #" + order.order_number + " ya tiene guía 🚚\n\nNúmero de guía: " + trackingNumber + "\nRastrea tu envío aquí: " + trackingUrl + "\n\nAbre el enlace para consultar el avance con la transportadora.";
     const delivered = await sendText(order.conversation_id, message, { tenant_id: order.tenant_id });
     if (delivered !== true) throw new CustomerOrderError("tracking_delivery_failed", "No pudimos entregar la guía en el canal del cliente. No se guardó como enviada.", 502);
     await recordAdminEvent(order.conversation_id, "customer_order_tracking_sent", message, "ok", false, { tenantId: order.tenant_id });
@@ -16638,7 +16638,7 @@ app.post("/admin/panel/orders/action", async (req, res) => {
       tenantId,
       body.order_id,
       body.action,
-      { tracking_number: body.tracking_number },
+      { tracking_number: body.tracking_number, tracking_url: body.tracking_url },
       auth.email || auth.username || auth.name || "customer_panel"
     );
     res.json({ ok: true, order });

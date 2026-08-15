@@ -33,6 +33,18 @@ function cleanId(value) {
   return text(value, 100).replace(/[^a-zA-Z0-9._-]/g, "");
 }
 
+function normalizeTrackingUrl(value) {
+  const raw = text(value, 1000);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return "";
+    return parsed.toString();
+  } catch (_) {
+    return "";
+  }
+}
+
 function normalizeItems(items) {
   return (Array.isArray(items) ? items : []).slice(0, 100).map(function (item) {
     return {
@@ -85,6 +97,7 @@ function normalizeOrder(input) {
     payment_note: text(input.payment_note || input.paymentNote, 500),
     stage,
     tracking_number: text(input.tracking_number || input.guide, 120),
+    tracking_url: normalizeTrackingUrl(input.tracking_url || input.tracking_link),
     tracking_sent_at: text(input.tracking_sent_at, 60),
     created_at: createdAt,
     updated_at: updatedAt,
@@ -220,10 +233,15 @@ function createCustomerOrderService(options) {
       } else if (action === "send_tracking") {
         if (!["pagado", "preparacion", "enviado"].includes(current.stage)) throw new CustomerOrderError("invalid_transition", "Confirma el pago antes de enviar una guía.", 409);
         const tracking = text(payload && payload.tracking_number, 120);
+        const rawTrackingUrl = text(payload && payload.tracking_url, 1000);
+        const trackingUrl = normalizeTrackingUrl(rawTrackingUrl);
         if (!tracking) throw new CustomerOrderError("tracking_required", "Escribe el número de guía.");
+        if (!rawTrackingUrl) throw new CustomerOrderError("tracking_url_required", "Agrega el enlace de rastreo de la transportadora.");
+        if (!trackingUrl) throw new CustomerOrderError("tracking_url_invalid", "Usa un enlace seguro que comience por https://.");
         if (typeof options.sendTracking !== "function") throw new CustomerOrderError("delivery_unavailable", "El canal no está disponible para enviar la guía.", 503);
-        await options.sendTracking(current, tracking);
+        await options.sendTracking(current, tracking, trackingUrl);
         next.tracking_number = tracking;
+        next.tracking_url = trackingUrl;
         next.tracking_sent_at = new Date().toISOString();
       }
       next.stage = nextStage;
@@ -252,5 +270,6 @@ module.exports = {
   InMemoryCustomerOrderStore,
   collapseLatest,
   createCustomerOrderService,
+  normalizeTrackingUrl,
   normalizeOrder
 };

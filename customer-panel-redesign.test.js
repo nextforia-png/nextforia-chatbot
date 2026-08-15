@@ -76,9 +76,9 @@ function renderTenant(planId, initialTab, ordersV1Enabled) {
 }
 
 const redesigned = render(true, "orders");
-assert(redesigned.includes('<body class="panel-redesign">'));
+assert(redesigned.includes('<body class="customer-panel-mobile-v389 panel-redesign">'));
 const redesignedNotifications = render(true, "notifications");
-assert(redesignedNotifications.includes('<body class="panel-redesign">'), "notifications must keep the approved redesigned sidebar state");
+assert(redesignedNotifications.includes('<body class="customer-panel-mobile-v389 panel-redesign">'), "notifications must keep the approved redesigned sidebar state");
 assert(redesigned.includes('["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name)'), "client navigation must preserve the redesign when notifications is selected");
 assert(redesigned.includes('id="nav-orders"'));
 assert(redesigned.includes('<section class="view active" id="panel-orders">'));
@@ -105,8 +105,14 @@ assert(redesigned.includes('disabled title="Disponible cuando el backend publiqu
 assert(redesigned.includes('id="mnav-mobile-home"'));
 assert(redesigned.includes('id="mnav-mobile-chats"'));
 assert(redesigned.includes('id="mnav-mobile-profile"'));
-assert(redesigned.includes('style="--mobile-tabs:3"'));
+assert(redesigned.includes('style="--mobile-tabs:5"'));
 assert(redesigned.includes('class="mobileProfileLinks"'));
+assert(redesigned.includes('class="mobileDashboard"'));
+assert(redesigned.includes('id="mobileHeaderNotificationCount"'));
+assert(redesigned.includes('id="mobileDetailHeader"'));
+assert(redesigned.includes('id="mnav-retargeting"'));
+assert(redesigned.includes('function renderMobileDashboard()'));
+assert(redesigned.includes('grid-template-columns:repeat(var(--mobile-tabs,5),minmax(0,1fr))!important'));
 assert(redesigned.includes('onclick="openSummaryMetric(\'sales\')"'));
 assert(redesigned.includes('onclick="openSummaryMetric(\'all\')"'));
 assert(redesigned.includes('onclick="openSummaryMetric(\'resolved\')"'));
@@ -159,7 +165,7 @@ assert(!aiSummaryCard[0].includes("openSummaryMetric"), "AI summary must remain 
 assert(redesigned.includes("openProfileSection('plan')"));
 assert(redesigned.includes("openProfileSection('channels')"));
 assert(redesigned.includes("openProfileSection('setup')"));
-assert(redesigned.includes("openProfileSection('notifications')"));
+assert(redesigned.includes("onclick=\"showTab('notifications')\" aria-label=\"Abrir notificaciones\""));
 assert(!redesigned.includes("undefinedNotificaciones"));
 assert(
   redesigned.indexOf('id="nav-notifications"') < redesigned.indexOf('<div class="footTitle">Cuenta</div>'),
@@ -198,19 +204,19 @@ assert(legacy.includes('>Comprar chats adicionales</button>'));
 assert(legacy.includes('>Ver promoción</button>'));
 
 const stagingDefault = renderStagingDefault();
-assert(stagingDefault.includes('<body class="panel-redesign">'));
+assert(stagingDefault.includes('<body class="customer-panel-mobile-v389 panel-redesign">'));
 assert(stagingDefault.includes('id="nav-orders"'));
 const redesignedPlan = render(true, "plan");
-assert(redesignedPlan.includes('<body class="panel-redesign">'), "Mi plan must retain its redesign styles");
+assert(redesignedPlan.includes('<body class="customer-panel-mobile-v389 panel-redesign">'), "Mi plan must retain its redesign styles");
 const redesignedChannels = render(true, "channels");
-assert(redesignedChannels.includes('<body class="panel-redesign">'), "Conectar canales must retain its redesign styles");
+assert(redesignedChannels.includes('<body class="customer-panel-mobile-v389 panel-redesign">'), "Conectar canales must retain its redesign styles");
 assert(redesigned.includes('["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name)'));
 
 // Production carried the old review-era literal `false`.  A successful code
 // deploy must still serve the approved v2 panel; only `0` is the rollback.
 process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED = "false";
 const migratedProductionFlag = renderTenant("nextfor-aura", "summary", true);
-assert(migratedProductionFlag.includes('<body class="panel-redesign">'));
+assert(migratedProductionFlag.includes('<body class="customer-panel-mobile-v389 panel-redesign">'));
 assert(migratedProductionFlag.includes('id="nav-orders"'));
 assert(migratedProductionFlag.includes("Oportunidades de venta"));
 
@@ -221,6 +227,9 @@ assert(uno.includes("1 bot entrenado y listo"));
 assert(uno.includes('id="nav-orders"'));
 assert(uno.includes('id="panel-orders"'));
 assert(!uno.includes('id="nav-appointments"'));
+assert(uno.includes('class="mobileBotSwitch" data-bot-count="1"'));
+assert(uno.includes('id="mnav-mobile-home" data-bot="support"'));
+assert(uno.includes('class="mobileProfileLogout" href="/admin/logout"'));
 
 const aura = renderTenant("nextfor-aura");
 assert(aura.includes("Nextfor Aura"));
@@ -228,6 +237,7 @@ assert(aura.includes("1 bot entrenado y listo"));
 assert(aura.includes('id="nav-orders"'));
 assert(aura.includes('id="panel-orders"'));
 assert(!aura.includes('id="nav-appointments"'));
+assert(aura.includes('class="mobileBotSwitch" data-bot-count="1"'));
 
 const tempo = renderTenant("nextfor-tempo", "summary");
 assert(tempo.includes("Nextfor Tempo"));
@@ -235,6 +245,10 @@ assert(tempo.includes('id="nav-appointments"'));
 assert(tempo.includes('<section class="view active" id="panel-appointments">'));
 assert(!tempo.includes('id="nav-orders"'));
 assert(!tempo.includes('<body class="panel-redesign">'), "appointment-only tenants keep the production appointment shell");
+assert(tempo.includes('<body class="customer-panel-mobile-v389">'));
+assert(tempo.includes('class="mobileBotSwitch" data-bot-count="1"'));
+assert(tempo.includes('id="mnav-appointments" data-bot="appointments"'));
+assert(!tempo.includes('id="mnav-mobile-home" data-bot="appointments"'));
 
 const atlas = renderTenant("nextfor-atlas");
 assert(atlas.includes("Nextfor Atlas"));
@@ -242,6 +256,9 @@ assert(atlas.includes("/admin/assets/lumen-plan-atlas.png"));
 assert(atlas.includes("2 bots entrenados y listos"));
 assert(atlas.includes('id="nav-appointments"'));
 assert(atlas.includes('id="nav-orders"'));
+assert(atlas.includes('class="mobileBotSwitch" data-bot-count="2"'));
+assert(atlas.includes('id="mnav-mobile-home" data-bot="support"'));
+assert(atlas.includes('id="mnav-appointments" data-bot="appointments"'));
 const atlasSupportLabel = atlas.match(/id="bot-support"[\s\S]*?<strong>([^<]+)<\/strong>/);
 const atlasAppointmentLabel = atlas.match(/id="bot-appointments"[\s\S]*?<strong>([^<]+)<\/strong>/);
 assert.strictEqual(atlasSupportLabel && atlasSupportLabel[1], "Atención al cliente");

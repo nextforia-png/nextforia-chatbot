@@ -144,6 +144,12 @@ const {
 const { resolveTenantRuntimePolicy } = require("./tenant-runtime-policy");
 const { applyAnthropicCachePolicy } = require("./anthropic-cache-policy");
 const { RuntimeIncidentMonitor } = require("./runtime-incident-monitor");
+const {
+  InMemoryBotOpsStore,
+  SupabaseBotOpsStore,
+  createBotOpsService,
+  createResendBotOpsNotifier
+} = require("./bot-ops");
 const { applyTenantOutboundPolicy } = require("./tenant-outbound-policy");
 const {
   ROUTES: ATLAS_ROUTES,
@@ -481,6 +487,19 @@ const CHANNEL_CONNECTION_PUBLIC_ORIGINS = configuredHttpsOrigins(
 );
 const RAW_DATA_ENCRYPTION_KEY = String(process.env.DATA_ENCRYPTION_KEY || "").trim();
 const DATA_ENCRYPTION_KEY = parseEncryptionKey(RAW_DATA_ENCRYPTION_KEY);
+const BOT_OPS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.BOT_OPS_TEST_MODE === "1";
+const BOT_OPS_ENABLED = BOT_OPS_TEST_MODE || (
+  process.env.BOT_OPS_ENABLED !== "0" && SUPABASE_ENABLED && !!DATA_ENCRYPTION_KEY
+);
+const BOT_OPS_TIME_ZONE = String(process.env.BOT_OPS_TIME_ZONE || "America/Bogota").trim();
+const BOT_OPS_DAILY_MINUTE = boundedEnvInt("BOT_OPS_DAILY_MINUTE", 6 * 60, 0, 1439);
+const BOT_OPS_WEEKLY_MINUTE = boundedEnvInt("BOT_OPS_WEEKLY_MINUTE", 6 * 60 + 30, 0, 1439);
+const BOT_OPS_CONTROLLED_TESTS_ENABLED = process.env.BOT_OPS_CONTROLLED_TESTS_ENABLED === "1" && (
+  process.env.NODE_ENV === "test" || (() => {
+    try { return new URL(PUBLIC_BASE_URL).hostname === "staging.nextforia.com"; }
+    catch (_) { return false; }
+  })()
+);
 const CHANNEL_CONNECTIONS_STAGING_PREVIEW = CHANNEL_CONNECTIONS_V1_ENABLED
   || process.env.CHANNEL_CONNECTIONS_V1_PREVIEW === "1"
   || (
@@ -506,6 +525,14 @@ const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_
 const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const BOT_OPS_ALERT_FROM_EMAIL = String(process.env.BOT_OPS_ALERT_FROM_EMAIL || CUSTOMER_INVITE_FROM_EMAIL || "").trim();
+const BOT_OPS_ALERT_EMAILS = String(process.env.BOT_OPS_ALERT_EMAIL || "").split(",").map(function (value) {
+  return value.trim().toLowerCase();
+}).filter(Boolean).concat(DASHBOARD_USERS.filter(function (user) {
+  return user.role === "super_admin" && user.email;
+}).map(function (user) { return user.email; })).filter(function (value, index, values) {
+  return values.indexOf(value) === index;
+});
 const CUSTOMER_PUBLIC_SIGNUP_ENABLED = process.env.CUSTOMER_PUBLIC_SIGNUP_ENABLED !== "0";
 const CUSTOMER_ACCESS_RESET_RELEASE_CUTOFF_ISO = "2026-07-28T02:51:06.000Z";
 const CUSTOMER_ACCESS_RESET_ENV_CUTOFF_ISO = process.env.CUSTOMER_ACCESS_RESET_CUTOFF || "";
@@ -1020,6 +1047,89 @@ const retargetingAppendLocks = new Map();
 // ─── Persistencia en Supabase (v37) ───────────────────────────────────
 const SB_HEADERS = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
 
+const botOpsStore = BOT_OPS_ENABLED
+  ? (BOT_OPS_TEST_MODE
+      ? new InMemoryBotOpsStore()
+      : new SupabaseBotOpsStore({
+          url: SUPABASE_URL,
+          headers: SB_HEADERS,
+          axiosClient: axios,
+          encrypt: function (value) { return encryptStoredText(value, DATA_ENCRYPTION_KEY); },
+          decrypt: function (value) { return decryptStoredText(value, DATA_ENCRYPTION_KEY); }
+        }))
+  : null;
+const botOpsCriticalNotifier = createResendBotOpsNotifier({
+  apiKey: RESEND_API_KEY,
+  from: BOT_OPS_ALERT_FROM_EMAIL,
+  to: BOT_OPS_ALERT_EMAILS,
+  axiosClient: axios,
+  baseUrl: PUBLIC_BASE_URL
+});
+const botOpsService = botOpsStore ? createBotOpsService({
+  store: botOpsStore,
+  timeZone: BOT_OPS_TIME_ZONE,
+  dailyMinute: BOT_OPS_DAILY_MINUTE,
+  weeklyMinute: BOT_OPS_WEEKLY_MINUTE,
+  notifyCritical: botOpsCriticalNotifier,
+  safeAction: async function (action, context) {
+    const event = context && context.event || {};
+    const finding = context && context.finding || {};
+    const userId = cleanRuntimeText(event.payload && event.payload.user_id, 500);
+    const tenantId = cleanTenantId(event.tenant_id);
+    if (action === "human_attention" && userId && tenantId) {
+      addHumanHandoff(userId, tenantId);
+      await queueCustomerHandoffNotification(tenantId, userId, "bot_ops_protection", {
+        source_event_id: "bot-ops:" + cleanRuntimeText(finding.dedupe_key, 300)
+      });
+      return { ok: true, action: "human_attention" };
+    }
+    // WhatsApp's durable inbox already performs capped exponential retries.
+    // Bot Ops observes and reports that protection instead of duplicating sends.
+    if (["durable_retry", "safe_retry"].includes(action)) return { ok: true, action, delegated: "durable_worker" };
+    return { ok: true, skipped: true };
+  },
+  log
+}) : null;
+
+function recordBotOpsEvent(input) {
+  if (!botOpsService) return Promise.resolve(false);
+  return botOpsService.recordEvent(input).catch(function (error) {
+    log("error", "bot_ops_event_persistence_failed", {
+      event_type: cleanRuntimeText(input && input.event_type, 80) || "unknown",
+      tenant_id: cleanTenantId(input && input.tenant_id) || "unknown",
+      error: cleanRuntimeText(error && error.message, 200) || "bot_ops_store_failed"
+    });
+    return false;
+  });
+}
+
+function recordBotOpsTurn(rec) {
+  const sourceId = cleanRuntimeText(rec && rec.sourceEventId, 500);
+  return recordBotOpsEvent({
+    event_id: "botops:turn:" + crypto.createHash("sha256").update([
+      rec && rec.tenantId, rec && rec.channel, sourceId, rec && rec.status,
+      rec && rec.userMessage, rec && rec.botReply, JSON.stringify(rec && rec.tools || [])
+    ].join("\u001f")).digest("hex"),
+    tenant_id: rec && rec.tenantId,
+    channel: rec && rec.channel,
+    user_id: rec && rec.userId,
+    source_id: sourceId,
+    occurred_at: rec && rec.ts,
+    event_type: "turn",
+    payload: {
+      user_id: rec && rec.userId,
+      user_message: rec && rec.userMessage,
+      bot_reply: rec && rec.botReply,
+      tools: rec && rec.tools,
+      zero_result_queries: rec && rec.zeroResultQueries,
+      handoff: rec && rec.handoff,
+      rating: rec && rec.rating,
+      status: rec && rec.status,
+      eval: rec && rec.eval
+    }
+  });
+}
+
 function customerNotificationPayloadFromTurn(turn, toolName, prefix) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   if (!tools.includes(toolName)) return null;
@@ -1184,6 +1294,33 @@ const metaWebhookInbox = metaWebhookInboxStore
       store: metaWebhookInboxStore,
       owner: "nextfor:" + String(process.env.RENDER_INSTANCE_ID || process.pid),
       processEvent: processWhatsAppInboxEvent,
+      onFailure: async function (row, error, outcome) {
+        const payload = row && row.payload || {};
+        if (payload.event_type !== "message" || !payload.message) return;
+        let tenantId = cleanTenantId(row && row.tenant_id);
+        if (!tenantId && payload.value) {
+          const destination = await resolveWhatsAppDestinationRuntime(payload.value).catch(function () { return null; });
+          tenantId = cleanTenantId(destination && destination.tenantId);
+        }
+        const userId = whatsappMessageSender(payload.value, payload.message);
+        await recordBotOpsEvent({
+          event_id: "botops:inbound-failure:" + cleanRuntimeText(row && row.event_id, 500) + ":" + (outcome.permanent ? "permanent" : "retryable"),
+          tenant_id: tenantId || "unknown-tenant",
+          bot_id: "customer_service",
+          channel: "whatsapp",
+          user_id: userId,
+          source_id: cleanRuntimeText(row && row.event_id, 500),
+          occurred_at: new Date().toISOString(),
+          event_type: "inbound_processing_failure",
+          payload: {
+            user_id: userId,
+            error_type: cleanRuntimeText(error && error.message, 160),
+            retryable: outcome.retryable === true,
+            permanent: outcome.permanent === true,
+            attempts: Number(row && row.attempts || 0)
+          }
+        });
+      },
       log
     })
   : null;
@@ -3533,6 +3670,7 @@ function recordTurn(userId, userMessage, botReply, status, meta) {
         })
       : supabaseInsert(rec);
     return Promise.resolve(persistence).then(async function (result) {
+      await recordBotOpsTurn(rec);
       if (rec.handoff && rec.status !== "outbound_pending" && rec.tools.includes("request_human_handoff")) {
         await queueCustomerHandoffNotification(tenantId, cleanUserId, "solicitud_cliente", meta);
       }
@@ -3577,7 +3715,11 @@ function recordAdminEvent(userId, tool, message, status, handoffOverride, meta) 
       sourceEventId: cleanRuntimeText(meta && (meta.sourceEventId || meta.source_event_id), 500) || null
     };
     rememberConversationTurn(rec);
-    return requirePersistence ? supabaseInsertStrict(rec) : supabaseInsert(rec);
+    const persistence = requirePersistence ? supabaseInsertStrict(rec) : supabaseInsert(rec);
+    return Promise.resolve(persistence).then(async function (result) {
+      await recordBotOpsTurn(rec);
+      return result;
+    });
   } catch (e) {
     console.error("recordAdminEvent error:", e.message);
     return meta && (meta.requirePersistence === true || meta.require_persistence === true)
@@ -5169,6 +5311,21 @@ async function notifyTeam(text, excludePhone) {
 
 async function recordAnthropicRuntimeFailure(error, tenantId, channel) {
   const incident = runtimeIncidentMonitor.failure("anthropic", tenantId, error);
+  await recordBotOpsEvent({
+    tenant_id: tenantId,
+    bot_id: "customer_service",
+    channel: channel || "unknown",
+    event_type: "provider_error",
+    occurred_at: incident.occurred_at,
+    source_id: "anthropic:" + incident.occurred_at,
+    payload: {
+      provider: "anthropic",
+      error_type: incident.error_type,
+      status: incident.status,
+      consecutive_failures: incident.consecutive_failures,
+      retryable: ![400, 401, 403, 404, 422].includes(incident.status)
+    }
+  });
   log("error", "conversation_provider_failure", {
     provider: incident.provider,
     tenant_id: incident.tenant_id,
@@ -6729,6 +6886,23 @@ async function processWhatsAppStatusInboxEvent(value, status, inboxRow) {
         processedWhatsAppStatusEventIds.delete(oldest);
       }
     }
+    const retryableCodes = new Set(["1", "2", "4", "17", "32", "613", "80007", "130429", "131000", "131016", "131042", "131048", "131056", "133004"]);
+    await recordBotOpsEvent({
+      event_id: eventId ? "botops:" + eventId : undefined,
+      tenant_id: destination.tenantId,
+      bot_id: "customer_service",
+      channel: "whatsapp",
+      user_id: recipientId,
+      event_type: "delivery_status",
+      source_id: cleanRuntimeText(status && status.id, 500),
+      occurred_at: new Date().toISOString(),
+      payload: {
+        user_id: recipientId,
+        status: state || "unknown",
+        error_code: errorCodes[0] || null,
+        retryable: state !== "failed" || !errorCodes.length || errorCodes.some(function (code) { return retryableCodes.has(String(code)); })
+      }
+    });
   }
   return { tenant_id: destination.tenantId, delivery_status: state || "unknown" };
 }
@@ -7514,8 +7688,10 @@ async function receiveElevenLabsPostCallWebhook(req, res) {
     res.status(401).json({ ok: false, error: "invalid_webhook" });
     return;
   }
+  let verifiedEvent = null;
   try {
     const event = await ELEVENLABS_WEBHOOK_CLIENT.webhooks.constructEvent(rawBody, signature, ELEVENLABS_WEBHOOK_SECRET);
+    verifiedEvent = event;
     if (event.type !== "post_call_transcription") {
       res.json({ ok: true, ignored: true });
       return;
@@ -7532,8 +7708,31 @@ async function receiveElevenLabsPostCallWebhook(req, res) {
       appointment = await applyAppointmentCalendarEffect(appointment, "sync", "elevenlabs_post_call");
     }
     if (appointment) await persistAppointment(appointment);
+    await recordBotOpsEvent({
+      tenant_id: tenantId,
+      bot_id: "appointments",
+      channel: "voice",
+      event_type: "appointment_result",
+      source_id: appointment && appointment.conversation_id || cleanRuntimeText(event.data && event.data.conversation_id, 500),
+      occurred_at: new Date().toISOString(),
+      payload: {
+        ok: !!appointment,
+        calendar_sync_status: appointment && appointment.calendar_sync_status || "not_required",
+        status: appointment && appointment.status || "no_appointment_created"
+      }
+    });
     res.json({ ok: true, tenant_id: tenantId, conversation_id: appointment && appointment.conversation_id || null });
   } catch (error) {
+    if (verifiedEvent) {
+      await recordBotOpsEvent({
+        tenant_id: "unknown-tenant",
+        bot_id: "appointments",
+        channel: "voice",
+        event_type: "provider_error",
+        occurred_at: new Date().toISOString(),
+        payload: { provider: "elevenlabs", error_type: cleanRuntimeText(error && error.message, 120), retryable: false }
+      });
+    }
     res.status(401).json({ ok: false, error: "invalid_webhook" });
   }
 }
@@ -17780,6 +17979,144 @@ loadData(); setInterval(loadData, 15000);
 </body></html>`);
 });
 
+app.get("/admin/bot-ops/summary", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!botOpsService) {
+    res.status(503).json({ ok: false, enabled: false, storage_ready: false, error: "bot_ops_not_configured" });
+    return;
+  }
+  try {
+    const snapshot = await botOpsService.snapshot();
+    const companyNames = new Map([[DEFAULT_TENANT_ID, CUSTOMER_PANEL_BUSINESS.name]]);
+    const setupTenants = await listSetupReviewTenants().catch(function () { return []; });
+    setupTenants.concat(listRegisteredClients()).forEach(function (tenant) {
+      const tenantId = cleanTenantId(tenant && (tenant.id || tenant.tenant_id));
+      const name = cleanRuntimeText(tenant && (tenant.company_name || tenant.brand_name || tenant.name || tenant.short_name), 200);
+      if (tenantId && name) companyNames.set(tenantId, name);
+    });
+    const decorate = function (row) {
+      if (!row || !row.tenant_id) return row;
+      row.company_name = companyNames.get(cleanTenantId(row.tenant_id)) || row.tenant_id;
+      return row;
+    };
+    [snapshot.open_incidents, snapshot.improvement_opportunities, snapshot.pending_approvals].forEach(function (rows) {
+      (rows || []).forEach(decorate);
+    });
+    if (snapshot.weekly_report && Array.isArray(snapshot.weekly_report.patterns)) snapshot.weekly_report.patterns.forEach(decorate);
+    res.json(Object.assign(snapshot, {
+      enabled: true,
+      version: BOT_VERSION,
+      recurring_schedule: {
+        time_zone: BOT_OPS_TIME_ZONE,
+        daily: "06:00",
+        weekly: "Monday 06:30"
+      },
+      independent_email_alerts_ready: !!(RESEND_API_KEY && BOT_OPS_ALERT_FROM_EMAIL && BOT_OPS_ALERT_EMAILS.length)
+    }));
+  } catch (error) {
+    res.status(503).json({ ok: false, enabled: true, storage_ready: false, error: "bot_ops_storage_unavailable" });
+  }
+});
+
+app.post("/admin/bot-ops/run-due", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!botOpsService) {
+    res.status(503).json({ ok: false, error: "bot_ops_not_configured" });
+    return;
+  }
+  try {
+    res.json(await botOpsService.runDue(new Date(), auth.method === "key" ? "external_scheduler" : "super_admin"));
+  } catch (error) {
+    log("error", "bot_ops_due_review_failed", { error: cleanRuntimeText(error && error.message, 200) });
+    res.status(503).json({ ok: false, error: "bot_ops_review_failed" });
+  }
+});
+
+app.post("/admin/bot-ops/review", async (req, res) => {
+  const auth = dashboardAuth(req);
+  if (!auth.ok || auth.role !== "super_admin") {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!botOpsService) {
+    res.status(503).json({ ok: false, error: "bot_ops_not_configured" });
+    return;
+  }
+  const kind = req.body && req.body.review_type === "weekly" ? "weekly" : "daily";
+  const scheduleKey = "manual:" + new Date().toISOString() + ":" + crypto.randomUUID();
+  try {
+    const result = kind === "weekly"
+      ? await botOpsService.runWeekly(scheduleKey, "super_admin_manual")
+      : await botOpsService.runDaily(scheduleKey, "super_admin_manual");
+    res.json(result);
+  } catch (error) {
+    log("error", "bot_ops_manual_review_failed", { review_type: kind, error: cleanRuntimeText(error && error.message, 200) });
+    res.status(503).json({ ok: false, error: "bot_ops_review_failed" });
+  }
+});
+
+if (BOT_OPS_CONTROLLED_TESTS_ENABLED) {
+  app.post("/admin/bot-ops/controlled-test", async (req, res) => {
+    const auth = dashboardAuth(req);
+    if (!auth.ok || auth.role !== "super_admin") {
+      res.status(401).json({ ok: false, error: "unauthorized" });
+      return;
+    }
+    const fixture = req.body && req.body.fixture;
+    const fixtures = {
+      failed_message: {
+        tenant_id: "bot-ops-staging-test",
+        bot_id: "customer_service",
+        channel: "whatsapp",
+        user_id: "synthetic:failed-message",
+        event_type: "turn",
+        payload: {
+          user_id: "synthetic:failed-message",
+          user_message: "Controlled Bot Ops delivery test",
+          bot_reply: "",
+          tools: ["atlas_route_customer_service"],
+          status: "error",
+          synthetic: true
+        }
+      },
+      dissatisfied_customer: {
+        tenant_id: "bot-ops-staging-dissatisfaction",
+        bot_id: "customer_service",
+        channel: "instagram",
+        user_id: "synthetic:dissatisfied-customer",
+        event_type: "turn",
+        payload: {
+          user_id: "synthetic:dissatisfied-customer",
+          user_message: "Pésimo servicio, estoy muy molesta",
+          bot_reply: "Te paso con una persona.",
+          tools: ["request_human_handoff"],
+          handoff: true,
+          rating: 1,
+          status: "ok",
+          synthetic: true
+        }
+      }
+    };
+    if (!Object.prototype.hasOwnProperty.call(fixtures, fixture)) {
+      res.status(400).json({ ok: false, error: "invalid_controlled_fixture" });
+      return;
+    }
+    await recordBotOpsEvent(Object.assign({}, fixtures[fixture], {
+      event_id: "controlled-test:" + crypto.randomUUID(),
+      occurred_at: new Date().toISOString()
+    }));
+    res.json({ ok: true, fixture, synthetic: true });
+  });
+}
+
 async function buildAdminHealthResult() {
   const dercoAppointmentRecord = await loadClientOnboarding(false, DERCO_TENANT_ID).catch(function () { return null; });
   const dercoAppointmentChannels = await setupReviewChannels(DERCO_TENANT_ID).catch(function () { return []; });
@@ -17876,6 +18213,22 @@ async function buildAdminHealthResult() {
     },
     checks: {}
   };
+  result.bot_ops = {
+    enabled: BOT_OPS_ENABLED,
+    storage_ready: false,
+    independent_email_alerts_ready: !!(RESEND_API_KEY && BOT_OPS_ALERT_FROM_EMAIL && BOT_OPS_ALERT_EMAILS.length),
+    time_zone: BOT_OPS_TIME_ZONE,
+    daily_review: "06:00",
+    weekly_review: "Monday 06:30"
+  };
+  if (botOpsService) {
+    try {
+      await botOpsService.assertReady();
+      result.bot_ops.storage_ready = true;
+    } catch (error) {
+      result.bot_ops.storage_error = "bot_ops_storage_unavailable";
+    }
+  }
   // Probar Shopify storefront search (gratis, no consume saldo)
   try {
     const r = await axios.get(`https://ravtoys.com/search?q=test&view=json&resources[limit]=1&type=product`, { timeout: 5000 });
@@ -17957,6 +18310,9 @@ async function buildAdminHealthResult() {
   if (!CHANNEL_CONNECTIONS_V1_VISIBLE) blockers.push("channel_connections_not_visible");
   if (CHANNEL_CONNECTIONS_V1_VISIBLE && !result.channel_connections.meta_authorization_available.whatsapp) blockers.push("meta_whatsapp_oauth_not_ready");
   if (result.checks.supabase_conversation_logs !== "ok") blockers.push("supabase_not_ok");
+  if (!result.bot_ops.enabled) blockers.push("bot_ops_not_enabled");
+  if (result.bot_ops.enabled && !result.bot_ops.storage_ready) blockers.push("bot_ops_storage_not_ready");
+  if (result.bot_ops.enabled && !result.bot_ops.independent_email_alerts_ready) blockers.push("bot_ops_email_alerts_not_ready");
   result.production_readiness = {
     infrastructure_ready: blockers.length === 0,
     blockers,
@@ -18521,6 +18877,23 @@ app.listen(PORT, () => {
   console.log(`Anthropic: ${ANTHROPIC_API_KEY ? "OK" : "MISSING"}`);
   console.log(`Shopify: ${SHOPIFY_ADMIN_TOKEN ? "OK " + SHOPIFY_STORE_DOMAIN : "MISSING"}`);
   console.log(`Notifications configured: ${NOTIFICATION_PHONES.length}`);
+  if (botOpsService && process.env.NODE_ENV !== "test") {
+    const runBotOpsDue = async function () {
+      try {
+        await botOpsService.assertReady();
+        const result = await botOpsService.runDue(new Date(), "in_process_scheduler");
+        const executed = (result.results || []).filter(function (item) { return !item.skipped; }).length;
+        if (executed) log("info", "bot_ops_reviews_completed", { executed, checked_at: result.checked_at });
+      } catch (error) {
+        log("error", "bot_ops_scheduler_failed", { error: cleanRuntimeText(error && error.message, 200) || "scheduler_failed" });
+      }
+    };
+    const initialBotOpsCheck = setTimeout(runBotOpsDue, 10000);
+    initialBotOpsCheck.unref();
+    const botOpsTimer = setInterval(runBotOpsDue, 5 * 60 * 1000);
+    botOpsTimer.unref();
+    console.log(`Bot Ops scheduled daily at 06:00 and Mondays at 06:30 (${BOT_OPS_TIME_ZONE})`);
+  }
   if (RENDER_SELF_HEALTH_URL) {
     const checkUrl = `${RENDER_SELF_HEALTH_URL}/instagram/health`;
     const runSelfCheck = async function () {

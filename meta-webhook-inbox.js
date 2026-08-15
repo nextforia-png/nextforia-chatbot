@@ -486,6 +486,7 @@ function createMetaWebhookInbox(options) {
   const store = options.store;
   const processEvent = options.processEvent;
   const log = options.log || function () {};
+  const onFailure = typeof options.onFailure === "function" ? options.onFailure : null;
   const owner = text(options.owner, 200) || "webhook-worker:" + crypto.randomUUID();
   const intervalMs = Math.max(1000, Number(options.interval_ms) || 5000);
   let draining = false;
@@ -573,6 +574,16 @@ function createMetaWebhookInbox(options) {
             recover_after_fix: recoveryPending
           });
           if (failed !== true) throw leaseLost(row.event_id);
+          if (onFailure) {
+            try {
+              await onFailure(row, error, { permanent, retryable: !permanent, delay_ms: permanent ? null : delayMs });
+            } catch (callbackError) {
+              log("warn", "meta_webhook_failure_observer_failed", {
+                event_id_suffix: String(row.event_id || "").slice(-16),
+                error: text(callbackError && callbackError.message, 240)
+              });
+            }
+          }
           log("warn", "meta_webhook_event_failed", {
             event_id_suffix: String(row.event_id || "").slice(-16),
             attempts: row.attempts,

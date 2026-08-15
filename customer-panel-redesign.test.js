@@ -82,6 +82,11 @@ assert(redesignedNotifications.includes('<body class="customer-panel-mobile-v389
 assert(redesigned.includes('["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name)'), "client navigation must preserve the redesign when notifications is selected");
 assert(redesigned.includes('id="nav-orders"'));
 assert(redesigned.includes('<section class="view active" id="panel-orders">'));
+assert(redesigned.includes('id="orderTrackingUrlInput"'));
+assert(redesigned.includes('placeholder="https://transportadora.com/rastrear"'));
+assert(redesigned.includes('tracking_url:trackingUrlValue'));
+assert(redesigned.includes('Guía y enlace entregados al cliente y guardados.'));
+assert(redesigned.includes('["pagado","preparacion","enviado"].includes(selected.stage)'));
 assert(redesigned.includes("Oportunidades de venta"));
 assert(redesigned.includes("4 pasos para quedar listo"));
 assert(redesigned.includes("Personalizar"));

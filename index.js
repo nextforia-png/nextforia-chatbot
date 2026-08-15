@@ -374,7 +374,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v393-order-notifications";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v396-order-notifications";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5656,6 +5656,40 @@ async function executeSaveCheckoutField(userId, input, stateId, tenantId) {
   };
 }
 
+function customerOrderNotificationId(tenantId, orderId) {
+  return "order-" + crypto.createHash("sha256")
+    .update([cleanTenantId(tenantId), String(orderId || "")].join("\u001f"))
+    .digest("hex").slice(0, 40);
+}
+
+async function queueCustomerOrderNotification(tenantId, order) {
+  const cleanTenant = cleanTenantId(tenantId);
+  if (!cleanTenant || !order || !order.id) return null;
+  const total = order.total == null
+    ? Number(order.subtotal || 0).toLocaleString("es-CO") + " COP + envío"
+    : Number(order.total || 0).toLocaleString("es-CO") + " " + (order.currency || "COP");
+  try {
+    return await customerNotificationService.createOrder({
+      id: customerOrderNotificationId(cleanTenant, order.id),
+      tenant_id: cleanTenant,
+      order_id: order.id,
+      conversation_id: order.conversation_id,
+      channel: order.channel,
+      customer_label: order.name,
+      title: "Nuevo pedido por confirmar",
+      message: (order.name || "Un cliente") + " creó el pedido #" + order.order_number + " por " + total + ".",
+      created_at: order.created_at
+    });
+  } catch (error) {
+    log("error", "customer_order_notification_failed", {
+      tenant_id: cleanTenant,
+      order_id: String(order.id).slice(0, 120),
+      error: String(error && error.message || error || "unknown").slice(0, 180)
+    });
+    return null;
+  }
+}
+
 async function ensureCheckoutOrder(userId, stateId, tenantId, runtime, personality) {
   const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
@@ -5717,6 +5751,7 @@ async function ensureCheckoutOrder(userId, stateId, tenantId, runtime, personali
     allowClear: false,
     source: "bot_order"
   });
+  await queueCustomerOrderNotification(cleanTenant, order);
   return { order, amounts };
 }
 
@@ -12263,7 +12298,49 @@ function buildCustomerPanelDemoSnapshot() {
     summary: whatsappSummary,
     summaries: { whatsapp: whatsappSummary, instagram: instagramSummary, messenger: messengerSummary },
     tags: CUSTOMER_META_TAGS,
-    conversations
+    conversations,
+    nextfor_notifications: {
+      count: 2,
+      unread_count: 2,
+      pending_count: 0,
+      pending_questions: [],
+      items: [
+        {
+          version: 1,
+          id: "demo-order-notification-1042",
+          tenant_id: "nextfor-aura-demo",
+          type: "customer_order_created",
+          priority: "high",
+          conversation_id: "573001112233",
+          order_id: "1042",
+          channel: "whatsapp",
+          customer_label: "Valentina Ríos",
+          title: "Nuevo pedido por confirmar",
+          message: "Valentina Ríos creó el pedido #1042 por $342.700.",
+          action_label: "Ver pedido",
+          action_url: "/admin/panel-demo?tab=orders&order=1042",
+          created_at: iso(8),
+          read: false
+        },
+        {
+          version: 1,
+          id: "demo-order-notification-1041",
+          tenant_id: "nextfor-aura-demo",
+          type: "customer_order_created",
+          priority: "high",
+          conversation_id: "ig:17841470000112233",
+          order_id: "1041",
+          channel: "instagram",
+          customer_label: "Andrés Gómez",
+          title: "Nuevo pedido por confirmar",
+          message: "Andrés Gómez creó el pedido #1041 por $980.000.",
+          action_label: "Ver pedido",
+          action_url: "/admin/panel-demo?tab=orders&order=1041",
+          created_at: iso(26),
+          read: false
+        }
+      ]
+    }
   };
 }
 
@@ -16227,6 +16304,37 @@ if (process.env.NODE_ENV === "test") {
     });
     res.json({ ok: true, tenant_id: tenantId, conversation_id: userId });
   });
+
+  app.post("/admin/test/customer-order-notification", async (req, res) => {
+    if (!customerPanelAuthOk(req, "admin")) {
+      res.status(401).json({ ok: false, error: "unauthorized" });
+      return;
+    }
+    const auth = dashboardAuth(req);
+    const tenantId = customerTenantForAuth(auth);
+    const body = req.body || {};
+    try {
+      const order = await customerOrderService.upsertDraft({
+        id: String(body.order_id || "test-order").replace(/[^a-zA-Z0-9._-]/g, ""),
+        order_number: body.order_number || "TEST-1001",
+        tenant_id: tenantId,
+        conversation_id: normalizeConversationUserId(body.conversation_id || "wa:573010000001"),
+        channel: body.channel || "whatsapp",
+        name: body.name || "Cliente de prueba",
+        phone: body.phone || "+57 301 000 0001",
+        items: body.items || [{ name: "Producto de prueba", qty: 1, price: 129900 }],
+        shipping: 12900,
+        currency: "COP",
+        payment: "Por confirmar",
+        stage: "por_confirmar",
+        source_event_id: "test-order:" + String(body.order_id || "test-order")
+      });
+      const notification = await queueCustomerOrderNotification(tenantId, order);
+      res.json({ ok: true, tenant_id: tenantId, order, notification });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error && error.message || "order_notification_failed" });
+    }
+  });
 }
 
 app.get("/admin/panel/notifications", async (req, res) => {
@@ -17560,6 +17668,7 @@ app.get("/admin/panel", async (req, res) => {
     capabilities,
     initialTab,
     initialConversation: normalizeConversationUserId(req.query.conversation),
+    initialOrder: String(req.query.order || "").trim().slice(0, 120),
     tenantContext: panelBusinessContext,
     customerSetupCompleted,
     paymentsV1Enabled: PAYMENTS_V1_ENABLED,
@@ -17583,6 +17692,7 @@ app.get("/admin/panel-demo", (req, res) => {
     capabilities,
     demoMode: true,
     initialTab,
+    initialOrder: String(req.query.order || "").trim().slice(0, 120),
     tenantContext: {
       id: "nextfor-aura-demo",
       company_name: "Comercio piloto",

@@ -22,9 +22,14 @@ function actor(value) {
 function normalizeNotification(input) {
   input = input || {};
   const tenantId = tenant(input.tenant_id);
+  const type = ["human_handoff_required", "customer_order_created"].includes(text(input.type, 80))
+    ? text(input.type, 80)
+    : "human_handoff_required";
   const conversationId = text(input.conversation_id, 500);
+  const orderId = text(input.order_id, 120);
   if (!tenantId) throw new Error("notification_tenant_required");
-  if (!conversationId) throw new Error("notification_conversation_required");
+  if (type === "human_handoff_required" && !conversationId) throw new Error("notification_conversation_required");
+  if (type === "customer_order_created" && !orderId) throw new Error("notification_order_required");
   const id = text(input.id, 120) || crypto.randomUUID();
   const createdAt = text(input.created_at, 80) || new Date().toISOString();
   const channel = ["whatsapp", "instagram", "messenger", "email"].includes(text(input.channel, 30).toLowerCase())
@@ -34,16 +39,19 @@ function normalizeNotification(input) {
     version: 1,
     id,
     tenant_id: tenantId,
-    type: "human_handoff_required",
+    type,
     priority: "high",
     conversation_id: conversationId,
+    order_id: orderId,
     channel,
     customer_label: text(input.customer_label, 160) || "Un cliente",
     reason: text(input.reason, 240) || "solicitud_cliente",
-    title: text(input.title, 160) || "Un cliente necesita tu ayuda",
-    message: text(input.message, 500) || "La IA pausó esta conversación para que tu equipo pueda continuar.",
-    action_label: text(input.action_label, 80) || "Abrir conversación",
-    action_url: "/admin/panel?tab=conversations&conversation=" + encodeURIComponent(conversationId),
+    title: text(input.title, 160) || (type === "customer_order_created" ? "Nuevo pedido por confirmar" : "Un cliente necesita tu ayuda"),
+    message: text(input.message, 500) || (type === "customer_order_created" ? "Tu equipo tiene un pedido nuevo listo para revisar." : "La IA pausó esta conversación para que tu equipo pueda continuar."),
+    action_label: text(input.action_label, 80) || (type === "customer_order_created" ? "Ver pedido" : "Abrir conversación"),
+    action_url: type === "customer_order_created"
+      ? "/admin/panel?tab=orders&order=" + encodeURIComponent(orderId)
+      : "/admin/panel?tab=conversations&conversation=" + encodeURIComponent(conversationId),
     created_at: createdAt
   };
 }
@@ -156,7 +164,9 @@ function createCustomerNotificationService(options) {
           title: notification.title,
           body: notification.message,
           action_url: notification.action_url,
-          tag: "nextfor-handoff-" + notification.conversation_id
+          tag: notification.type === "customer_order_created"
+            ? "nextfor-order-" + notification.order_id
+            : "nextfor-handoff-" + notification.conversation_id
         });
         delivered += 1;
       } catch (error) {
@@ -173,9 +183,9 @@ function createCustomerNotificationService(options) {
     return { attempted: (subscriptions || []).length, delivered };
   }
 
-  async function createHandoff(input) {
+  async function createNotification(input) {
     const notification = normalizeNotification(input);
-    const existing = await store.listNotifications(notification.tenant_id, 200);
+    const existing = await store.listNotifications(notification.tenant_id, 2000);
     const duplicate = (existing || []).find(function (row) { return row.id === notification.id; });
     if (duplicate) return duplicate;
     await store.appendNotification(notification);
@@ -184,6 +194,14 @@ function createCustomerNotificationService(options) {
       if (typeof options.onError === "function") options.onError(error, notification, null);
     });
     return notification;
+  }
+
+  async function createHandoff(input) {
+    return createNotification(Object.assign({}, input, { type: "human_handoff_required" }));
+  }
+
+  async function createOrder(input) {
+    return createNotification(Object.assign({}, input, { type: "customer_order_created" }));
   }
 
   async function markRead(tenantId, actorId, notificationId) {
@@ -253,6 +271,7 @@ function createCustomerNotificationService(options) {
   return {
     events,
     createHandoff,
+    createOrder,
     list,
     markRead,
     subscribe,

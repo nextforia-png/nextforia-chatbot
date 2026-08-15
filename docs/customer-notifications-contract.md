@@ -4,17 +4,23 @@ This contract defines the tenant-safe notification channel used by the Customer 
 
 ## Event
 
-`human_handoff_required` is created only after the conversation turn containing `request_human_handoff` has been persisted successfully. The event is idempotent for a repeated source event and contains:
+Two persistent event types use this channel:
+
+- `human_handoff_required` is created only after the conversation turn containing `request_human_handoff` has been persisted successfully.
+- `customer_order_created` is created only after a tenant-scoped order has been persisted in the shared order store with stage `por_confirmar`.
+
+Both events are idempotent for a repeated source event or order and contain:
 
 - `id`
 - `tenant_id`
 - `type`, `priority`, `reason`
 - `conversation_id`, `channel`, `customer_label`
+- `order_id` for `customer_order_created`
 - `title`, `message`
 - `action_label`, `action_url`
 - `created_at`
 
-`action_url` is always a same-origin Customer Panel URL that opens the exact conversation.
+`action_url` is always a same-origin Customer Panel URL that opens the exact conversation or order.
 
 ## Customer API
 
@@ -31,11 +37,11 @@ The SSE stream reconnects periodically through normal session revalidation. Web 
 
 ## Delivery behavior
 
-1. The bot requests human intervention.
-2. The conversation and handoff state are persisted.
+1. The bot requests human intervention or persists a new order.
+2. The conversation/handoff state or order is persisted.
 3. A tenant-scoped event is stored and emitted.
 4. Open Customer Panels receive it over SSE, display a fixed alert, and play a sound after browser audio has been unlocked by user interaction.
 5. Subscribed browsers receive Web Push when supported and permitted by the user.
-6. Selecting either alert opens `tab=conversations` with the exact `conversation_id` selected.
+6. Selecting an alert opens either `tab=conversations` with the exact `conversation_id` or `tab=orders` with the exact `order_id` selected.
 
 The future mobile app should consume the same persistent event schema. A native push adapter can be added beside Web Push without changing the bot trigger or event contract.

@@ -660,7 +660,7 @@ function providerFor(options) {
     provider: providerFor({
       onPrepare: function (session) {
         assert.strictEqual(session.onboarding_mode, "coexistence_recovery");
-        assert.strictEqual(session.onboarding_event, "FINISH_GRANT_ONLY_API_ACCESS");
+        assert.strictEqual(session.onboarding_event, "FINISH");
         return Object.assign(coexistenceCandidate(session.phone_number_id, session.waba_id), {
           onboarding_mode: "coexistence_recovery"
         });
@@ -696,7 +696,7 @@ function providerFor(options) {
       waba_id: "waba-recovery",
       phone_number_id: "phone-recovery",
       onboarding_mode: "coexistence_recovery",
-      onboarding_event: "FINISH_GRANT_ONLY_API_ACCESS",
+      onboarding_event: "FINISH",
       app_only_install: true
     }
   });

@@ -116,7 +116,22 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(source, /applyTenantWhatsAppBusinessProfile/);
   assert.match(source, /bot-personality\/whatsapp-profile-sync/);
   assert.match(source, /whatsappBusinessProfileForPersonality/);
+  assert.match(source, /display_name: String\(personality && personality\.profile && personality\.profile\.display_name/);
+  assert.match(source, /display_name_change_required/);
+  assert.match(source, /display_name_pending_review/);
+  assert.match(source, /display_name_approved_re_registration_required/);
+  assert.match(source, /display_name_declined/);
+  assert(source.includes("business\\.facebook\\.com\\/wa\\/manage\\/phone-numbers"));
   assert.match(connectionSource, /async updateWhatsAppBusinessProfile\(credential, input\)/);
+  assert.match(connectionSource, /async inspectWhatsAppDisplayName\(credential\)/);
+  assert.match(connectionSource, /fields: "id,display_phone_number,verified_name,name_status,new_name_status"/);
+  assert.doesNotMatch(connectionSource, /update\.display_name\s*=/,
+    "the Business Profile endpoint cannot update the approved WhatsApp display name");
+  const profileSyncStart = connectionSource.indexOf("async syncWhatsAppBusinessProfile");
+  const profileSyncEnd = connectionSource.indexOf("\n    async inspectWhatsApp", profileSyncStart);
+  assert(profileSyncStart >= 0 && profileSyncEnd > profileSyncStart);
+  assert.doesNotMatch(connectionSource.slice(profileSyncStart, profileSyncEnd), /registerWhatsApp|\/register/,
+    "checking or requesting a display name must never re-register the phone automatically");
   assert.match(connectionSource, /update\.profile_picture_handle = handle/);
   assert.match(connectionSource, /whatsapp_business_profile_not_verified/);
   assert.match(connectionSource, /fields: "profile_picture_url,description,address"/);
@@ -265,7 +280,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v392-shipping-order-sync"));
+    assert((await response.text()).includes("NextforIA Chatbot v393-whatsapp-display-name-panel"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

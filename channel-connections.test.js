@@ -164,6 +164,41 @@ function expectCode(promise, code) {
   assert.strictEqual(textProfileResult.picture_present, false);
   assert.strictEqual(textProfileRequests.length, 2);
 
+  const displayNameRequests = [];
+  const displayNameMeta = new MetaChannelProvider({
+    appId: "profile-app",
+    appSecret: "profile-secret",
+    graphVersion: "v25.0",
+    redirectUri: "https://nextforia.com/admin/channel-connections/meta/callback",
+    axiosClient: async function (request) {
+      displayNameRequests.push(request);
+      assert.strictEqual(request.method, "GET");
+      assert.strictEqual(request.headers.Authorization, "Bearer display-name-token");
+      assert.strictEqual(request.params.fields, "id,display_phone_number,verified_name,name_status,new_name_status");
+      assert(!request.url.includes("display-name-token"));
+      return { data: {
+        id: "display-name-phone",
+        display_phone_number: "+57 301 5872708",
+        verified_name: "RAV toys",
+        name_status: "APPROVED",
+        new_name_status: "PENDING_REVIEW"
+      } };
+    }
+  });
+  const inspectedDisplayName = await displayNameMeta.inspectWhatsAppDisplayName({
+    phone_number_id: "display-name-phone",
+    access_token: "display-name-token"
+  });
+  assert.deepStrictEqual(inspectedDisplayName, {
+    ok: true,
+    phone_number_id: "display-name-phone",
+    display_phone_number: "+57 301 5872708",
+    verified_name: "RAV toys",
+    name_status: "APPROVED",
+    new_name_status: "PENDING_REVIEW"
+  });
+  assert.strictEqual(displayNameRequests.length, 1);
+
   const embeddedExchangeRequests = [];
   const embeddedExchangeAxios = async function (request) {
     embeddedExchangeRequests.push(request);
@@ -703,6 +738,7 @@ function expectCode(promise, code) {
     status: "connected",
     webhook_status: "subscribed",
     phone_number_id: "profile-phone",
+    whatsapp_business_account_id: "profile-waba",
     credentials_ciphertext: encryptStoredText(JSON.stringify({
       phone_number_id: "profile-phone",
       access_token: "profile-token"
@@ -713,6 +749,15 @@ function expectCode(promise, code) {
   const profileSyncService = createChannelConnectionService({
     store: profileSyncStore,
     provider: {
+      inspectWhatsAppDisplayName: async function () {
+        return {
+          ok: true,
+          verified_name: "RAV Bot",
+          name_status: "APPROVED",
+          new_name_status: null,
+          display_phone_number: "+57 301 5872708"
+        };
+      },
       updateWhatsAppBusinessProfile: async function (credential, input) {
         profileUpdateCalls++;
         assert.strictEqual(credential.phone_number_id, "profile-phone");
@@ -734,6 +779,7 @@ function expectCode(promise, code) {
   });
   const syncedProfile = await profileSyncService.syncWhatsAppBusinessProfile("tenant-profile", {
     avatar_url: "data:image/jpeg;base64," + Buffer.from("profile-image").toString("base64"),
+    display_name: "RAV Bot",
     description: "Perfil de tenant",
     address: "Calle del tenant"
   }, "owner@profile.example");
@@ -742,9 +788,67 @@ function expectCode(promise, code) {
   assert.strictEqual(syncedProfile.picture_present, true);
   assert.strictEqual(syncedProfile.description_applied, true);
   assert.strictEqual(syncedProfile.address_applied, true);
+  assert.strictEqual(syncedProfile.desired_display_name, "RAV Bot");
+  assert.strictEqual(syncedProfile.current_display_name, "RAV Bot");
+  assert.strictEqual(syncedProfile.display_name_matches, true);
+  assert.strictEqual(syncedProfile.manager_url, "https://business.facebook.com/wa/manage/phone-numbers/?waba_id=profile-waba&phone_number_id=profile-phone");
   assert.strictEqual(syncedProfileImage.mime_type, "image/jpeg");
   assert.strictEqual(syncedProfileImage.bytes.toString(), "profile-image");
   assert.strictEqual(profileUpdateCalls, 1);
+
+  let displayNameRegistrationCalls = 0;
+  let inspectedNewNameStatus = "PENDING_REVIEW";
+  const pendingNameService = createChannelConnectionService({
+    store: profileSyncStore,
+    provider: {
+      inspectWhatsAppDisplayName: async function () {
+        return {
+          ok: true,
+          verified_name: "RAV toys",
+          name_status: "APPROVED",
+          new_name_status: inspectedNewNameStatus,
+          display_phone_number: "+57 301 5872708"
+        };
+      },
+      updateWhatsAppBusinessProfile: async function () {
+        return {
+          ok: true,
+          profile_verified: true,
+          picture_present: true,
+          description_applied: true,
+          address_applied: true
+        };
+      },
+      registerWhatsApp: async function () {
+        displayNameRegistrationCalls++;
+        throw new Error("display-name sync must never register the phone");
+      }
+    },
+    encryptionKey
+  });
+  const pendingDisplayName = await pendingNameService.syncWhatsAppBusinessProfile("tenant-profile", {
+    display_name: "RAV Bot",
+    description: "Perfil de tenant",
+    address: "Calle del tenant"
+  }, "owner@profile.example");
+  assert.strictEqual(pendingDisplayName.status, "display_name_pending_review");
+  assert.strictEqual(pendingDisplayName.current_display_name, "RAV toys");
+  assert.strictEqual(pendingDisplayName.desired_display_name, "RAV Bot");
+  assert.strictEqual(pendingDisplayName.display_name_matches, false);
+  assert.strictEqual(displayNameRegistrationCalls, 0, "display-name sync must never call /register");
+  inspectedNewNameStatus = "APPROVED";
+  assert.strictEqual((await pendingNameService.syncWhatsAppBusinessProfile("tenant-profile", {
+    display_name: "RAV Bot"
+  }, "owner@profile.example")).status, "display_name_approved_re_registration_required");
+  inspectedNewNameStatus = "DECLINED";
+  assert.strictEqual((await pendingNameService.syncWhatsAppBusinessProfile("tenant-profile", {
+    display_name: "RAV Bot"
+  }, "owner@profile.example")).status, "display_name_declined");
+  inspectedNewNameStatus = null;
+  assert.strictEqual((await pendingNameService.syncWhatsAppBusinessProfile("tenant-profile", {
+    display_name: "RAV Bot"
+  }, "owner@profile.example")).status, "display_name_change_required");
+  assert.strictEqual(displayNameRegistrationCalls, 0, "none of the display-name states may call /register");
   await profileSyncStore.upsert({
     tenant_id: "tenant-coexistence",
     channel: "whatsapp",

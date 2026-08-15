@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const vm = require("vm");
 const configurationUi = require("./customer-bot-configuration");
 const renderCustomerPanel = require("./customer-panel");
 
@@ -24,10 +25,49 @@ assert(configurationUi.clientScript.includes('typeof payload.can_edit==="boolean
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));
+assert(configurationUi.clientScript.includes("Nombre del bot y nombre que quieres mostrar en WhatsApp"));
+assert(configurationUi.clientScript.includes("Foto de WhatsApp y nombre del bot"));
+assert(configurationUi.clientScript.includes("Nombre público de WhatsApp"));
+assert(configurationUi.clientScript.includes("Nombre que quieres"));
+assert(configurationUi.clientScript.includes("WhatsApp muestra"));
+assert(configurationUi.clientScript.includes("Solicitar o cambiar nombre en Meta"));
+assert(configurationUi.clientScript.includes("display_name_pending_review"));
+assert(configurationUi.clientScript.includes("display_name_approved_re_registration_required"));
+assert(configurationUi.clientScript.includes("display_name_declined"));
+assert(configurationUi.clientScript.includes("display_name_change_required"));
+assert(configurationUi.clientScript.includes("nxSafeWhatsAppManagerUrl"));
+assert.match(configurationUi.clientScript, /business\\\.facebook\\\.com\\\/wa\\\/manage\\\/phone-numbers/);
 assert(configurationUi.clientScript.includes("La dirección también se publica"));
 assert(configurationUi.clientScript.includes("Verificando perfil en WhatsApp"));
 assert(!configurationUi.clientScript.includes("URL del logo o imagen"));
 new Function(configurationUi.clientScript);
+const uiContext = {
+  state: { whatsappProfileSync: null, personalityCanEdit: true },
+  PANEL_CONTEXT: { businessName: "RAV Toys" },
+  document: { addEventListener: function () {} },
+  window: {},
+  esc: function (value) { return String(value == null ? "" : value); },
+  attr: function (value) { return String(value == null ? "" : value); },
+  clearTimeout: clearTimeout,
+  setTimeout: setTimeout
+};
+vm.runInNewContext(configurationUi.clientScript, uiContext);
+const pendingNameCard = uiContext.nxWhatsAppDisplayNameState({
+  status: "display_name_pending_review",
+  desired_display_name: "RAV Bot",
+  current_display_name: "RAV toys",
+  manager_url: "https://business.facebook.com/wa/manage/phone-numbers/?waba_id=waba-one&phone_number_id=phone-one"
+}, "RAV Bot");
+assert(pendingNameCard.includes("RAV Bot"));
+assert(pendingNameCard.includes("RAV toys"));
+assert(pendingNameCard.includes("En revisión"));
+assert(pendingNameCard.includes("Solicitar o cambiar nombre en Meta"));
+const unsafeNameCard = uiContext.nxWhatsAppDisplayNameState({
+  status: "display_name_change_required",
+  manager_url: "https://evil.example/steal"
+}, "RAV Bot");
+assert(!unsafeNameCard.includes("evil.example"));
+assert(!unsafeNameCard.includes("Solicitar o cambiar nombre en Meta"));
 
 function render(role, tenant) {
   let html = "";
@@ -64,7 +104,9 @@ assert(auraHtml.includes("reader.readAsDataURL(file)"));
 assert(!auraHtml.includes("URL.createObjectURL(file)"));
 assert(auraHtml.includes('canvas.toDataURL("image/jpeg"'));
 assert(auraHtml.includes("/whatsapp-profile-sync"));
-assert(auraHtml.includes("Bot y WhatsApp actualizados"));
+assert(auraHtml.includes("Bot y perfil de WhatsApp actualizados"));
+assert(auraHtml.includes("Bot aplicado · cambia el nombre público en Meta"));
+assert(auraHtml.includes("Bot aplicado · nombre en revisión de Meta"));
 assert(auraHtml.includes("Bot aplicado · actualiza el perfil en WhatsApp Business"));
 assert(auraHtml.includes("Herramientas para la empresa → Perfil de empresa"));
 assert(auraHtml.includes('sync.status==="manual_app_required"'));

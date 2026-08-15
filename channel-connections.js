@@ -1973,6 +1973,44 @@ class MetaChannelProvider {
     }
   }
 
+  async inspectWhatsAppDisplayName(credential) {
+    const phoneNumberId = cleanText(credential && credential.phone_number_id, 240);
+    const accessToken = cleanText(credential && credential.access_token, 4096);
+    if (!phoneNumberId || !accessToken) {
+      throw new ChannelConnectionError("existing_asset_credentials_required", 409);
+    }
+    try {
+      let response;
+      try {
+        response = await this.graph(encodeURIComponent(phoneNumberId), accessToken, {
+          params: {
+            fields: "id,display_phone_number,verified_name,name_status,new_name_status"
+          }
+        });
+      } catch (_) {
+        // new_name_status is not enabled for every Graph app/version. The
+        // current verified name and name_status remain authoritative.
+        response = await this.graph(encodeURIComponent(phoneNumberId), accessToken, {
+          params: {
+            fields: "id,display_phone_number,verified_name,name_status"
+          }
+        });
+      }
+      const data = response && response.data || {};
+      return {
+        ok: true,
+        phone_number_id: phoneNumberId,
+        display_phone_number: cleanText(data.display_phone_number, 80) || null,
+        verified_name: cleanText(data.verified_name, 120) || null,
+        name_status: cleanText(data.name_status, 80).toUpperCase() || null,
+        new_name_status: cleanText(data.new_name_status, 80).toUpperCase() || null
+      };
+    } catch (error) {
+      if (error instanceof ChannelConnectionError) throw error;
+      throw new ChannelConnectionError("whatsapp_display_name_status_failed", 422, internalError(error));
+    }
+  }
+
   async exchangeCode(code, options) {
     const channel = cleanChannel(options && options.channel);
     const omitRedirectUri = channel === "whatsapp" && options && options.omitRedirectUri === true;
@@ -3764,8 +3802,33 @@ function createChannelConnectionService(options) {
       }
       if (record.protected_legacy) throw new ChannelConnectionError("legacy_connection_protected", 409);
       const onboardingMode = publicConnection(record, { superAdmin: true }).whatsapp_onboarding_mode || "cloud_api";
+      const desiredDisplayName = cleanText(profile && profile.display_name, 120);
+      const credential = credentialPayload(record);
+      let displayName = null;
+      if (credential && provider && typeof provider.inspectWhatsAppDisplayName === "function") {
+        displayName = await provider.inspectWhatsAppDisplayName(credential);
+      }
+      const currentDisplayName = cleanText(displayName && displayName.verified_name, 120);
+      const namesMatch = !!desiredDisplayName && !!currentDisplayName &&
+        desiredDisplayName.localeCompare(currentDisplayName, undefined, { sensitivity: "accent" }) === 0;
+      const nameStatus = cleanText(displayName && displayName.name_status, 80).toUpperCase() || null;
+      const newNameStatus = cleanText(displayName && displayName.new_name_status, 80).toUpperCase() || null;
+      const managerUrl = record.whatsapp_business_account_id
+        ? "https://business.facebook.com/wa/manage/phone-numbers/?waba_id=" +
+          encodeURIComponent(record.whatsapp_business_account_id) + "&phone_number_id=" +
+          encodeURIComponent(record.phone_number_id || "")
+        : "https://business.facebook.com/wa/manage/phone-numbers/";
+      const displayNameResult = {
+        desired_display_name: desiredDisplayName || null,
+        current_display_name: currentDisplayName || null,
+        display_name_matches: namesMatch,
+        name_status: nameStatus,
+        new_name_status: newNameStatus,
+        display_phone_number: cleanText(displayName && displayName.display_phone_number, 80) || null,
+        manager_url: managerUrl
+      };
       if (onboardingMode === "coexistence") {
-        return {
+        return Object.assign({
           ok: false,
           status: "manual_app_required",
           profile_verified: false,
@@ -3775,9 +3838,8 @@ function createChannelConnectionService(options) {
           address_requested: Object.prototype.hasOwnProperty.call(profile || {}, "address"),
           phone_number_suffix: String(record.phone_number_id || "").slice(-8),
           synced_by: actorLabel(actor)
-        };
+        }, displayNameResult);
       }
-      const credential = credentialPayload(record);
       if (!credential || !provider || typeof provider.updateWhatsAppBusinessProfile !== "function") {
         throw new ChannelConnectionError("existing_asset_credentials_required", 409);
       }
@@ -3791,9 +3853,16 @@ function createChannelConnectionService(options) {
       if (!result || result.ok !== true || result.profile_verified !== true) {
         throw new ChannelConnectionError("whatsapp_profile_sync_failed", 422);
       }
-      return {
+      let status = "applied";
+      if (desiredDisplayName && displayName && !namesMatch) {
+        if (["PENDING", "PENDING_REVIEW", "IN_REVIEW"].includes(newNameStatus)) status = "display_name_pending_review";
+        else if (["APPROVED", "AVAILABLE_WITHOUT_REVIEW"].includes(newNameStatus)) status = "display_name_approved_re_registration_required";
+        else if (["DECLINED", "REJECTED"].includes(newNameStatus) || nameStatus === "DECLINED") status = "display_name_declined";
+        else status = "display_name_change_required";
+      }
+      return Object.assign({
         ok: true,
-        status: "applied",
+        status,
         profile_verified: true,
         onboarding_mode: onboardingMode,
         picture_present: result.picture_present === true,
@@ -3801,7 +3870,7 @@ function createChannelConnectionService(options) {
         address_applied: result.address_applied === true,
         phone_number_suffix: cleanText(result.phone_number_suffix, 8) || String(record.phone_number_id || "").slice(-8),
         synced_by: actorLabel(actor)
-      };
+      }, displayNameResult);
     },
 
     async inspectWhatsApp(tenantId) {

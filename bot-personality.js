@@ -29,7 +29,7 @@ const BOT_CONFIGURATION_CONTRACT = Object.freeze({
   response_length: "prompt",
   emoji_level: "prompt",
   "profile.avatar_url": "whatsapp_profile",
-  "profile.display_name": "prompt_and_whatsapp_profile",
+  "profile.display_name": "prompt_and_whatsapp_display_name_request",
   "profile.description": "prompt_and_whatsapp_profile",
   "greeting.tone": "editor_state",
   "greeting.selected": "editor_state",

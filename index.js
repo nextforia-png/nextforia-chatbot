@@ -374,7 +374,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v392-shipping-order-sync";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v393-whatsapp-display-name-panel";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -10929,9 +10929,28 @@ function customerAccountProfile(auth, onboarding) {
 function whatsappBusinessProfileForPersonality(personality) {
   return {
     avatar_url: String(personality && personality.profile && personality.profile.avatar_url || "").trim(),
+    display_name: String(personality && personality.profile && personality.profile.display_name || "").trim().slice(0, 120),
     description: String(personality && personality.profile && personality.profile.description || "").trim().slice(0, 256),
     address: String(personality && personality.business && personality.business.address || "").trim().slice(0, 256)
   };
+}
+
+function whatsappDisplayNameMessage(result) {
+  const desired = String(result && result.desired_display_name || "").trim();
+  const current = String(result && result.current_display_name || "").trim();
+  if (result && result.status === "display_name_pending_review") {
+    return "Meta está revisando el nombre “" + desired + "”. El bot ya usa ese nombre al responder; el nombre público cambiará cuando Meta lo apruebe.";
+  }
+  if (result && result.status === "display_name_approved_re_registration_required") {
+    return "Meta aprobó “" + desired + "”. Falta aplicar el nombre aprobado al número de forma controlada; Nextfor no repetirá el registro automáticamente.";
+  }
+  if (result && result.status === "display_name_declined") {
+    return "Meta rechazó “" + desired + "”. Revisa sus reglas de nombres y solicita otro desde WhatsApp Manager.";
+  }
+  if (result && result.status === "display_name_change_required") {
+    return "El bot responde como “" + desired + "”, pero WhatsApp todavía muestra “" + (current || "otro nombre") + "”. Solicita el cambio en Meta desde este panel.";
+  }
+  return "El perfil del negocio también quedó actualizado en WhatsApp.";
 }
 
 async function applyTenantWhatsAppBusinessProfile(tenantId, personality, actor) {
@@ -10952,17 +10971,32 @@ async function applyTenantWhatsAppBusinessProfile(tenantId, personality, actor) 
         bot_applied: true,
         onboarding_mode: "coexistence",
         phone_number_suffix: result.phone_number_suffix || null,
-        message: "Bot actualizado. Para cambiar foto, nombre y descripción pública, abre WhatsApp Business en el celular y ve a Configuración → Herramientas para la empresa → Perfil de empresa. Meta puede revisar el nombre."
+        desired_display_name: result.desired_display_name || null,
+        current_display_name: result.current_display_name || null,
+        display_name_matches: result.display_name_matches === true,
+        name_status: result.name_status || null,
+        new_name_status: result.new_name_status || null,
+        display_phone_number: result.display_phone_number || null,
+        manager_url: result.manager_url || null,
+        message: "Bot actualizado. Este número usa coexistencia: cambia el nombre público en WhatsApp Business → Configuración → Herramientas para la empresa → Perfil de empresa. Meta puede revisarlo."
       };
     }
     return {
-      status: "applied",
-      applied: true,
+      status: result.status || "applied",
+      applied: result.status === "applied",
+      bot_applied: true,
       picture_present: result.picture_present === true,
       description_applied: result.description_applied === true,
       address_applied: result.address_applied === true,
       phone_number_suffix: result.phone_number_suffix || null,
-      message: "El perfil del negocio también quedó actualizado en WhatsApp."
+      desired_display_name: result.desired_display_name || null,
+      current_display_name: result.current_display_name || null,
+      display_name_matches: result.display_name_matches === true,
+      name_status: result.name_status || null,
+      new_name_status: result.new_name_status || null,
+      display_phone_number: result.display_phone_number || null,
+      manager_url: result.manager_url || null,
+      message: whatsappDisplayNameMessage(result)
     };
   } catch (error) {
     const code = error instanceof ChannelConnectionError ? error.code : "whatsapp_profile_sync_failed";
@@ -10983,7 +11017,16 @@ async function applyTenantWhatsAppBusinessProfile(tenantId, personality, actor) 
 }
 
 function storedWhatsAppProfileSync(sync, updatedAt) {
-  const allowed = ["applied", "manual_app_required", "pending_connection", "failed"];
+  const allowed = [
+    "applied",
+    "manual_app_required",
+    "pending_connection",
+    "failed",
+    "display_name_change_required",
+    "display_name_pending_review",
+    "display_name_approved_re_registration_required",
+    "display_name_declined"
+  ];
   if (!sync || !allowed.includes(sync.status)) return null;
   return {
     status: sync.status,
@@ -10994,6 +11037,15 @@ function storedWhatsAppProfileSync(sync, updatedAt) {
     description_applied: sync.description_applied === true,
     address_applied: sync.address_applied === true,
     phone_number_suffix: String(sync.phone_number_suffix || "").trim().slice(-8) || null,
+    desired_display_name: String(sync.desired_display_name || "").trim().slice(0, 120) || null,
+    current_display_name: String(sync.current_display_name || "").trim().slice(0, 120) || null,
+    display_name_matches: sync.display_name_matches === true,
+    name_status: String(sync.name_status || "").trim().slice(0, 80) || null,
+    new_name_status: String(sync.new_name_status || "").trim().slice(0, 80) || null,
+    display_phone_number: String(sync.display_phone_number || "").trim().slice(0, 80) || null,
+    manager_url: /^https:\/\/business\.facebook\.com\/wa\/manage\/phone-numbers\//.test(String(sync.manager_url || ""))
+      ? String(sync.manager_url).slice(0, 1200)
+      : null,
     message: String(sync.message || "").trim().slice(0, 500),
     updated_at: updatedAt || new Date().toISOString()
   };
@@ -14828,7 +14880,13 @@ app.post("/admin/panel/bot-personality/whatsapp-profile-sync", async (req, res) 
     await persistWhatsAppProfileSync(onboarding, tenantId, sync);
     const success = sync.status === "applied";
     const manual = sync.status === "manual_app_required";
-    res.status(success ? 200 : manual ? 202 : sync.status === "pending_connection" ? 409 : 502).json({
+    const displayNameAction = [
+      "display_name_change_required",
+      "display_name_pending_review",
+      "display_name_approved_re_registration_required",
+      "display_name_declined"
+    ].includes(sync.status);
+    res.status(success ? 200 : manual || displayNameAction ? 202 : sync.status === "pending_connection" ? 409 : 502).json({
       ok: success,
       applied: liveConfiguration.active,
       whatsapp_profile_sync: sync,

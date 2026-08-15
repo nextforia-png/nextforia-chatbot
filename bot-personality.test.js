@@ -24,6 +24,7 @@ const onboarding = {
     business: { brand_name: "RAV Toys" },
     operations: {
       support_hours: "Lunes a viernes 9 a 6",
+      shipping: "Cobertura nacional; algunas zonas requieren cotización.",
       frequent_questions: "¿Hacen envíos? Sí, a toda Colombia.",
       payments: "Nequi y transferencia",
       bot_instructions: "No prometas inventario."
@@ -51,12 +52,18 @@ assert.strictEqual(defaults.response_length, "muy_breve");
 assert.strictEqual(defaults.profile.display_name, "RAV-Bot");
 assert.ok(defaults.greeting.text.includes("RAV Toys"));
 assert.strictEqual(defaults.faqs.length, 1);
+assert.strictEqual(defaults.shipping.pricing_mode, "quote");
+assert.strictEqual(defaults.shipping.policy, "Cobertura nacional; algunas zonas requieren cotización.");
 
 const normalized = normalizeBotConfiguration({
   response_length: "invalid",
   profile: { display_name: " Aura " },
   shipping: {
-    fields: [{ id: "city", label: "Ciudad", required: true }, { id: "evil", label: "No permitido" }]
+    fields: [{ id: "city", label: "Ciudad", required: true }, { id: "evil", label: "No permitido" }],
+    pricing_mode: "flat",
+    flat_fee_cop: 12900,
+    free_over_cop: 200000,
+    policy: "Aplica a cobertura nacional."
   },
   catalog: { price_mode: "human" },
   payments: { methods: ["card", "invalid", "card"] },
@@ -66,6 +73,8 @@ const normalized = normalizeBotConfiguration({
 assert.strictEqual(normalized.response_length, "muy_breve");
 assert.strictEqual(normalized.profile.display_name, "Aura");
 assert.deepStrictEqual(normalized.shipping.fields.map(function (row) { return row.id; }), ["city"]);
+assert.strictEqual(normalized.shipping.pricing_mode, "flat");
+assert.strictEqual(normalized.shipping.flat_fee_cop, 12900);
 assert.deepStrictEqual(normalized.payments.methods, ["card"]);
 assert.strictEqual(normalized.faqs[0].question, "¿Horario?");
 assert.strictEqual(normalized.extra_context.length, 5000);
@@ -121,7 +130,13 @@ const contractPrompt = buildBotConfigurationPrompt({
     returns_policy: "DEVOLUCION-CONTRATO",
     out_of_hours_notice: true
   },
-  shipping: { fields: [{ id: "city", label: "CIUDAD-CONTRATO", required: true }] },
+  shipping: {
+    fields: [{ id: "city", label: "CIUDAD-CONTRATO", required: true }],
+    pricing_mode: "flat",
+    flat_fee_cop: 12900,
+    free_over_cop: 200000,
+    policy: "POLITICA-ENVIO-CONTRATO"
+  },
   reminders: {
     type: "virtual",
     text: "RECORDATORIO-CONTRATO",
@@ -151,6 +166,9 @@ assert(contractPrompt.includes("reemplaza cualquier dato diferente o anterior de
   "DEVOLUCION-CONTRATO",
   "Fuera del horario humano",
   "CIUDAD-CONTRATO (obligatorio)",
+  "$12.900 COP",
+  "$200.000 COP",
+  "POLITICA-ENVIO-CONTRATO",
   "cita virtual",
   "RECORDATORIO-CONTRATO",
   "un día antes, 1 hora antes",

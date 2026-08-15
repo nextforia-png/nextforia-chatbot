@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const CUSTOMER_ORDER_STATE_TOOL = "customer_order_state_v1";
 const ORDER_STAGES = Object.freeze(["por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]);
 const ORDER_ACTIONS = Object.freeze(["confirm_payment", "start_preparation", "send_tracking", "mark_sent", "cancel"]);
+const SHIPPING_STATUSES = Object.freeze(["priced", "free", "pending_quote"]);
 
 class CustomerOrderError extends Error {
   constructor(code, message, status) {
@@ -52,6 +53,13 @@ function normalizeOrder(input) {
   if (!id) throw new CustomerOrderError("order_id_required", "El pedido necesita un identificador.");
   const createdAt = text(input.created_at, 60) || new Date().toISOString();
   const updatedAt = text(input.updated_at, 60) || createdAt;
+  const items = normalizeItems(input.items);
+  const shipping = amount(input.shipping);
+  const requestedShippingStatus = text(input.shipping_status, 40).toLowerCase();
+  const shippingStatus = SHIPPING_STATUSES.includes(requestedShippingStatus)
+    ? requestedShippingStatus
+    : (shipping > 0 ? "priced" : "free");
+  const subtotal = items.reduce(function (total, item) { return total + item.price * item.qty; }, 0);
   return {
     version: 1,
     id,
@@ -66,8 +74,12 @@ function normalizeOrder(input) {
     address: text(input.address, 500),
     city: text(input.city, 200),
     location: text(input.location, 240),
-    items: normalizeItems(input.items),
-    shipping: amount(input.shipping),
+    items,
+    subtotal,
+    shipping,
+    shipping_status: shippingStatus,
+    shipping_policy: text(input.shipping_policy, 3000),
+    total: shippingStatus === "pending_quote" ? null : subtotal + shipping,
     currency: text(input.currency, 12).toUpperCase() || "COP",
     payment: text(input.payment, 180) || "Por confirmar",
     payment_note: text(input.payment_note || input.paymentNote, 500),
@@ -157,6 +169,29 @@ function createCustomerOrderService(options) {
     });
   }
 
+  async function upsertDraft(input) {
+    const record = normalizeOrder(input);
+    return serialized(record.tenant_id + ":" + record.id, async function () {
+      const existing = (await list(record.tenant_id, 500)).find(function (item) { return item.id === record.id; });
+      if (!existing) return store.append(record);
+      if (existing.stage !== "por_confirmar") return existing;
+      const comparableFields = [
+        "conversation_id", "channel", "name", "phone", "email", "id_number", "address", "city", "location",
+        "items", "subtotal", "shipping", "shipping_status", "shipping_policy", "total", "currency", "payment",
+        "payment_note", "source", "source_event_id"
+      ];
+      const changed = comparableFields.some(function (field) {
+        return JSON.stringify(existing[field]) !== JSON.stringify(record[field]);
+      });
+      if (!changed) return existing;
+      return store.append(Object.assign({}, existing, record, {
+        created_at: existing.created_at,
+        updated_at: new Date().toISOString(),
+        revision: existing.revision + 1
+      }));
+    });
+  }
+
   async function action(targetTenantId, orderId, actionName, payload, actor) {
     const cleanTenant = tenantId(targetTenantId);
     const id = cleanId(orderId);
@@ -168,6 +203,9 @@ function createCustomerOrderService(options) {
       const next = Object.assign({}, current);
       if (action === "confirm_payment") {
         if (current.stage !== "por_confirmar") throw new CustomerOrderError("invalid_transition", "Este pago ya fue procesado.", 409);
+        if (current.shipping_status === "pending_quote") {
+          throw new CustomerOrderError("shipping_quote_required", "Confirma el valor del envío antes de marcar el pago.", 409);
+        }
         nextStage = "pagado";
       } else if (action === "start_preparation") {
         if (current.stage !== "pagado") throw new CustomerOrderError("invalid_transition", "Confirma el pago antes de preparar el pedido.", 409);
@@ -202,13 +240,14 @@ function createCustomerOrderService(options) {
     return "ord-" + crypto.createHash("sha256").update(seed || crypto.randomUUID()).digest("hex").slice(0, 20);
   }
 
-  return { list, get, create, action, createId };
+  return { list, get, create, upsertDraft, action, createId };
 }
 
 module.exports = {
   CUSTOMER_ORDER_STATE_TOOL,
   ORDER_ACTIONS,
   ORDER_STAGES,
+  SHIPPING_STATUSES,
   CustomerOrderError,
   InMemoryCustomerOrderStore,
   collapseLatest,

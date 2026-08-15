@@ -272,6 +272,8 @@ assert(redesigned.includes('Orders layout repair'), 'orders visual repair styles
 assert(redesigned.includes('.orderShippingGrid button{width:100%!important;height:auto!important;min-height:70px'), 'shipping fields must grow instead of clipping values');
 assert(redesigned.includes('.orderDetailPane{min-width:0;padding:25px 28px 44px'), 'order detail must keep its independent non-overflowing scroller');
 assert(redesigned.includes('.orderDetailActions{display:grid;grid-template-columns:1fr'), 'order actions must stack without overlapping');
+assert(redesigned.includes('shipping_status==="pending_quote"'), 'orders with an unknown shipping price must be visibly marked');
+assert(redesigned.includes('Subtotal pendiente de envío'), 'the panel must not present an incomplete amount as the final total');
 
 delete process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED;
 delete process.env.RENDER_SERVICE_NAME;

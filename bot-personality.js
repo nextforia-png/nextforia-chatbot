@@ -1,5 +1,7 @@
 "use strict";
 
+const { normalizeShippingPricing } = require("./checkout-shipping");
+
 const RESPONSE_LENGTHS = Object.freeze(["muy_breve", "breve", "detallada"]);
 const GREETING_TONES = Object.freeze(["cercano", "formal", "directo"]);
 const EMOJI_LEVELS = Object.freeze(["ninguno", "pocos", "moderados"]);
@@ -38,6 +40,10 @@ const BOT_CONFIGURATION_CONTRACT = Object.freeze({
   "business.returns_policy": "prompt",
   "business.out_of_hours_notice": "prompt",
   "shipping.fields": "prompt",
+  "shipping.pricing_mode": "prompt_and_checkout",
+  "shipping.flat_fee_cop": "prompt_and_checkout",
+  "shipping.free_over_cop": "prompt_and_checkout",
+  "shipping.policy": "prompt_and_checkout",
   "reminders.type": "prompt",
   "reminders.selected": "editor_state",
   "reminders.custom": "editor_state",
@@ -250,7 +256,11 @@ function defaultsFromOnboarding(record, planId) {
       out_of_hours_notice: true
     },
     shipping: {
-      fields: defaultShippingFields()
+      fields: defaultShippingFields(),
+      pricing_mode: "quote",
+      flat_fee_cop: 0,
+      free_over_cop: 0,
+      policy: cleanText(operations.shipping, 3000)
     },
     reminders: {
       type: cleanText(appointment.reminder_channel, 80) ? "reservation" : "reservation",
@@ -379,9 +389,9 @@ function normalizeBotConfiguration(input, meta) {
       ),
       out_of_hours_notice: cleanBoolean(business.out_of_hours_notice, businessFallback.out_of_hours_notice)
     },
-    shipping: {
+    shipping: Object.assign({
       fields: normalizeShippingFields(shipping.fields, shippingFallback.fields)
-    },
+    }, normalizeShippingPricing(shipping, shippingFallback)),
     reminders: {
       type: cleanChoice(reminders.type, REMINDER_TYPES, cleanChoice(remindersFallback.type, REMINDER_TYPES, "reservation")),
       selected: Math.max(0, Math.min(1, Number.isFinite(Number(reminders.selected)) ? Number(reminders.selected) : Number(remindersFallback.selected) || 0)),
@@ -491,6 +501,19 @@ function buildBotConfigurationPrompt(configuration, meta) {
       config.shipping.fields.map(function (field) {
         return field.label + (field.required ? " (obligatorio)" : " (opcional)");
       }).join(", ") + ".");
+  }
+  if (features.shipping) {
+    if (config.shipping.pricing_mode === "flat" && config.shipping.flat_fee_cop > 0) {
+      lines.push("- Costo de envío: $" + config.shipping.flat_fee_cop.toLocaleString("es-CO") + " COP" +
+        (config.shipping.free_over_cop > 0
+          ? "; es gratis desde $" + config.shipping.free_over_cop.toLocaleString("es-CO") + " COP de subtotal"
+          : "") + ". El sistema calcula y suma este valor; no hagas la suma por tu cuenta.");
+    } else if (config.shipping.pricing_mode === "free") {
+      lines.push("- Costo de envío: gratis. El sistema lo registra como $0 COP.");
+    } else {
+      lines.push("- Costo de envío: por confirmar. Nunca digas que es gratis ni envíes instrucciones de pago con un total incompleto; escala para cotizarlo.");
+    }
+    if (config.shipping.policy) lines.push("- Reglas y cobertura de envío: " + config.shipping.policy);
   }
   if (features.catalog) {
     lines.push("- Política de precios: " + ({

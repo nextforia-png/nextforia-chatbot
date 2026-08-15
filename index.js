@@ -48,6 +48,10 @@ const {
   InMemoryCustomerOrderStore,
   createCustomerOrderService
 } = require("./customer-orders");
+const {
+  checkoutAmounts,
+  confirmedPaymentMessage
+} = require("./checkout-shipping");
 const { buildDailyClientActivity } = require("./customer-panel-activity");
 const { renderForgotPassword, renderResetPassword } = require("./customer-password-recovery");
 const renderCustomerPublicSignup = require("./customer-public-signup");
@@ -370,7 +374,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v391-customer-panel-orders-mobile";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v393-order-notifications";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5517,7 +5521,7 @@ async function executeNotifyWarrantyTeam(userId, stateId) {
   return { notified: true, next_action: "ACCION OBLIGATORIA INMEDIATA: 1) Dile al cliente algo como '¡Listo! Ya pasé tu caso a nuestra asesora Eliana 🌴 Te escribirá pronto para ayudarte 💛'. 2) Llama request_human_handoff(reason='garantia'). NO termines el turno sin estos dos pasos." };
 }
 
-async function executeSelectProductForPurchase(userId, input, stateId) {
+async function executeSelectProductForPurchase(userId, input, stateId, runtime) {
   const key = operationalStateKey(userId, stateId);
   const products = lastSearchResults.get(key) || [];
   const chosen = products.find(p => p.product_url === input.product_url);
@@ -5530,6 +5534,11 @@ async function executeSelectProductForPurchase(userId, input, stateId) {
   }
   if (!checkouts.has(key)) checkouts.set(key, { products: [], data: {} });
   const state = checkouts.get(key);
+  if (!state.checkout_source_event_id) {
+    state.checkout_source_event_id = cleanRuntimeText(runtime && (runtime.source_event_id || runtime.sourceEventId), 500) ||
+      "checkout:" + crypto.randomUUID();
+    state.checkout_started_at = new Date().toISOString();
+  }
   if (!state.products) state.products = [];
   // Si ya está en el carrito, no duplicar
   const existing = state.products.find(p => p.product_url === chosen.product_url);
@@ -5647,27 +5656,97 @@ async function executeSaveCheckoutField(userId, input, stateId, tenantId) {
   };
 }
 
-async function executeSendPaymentLink(userId, input, stateId) {
+async function ensureCheckoutOrder(userId, stateId, tenantId, runtime, personality) {
   const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay productos en el carrito. Llama select_product_for_purchase primero." };
   }
-  const totalAmount = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
-  if (totalAmount === 0 && state.products && state.products.length > 0) {
+  const missing = CHECKOUT_FIELDS.filter(f => !state.data?.[f]);
+  if (missing.length > 0) {
+    return { error: "Faltan campos del cliente: " + missing.join(", ") + ". Pídelos antes de crear el pedido." };
+  }
+  const amounts = checkoutAmounts(state.products, personality && personality.shipping);
+  if (amounts.subtotal === 0) {
     alertTeam("cobro_cero", "Pedido con total $0 pero hay " + state.products.length + " producto(s) en el carrito (cliente " + userId + "). Posible problema de precios.");
   }
+  state.shipping_quote = amounts;
+  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
+  const sourceEventId = cleanRuntimeText(state.checkout_source_event_id, 500) ||
+    cleanRuntimeText(runtime && (runtime.source_event_id || runtime.sourceEventId), 500) ||
+    cleanRuntimeText(state.order_source_event_id, 500) || "checkout:" + crypto.randomUUID();
+  state.order_source_event_id = sourceEventId;
+  const orderId = state.order_id || customerOrderService.createId({
+    tenant_id: cleanTenant,
+    conversation_id: userId,
+    source_event_id: sourceEventId
+  });
+  state.order_id = orderId;
+  const data = state.data || {};
   const currency = state.products[0].currency || "COP";
-  const amount = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
+  const order = await customerOrderService.upsertDraft({
+    id: orderId,
+    order_number: "NX-" + orderId.slice(-6).toUpperCase(),
+    tenant_id: cleanTenant,
+    conversation_id: normalizeConversationUserId(userId),
+    channel: conversationChannel(userId),
+    name: data.nombre,
+    phone: data.telefono,
+    id_number: data.cedula,
+    address: data.direccion,
+    items: state.products.map(function (product) {
+      return {
+        name: product.title,
+        qty: Math.max(1, Number(product.qty || product.quantity) || 1),
+        price: product.price_amount,
+        product_url: product.product_url
+      };
+    }),
+    shipping: amounts.amount == null ? 0 : amounts.amount,
+    shipping_status: amounts.status,
+    shipping_policy: amounts.policy,
+    currency,
+    payment: data.metodo_pago,
+    payment_note: amounts.status === "pending_quote"
+      ? "El valor del envío está por cotizar. No se debe cobrar hasta confirmar el total."
+      : "Instrucciones de pago enviadas. Verifica el pago o comprobante antes de preparar.",
+    stage: "por_confirmar",
+    source_event_id: sourceEventId,
+    source: "bot_checkout"
+  });
+  await saveCustomerMeta(userId, profilePatchFromOrder(order), cleanTenant, {
+    allowClear: false,
+    source: "bot_order"
+  });
+  return { order, amounts };
+}
+
+async function executeSendPaymentLink(userId, input, stateId, tenantId, runtime, personality) {
+  const state = checkouts.get(operationalStateKey(userId, stateId));
+  const ensured = await ensureCheckoutOrder(userId, stateId, tenantId, runtime, personality);
+  if (ensured.error) return ensured;
+  const order = ensured.order;
+  const amounts = ensured.amounts;
+  if (amounts.status === "pending_quote") {
+    return {
+      error: "shipping_quote_required",
+      order_id: order.id,
+      order_saved: true,
+      next_action: "No envíes instrucciones de pago ni digas que el envío es gratis. Explica que el valor del envío está por confirmar y llama request_human_handoff(reason='cotizar_envio')."
+    };
+  }
+  const currency = state.products[0].currency || "COP";
+  const amount = `${amounts.total.toLocaleString("es-CO")} ${currency}`;
+  const breakdown = `Productos: *${amounts.subtotal.toLocaleString("es-CO")} ${currency}*\nEnvío: *${amounts.amount.toLocaleString("es-CO")} ${currency}*\nTotal: *${amount}*`;
   let msg;
   switch (input.method) {
     case "transferencia":
-      msg = `💳 *Transferencia Bancolombia*\n\nCuenta de ahorros: *37 938 445 851*\nTitular: RAV Kids SAS\nNIT: 900 822 164-1\n\nMonto a transferir: *${amount}*\n\nCuando tengas el comprobante, me lo envías por aquí y cerramos el pedido. 🙏`;
+      msg = `💳 *Transferencia Bancolombia*\n\nCuenta de ahorros: *37 938 445 851*\nTitular: RAV Kids SAS\nNIT: 900 822 164-1\n\n${breakdown}\n\nCuando tengas el comprobante, me lo envías por aquí y cerramos el pedido. 🙏`;
       break;
     case "wompi":
-      msg = `📱 *Pago con tarjeta (Wompi)*\n\nHaz clic aquí para pagar *${amount}*:\nhttps://checkout.wompi.co/l/iGnSPs\n\nEn el checkout coloca el valor exacto y sigue los pasos. Al terminar, avísame por acá. 🙏`;
+      msg = `📱 *Pago con tarjeta (Wompi)*\n\n${breakdown}\n\nHaz clic aquí para pagar *${amount}*:\nhttps://checkout.wompi.co/l/iGnSPs\n\nEn el checkout coloca el valor exacto y sigue los pasos. Al terminar, avísame por acá. 🙏`;
       break;
     case "contraentrega":
-      msg = `🚚 *Pago contraentrega*\n\nPagas *${amount}* en efectivo cuando recibas tu pedido.\n\nSolo disponible para compras menores a $1.450.000. Te confirmamos el envío en un momento. 🎁`;
+      msg = `🚚 *Pago contraentrega*\n\n${breakdown}\n\nPagas *${amount}* en efectivo cuando recibas tu pedido.\n\nSolo disponible para compras menores a $1.450.000. Te confirmamos el envío en un momento. 🎁`;
       break;
     case "addi":
       msg = `📅 *Crédito con Addi*\n\nCompra ahora, paga después, sin intereses. Sujeto a aprobación.\n\nEl equipo te pasará el link de Addi en un momento para que solicites el crédito por *${amount}*.`;
@@ -5678,17 +5757,20 @@ async function executeSendPaymentLink(userId, input, stateId) {
     default:
       msg = `Te paso los detalles de pago por aquí. Monto: ${amount}`;
   }
-  await sendText(userId, msg);
+  await sendText(userId, msg, runtime);
+  state.payment_sent_at = new Date().toISOString();
+  state.payment_method = input.method;
+  state.payment_order_id = order.id;
   console.log(`[Checkout ${maskedIdentifier(userId)}] Payment link sent: ${input.method} for ${amount}`);
   const automatedMethods = ["wompi", "transferencia"];
   const isAutomated = automatedMethods.includes(input.method);
   const next_action = isAutomated
     ? "Espera silenciosamente a que el cliente confirme el pago ('ya pagué', 'listo', 'transferí'). Cuando confirme, llama notify_sale_team y luego request_human_handoff(reason='venta_cerrada')."
     : "ACCION OBLIGATORIA INMEDIATA EN ESTE MISMO TURNO: llama notify_sale_team (sin argumentos) y luego request_human_handoff(reason='venta_metodo_manual'). NO esperes que el cliente diga nada. El humano continuará.";
-  return { sent: true, method: input.method, amount, automated: isAutomated, next_action };
+  return { sent: true, method: input.method, amount, subtotal: amounts.subtotal, shipping: amounts.amount, order_id: order.id, order_saved: true, automated: isAutomated, next_action };
 }
 
-async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
+async function executeNotifyTeam(userId, stateId, tenantId, runtime, personality) {
   const state = checkouts.get(operationalStateKey(userId, stateId));
   if (!state || !state.products || state.products.length === 0) {
     return { error: "No hay checkout completo para notificar." };
@@ -5697,11 +5779,14 @@ async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
   if (missing.length > 0) {
     return { error: "Faltan campos del cliente: " + missing.join(", ") + ". Pídelos antes de notificar al equipo." };
   }
-  const d = state.data;
-  const totalAmount = state.products.reduce((sum, p) => sum + (p.price_amount || 0), 0);
-  if (totalAmount === 0 && state.products && state.products.length > 0) {
-    alertTeam("cobro_cero", "Pedido con total $0 pero hay " + state.products.length + " producto(s) en el carrito (cliente " + userId + "). Posible problema de precios.");
+  const ensured = await ensureCheckoutOrder(userId, stateId, tenantId, runtime, personality);
+  if (ensured.error) return ensured;
+  if (ensured.amounts.status === "pending_quote") return { error: "shipping_quote_required", order_id: ensured.order.id };
+  if (state.team_notified_at) {
+    return { notified: true, duplicate: true, order_id: ensured.order.id, products_count: state.products.length };
   }
+  const d = state.data;
+  const totalAmount = ensured.amounts.total;
   const currency = state.products[0].currency || "COP";
   const formattedTotal = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
   const productsList = state.products.map((p, i) => `  ${i+1}. ${p.title} — ${p.price}\n     ${p.product_url}`).join("\n");
@@ -5712,6 +5797,7 @@ async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
     `📦 Productos (${state.products.length}):`,
     productsList,
     "",
+    `🚚 Envío: ${ensured.amounts.amount.toLocaleString("es-CO")} ${currency}`,
     `💰 *TOTAL: ${formattedTotal}*`,
     "",
     "👤 *Datos del cliente*",
@@ -5725,44 +5811,10 @@ async function executeNotifyTeam(userId, stateId, tenantId, runtime) {
     "",
     "Pendiente: confirmar pago y despachar pedido."
   ].join("\n");
-  const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
-  const sourceEventId = cleanRuntimeText(runtime && (runtime.source_event_id || runtime.sourceEventId), 500) ||
-    cleanRuntimeText(state.order_source_event_id, 500) || crypto.randomUUID();
-  state.order_source_event_id = sourceEventId;
-  const orderId = state.order_id || customerOrderService.createId({
-    tenant_id: cleanTenant,
-    conversation_id: userId,
-    source_event_id: sourceEventId
-  });
-  state.order_id = orderId;
-  const order = await customerOrderService.create({
-    id: orderId,
-    order_number: "NX-" + orderId.slice(-6).toUpperCase(),
-    tenant_id: cleanTenant,
-    conversation_id: normalizeConversationUserId(userId),
-    channel: conversationChannel(userId),
-    name: d.nombre,
-    phone: d.telefono,
-    id_number: d.cedula,
-    address: d.direccion,
-    items: state.products.map(function (product) {
-      return { name: product.title, qty: 1, price: product.price_amount, product_url: product.product_url };
-    }),
-    shipping: 0,
-    currency,
-    payment: d.metodo_pago,
-    payment_note: "Verifica el pago o comprobante en la conversación antes de preparar.",
-    stage: "por_confirmar",
-    source_event_id: sourceEventId,
-    source: "bot_checkout"
-  });
-  await saveCustomerMeta(userId, profilePatchFromOrder(order), cleanTenant, {
-    allowClear: false,
-    source: "bot_order"
-  });
-  await notifyTeam(summary, userId);
+  if (isRavTenantId(tenantId)) await notifyTeam(summary, userId);
+  state.team_notified_at = new Date().toISOString();
   console.log(`[Checkout ${maskedIdentifier(userId)}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
-  return { notified: true, team_size: NOTIFICATION_PHONES.length, products_count: state.products.length, order_id: order.id };
+  return { notified: true, team_size: isRavTenantId(tenantId) ? NOTIFICATION_PHONES.length : 0, products_count: state.products.length, order_id: ensured.order.id };
 }
 
 function customerHandoffNotificationId(tenantId, userId, reason, runtime) {
@@ -6134,6 +6186,40 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     });
   }
   conversationConfigurationFingerprints.set(stateKey, liveBotConfiguration.fingerprint);
+  const checkoutAwaitingPayment = checkouts.get(stateKey);
+  if (usesCustomerServiceBot && checkoutAwaitingPayment && checkoutAwaitingPayment.payment_sent_at &&
+      ["wompi", "transferencia"].includes(checkoutAwaitingPayment.payment_method) &&
+      confirmedPaymentMessage(userMessage)) {
+    const sale = await executeNotifyTeam(
+      userId,
+      stateKey,
+      tenantId,
+      conversationRuntime,
+      liveBotConfiguration.personality
+    );
+    if (sale && sale.notified) {
+      conversationTurnContext.push("tools", "checkout_payment_confirmed");
+      conversationTurnContext.push("tools", "notify_sale_team");
+      conversationTurnContext.push("tools", "request_human_handoff");
+      const handoff = await executeHumanHandoff(userId, { reason: "venta_cerrada" }, conversationRuntime);
+      history.push({ role: "user", content: userMessage });
+      history.push({ role: "assistant", content: handoff.customer_message });
+      conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
+      await recordTurn(
+        userId,
+        userMessage,
+        handoff.customer_message,
+        handoff.delivered ? "ok" : "error",
+        conversationRuntime
+      );
+      return;
+    }
+    log("warn", "checkout_payment_confirmation_not_finalized", {
+      tenant_id: tenantId,
+      channel: conversationRuntime.channel,
+      error: cleanRuntimeText(sale && sale.error, 120) || "unknown"
+    });
+  }
   const configuredGreeting = configuredGreetingForTurn({
     active: usesCustomerServiceBot,
     message: userMessage,
@@ -6408,7 +6494,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeNotifyWarrantyTeam(userId, stateKey);
                 break;
               case "select_product_for_purchase":
-                result = await executeSelectProductForPurchase(userId, toolUse.input, stateKey);
+                result = await executeSelectProductForPurchase(userId, toolUse.input, stateKey, conversationRuntime);
                 if (result && (result.added || result.already_in_cart)) {
                   await createRetargetingJobForCustomer(tenantId, userId, "abandoned_cart", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":" + toolUse.id, {
                     source_at: conversationMeta.source_at || new Date().toISOString(),
@@ -6431,10 +6517,17 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeSaveCustomerProfile(userId, tenantId, toolUse.input, "bot_conversation");
                 break;
               case "send_payment_link":
-                result = await executeSendPaymentLink(userId, toolUse.input, stateKey);
+                result = await executeSendPaymentLink(
+                  userId,
+                  toolUse.input,
+                  stateKey,
+                  tenantId,
+                  conversationRuntime,
+                  liveBotConfiguration.personality
+                );
                 break;
               case "notify_sale_team":
-                result = await executeNotifyTeam(userId, stateKey, tenantId, conversationRuntime);
+                result = await executeNotifyTeam(userId, stateKey, tenantId, conversationRuntime, liveBotConfiguration.personality);
                 break;
               case "request_human_handoff":
               conversationTurnContext.set("handoff", true);

@@ -285,6 +285,8 @@ assert(redesigned.includes('body.customer-panel-mobile-v389.order-mobile-detail 
 assert(redesigned.includes('body.panel-redesign .orderMobileSummary'), 'mobile-only order summaries must stay hidden in the unchanged desktop layout');
 assert(redesigned.includes('.orderStepDesktop'), 'desktop order step labels must remain available');
 assert(redesigned.includes('.orderStepMobile'), 'mobile order step labels must follow the approved payment journey');
+assert(redesigned.includes('shipping_status==="pending_quote"'), 'orders with an unknown shipping price must be visibly marked');
+assert(redesigned.includes('Subtotal pendiente de envío'), 'the panel must not present an incomplete amount as the final total');
 
 delete process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED;
 delete process.env.RENDER_SERVICE_NAME;

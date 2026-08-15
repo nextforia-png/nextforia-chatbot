@@ -272,6 +272,19 @@ assert(redesigned.includes('Orders layout repair'), 'orders visual repair styles
 assert(redesigned.includes('.orderShippingGrid button{width:100%!important;height:auto!important;min-height:70px'), 'shipping fields must grow instead of clipping values');
 assert(redesigned.includes('.orderDetailPane{min-width:0;padding:25px 28px 44px'), 'order detail must keep its independent non-overflowing scroller');
 assert(redesigned.includes('.orderDetailActions{display:grid;grid-template-columns:1fr'), 'order actions must stack without overlapping');
+assert(redesigned.includes('class="mobileOrdersIntro"'), 'mobile orders must render the approved compact introduction');
+assert(redesigned.includes('function orderRelativeTime(value)'), 'mobile orders must derive honest relative timestamps from order data');
+assert(redesigned.includes('function orderItemSummary(order)'), 'mobile orders must summarize real order items');
+assert(redesigned.includes('state.tab==="orders"&&state.orderPane==="detail"'), 'only an opened order may enter the full-screen mobile detail state');
+assert(redesigned.includes('orderDetail?["Detalle del pedido",""]'), 'the mobile order detail must use the approved dedicated header');
+assert(redesigned.includes('function renderMobileOrderAction(order)'), 'the mobile confirmation CTA must reuse the real order action');
+assert(redesigned.includes('data-action="confirm_payment" onclick="orderAction(this.dataset.action)"'), 'mobile payment confirmation must call the existing backend action');
+assert(redesigned.includes('class="orderMobileOpenChat"'), 'mobile order detail must keep exact-conversation navigation available');
+assert(redesigned.includes('body.customer-panel-mobile-v389.orders-view:not(.order-mobile-detail) .orderFilters'), 'mobile list must remove noisy status filters without changing desktop');
+assert(redesigned.includes('body.customer-panel-mobile-v389.order-mobile-detail .orderTrackingCard'), 'mobile detail must scope its simplification to the full-screen order state');
+assert(redesigned.includes('body.panel-redesign .orderMobileSummary'), 'mobile-only order summaries must stay hidden in the unchanged desktop layout');
+assert(redesigned.includes('.orderStepDesktop'), 'desktop order step labels must remain available');
+assert(redesigned.includes('.orderStepMobile'), 'mobile order step labels must follow the approved payment journey');
 
 delete process.env.CUSTOMER_PANEL_REDESIGN_V1_ENABLED;
 delete process.env.RENDER_SERVICE_NAME;

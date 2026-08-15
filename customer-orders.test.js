@@ -100,6 +100,30 @@ async function rejectsCode(promise, code) {
   assert.strictEqual(pricedShipping.total, 97850);
   assert.strictEqual((await service.list("tenant-a")).filter(function (order) { return order.id === pendingShipping.id; }).length, 1);
 
+  const trackingDraftOrder = await service.create(Object.assign({}, base, {
+    id: "ord-tracking-draft",
+    order_number: "NX-0002",
+    conversation_id: "wa:tracking-draft"
+  }));
+  const trackingDraft = await service.action("tenant-a", trackingDraftOrder.id, "save_tracking_draft", {
+    tracking_number: "DRAFT-456",
+    tracking_url: "https://transportadora.example/rastrear/DRAFT-456"
+  }, "agent@example.com");
+  assert.strictEqual(trackingDraft.stage, "por_confirmar");
+  assert.strictEqual(trackingDraft.tracking_number, "DRAFT-456");
+  assert.strictEqual(trackingDraft.tracking_url, "https://transportadora.example/rastrear/DRAFT-456");
+  assert.strictEqual(trackingDraft.tracking_sent_at, "");
+  assert.strictEqual(deliveries.length, 1, "saving a draft must not contact the customer");
+  await service.action("tenant-a", trackingDraft.id, "confirm_payment", {}, "agent@example.com");
+  await service.action("tenant-a", trackingDraft.id, "start_preparation", {}, "agent@example.com");
+  await rejectsCode(service.action("tenant-a", trackingDraft.id, "mark_sent", {}, "agent@example.com"), "tracking_required");
+  const deliveredDraft = await service.action("tenant-a", trackingDraft.id, "send_tracking", {
+    tracking_number: trackingDraft.tracking_number,
+    tracking_url: trackingDraft.tracking_url
+  }, "agent@example.com");
+  assert(deliveredDraft.tracking_sent_at);
+  assert.strictEqual((await service.action("tenant-a", trackingDraft.id, "mark_sent", {}, "agent@example.com")).stage, "enviado");
+
   console.log("customer orders tests passed");
 })().catch(function (error) {
   console.error(error);

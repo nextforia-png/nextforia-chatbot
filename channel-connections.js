@@ -2351,10 +2351,12 @@ class MetaChannelProvider {
         session.is_wa_login_user === true
       );
       const appOnlyRecoveryConfirmed = onboardingMode === "coexistence_recovery" && session && [
+        "FINISH",
         "FINISH_ONLY_WABA",
         "FINISH_GRANT_ONLY_API_ACCESS"
       ].includes(session.onboarding_event);
       const isOnBusinessApp = phone.is_on_biz_app === true;
+      const isConnectedCloudApiPhone = String(phone.status || "").toUpperCase() === "CONNECTED";
       if (onboardingMode === "coexistence") {
         if (!coexistenceEventConfirmed) {
           throw new ChannelConnectionError(
@@ -2378,11 +2380,11 @@ class MetaChannelProvider {
             "Meta did not confirm app-only access for this recovery attempt"
           );
         }
-        if (!isOnBusinessApp) {
+        if (!isOnBusinessApp && !isConnectedCloudApiPhone) {
           throw new ChannelConnectionError(
             "whatsapp_coexistence_number_required",
             409,
-            "Recovery requires a number that remains active in WhatsApp Business App"
+            "Recovery requires a number active in WhatsApp Business App or already connected to Cloud API"
           );
         }
       } else if (coexistenceEventConfirmed || appOnlyRecoveryConfirmed || isOnBusinessApp) {

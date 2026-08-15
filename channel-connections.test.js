@@ -187,6 +187,16 @@ function expectCode(promise, code) {
         platform_type: "CLOUD_API"
       }] } };
     }
+    if (request.url.endsWith("/v25.0/waba-cloud-existing/phone_numbers")) {
+      return { data: { data: [{
+        id: "phone-cloud-existing",
+        display_phone_number: "+1 555 010 1000",
+        verified_name: "Existing Cloud API",
+        is_on_biz_app: false,
+        status: "CONNECTED",
+        platform_type: "CLOUD_API"
+      }] } };
+    }
     throw new Error("Unexpected WhatsApp Embedded Signup request: " + request.url);
   };
   embeddedExchangeAxios.get = async function (url, options) {
@@ -248,12 +258,30 @@ function expectCode(promise, code) {
   assert.strictEqual(embeddedRecoveryCandidate.onboarding_mode, "coexistence_recovery");
   assert.strictEqual(embeddedRecoveryCandidate.coexistence, true);
   assert.strictEqual(embeddedRecoveryCandidate.coexistence_event_confirmed, true);
-  await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+  const embeddedGenericRecoveryCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-coexistence",
     phone_number_id: "phone-coexistence",
     onboarding_mode: "coexistence_recovery",
     onboarding_event: "FINISH"
-  }), "whatsapp_coexistence_event_required");
+  });
+  assert.strictEqual(embeddedGenericRecoveryCandidate.phone_number_id, "phone-coexistence");
+  assert.strictEqual(embeddedGenericRecoveryCandidate.coexistence_event_confirmed, true,
+    "a generic v4 FINISH must honor the signed recovery mode");
+  const embeddedConnectedCloudRecoveryCandidate = await embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-cloud-existing",
+    phone_number_id: "phone-cloud-existing",
+    onboarding_mode: "coexistence_recovery",
+    onboarding_event: "FINISH"
+  });
+  assert.strictEqual(embeddedConnectedCloudRecoveryCandidate.phone_number_id, "phone-cloud-existing");
+  assert.strictEqual(embeddedConnectedCloudRecoveryCandidate.coexistence_event_confirmed, true,
+    "recovery must accept a number Graph confirms is already connected to Cloud API");
+  await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
+    waba_id: "waba-embedded",
+    phone_number_id: "phone-embedded",
+    onboarding_mode: "coexistence_recovery",
+    onboarding_event: "FINISH"
+  }), "whatsapp_coexistence_number_required");
   await expectCode(embeddedExchangeMeta.prepareEmbeddedWhatsApp("embedded-code", {
     waba_id: "waba-embedded",
     business_id: "business-embedded",

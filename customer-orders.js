@@ -4,7 +4,7 @@ const crypto = require("crypto");
 
 const CUSTOMER_ORDER_STATE_TOOL = "customer_order_state_v1";
 const ORDER_STAGES = Object.freeze(["por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]);
-const ORDER_ACTIONS = Object.freeze(["confirm_payment", "start_preparation", "send_tracking", "mark_sent", "cancel"]);
+const ORDER_ACTIONS = Object.freeze(["confirm_payment", "start_preparation", "save_tracking_draft", "send_tracking", "mark_sent", "cancel"]);
 const SHIPPING_STATUSES = Object.freeze(["priced", "free", "pending_quote"]);
 
 class CustomerOrderError extends Error {
@@ -43,6 +43,16 @@ function normalizeTrackingUrl(value) {
   } catch (_) {
     return "";
   }
+}
+
+function trackingDetails(payload) {
+  const trackingNumber = text(payload && payload.tracking_number, 120);
+  const rawTrackingUrl = text(payload && payload.tracking_url, 1000);
+  const trackingUrl = normalizeTrackingUrl(rawTrackingUrl);
+  if (!trackingNumber) throw new CustomerOrderError("tracking_required", "Escribe el número de guía.");
+  if (!rawTrackingUrl) throw new CustomerOrderError("tracking_url_required", "Agrega el enlace de rastreo de la transportadora.");
+  if (!trackingUrl) throw new CustomerOrderError("tracking_url_invalid", "Usa un enlace seguro que comience por https://.");
+  return { trackingNumber, trackingUrl };
 }
 
 function normalizeItems(items) {
@@ -225,24 +235,26 @@ function createCustomerOrderService(options) {
         nextStage = "preparacion";
       } else if (action === "mark_sent") {
         if (current.stage !== "preparacion") throw new CustomerOrderError("invalid_transition", "El pedido debe estar en preparación antes de enviarlo.", 409);
-        if (!current.tracking_number) throw new CustomerOrderError("tracking_required", "Agrega y envía la guía antes de marcar el pedido como enviado.", 409);
+        if (!current.tracking_number || !current.tracking_url || !current.tracking_sent_at) throw new CustomerOrderError("tracking_required", "Agrega y envía la guía con su enlace antes de marcar el pedido como enviado.", 409);
         nextStage = "enviado";
       } else if (action === "cancel") {
         if (current.stage === "enviado" || current.stage === "cancelado") throw new CustomerOrderError("invalid_transition", "Este pedido ya no se puede cancelar desde el panel.", 409);
         nextStage = "cancelado";
-      } else if (action === "send_tracking") {
-        if (!["pagado", "preparacion", "enviado"].includes(current.stage)) throw new CustomerOrderError("invalid_transition", "Confirma el pago antes de enviar una guía.", 409);
-        const tracking = text(payload && payload.tracking_number, 120);
-        const rawTrackingUrl = text(payload && payload.tracking_url, 1000);
-        const trackingUrl = normalizeTrackingUrl(rawTrackingUrl);
-        if (!tracking) throw new CustomerOrderError("tracking_required", "Escribe el número de guía.");
-        if (!rawTrackingUrl) throw new CustomerOrderError("tracking_url_required", "Agrega el enlace de rastreo de la transportadora.");
-        if (!trackingUrl) throw new CustomerOrderError("tracking_url_invalid", "Usa un enlace seguro que comience por https://.");
-        if (typeof options.sendTracking !== "function") throw new CustomerOrderError("delivery_unavailable", "El canal no está disponible para enviar la guía.", 503);
-        await options.sendTracking(current, tracking, trackingUrl);
-        next.tracking_number = tracking;
-        next.tracking_url = trackingUrl;
-        next.tracking_sent_at = new Date().toISOString();
+      } else if (action === "save_tracking_draft" || action === "send_tracking") {
+        if (action === "save_tracking_draft" && current.stage !== "por_confirmar") throw new CustomerOrderError("invalid_transition", "El pago ya está confirmado; envía la guía al cliente.", 409);
+        if (action === "send_tracking" && !["pagado", "preparacion", "enviado"].includes(current.stage)) throw new CustomerOrderError("invalid_transition", "Confirma el pago antes de enviar una guía.", 409);
+        const details = trackingDetails(payload);
+        if (action === "save_tracking_draft") {
+          next.tracking_number = details.trackingNumber;
+          next.tracking_url = details.trackingUrl;
+          next.tracking_sent_at = "";
+        } else {
+          if (typeof options.sendTracking !== "function") throw new CustomerOrderError("delivery_unavailable", "El canal no está disponible para enviar la guía.", 503);
+          await options.sendTracking(current, details.trackingNumber, details.trackingUrl);
+          next.tracking_number = details.trackingNumber;
+          next.tracking_url = details.trackingUrl;
+          next.tracking_sent_at = new Date().toISOString();
+        }
       }
       next.stage = nextStage;
       next.updated_at = new Date().toISOString();

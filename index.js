@@ -46,7 +46,8 @@ const {
   CUSTOMER_ORDER_STATE_TOOL,
   CustomerOrderError,
   InMemoryCustomerOrderStore,
-  createCustomerOrderService
+  createCustomerOrderService,
+  enrichCustomerOrderContact
 } = require("./customer-orders");
 const {
   checkoutAmounts,
@@ -379,7 +380,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v399-order-shipping-default-rebuild";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v400-customer-panel-mobile-order-detail";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -16650,7 +16651,26 @@ app.get("/admin/panel/orders-data", async (req, res) => {
     return;
   }
   try {
-    const orders = await customerOrderService.list(tenantId, 300);
+    const storedOrders = await customerOrderService.list(tenantId, 300);
+    let profileTurns = conversationLogs.filter(function (turn) {
+      return cleanTenantId(turn.tenantId || turn.tenant_id) === tenantId && isCustomerMetaTurn(turn);
+    });
+    if (SUPABASE_ENABLED) {
+      try {
+        const rows = await supabaseFetchLatestToolStates(CUSTOMER_META_TOOL, { tenantId });
+        if (rows) profileTurns = rows.map(normalizeTurnRow);
+      } catch (profileError) {
+        log("warn", "customer_orders_profile_enrichment_failed", {
+          tenant_id: tenantId,
+          error: String(profileError && profileError.message || profileError || "unknown").slice(0, 180)
+        });
+      }
+    }
+    const profiles = customerMetaFromTurns(profileTurns);
+    const orders = storedOrders.map(function (order) {
+      const customerId = normalizeConversationUserId(order.conversation_id);
+      return enrichCustomerOrderContact(order, profiles[customerId]);
+    });
     res.json({
       ok: true,
       source: SUPABASE_ENABLED ? "tenant_supabase" : "memory_test_only",
@@ -16687,7 +16707,18 @@ app.post("/admin/panel/orders/action", async (req, res) => {
       { tracking_number: body.tracking_number, tracking_url: body.tracking_url, shipping: body.shipping },
       auth.email || auth.username || auth.name || "customer_panel"
     );
-    res.json({ ok: true, order });
+    let panelOrder = order;
+    try {
+      const profile = await loadCustomerMeta(order.conversation_id, tenantId);
+      panelOrder = enrichCustomerOrderContact(order, profile);
+    } catch (profileError) {
+      log("warn", "customer_order_action_profile_enrichment_failed", {
+        tenant_id: tenantId,
+        order_id: order.id,
+        error: String(profileError && profileError.message || profileError || "unknown").slice(0, 180)
+      });
+    }
+    res.json({ ok: true, order: panelOrder });
   } catch (error) {
     const status = error instanceof CustomerOrderError ? error.status : 503;
     res.status(status).json({ ok: false, error: error.code || "order_action_failed", message: error.message });

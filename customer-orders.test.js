@@ -4,7 +4,8 @@ const assert = require("assert");
 const {
   InMemoryCustomerOrderStore,
   CustomerOrderError,
-  createCustomerOrderService
+  createCustomerOrderService,
+  enrichCustomerOrderContact
 } = require("./customer-orders");
 
 async function rejectsCode(promise, code) {
@@ -41,6 +42,28 @@ async function rejectsCode(promise, code) {
   assert.strictEqual((await service.list("tenant-a")).length, 1);
   assert.strictEqual((await service.list("tenant-b")).length, 0);
   await rejectsCode(service.get("tenant-b", "ord-a"), "order_not_found");
+
+  const enriched = enrichCustomerOrderContact(created, {
+    name: "Nombre actualizado",
+    phone: "+573001112233",
+    email: "cliente@example.com",
+    address: "Dirección del perfil",
+    address_line_2: "Apto 501",
+    neighborhood: "Chapinero",
+    city: "Bogotá",
+    state: "Cundinamarca",
+    postal_code: "110231",
+    country: "Colombia",
+    id_number: "1037632938",
+    delivery_instructions: "Llamar al llegar"
+  });
+  assert.strictEqual(enriched.name, "Valentina Ríos", "the order snapshot keeps explicit values");
+  assert.strictEqual(enriched.phone, "+573001112233", "missing order values come from the canonical customer profile");
+  assert.strictEqual(enriched.address_line_2, "Apto 501");
+  assert.strictEqual(enriched.neighborhood, "Chapinero");
+  assert.strictEqual(enriched.city, "Bogotá");
+  assert.strictEqual(enriched.delivery_instructions, "Llamar al llegar");
+  assert.strictEqual(enriched.customer_profile.email, "cliente@example.com");
 
   const paid = await service.action("tenant-a", "ord-a", "confirm_payment", {
     tracking_number: "",

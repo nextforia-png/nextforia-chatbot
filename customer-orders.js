@@ -1,6 +1,10 @@
 "use strict";
 
 const crypto = require("crypto");
+const {
+  PROFILE_FIELDS,
+  normalizeCustomerContactProfile
+} = require("./customer-contact-profile");
 
 const CUSTOMER_ORDER_STATE_TOOL = "customer_order_state_v1";
 const ORDER_STAGES = Object.freeze(["por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]);
@@ -95,7 +99,13 @@ function normalizeOrder(input) {
     email: text(input.email, 200).toLowerCase(),
     id_number: text(input.id_number, 80),
     address: text(input.address, 500),
+    address_line_2: text(input.address_line_2, 300),
+    neighborhood: text(input.neighborhood, 160),
     city: text(input.city, 200),
+    state: text(input.state, 200),
+    postal_code: text(input.postal_code, 40),
+    country: text(input.country, 120),
+    delivery_instructions: text(input.delivery_instructions, 500),
     location: text(input.location, 240),
     items,
     subtotal,
@@ -118,6 +128,20 @@ function normalizeOrder(input) {
     last_action: text(input.last_action, 80),
     last_actor: text(input.last_actor, 200)
   };
+}
+
+function enrichCustomerOrderContact(order, customerProfile) {
+  const normalizedOrder = normalizeOrder(order);
+  const profile = normalizeCustomerContactProfile(customerProfile);
+  const enriched = Object.assign({}, normalizedOrder);
+  PROFILE_FIELDS.forEach(function (field) {
+    const current = text(enriched[field], 1000);
+    if (!current || (field === "name" && current.toLowerCase() === "cliente")) {
+      enriched[field] = profile[field] || current;
+    }
+  });
+  enriched.customer_profile = profile;
+  return enriched;
 }
 
 class InMemoryCustomerOrderStore {
@@ -200,7 +224,8 @@ function createCustomerOrderService(options) {
       if (!existing) return store.append(record);
       if (existing.stage !== "por_confirmar") return existing;
       const comparableFields = [
-        "conversation_id", "channel", "name", "phone", "email", "id_number", "address", "city", "location",
+        "conversation_id", "channel", "name", "phone", "email", "id_number", "address", "address_line_2",
+        "neighborhood", "city", "state", "postal_code", "country", "delivery_instructions", "location",
         "items", "subtotal", "shipping", "shipping_status", "shipping_policy", "total", "currency", "payment",
         "payment_note", "source", "source_event_id"
       ];
@@ -291,6 +316,7 @@ module.exports = {
   InMemoryCustomerOrderStore,
   collapseLatest,
   createCustomerOrderService,
+  enrichCustomerOrderContact,
   normalizeTrackingUrl,
   normalizeOrder
 };

@@ -48,6 +48,51 @@ const {
   assert.strictEqual(pushes.length, 1);
   assert.strictEqual(pushes[0].subscription.endpoint, "https://push.example/subscription-a");
 
+  const orderStore = new InMemoryCustomerNotificationStore();
+  const orderPushes = [];
+  const orderEventsA = [];
+  const orderEventsB = [];
+  const orderService = createCustomerNotificationService({
+    store: orderStore,
+    pushSender: {
+      send: async function (subscription, payload) {
+        orderPushes.push({ subscription, payload });
+      }
+    }
+  });
+  orderService.events.on("tenant:tenant-a", function (event) { orderEventsA.push(event); });
+  orderService.events.on("tenant:tenant-b", function (event) { orderEventsB.push(event); });
+  await orderService.subscribe("tenant-a", "admin-a", {
+    endpoint: "https://push.example/order-subscription-a",
+    keys: { p256dh: "order-public-key-a", auth: "order-auth-a" }
+  });
+  const orderCreated = await orderService.createOrder({
+    id: "order-notification-a-1",
+    tenant_id: "tenant-a",
+    order_id: "order-a-1001",
+    conversation_id: "wa:573010000001",
+    channel: "whatsapp",
+    customer_label: "Cliente pedido A"
+  });
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.strictEqual(orderCreated.type, "customer_order_created");
+  assert.strictEqual(orderCreated.action_url, "/admin/panel?tab=orders&order=order-a-1001");
+  assert.strictEqual(orderCreated.action_label, "Ver pedido");
+  assert.strictEqual(orderEventsA.length, 1);
+  assert.strictEqual(orderEventsB.length, 0);
+  assert.strictEqual(orderPushes.length, 1);
+  assert.strictEqual(orderPushes[0].payload.tag, "nextfor-order-order-a-1001");
+  assert.strictEqual((await orderService.list("tenant-a", "admin-a", 20)).count, 1);
+  assert.strictEqual((await orderService.list("tenant-b", "admin-b", 20)).count, 0);
+  await orderService.createOrder({
+    id: "order-notification-a-1",
+    tenant_id: "tenant-a",
+    order_id: "order-a-1001"
+  });
+  await new Promise(function (resolve) { setImmediate(resolve); });
+  assert.strictEqual(orderEventsA.length, 1, "an order replay must not alert twice");
+  assert.strictEqual(orderPushes.length, 1, "an order replay must not push twice");
+
   const duplicate = await service.createHandoff({
     id: "handoff-a-1",
     tenant_id: "tenant-a",
@@ -102,6 +147,9 @@ const {
   assert.throws(function () {
     normalizeNotification({ tenant_id: "tenant-a", conversation_id: "" });
   }, /notification_conversation_required/);
+  assert.throws(function () {
+    normalizeNotification({ type: "customer_order_created", tenant_id: "tenant-a", order_id: "" });
+  }, /notification_order_required/);
 
   console.log("customer-notifications.test.js OK");
 })().catch(function (error) {

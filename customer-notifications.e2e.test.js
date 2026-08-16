@@ -94,8 +94,8 @@ async function nextEvent(stream, expectedName, timeoutMs) {
   const base = "http://127.0.0.1:" + port;
   const vapid = webPush.generateVAPIDKeys();
   const fixtures = [
-    { user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: "TenantPassword2026", role: "admin" },
-    { user_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: "TenantPassword2026", role: "admin" }
+    { user_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", tenant_id: "tenant-a", company_name: "Empresa A", email: "admin@a.example", password: "TenantPassword2026", role: "admin", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" },
+    { user_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", tenant_id: "tenant-b", company_name: "Empresa B", email: "admin@b.example", password: "TenantPassword2026", role: "admin", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }
   ];
   const child = childProcess.spawn(process.execPath, [path.join(__dirname, "index.js")], {
     cwd: __dirname,
@@ -161,6 +161,44 @@ async function nextEvent(stream, expectedName, timeoutMs) {
     result = await json(base, "/admin/panel/notifications", cookieA);
     assert.strictEqual(result.body.unread_count, 0);
 
+    const orderStreamA = await openEvents(base, cookieA);
+    await nextEvent(orderStreamA, "ready", 3000);
+    const orderResult = await json(base, "/admin/test/customer-order-notification", cookieA, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        order_id: "order-a-1001",
+        order_number: "A-1001",
+        conversation_id: "wa:573010000001",
+        name: "Cliente pedido A"
+      })
+    });
+    assert.strictEqual(orderResult.response.status, 200);
+    assert.strictEqual(orderResult.body.tenant_id, "tenant-a");
+    const orderEvent = await nextEvent(orderStreamA, "notification", 5000);
+    assert.strictEqual(orderEvent.type, "customer_order_created");
+    assert.strictEqual(orderEvent.tenant_id, "tenant-a");
+    assert.strictEqual(orderEvent.order_id, "order-a-1001");
+    assert.strictEqual(orderEvent.action_url, "/admin/panel?tab=orders&order=order-a-1001");
+    orderStreamA.controller.abort();
+
+    result = await json(base, "/admin/panel/notifications", cookieA);
+    assert.strictEqual(result.body.unread_count, 1);
+    assert.strictEqual(result.body.items[0].id, orderEvent.id);
+    assert.strictEqual(result.body.items[0].action_label, "Ver pedido");
+    const isolatedAfterOrder = await json(base, "/admin/panel/notifications", cookieB);
+    assert.strictEqual(isolatedAfterOrder.response.status, 200);
+    assert.strictEqual(isolatedAfterOrder.body.count, 0, "tenant B must never see tenant A order notifications");
+    const crossTenantOrderRead = await json(base, "/admin/panel/notifications/" + encodeURIComponent(orderEvent.id) + "/read", cookieB, { method: "POST" });
+    assert.strictEqual(crossTenantOrderRead.response.status, 404);
+
+    const ordersA = await json(base, "/admin/panel/orders-data", cookieA);
+    assert.strictEqual(ordersA.response.status, 200);
+    assert(ordersA.body.orders.some(function (order) { return order.id === "order-a-1001"; }));
+    const ordersB = await json(base, "/admin/panel/orders-data", cookieB);
+    assert.strictEqual(ordersB.response.status, 200);
+    assert.strictEqual(ordersB.body.orders.some(function (order) { return order.id === "order-a-1001"; }), false);
+
     let response = await fetch(base + "/admin/panel?tab=conversations&conversation=ig%3A178500000001", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);
     const panel = await response.text();
@@ -168,6 +206,18 @@ async function nextEvent(stream, expectedName, timeoutMs) {
     assert(panel.includes("startNotificationStream()"));
     assert(panel.includes("playNotificationSound()"));
     assert(panel.includes("pushManager.subscribe"));
+    response = await fetch(base + "/admin/panel?tab=orders&order=order-a-1001", { headers: { cookie: cookieA } });
+    assert.strictEqual(response.status, 200);
+    const orderPanel = await response.text();
+    assert(orderPanel.includes('INITIAL_ORDER="order-a-1001"'));
+    assert(orderPanel.includes('id="navOrderCount"'));
+    assert(orderPanel.includes('id="mnavOrderCount"'));
+    assert(orderPanel.includes('function renderOrderBadges()'));
+    assert(orderPanel.includes('item.type==="customer_order_created"'));
+    response = await fetch(base + "/admin/panel-demo?tab=orders&order=1042");
+    assert.strictEqual(response.status, 200);
+    const demoOrderPanel = await response.text();
+    assert(demoOrderPanel.includes('INITIAL_ORDER="1042"'), "demo notification links must preserve the exact order on mobile and desktop");
     response = await fetch(base + "/admin/customer-notification-sw.js", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);
     const serviceWorker = await response.text();

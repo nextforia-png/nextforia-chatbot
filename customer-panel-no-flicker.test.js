@@ -48,4 +48,20 @@ assert.ok(/<div class="toolbar" style="display:none">/.test(planTab), "en Mi pla
 const forced = renderPanel({ id: "a", company_name: "Empresa A", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }, "appointments");
 assert.strictEqual(activeView(forced), "panel-summary", "no se activa un módulo no asignado ni pidiéndolo por URL");
 
+// ── Atlas respeta el área pedida: Conversaciones nunca se convierte en Citas ──
+const atlasContext = { id: "atlas", company_name: "Empresa Atlas", plan_id: "nextfor-atlas", assigned_bot_id: "both" };
+const atlasConversations = renderPanel(atlasContext, "conversations");
+assert.strictEqual(pick(atlasConversations, /id="pageTitle">([^<]*)</), "Conversaciones");
+assert.strictEqual(activeView(atlasConversations), "panel-inbox", "Atlas debe abrir la bandeja solicitada sin ocultar sus conversaciones");
+assert.ok(atlasConversations.includes('INITIAL_TAB="conversations"'), "el estado inicial debe conservar Conversaciones");
+
+const atlasAppointments = renderPanel(atlasContext, "appointments");
+assert.strictEqual(pick(atlasAppointments, /id="pageTitle">([^<]*)</), "Citas");
+assert.strictEqual(activeView(atlasAppointments), "panel-appointments", "Atlas debe abrir Citas únicamente cuando se solicita Citas");
+assert.ok(atlasAppointments.includes('INITIAL_TAB="appointments"'), "el estado inicial debe conservar Citas");
+
+[atlasConversations, atlasAppointments].forEach(function (html) {
+  assert.strictEqual((html.match(/class="view active"/g) || []).length, 1, "Atlas debe pintar una sola vista activa");
+});
+
 console.log("customer-panel-no-flicker.test.js OK");

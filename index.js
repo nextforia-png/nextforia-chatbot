@@ -380,7 +380,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v404-customer-panel-mobile-profile-sections";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v405-customer-panel-appointment-desktop";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -17862,22 +17862,34 @@ app.get("/admin/panel-demo", (req, res) => {
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
   const initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "summary";
+  const appointmentDemo = initialTab === "appointments";
   renderCustomerPanel(res, {
     auth,
     capabilities,
     demoMode: true,
     initialTab,
     initialOrder: String(req.query.order || "").trim().slice(0, 120),
-    tenantContext: {
-      id: "nextfor-aura-demo",
-      company_name: "Comercio piloto",
-      plan_id: "nextfor-aura",
-      plan_name: "Nextfor Aura",
-      assigned_bot_id: "customer-service",
-      assigned_bot_name: "Atención al cliente",
-      support: true,
-      appointments: false
-    },
+    tenantContext: appointmentDemo
+      ? {
+          id: "nextfor-tempo-demo",
+          company_name: "Clínica piloto",
+          plan_id: "nextfor-tempo",
+          plan_name: "Nextfor Tempo",
+          assigned_bot_id: "agendamiento",
+          assigned_bot_name: "Agendamiento",
+          support: false,
+          appointments: true
+        }
+      : {
+          id: "nextfor-aura-demo",
+          company_name: "Comercio piloto",
+          plan_id: "nextfor-aura",
+          plan_name: "Nextfor Aura",
+          assigned_bot_id: "customer-service",
+          assigned_bot_name: "Atención al cliente",
+          support: true,
+          appointments: false
+        },
     customerSetupCompleted: true,
     dataPath: "/admin/panel/demo-data",
     appointmentsPath: "/admin/panel/demo-appointments-data",

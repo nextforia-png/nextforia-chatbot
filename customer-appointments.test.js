@@ -1,11 +1,13 @@
 "use strict";
 
 const assert = require("assert");
+const fs = require("fs");
 const vm = require("vm");
 const {
   clientScript,
   customerAppointmentSnapshot,
   demoAppointmentSnapshot,
+  markup,
   styles
 } = require("./customer-appointments");
 
@@ -36,7 +38,27 @@ assert(clientScript.includes("Número público de citas."));
 assert(clientScript.includes("Probar llamada"));
 assert(clientScript.includes("No requiere extensión."));
 assert(clientScript.includes("copyAppointmentCallNumber"));
+assert(clientScript.includes('["agenda","chats","reminders","rules"]'));
+assert(clientScript.includes("PANEL_ONBOARDING_PATH"));
+assert(clientScript.includes("appointment_setup"));
+assert(clientScript.includes("Confirmar cita"));
+assert(!clientScript.includes("Confirmar y enviar →"));
+assert(markup.includes('id="apptRulesView"'));
+assert(markup.includes("Una sola fuente de información"));
+assert(markup.includes("Recuerda"));
+assert(markup.includes("Confirma"));
+assert(markup.includes("Llega listo"));
+assert(markup.includes('id="apptNeedsCount"'));
 assert(styles.includes("apptGatePhone"));
 assert(styles.includes("auto-fit"));
+assert(styles.includes("apptRulesGrid"));
+assert(styles.includes("remJourney"));
+assert(styles.includes(".apptDetail>.mobileBack{display:none!important}"));
+assert(styles.includes(".apptDetail>.mobileBack{display:inline-flex!important}"));
+
+const indexSource = fs.readFileSync(require.resolve("./index"), "utf8");
+assert(indexSource.includes('const appointmentDemo = initialTab === "appointments"'));
+assert(indexSource.includes('id: "nextfor-tempo-demo"'));
+assert(indexSource.includes('const BOT_VERSION = "v405-customer-panel-appointment-desktop"'));
 
 console.log("customer appointment panel tests: ok");

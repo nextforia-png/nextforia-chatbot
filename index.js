@@ -380,7 +380,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v401-customer-panel-mobile-profile-navigation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v403-instagram-native-human-replies";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -929,9 +929,11 @@ const instagramRuntimeState = {
   webhook_requests: 0,
   inbound_messages: 0,
   outbound_messages: 0,
+  human_outbound_messages: 0,
   last_webhook_at: null,
   last_inbound_at: null,
   last_outbound_at: null,
+  last_human_outbound_at: null,
   last_error_at: null,
   last_error_stage: null,
   last_error_code: null,
@@ -3226,11 +3228,18 @@ function managedInstagramTextFingerprint(text) {
   return value ? crypto.createHash("sha256").update(value).digest("hex") : "";
 }
 
-function rememberManagedInstagramOutbound(text) {
+function managedInstagramMessageIdKey(messageId) {
+  const value = cleanRuntimeText(messageId, 500);
+  return value ? "id:" + value : "";
+}
+
+function rememberManagedInstagramOutbound(text, messageId) {
   const fingerprint = managedInstagramTextFingerprint(text);
-  if (!fingerprint) return;
   const now = Date.now();
-  recentManagedInstagramOutbound.set(fingerprint, now + 10 * 60 * 1000);
+  const expiresAt = now + 10 * 60 * 1000;
+  if (fingerprint) recentManagedInstagramOutbound.set("text:" + fingerprint, expiresAt);
+  const messageIdKey = managedInstagramMessageIdKey(messageId);
+  if (messageIdKey) recentManagedInstagramOutbound.set(messageIdKey, expiresAt);
   for (const [key, expiresAt] of recentManagedInstagramOutbound) {
     if (expiresAt <= now || recentManagedInstagramOutbound.size > 2000) {
       recentManagedInstagramOutbound.delete(key);
@@ -3238,12 +3247,17 @@ function rememberManagedInstagramOutbound(text) {
   }
 }
 
-function isRecentManagedInstagramOutbound(text) {
+function isRecentManagedInstagramOutbound(text, messageId) {
+  const messageIdKey = managedInstagramMessageIdKey(messageId);
+  const messageExpiresAt = messageIdKey ? recentManagedInstagramOutbound.get(messageIdKey) || 0 : 0;
+  if (messageExpiresAt > Date.now()) return true;
+  if (messageExpiresAt) recentManagedInstagramOutbound.delete(messageIdKey);
   const fingerprint = managedInstagramTextFingerprint(text);
   if (!fingerprint) return false;
-  const expiresAt = recentManagedInstagramOutbound.get(fingerprint) || 0;
+  const fingerprintKey = "text:" + fingerprint;
+  const expiresAt = recentManagedInstagramOutbound.get(fingerprintKey) || 0;
   if (expiresAt <= Date.now()) {
-    if (expiresAt) recentManagedInstagramOutbound.delete(fingerprint);
+    if (expiresAt) recentManagedInstagramOutbound.delete(fingerprintKey);
     return false;
   }
   return true;
@@ -4908,12 +4922,15 @@ async function sendText(to, text, options) {
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       const chunks = splitMetaMessageText(text, 950);
       for (const chunk of chunks) {
-        await axios.post(
+        const response = await axios.post(
           `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
           { recipient: { id: recipient.id }, message: { text: chunk } },
           { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
         );
-        rememberManagedInstagramOutbound(chunk);
+        rememberManagedInstagramOutbound(
+          chunk,
+          response && response.data && (response.data.message_id || response.data.id)
+        );
         instagramRuntimeState.outbound_messages++;
       }
       instagramRuntimeState.last_outbound_at = new Date().toISOString();
@@ -7458,10 +7475,12 @@ function instagramEventsFromEntry(entry) {
     if (value.sender?.id && value.message) events.push(value);
     for (const message of value.messages || []) {
       const senderId = message?.from?.id || message?.sender?.id || value.sender?.id;
+      const recipientId = message?.to?.id || message?.recipient?.id ||
+        (typeof message?.to === "string" ? message.to : "") || value.recipient?.id;
       if (!senderId) continue;
       events.push({
         sender: { id: senderId },
-        recipient: value.recipient || null,
+        recipient: recipientId ? { id: recipientId } : value.recipient || null,
         timestamp: message.timestamp || value.timestamp || entry?.time,
         message: {
           mid: message.id || message.mid || null,
@@ -7473,6 +7492,77 @@ function instagramEventsFromEntry(entry) {
     }
   }
   return events;
+}
+
+function instagramBusinessOutboundEvent(event, destination) {
+  return !!(event && event.message && event.message.is_echo) ||
+    String(event && event.sender && event.sender.id || "") === String(destination && destination.instagramUserId || "");
+}
+
+function instagramNativeReplyText(event) {
+  const message = event && event.message || {};
+  const text = cleanRuntimeText(message.text, 1000);
+  if (text) return text;
+  const attachment = Array.isArray(message.attachments) ? message.attachments[0] : null;
+  const type = cleanRuntimeText(attachment && attachment.type, 80).toLowerCase();
+  if (type === "image") return "[Imagen enviada desde Instagram]";
+  if (type === "audio") return "[Audio enviado desde Instagram]";
+  if (type === "video") return "[Video enviado desde Instagram]";
+  if (type === "file") return "[Archivo enviado desde Instagram]";
+  if (type === "share") return "[Publicación compartida desde Instagram]";
+  return "[Mensaje enviado desde Instagram]";
+}
+
+function instagramEventSourceAt(timestamp) {
+  const numeric = Number(timestamp);
+  if (!Number.isFinite(numeric) || numeric <= 0) return new Date().toISOString();
+  const milliseconds = numeric < 100000000000 ? numeric * 1000 : numeric;
+  const parsed = new Date(milliseconds);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+}
+
+async function recordInstagramNativeHumanReply(event, destination, eventId) {
+  const recipientId = cleanRuntimeText(event && event.recipient && event.recipient.id, 240);
+  if (!recipientId || recipientId === String(destination.instagramUserId || "")) {
+    instagramRuntimeState.last_skip_reason = "human_outbound_recipient_missing";
+    return false;
+  }
+  const userId = "ig:" + recipientId;
+  const text = instagramNativeReplyText(event);
+  const sourceAt = instagramEventSourceAt(event && event.timestamp);
+  rememberConversationRuntime(userId, destination);
+  addHumanHandoff(userId, destination.tenantId);
+  await recordRetargetingSignal(
+    destination.tenantId,
+    userId,
+    "handoff",
+    "instagram-native:" + eventId,
+    "instagram_native_inbox"
+  );
+  await recordAdminEvent(
+    userId,
+    "admin_send_message",
+    "[Humano] " + text,
+    "ok",
+    true,
+    {
+      tenant_id: destination.tenantId,
+      source_event_id: eventId,
+      source_at: sourceAt,
+      require_persistence: true,
+      tools: ["instagram_native_echo"]
+    }
+  );
+  instagramRuntimeState.human_outbound_messages++;
+  instagramRuntimeState.last_human_outbound_at = sourceAt;
+  instagramRuntimeState.last_skip_reason = null;
+  log("info", "instagram_native_human_reply_recorded", {
+    tenant_id: destination.tenantId,
+    message_id_suffix: String(eventId).slice(-16),
+    recipient_suffix: recipientId.slice(-8),
+    message_type: event && event.message && event.message.text ? "text" : "attachment"
+  });
+  return true;
 }
 
 app.post("/instagram/webhook", async (req, res) => {
@@ -7514,20 +7604,20 @@ app.post("/instagram/webhook", async (req, res) => {
           instagramRuntimeState.last_skip_reason = "missing_sender";
           continue;
         }
-        if (event.message?.is_echo || String(event.sender.id) === String(destination.instagramUserId)) {
-          instagramRuntimeState.last_skip_reason = "echo_or_business_sender";
-          continue;
-        }
         const eventId = event.message?.mid || ["ig", event.sender.id, event.timestamp || entry?.time || "", event.message?.text || ""].join(":");
         if (!acceptMetaEventId(eventId)) {
           instagramRuntimeState.last_skip_reason = "duplicate_event";
           continue;
         }
-        if (event.message?.text && isRecentManagedInstagramOutbound(event.message.text)) {
-          instagramRuntimeState.last_skip_reason = "managed_outbound_echo";
-          log("info", "instagram_managed_outbound_echo_skipped", {
-            destination_tenant_id: destination.tenantId
-          });
+        if (instagramBusinessOutboundEvent(event, destination)) {
+          if (isRecentManagedInstagramOutbound(event.message?.text, event.message?.mid)) {
+            instagramRuntimeState.last_skip_reason = "managed_outbound_echo";
+            log("info", "instagram_managed_outbound_echo_skipped", {
+              destination_tenant_id: destination.tenantId
+            });
+            continue;
+          }
+          await recordInstagramNativeHumanReply(event, destination, eventId);
           continue;
         }
         const userId = `ig:${event.sender.id}`;

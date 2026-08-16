@@ -107,8 +107,21 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(source, /function splitMetaMessageText\(value, maxLength\)/);
   assert.match(source, /const chunks = splitMetaMessageText\(text, 950\)[\s\S]*?for \(const chunk of chunks\)[\s\S]*?message: \{ text: chunk \}/);
   assert.doesNotMatch(source, /recipient\.channel === "instagram"[\s\S]{0,1400}slice\(0, 2000\)/);
-  assert.match(source, /rememberManagedInstagramOutbound\(chunk\)/);
-  assert.match(source, /isRecentManagedInstagramOutbound\(event\.message\.text\)[\s\S]*?managed_outbound_echo/);
+  assert.match(source, /rememberManagedInstagramOutbound\([\s\S]*?response && response\.data && \(response\.data\.message_id \|\| response\.data\.id\)/,
+    "managed Instagram sends must remember Meta's message id for exact echo deduplication");
+  assert.match(source, /isRecentManagedInstagramOutbound\(event\.message\?\.text, event\.message\?\.mid\)[\s\S]*?managed_outbound_echo/);
+  const instagramHumanReplyStart = source.indexOf("async function recordInstagramNativeHumanReply");
+  const instagramHumanReplyEnd = source.indexOf("\napp.post(\"/instagram/webhook\"", instagramHumanReplyStart);
+  assert(instagramHumanReplyStart >= 0 && instagramHumanReplyEnd > instagramHumanReplyStart);
+  const instagramHumanReplyHandler = source.slice(instagramHumanReplyStart, instagramHumanReplyEnd);
+  assert.match(instagramHumanReplyHandler, /const userId = "ig:" \+ recipientId/,
+    "a native Instagram reply must attach to the customer recipient, not the business sender");
+  assert.match(instagramHumanReplyHandler, /addHumanHandoff\(userId, destination\.tenantId\)/,
+    "a native Instagram reply must pause that tenant's bot conversation");
+  assert.match(instagramHumanReplyHandler, /recordAdminEvent\([\s\S]*?"admin_send_message"[\s\S]*?tenant_id: destination\.tenantId[\s\S]*?require_persistence: true/,
+    "a native Instagram reply must be persisted as a tenant-scoped human message");
+  assert.doesNotMatch(instagramHumanReplyHandler, /handleConversation|sendText\(/,
+    "a native Instagram reply must never trigger another bot response");
   assert.match(source, /ambiguous_instagram_destination_ids/);
   assert.match(source, /instagram_asset_tenant_conflict/);
   assert.match(source, /pending_activation/);
@@ -265,7 +278,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v401-customer-panel-mobile-profile-navigation"));
+    assert((await response.text()).includes("NextforIA Chatbot v403-instagram-native-human-replies"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

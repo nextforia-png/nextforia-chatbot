@@ -278,7 +278,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v403-instagram-native-human-replies"));
+    assert((await response.text()).includes("NextforIA Chatbot v404-customer-panel-mobile-profile-sections"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

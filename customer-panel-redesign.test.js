@@ -195,6 +195,11 @@ assert(!aiSummaryCard[0].includes("openSummaryMetric"), "AI summary must remain 
 assert(redesigned.includes("openProfileSection('plan')"));
 assert(redesigned.includes("openProfileSection('channels')"));
 assert(redesigned.includes("openProfileSection('setup')"));
+assert(redesigned.includes('function openProfileSection(tab){closeProfile();showTab(tab);resetMobileAccountViewport();}'));
+assert(redesigned.includes('.customer-panel-mobile-v389.mobile-account-view .mobileTabbar{display:grid!important}'));
+assert(redesigned.includes('document.body.classList.toggle("mobile-detail-view",detail&&!accountDetail)'));
+assert(redesigned.includes('document.body.classList.toggle("mobile-account-view",detail&&accountDetail)'));
+assert(redesigned.includes('requestAnimationFrame(function(){if(card)card.scrollTop=0;})'));
 assert(redesigned.includes("onclick=\"showTab('notifications')\" aria-label=\"Abrir notificaciones\""));
 assert(!redesigned.includes("undefinedNotificaciones"));
 assert(

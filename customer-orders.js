@@ -6,6 +6,7 @@ const CUSTOMER_ORDER_STATE_TOOL = "customer_order_state_v1";
 const ORDER_STAGES = Object.freeze(["por_confirmar", "pagado", "preparacion", "enviado", "cancelado"]);
 const ORDER_ACTIONS = Object.freeze(["confirm_payment", "start_preparation", "save_tracking_draft", "send_tracking", "mark_sent", "cancel"]);
 const SHIPPING_STATUSES = Object.freeze(["priced", "free", "pending_quote"]);
+const DEFAULT_SHIPPING_COP = 10000;
 
 class CustomerOrderError extends Error {
   constructor(code, message, status) {
@@ -227,7 +228,14 @@ function createCustomerOrderService(options) {
       if (action === "confirm_payment") {
         if (current.stage !== "por_confirmar") throw new CustomerOrderError("invalid_transition", "Este pago ya fue procesado.", 409);
         if (current.shipping_status === "pending_quote") {
-          throw new CustomerOrderError("shipping_quote_required", "Confirma el valor del envío antes de marcar el pago.", 409);
+          const suppliedShipping = payload
+            && payload.shipping !== undefined
+            && payload.shipping !== null
+            && String(payload.shipping).trim() !== "";
+          const shipping = suppliedShipping ? amount(payload.shipping) : DEFAULT_SHIPPING_COP;
+          next.shipping = shipping;
+          next.shipping_status = shipping > 0 ? "priced" : "free";
+          next.total = current.subtotal + shipping;
         }
         nextStage = "pagado";
       } else if (action === "start_preparation") {
@@ -275,6 +283,7 @@ function createCustomerOrderService(options) {
 
 module.exports = {
   CUSTOMER_ORDER_STATE_TOOL,
+  DEFAULT_SHIPPING_COP,
   ORDER_ACTIONS,
   ORDER_STAGES,
   SHIPPING_STATUSES,

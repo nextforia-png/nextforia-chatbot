@@ -91,17 +91,41 @@ async function rejectsCode(promise, code) {
   assert.strictEqual(pendingShipping.shipping, 0);
   assert.strictEqual(pendingShipping.total, null);
   assert.strictEqual(pendingShipping.shipping_status, "pending_quote");
-  await rejectsCode(service.action("tenant-a", pendingShipping.id, "confirm_payment", {}, "agent@example.com"), "shipping_quote_required");
-  const pricedShipping = await service.upsertDraft(Object.assign({}, pendingShipping, {
+  const defaultShipping = await service.action("tenant-a", pendingShipping.id, "confirm_payment", {}, "agent@example.com");
+  assert.strictEqual(defaultShipping.stage, "pagado");
+  assert.strictEqual(defaultShipping.shipping, 10000);
+  assert.strictEqual(defaultShipping.shipping_status, "priced");
+  assert.strictEqual(defaultShipping.total, 94950);
+
+  const customShippingDraft = await service.create({
+    id: "ord-custom-shipping",
+    tenant_id: "tenant-a",
+    conversation_id: "wa:custom-shipping",
+    items: [{ name: "Producto", qty: 1, price: 84950 }],
+    shipping_status: "pending_quote"
+  });
+  const customShipping = await service.action("tenant-a", customShippingDraft.id, "confirm_payment", { shipping: 15000 }, "agent@example.com");
+  assert.strictEqual(customShipping.stage, "pagado");
+  assert.strictEqual(customShipping.shipping, 15000);
+  assert.strictEqual(customShipping.total, 99950);
+
+  const pricedShippingDraft = await service.create({
+    id: "ord-priced-shipping",
+    tenant_id: "tenant-a",
+    conversation_id: "wa:priced-shipping",
+    items: [{ name: "Producto", qty: 1, price: 84950 }],
+    shipping_status: "pending_quote"
+  });
+  const pricedShipping = await service.upsertDraft(Object.assign({}, pricedShippingDraft, {
     shipping: 12900,
     shipping_status: "priced",
     shipping_policy: "Tarifa nacional configurada."
   }));
-  assert.strictEqual(pricedShipping.id, pendingShipping.id);
-  assert.strictEqual(pricedShipping.revision, pendingShipping.revision + 1);
+  assert.strictEqual(pricedShipping.id, pricedShippingDraft.id);
+  assert.strictEqual(pricedShipping.revision, pricedShippingDraft.revision + 1);
   assert.strictEqual(pricedShipping.shipping, 12900);
   assert.strictEqual(pricedShipping.total, 97850);
-  assert.strictEqual((await service.list("tenant-a")).filter(function (order) { return order.id === pendingShipping.id; }).length, 1);
+  assert.strictEqual((await service.list("tenant-a")).filter(function (order) { return order.id === pricedShipping.id; }).length, 1);
 
   const trackingDraftOrder = await service.create(Object.assign({}, base, {
     id: "ord-tracking-draft",

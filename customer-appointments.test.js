@@ -49,16 +49,22 @@ assert(markup.includes("Recuerda"));
 assert(markup.includes("Confirma"));
 assert(markup.includes("Llega listo"));
 assert(markup.includes('id="apptNeedsCount"'));
-assert(styles.includes("apptGatePhone"));
-assert(styles.includes("auto-fit"));
+assert(markup.includes('id="apptAgendaHero"'));
+assert(markup.includes('id="apptWeekLabel"'));
+assert(clientScript.includes("Conecta tu WhatsApp para que la IA confirme por ti"));
+assert(clientScript.includes("shiftAppointmentWeek"));
+assert(styles.includes("apptIntegrationGate"));
+assert(styles.includes("apptWeekNavigator"));
 assert(styles.includes("apptRulesGrid"));
 assert(styles.includes("remJourney"));
 assert(styles.includes(".apptDetail>.mobileBack{display:none!important}"));
 assert(styles.includes(".apptDetail>.mobileBack{display:inline-flex!important}"));
 
 const indexSource = fs.readFileSync(require.resolve("./index"), "utf8");
+const panelSource = fs.readFileSync(require.resolve("./customer-panel"), "utf8");
 assert(indexSource.includes('const appointmentDemo = initialTab === "appointments"'));
 assert(indexSource.includes('id: "nextfor-tempo-demo"'));
-assert(indexSource.includes('const BOT_VERSION = "v405-customer-panel-appointment-desktop"'));
+assert(indexSource.includes('const BOT_VERSION = "v406-customer-panel-appointment-header"'));
+assert(panelSource.includes('id="appointmentTopActions"'));
 
 console.log("customer appointment panel tests: ok");

@@ -113,14 +113,20 @@ module.exports = function renderCustomerPanel(res, options) {
   const channelConnectionsDemo = options.channelConnectionsDemo || null;
   const ordersEnabled = panelRedesignEnabled && (demoMode || (!!options.ordersV1Enabled && panelContext.support));
   const supportTabs = panelContext.support ? ["summary", "conversations", "human", "retargeting"] : [];
-  const availableTabs = supportTabs.concat(["appointments", "plan", "channels", "setup", "notifications", "tests"]).concat(ordersEnabled ? ["orders"] : []);
+  const appointmentTabs = panelContext.appointments ? ["appointments"] : [];
+  const availableTabs = supportTabs.concat(appointmentTabs, ["plan", "channels", "setup", "notifications", "tests"]).concat(ordersEnabled ? ["orders"] : []);
+  const defaultTab = !panelContext.v2 || panelContext.support
+    ? "summary"
+    : (panelContext.appointments ? "appointments" : "plan");
   const requestedTab = availableTabs.includes(options.initialTab)
     ? options.initialTab
-    : "summary";
+    : defaultTab;
   const requestedInitialTab = paymentGateRequired ? "plan" : (requestedTab === "human" ? "conversations" : requestedTab);
-  const initialTab = panelContext.v2 && panelContext.appointments && ["summary", "conversations", "orders", "retargeting"].includes(requestedInitialTab)
-    ? "appointments"
-    : (panelContext.v2 && panelContext.support && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
+  // An Atlas tenant has both product areas. The requested URL must choose the
+  // area; the mere presence of the other bot must never override it. Doing so
+  // made a valid conversations URL render Appointments and looked like data
+  // loss even though the tenant-scoped conversations were still present.
+  const initialTab = requestedInitialTab;
   // El primer pintado del servidor debe coincidir con lo que showTab(INITIAL_TAB)
   // dejaría: si no, el header y el módulo saltan al cargar (el "parpadeo").
   // Estos mapas son un espejo exacto de los del script de cliente (showTab).

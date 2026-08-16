@@ -303,6 +303,11 @@ assert(redesigned.includes('state.tab==="orders"&&state.orderPane==="detail"'), 
 assert(redesigned.includes('orderDetail?["Detalle del pedido",""]'), 'the mobile order detail must use the approved dedicated header');
 assert(redesigned.includes('function renderMobileOrderAction(order)'), 'the mobile confirmation CTA must reuse the real order action');
 assert(redesigned.includes('data-action="confirm_payment" onclick="orderAction(this.dataset.action)"'), 'mobile payment confirmation must call the existing backend action');
+assert(redesigned.includes('action="start_preparation";label="Empezar preparación"'), 'mobile orders must expose the real preparation transition');
+assert(redesigned.includes('action="mark_sent";label="Marcar pedido como enviado"'), 'mobile orders must expose the real sent transition');
+assert(redesigned.includes('.order-mobile-stage-preparacion .orderTrackingCard'), 'mobile preparation must expose guide and tracking controls');
+assert(redesigned.includes('function orderCustomerProfileValue(order,field)'), 'shipping details must read the canonical enriched customer profile');
+assert(redesigned.includes('justify-content:center;text-align:center'), 'the mobile takeover action must keep its text centered');
 assert(redesigned.includes('class="orderMobileOpenChat"'), 'mobile order detail must keep exact-conversation navigation available');
 assert(redesigned.includes('body.customer-panel-mobile-v389.orders-view:not(.order-mobile-detail) .orderFilters'), 'mobile list must remove noisy status filters without changing desktop');
 assert(redesigned.includes('body.customer-panel-mobile-v389.order-mobile-detail .orderTrackingCard'), 'mobile detail must scope its simplification to the full-screen order state');

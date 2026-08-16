@@ -36,14 +36,21 @@ function waitForServer(child, port) {
   });
 }
 
-async function login(base, email, password, platform) {
+async function loginResponse(base, email, password, platform) {
   const response = await fetch(base + "/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json", origin: base },
     body: JSON.stringify(platform ? { username: email, password } : { email, password })
   });
   assert.strictEqual(response.status, 200);
-  return String(response.headers.get("set-cookie") || "").split(";")[0];
+  return {
+    cookie: String(response.headers.get("set-cookie") || "").split(";")[0],
+    payload: await response.json()
+  };
+}
+
+async function login(base, email, password, platform) {
+  return (await loginResponse(base, email, password, platform)).cookie;
 }
 
 function completedAnswers(company, email, marker) {
@@ -230,7 +237,9 @@ function bothBotAnswers(company, email) {
   try {
     await waitForServer(child, port);
     const cookieA = await login(base, fixtures[0].email, password);
-    const cookieB = await login(base, fixtures[1].email, password);
+    const returningLogin = await loginResponse(base, fixtures[1].email, password);
+    const cookieB = returningLogin.cookie;
+    assert.strictEqual(returningLogin.payload.redirect, "/admin/panel?tab=summary", "returning support customers must enter directly through Resumen");
     const cookieC = await login(base, fixtures[2].email, password);
     const cookieD = await login(base, fixtures[3].email, password);
     const superAdminCookie = await login(base, "platform-owner", "SuperAdminPassword2026", true);

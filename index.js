@@ -380,7 +380,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v400-customer-panel-mobile-order-detail";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v401-customer-panel-mobile-profile-navigation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -11398,6 +11398,14 @@ async function customerPanelNextPathAfterSetup(auth, record, source) {
     try { billing = await paymentService.tenantBilling(auth.tenant_id); }
     catch (_) {}
     if (!billingMakesCustomer(billing)) return "/admin/panel?tab=plan&from=" + encodeURIComponent(source || "onboarding");
+  }
+  if (source === "login") {
+    const business = customerBusinessForAuthAndOnboarding(auth, record);
+    const planId = String(business && business.plan_id || "").trim().toLowerCase();
+    const assignedBotId = String(business && business.assigned_bot_id || "").trim().toLowerCase();
+    const appointmentOnly = planId === "nextfor-tempo" ||
+      ["agendamiento", "appointments", "appointment"].includes(assignedBotId);
+    return appointmentOnly ? "/admin/panel?tab=appointments" : "/admin/panel?tab=summary";
   }
   if (setupIncludesAppointments(record && record.answers || {})) {
     return "/admin/panel?tab=appointments&from=" + encodeURIComponent(source || "onboarding");

@@ -347,6 +347,7 @@ button{cursor:pointer}
 .profileHead{display:flex;align-items:center;justify-content:space-between}
 .profileHead h3{font-family:var(--font-display);font-size:24px;font-weight:900;color:var(--navy-900)}
 .profileClose{border:0;background:var(--slate-100);width:40px;height:40px;border-radius:12px;font-size:22px;color:var(--slate-700);cursor:pointer}
+.profileCloseMobile{display:none}
 .profileHint{margin-top:4px;color:var(--slate-700);font-size:13px;font-weight:600}
 .profileLogoRow{display:flex;align-items:center;gap:16px;margin:18px 0}
 .profileLogo{width:88px;height:88px;flex:0 0 auto;border-radius:20px;background:linear-gradient(145deg,var(--cyan-400),var(--cyan-500));display:grid;place-items:center;color:#fff;font-size:24px;font-weight:900;overflow:hidden}.profileLogo img{width:100%;height:100%;object-fit:cover}
@@ -1827,7 +1828,7 @@ ${panelRedesignEnabled ? `
   .customer-panel-mobile-v389 .mobileQuickActions>button>i{color:#0587CC;font-style:normal;font-weight:900}
   .customer-panel-mobile-v389 .mobileQuickIcon{width:44px;height:44px;display:grid;place-items:center;border-radius:13px;background:#E7F7FE;color:#0587CC}
   .customer-panel-mobile-v389 .mobileQuickIcon svg{width:20px;height:20px}
-  .customer-panel-mobile-v389 .mobileTabbar{grid-template-columns:repeat(var(--mobile-tabs,5),minmax(0,1fr))!important;height:auto;min-height:66px;padding:6px 5px calc(6px + env(safe-area-inset-bottom));gap:1px;background:rgba(255,255,255,.98)}
+  .customer-panel-mobile-v389 .mobileTabbar{z-index:72;grid-template-columns:repeat(var(--mobile-tabs,5),minmax(0,1fr))!important;height:auto;min-height:66px;padding:6px 5px calc(6px + env(safe-area-inset-bottom));gap:1px;background:rgba(255,255,255,.98)}
   .customer-panel-mobile-v389 .mobileTabbar button{display:none;min-width:0;min-height:54px;height:54px!important;padding:4px 2px;border-radius:13px!important;font-size:9px;line-height:1.05}
   .customer-panel-mobile-v389 .mobileTabbar button.active{background:#E9F8FF;box-shadow:none!important;color:#057BB6}
   .customer-panel-mobile-v389 .mobileTabbar .mobileNavIcon svg{width:19px;height:19px}
@@ -1850,9 +1851,13 @@ ${panelRedesignEnabled ? `
   .customer-panel-mobile-v389.conversations-view:not(.chat-open) .threadTop strong{font-size:13px!important}
   .customer-panel-mobile-v389.conversations-view:not(.chat-open) .threadPreviewRow p{font-size:11px!important}
   .customer-panel-mobile-v389.conversations-view:not(.chat-open) .threadStatus{padding-left:51px!important}
-  .customer-panel-mobile-v389 .profileModal{padding:0;align-items:stretch;background:#F4F7FB}
-  .customer-panel-mobile-v389 .profileModal .profileCard{width:100%;max-height:100dvh;padding:0 16px calc(26px + env(safe-area-inset-bottom));border-radius:0;background:#F4F7FB}
+  .customer-panel-mobile-v389 .profileModal{bottom:calc(66px + env(safe-area-inset-bottom));padding:0;align-items:stretch;background:#F4F7FB}
+  .customer-panel-mobile-v389 .profileModal .profileCard{width:100%;max-height:calc(100dvh - 66px - env(safe-area-inset-bottom));padding:0 16px 26px;border-radius:0;background:#F4F7FB}
   .customer-panel-mobile-v389 .profileModal .profileHead{top:0;margin:0 -16px;padding:12px 16px;min-height:66px;background:rgba(255,255,255,.97)}
+  .customer-panel-mobile-v389 .profileClose{width:auto;min-width:48px;padding:0 13px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:18px;font-weight:900}
+  .customer-panel-mobile-v389 .profileCloseDesktop{display:none}
+  .customer-panel-mobile-v389 .profileCloseMobile{display:inline-flex;align-items:center;gap:6px}
+  .customer-panel-mobile-v389 .profileCloseMobile small{font-size:10px;font-weight:900}
   .customer-panel-mobile-v389 .profileModal .profileHint{display:none}
   .customer-panel-mobile-v389 .mobileProfileSummary{display:flex;align-items:center;gap:12px;margin:18px 0 12px;padding:16px;border:1px solid #DEE6F0;border-radius:18px;background:#fff;box-shadow:0 7px 22px rgba(8,22,52,.05)}
   .customer-panel-mobile-v389 .mobileProfileLogo{width:52px;height:52px;display:grid;place-items:center;border-radius:15px;background:linear-gradient(145deg,#25BFFF,#0587CC);color:#fff;font-size:16px;font-weight:900}
@@ -2506,7 +2511,7 @@ body.panel-redesign .orderMobileOpenChat{display:none}
   <div class="profileModal" id="profileModal" role="dialog" aria-modal="true" aria-label="Perfil de la cuenta">
     <div class="profileScrim" onclick="closeProfile()"></div>
     <div class="profileCard">
-      <div class="profileHead"><h3>Perfil de tu cuenta</h3><button class="profileClose" type="button" onclick="closeProfile()" aria-label="Cerrar">×</button></div>
+      <div class="profileHead"><h3>Perfil de tu cuenta</h3><button class="profileClose" type="button" onclick="returnFromProfile()" aria-label="Volver al panel"><span class="profileCloseDesktop" aria-hidden="true">×</span><span class="profileCloseMobile" aria-hidden="true">← <small>Panel</small></span></button></div>
       <p class="profileHint">Administra los datos de contacto y la seguridad de tu acceso.</p>
       <section class="mobileProfileSummary"><span class="mobileProfileLogo" id="mobileProfileLogo">${escapeHtml(panelContext.initials)}</span><div><strong id="mobileProfileBusinessName">${escapeHtml(panelContext.businessName)}</strong><small>${escapeHtml(panelContext.planName)} · ${escapeHtml(activeBotLabel)}</small></div></section>
       <nav class="mobileProfileLinks" aria-label="Cuenta y configuración">
@@ -2604,8 +2609,9 @@ function preparePanelImage(file){return new Promise(function(resolve,reject){if(
 function fillAccountProfile(payload){var profile=payload&&payload.profile||{},canEdit=payload&&payload.can_edit!==false;state.accountProfile=profile;state.accountLogo=profile.logo_data_url||"";var fields={profileNameInput:profile.business_name||PANEL_CONTEXT.businessName,profileAdminName:profile.administrator_name||"",profilePhone:profile.contact_phone||"",profileEmail:profile.administrator_email||""};Object.keys(fields).forEach(function(id){var field=document.getElementById(id);if(field){field.value=fields[id];if(id!=="profileEmail")field.disabled=!canEdit;}});var upload=document.getElementById("profileUploadDrop"),save=document.getElementById("profileSaveBtn");if(upload){upload.style.pointerEvents=canEdit?"auto":"none";upload.style.opacity=canEdit?"1":".6";}if(save)save.disabled=!canEdit;applyPanelLogo(state.accountLogo,fields.profileNameInput);profileStatus(canEdit?"":"Tu rol tiene acceso de solo lectura.",false);}
 function demoAccountProfile(){var stored={};try{stored=JSON.parse(localStorage.getItem("nx_demo_profile_v1")||"{}");}catch(_){}return{can_edit:true,profile:{business_name:stored.business_name||PANEL_CONTEXT.businessName,administrator_name:stored.administrator_name||"Administrador demo",administrator_email:"demo@nextforia.com",contact_phone:stored.contact_phone||"+57 300 000 0000",logo_data_url:stored.logo_data_url||""}};}
 function loadAccountProfile(force){if(state.accountProfileLoading||(!force&&state.accountProfile))return;if(DEMO_MODE&&PANEL_REDESIGN_ENABLED){fillAccountProfile(demoAccountProfile());profileStatus("Vista demo: los cambios se guardan solo en este navegador.",false);return;}state.accountProfileLoading=true;profileStatus("Cargando tu información…",false);api(PANEL_ACCOUNT_PATH,{redirectOnAuth:true}).then(fillAccountProfile).catch(function(error){profileStatus(error.body&&error.body.message||"No pudimos cargar tu perfil.",true);}).finally(function(){state.accountProfileLoading=false;});}
-function openProfile(){var modal=document.getElementById("profileModal"),details=document.getElementById("mobileAccountDetails");if(!modal)return;if(details)details.classList.remove("open");modal.classList.add("open");document.body.classList.add("profile-open");loadAccountProfile(true);updateMobilePrimaryNav();}
+function openProfile(){var modal=document.getElementById("profileModal"),details=document.getElementById("mobileAccountDetails");if(!modal)return;if(details)details.classList.remove("open");modal.classList.add("open");modal.setAttribute("aria-modal",window.innerWidth<=760?"false":"true");document.body.classList.add("profile-open");loadAccountProfile(true);updateMobilePrimaryNav();}
 function closeProfile(){var modal=document.getElementById("profileModal");if(modal)modal.classList.remove("open");document.body.classList.remove("profile-open");updateMobilePrimaryNav();}
+function returnFromProfile(){if(window.innerWidth<=760){closeProfile();mobileGoHome();return;}closeProfile();}
 function openProfileSection(tab){closeProfile();showTab(tab);}
 function showMobileAccountDetails(){var details=document.getElementById("mobileAccountDetails");if(!details)return;details.classList.toggle("open");if(details.classList.contains("open"))setTimeout(function(){details.scrollIntoView({behavior:"smooth",block:"start"});},30);}
 function profileLogoDrag(event,active){if(event){event.preventDefault();event.stopPropagation();}var drop=document.getElementById("profileUploadDrop");if(drop)drop.classList.toggle("drag",!!active);}
@@ -3187,6 +3193,7 @@ function showTab(name){
   if(PANEL_CONTEXT.v2&&name==="appointments"&&!PANEL_CONTEXT.appointments)name="summary";
   if(PANEL_CONTEXT.v2&&["summary","conversations","orders","retargeting"].includes(name)&&!PANEL_CONTEXT.support)name="appointments";
   state.tab=name;
+  var profileModal=document.getElementById("profileModal");if(profileModal)profileModal.classList.remove("open");
   if(name!=="orders"){state.orderPane="list";document.body.classList.remove("order-detail-open","order-mobile-detail");}
   document.body.classList.toggle("panel-redesign",PANEL_REDESIGN_ENABLED&&["summary","conversations","orders","retargeting","notifications","plan","channels"].includes(name));
   if(name==="conversations"&&DEMO_MODE&&PANEL_REDESIGN_ENABLED&&window.innerWidth>760&&!state.selected&&state.conversations[0])state.selected=conversationKey(state.conversations[0]);

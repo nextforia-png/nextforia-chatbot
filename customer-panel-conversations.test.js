@@ -57,6 +57,30 @@ assert(/data-1p-ignore/.test(search) && /data-lpignore="true"/.test(search),
   "1Password y LastPass ignoran autocomplete: necesitan su propio opt-out");
 assert(!/\svalue=/.test(search), "el buscador nunca debe salir con un valor precargado");
 
+// Lo anterior no alcanzaba: verificado en produccion, Chrome ignora
+// autocomplete="off" y hace un preview del autorelleno que se confirma al
+// primer clic, dejando la bandeja vacia. readonly es lo unico que ningun
+// navegador ni gestor de contrasenas puede saltarse.
+assert(/\sreadonly/.test(search), "el buscador arranca readonly para que nadie lo autorellene");
+assert(/onfocus="unlockConversationSearch\(this\)"/.test(search) &&
+  /onpointerdown="unlockConversationSearch\(this\)"/.test(search),
+  "se desbloquea con mouse y con teclado, si no queda inutilizable");
+const unlock = /function unlockConversationSearch\([\s\S]*?\n(?=function |var )/.exec(clientScript + "\nfunction ");
+assert(unlock, "falta unlockConversationSearch");
+assert(/input\.value=""/.test(unlock[0]),
+  "si el navegador alcanzo a pegar algo hay que limpiarlo antes de filtrar");
+
+// ─── Notificaciones que se sienten ────────────────────────────────────────
+
+const sound = /function playNotificationSound\(\)[\s\S]*?\n(?=function |var )/.exec(clientScript + "\nfunction ");
+assert(sound, "no encontre playNotificationSound");
+assert(/navigator\.vibrate/.test(sound[0]), "en movil el sonido solo no basta");
+assert(/triangle/.test(sound[0]), "un seno puro se pierde con ruido de fondo");
+const peak = /exponentialRampToValueAtTime\((\.\d+),/.exec(sound[0]);
+assert(peak && Number(peak[1]) >= 0.35,
+  "el volumen anterior (.18) era el motivo de que no se sintiera");
+assert(/nxToastPulse/.test(styles), "el aviso visual tambien tiene que llamar la atencion");
+
 // ─── 2. El badge de version ya no tapa el compositor ──────────────────────
 
 assert(!/panelVersionFixed/.test(markup), "el badge flotante sale de la vista del cliente");

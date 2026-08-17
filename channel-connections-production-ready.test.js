@@ -208,6 +208,24 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(panelSource, /Conservar mi WhatsApp Business/);
   assert.match(panelSource, /featureType:"whatsapp_business_app_onboarding"/);
   assert.match(panelSource, /FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING/);
+  // El popup de Meta debe abrirse dentro del gesto del usuario. Si FB.login vuelve a
+  // quedar detrás de un fetch o de la carga del SDK, Safari iOS y Chrome Android lo
+  // bloquean en silencio y el cliente ve que "no pasa nada" al tocar el botón.
+  const openWhatsAppWindowStart = panelSource.indexOf("function openWhatsAppMetaWindow()");
+  const openWhatsAppWindowEnd = panelSource.indexOf("\nfunction whatsappLaunchPanel()", openWhatsAppWindowStart);
+  assert(openWhatsAppWindowStart >= 0 && openWhatsAppWindowEnd > openWhatsAppWindowStart,
+    "the WhatsApp popup must be opened by its own dedicated user-gesture handler");
+  const openWhatsAppWindow = panelSource.slice(openWhatsAppWindowStart, openWhatsAppWindowEnd);
+  assert.match(openWhatsAppWindow, /window\.FB\.login\(/,
+    "the second tap must call FB.login directly");
+  assert.doesNotMatch(openWhatsAppWindow, /\bapi\(|\.then\(|await /,
+    "no async work may run before FB.login or mobile browsers block the Meta window");
+  assert.match(panelSource, /function prepareWhatsAppConnection\(mode\)[\s\S]*?preloadMetaSdk\(\)/,
+    "step one must fetch the authorization and warm the Meta SDK before the user taps open");
+  assert.doesNotMatch(panelSource, /embedded_signup\)\{launchWhatsAppEmbeddedSignup/,
+    "the old single-tap flow opened the popup after a fetch and failed on mobile");
+  assert.match(panelSource, /function whatsappInAppBrowser\(\)[\s\S]*?FBAN\|FBAV/,
+    "in-app browsers cannot run Embedded Signup and must be warned before the attempt");
   assert.match(connectionSource, /registration_managed_by: coexistence \? "meta_embedded_signup" : "nextfor"/);
 
   const port = await availablePort();
@@ -278,7 +296,7 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v404-customer-panel-mobile-profile-sections"));
+    assert((await response.text()).includes("NextforIA Chatbot v410-whatsapp-connect-mobile"));
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

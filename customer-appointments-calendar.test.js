@@ -35,6 +35,17 @@ assert(!/MONTHEXTRA|YEARMONTHS/.test(clientScript),
 
 new vm.Script(clientScript);
 
+// El banner cuenta sobre el alcance activo, asi que cambiar de vista tiene que
+// recalcularlo. Antes solo lo hacia el render completo y el titular se quedaba
+// diciendo "11 citas" (la semana) mientras mirabas el mes.
+assert(/function setAppointmentMode\([\s\S]*?renderAppointmentHero\(\)/.test(clientScript),
+  "cambiar de vista debe recalcular el banner");
+
+// Track y fill del ano son <span>: sin display:block el ancho no aplica y la
+// barra se ve vacia.
+assert(/\.apptYearTrack\{display:block/.test(styles) && /\.apptYearFill\{display:block/.test(styles),
+  "las barras del ano necesitan ser cajas para que el ancho aplique");
+
 // ─── Logica de alcance y agregacion ───────────────────────────────────────
 
 function loadCalendarLogic(rows, mode, offsets) {

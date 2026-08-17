@@ -71,7 +71,7 @@ const indexSource = fs.readFileSync(require.resolve("./index"), "utf8");
 const panelSource = fs.readFileSync(require.resolve("./customer-panel"), "utf8");
 assert(indexSource.includes('const appointmentDemo = initialTab === "appointments"'));
 assert(indexSource.includes('id: "nextfor-tempo-demo"'));
-assert(indexSource.includes('const BOT_VERSION = "v407-customer-panel-appointment-reminders"'));
+assert(indexSource.includes('const BOT_VERSION = "v408-customer-panel-appointment-calendar"'));
 assert(panelSource.includes('id="appointmentTopActions"'));
 
 console.log("customer appointment panel tests: ok");

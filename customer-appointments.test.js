@@ -17,6 +17,9 @@ assert.strictEqual(demo.appointments.length, 11);
 assert.strictEqual(demo.appointments.every(function (row) { return row.tenant_id === demo.tenant_id; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "confirmed"; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "no_response"; }), true);
+assert.strictEqual(demo.reminders.filter(function (row) { return row.status === "programmed"; }).length, 3);
+assert.strictEqual(demo.metrics.confirmation_rate, 92);
+assert.strictEqual(demo.metrics.sent_reminders, 214);
 
 const shaped = customerAppointmentSnapshot({
   tenant_id: "tenant-a",
@@ -47,7 +50,10 @@ assert(markup.includes('id="apptRulesView"'));
 assert(markup.includes("Una sola fuente de información"));
 assert(markup.includes("Recuerda"));
 assert(markup.includes("Confirma"));
-assert(markup.includes("Llega listo"));
+assert(markup.includes("En tu agenda"));
+assert(markup.includes("Nadie olvida su cita — y tú no mueves un dedo."));
+assert(markup.includes('id="remAttention"'));
+assert(markup.includes('id="remTodayCount"'));
 assert(markup.includes('id="apptNeedsCount"'));
 assert(markup.includes('id="apptAgendaHero"'));
 assert(markup.includes('id="apptWeekLabel"'));
@@ -56,7 +62,8 @@ assert(clientScript.includes("shiftAppointmentWeek"));
 assert(styles.includes("apptIntegrationGate"));
 assert(styles.includes("apptWeekNavigator"));
 assert(styles.includes("apptRulesGrid"));
-assert(styles.includes("remJourney"));
+assert(styles.includes("remHeroV2"));
+assert(styles.includes("remCardTop"));
 assert(styles.includes(".apptDetail>.mobileBack{display:none!important}"));
 assert(styles.includes(".apptDetail>.mobileBack{display:inline-flex!important}"));
 
@@ -64,7 +71,7 @@ const indexSource = fs.readFileSync(require.resolve("./index"), "utf8");
 const panelSource = fs.readFileSync(require.resolve("./customer-panel"), "utf8");
 assert(indexSource.includes('const appointmentDemo = initialTab === "appointments"'));
 assert(indexSource.includes('id: "nextfor-tempo-demo"'));
-assert(indexSource.includes('const BOT_VERSION = "v406-customer-panel-appointment-header"'));
+assert(indexSource.includes('const BOT_VERSION = "v407-customer-panel-appointment-reminders"'));
 assert(panelSource.includes('id="appointmentTopActions"'));
 
 console.log("customer appointment panel tests: ok");

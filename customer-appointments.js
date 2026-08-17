@@ -8,6 +8,87 @@ function isoAt(base, dayOffset, hour, minute) {
   return date.toISOString();
 }
 
+// Relleno de calendario SOLO para /admin/panel-demo.
+// La semana en curso la escriben a mano las filas de arriba (es la que se ve en
+// detalle); esto agrega historial en el resto del mes y del ano para que las
+// vistas Mes y Ano muestren una agenda real en vez de once citas y once meses en
+// cero. Es determinista a proposito: sin Math.random los tests no parpadean.
+// El panel autenticado nunca pasa por aca — usa customerAppointmentSnapshot.
+function demoCalendarFillerRows(base, weekRows) {
+  const DEMO_NAMES = [
+    ["Paula Restrepo", "PR"], ["Julián Mesa", "JM"], ["Ana María Vélez", "AV"],
+    ["Ricardo Salazar", "RS"], ["Daniela Ospina", "DO"], ["Tomás Aguirre", "TA"],
+    ["Isabella Franco", "IF"], ["Miguel Cárdenas", "MC"], ["Sara Betancur", "SB"],
+    ["Emilio Naranjo", "EN"], ["Lucía Arango", "LA"], ["Samuel Quintero", "SQ"]
+  ];
+  const DEMO_REASONS = [
+    "Limpieza dental", "Control de ortodoncia", "Valoración de ortodoncia",
+    "Consulta general", "Blanqueamiento", "Diseño de sonrisa", "Valoración infantil"
+  ];
+  // Volumen por mes: una curva de crecimiento suave para que la vista Ano tenga
+  // relieve y se note cual fue el mes mas cargado.
+  const MONTHLY_LOAD = [14, 17, 21, 19, 24, 27, 23, 29, 34, 31, 26, 18];
+
+  const year = base.getFullYear();
+  const weekDays = {};
+  weekRows.forEach(function (row) {
+    const date = new Date(row.starts_at);
+    weekDays[date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate()] = true;
+  });
+
+  let seed = 20408;
+  function pick(size) {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return Math.floor((seed / 2147483648) * size);
+  }
+
+  const out = [];
+  for (let month = 0; month < 12; month += 1) {
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    let placed = 0;
+    let day = 1 + pick(3);
+    while (placed < MONTHLY_LOAD[month] && day <= daysInMonth) {
+      const date = new Date(year, month, day);
+      const weekday = date.getDay();
+      const key = year + "-" + month + "-" + day;
+      if (weekday !== 0 && !weekDays[key]) {
+        const perDay = 1 + pick(3);
+        for (let slot = 0; slot < perDay && placed < MONTHLY_LOAD[month]; slot += 1) {
+          const person = DEMO_NAMES[pick(DEMO_NAMES.length)];
+          const statusRoll = pick(10);
+          const status = statusRoll < 7 ? "confirmed" : statusRoll < 9 ? "ai_confirming" : "needs_you";
+          const hour = 8 + pick(9);
+          const reason = DEMO_REASONS[pick(DEMO_REASONS.length)];
+          const id = "apt-d" + month + "-" + day + "-" + slot;
+          out.push({
+            id: id, conversation_id: id, tenant_id: "demo-clinica-sonrie",
+            customer_name: person[0], initials: person[1],
+            channel: pick(10) < 7 ? "whatsapp" : "voice",
+            ui_status: status,
+            starts_at: new Date(year, month, day, hour, slot % 2 ? 30 : 0, 0, 0).toISOString(),
+            duration_minutes: 45 + pick(2) * 15,
+            consultation_reason: reason,
+            transcript_summary: "Cita agendada por la IA desde el canal del cliente.",
+            data_processing_consent: "authorized",
+            customer_phone: "+57 300 " + String(3140000 + out.length * 91),
+            customer_email: person[0].toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ /g, ".") + "@correo.com",
+            previous_appointments: pick(4),
+            alt_slots: ["Hoy · 4:30 pm", "Mañana · 9:00 am"],
+            sync: status === "confirmed" ? "synced" : "pending",
+            transcript: [
+              { from: "customer", text: "Hola, quisiera agendar una cita de " + reason.toLowerCase() + "." },
+              { from: "bot", text: "Claro. Ya revisé la agenda y dejé la cita lista." }
+            ]
+          });
+          placed += 1;
+        }
+      }
+      day += 1 + pick(2);
+    }
+  }
+  return out;
+}
+
 function demoAppointmentSnapshot(now) {
   const base = now || new Date();
   const rows = [
@@ -35,6 +116,8 @@ function demoAppointmentSnapshot(now) {
       ]
     };
   });
+  const weekRows = rows.slice();
+  rows.push.apply(rows, demoCalendarFillerRows(base, weekRows));
   const reminders = [
     ["rem-1", "apt-4", "Andrés Gómez", "whatsapp", "programmed", "12:00 pm", "3 h antes", "Recogida en tienda · Hoy 3:00 pm"],
     ["rem-2", "apt-3", "Laura Ruiz", "instagram", "programmed", "11:00 am", "24 h antes", "Asesoría de regalo · Mañana 11:00 am"],
@@ -57,7 +140,7 @@ function demoAppointmentSnapshot(now) {
       calls: { status: "not_requested", requested: false },
       ready_for_live: false
     },
-    metrics: { interactions: rows.length, requested: rows.length, booked: rows.filter(function (row) { return row.ui_status === "confirmed"; }).length, pending: rows.filter(function (row) { return row.ui_status !== "confirmed"; }).length, confirmation_rate: 92, avoided_absences: 18, sent_reminders: 214 },
+    metrics: { interactions: weekRows.length, requested: weekRows.length, booked: weekRows.filter(function (row) { return row.ui_status === "confirmed"; }).length, pending: weekRows.filter(function (row) { return row.ui_status !== "confirmed"; }).length, confirmation_rate: 92, avoided_absences: 18, sent_reminders: 214 },
     appointments: rows,
     reminders: reminders
   };

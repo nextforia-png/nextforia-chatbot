@@ -13,7 +13,17 @@ const {
 
 const demo = demoAppointmentSnapshot(new Date("2026-07-15T12:00:00-05:00"));
 assert.strictEqual(demo.tenant_id, "demo-clinica-sonrie");
-assert.strictEqual(demo.appointments.length, 11);
+// La semana en curso sigue siendo las 11 citas escritas a mano (v407).
+// A partir de v408 el demo ademas trae historial del resto del ano para que las
+// vistas Mes y Ano no salgan vacias; por eso el total ya no es 11.
+const demoWeekStart = new Date(2026, 6, 13);
+const demoWeekEnd = new Date(2026, 6, 20);
+const demoWeekRows = demo.appointments.filter(function (row) {
+  const at = new Date(row.starts_at);
+  return at >= demoWeekStart && at < demoWeekEnd;
+});
+assert.strictEqual(demoWeekRows.length, 11);
+assert(demo.appointments.length > 11, "el demo necesita historial para las vistas Mes y Ano");
 assert.strictEqual(demo.appointments.every(function (row) { return row.tenant_id === demo.tenant_id; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "confirmed"; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "no_response"; }), true);

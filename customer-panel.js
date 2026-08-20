@@ -699,6 +699,16 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .channelConnectCopy p{font-size:12.5px;color:var(--slate-500);line-height:1.5;margin-top:4px}
 .channelAccount{font-size:11.5px;color:var(--slate-700);font-weight:850;margin-top:7px}
 .channelConnectActions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;max-width:330px}
+.whatsappLaunchBox{flex:1 1 100%;width:100%;box-sizing:border-box;margin-top:6px;padding:14px;border:1px solid #DFE6F0;border-radius:16px;background:#F7FAFF;text-align:left;display:flex;flex-direction:column;gap:8px}
+.whatsappLaunchBox.ready{border-color:#1EBB72;background:#F1FCF6}
+.whatsappLaunchBox.warn{border-color:#F0B429;background:#FFF9EC}
+.whatsappLaunchStep{margin:0;font-size:11px;font-weight:850;letter-spacing:.04em;text-transform:uppercase;color:#71809A}
+.whatsappLaunchTitle{margin:0;font-size:15px;font-weight:800;color:#0B1D3A;line-height:1.3}
+.whatsappLaunchHint{margin:0;font-size:13px;line-height:1.45;color:#4A5B75}
+.whatsappLaunchBox .primaryBtn,.whatsappLaunchBox .ghostBtn{width:100%;max-width:none;flex:none}
+.whatsappLaunchBtn{min-height:52px;font-size:16px}
+.whatsappLaunchSpinner{display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border:2px solid #C6D4E8;border-top-color:#0587CC;border-radius:50%;animation:whatsappLaunchSpin .8s linear infinite}
+@keyframes whatsappLaunchSpin{to{transform:rotate(360deg)}}
 .channelState{display:inline-flex;align-items:center;border-radius:999px;padding:6px 10px;font-size:10.5px;font-weight:950;background:var(--slate-100);color:var(--slate-700)}
 .channelState.connected{background:var(--green-100);color:#087E50}.channelState.connecting{background:var(--cyan-100);color:#057BB6}.channelState.needs_attention{background:var(--amber-100);color:#9C650C}.channelState.disconnected{background:#FDECEC;color:#B73535}
 .channelAssetSelect{height:40px;max-width:260px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:0 10px;font:750 11.5px var(--font-body);color:var(--navy-900)}
@@ -2790,18 +2800,22 @@ function renderAppointmentCalendarGroup(calendars,canManage){calendars=(calendar
 function renderChannelConnections(){
   var root=document.getElementById("channelConnectionCards"),payload=state.channelConnections;
   if(!root||!payload)return;
+  // Descarga anticipada del SDK de Meta para que el toque del cliente abra la ventana al instante.
+  if(!DEMO_MODE&&!window.FB&&payload.meta_authorization_available&&payload.meta_authorization_available.whatsapp!==false)preloadMetaSdk().catch(function(){});
   var canManage=SERVER_ROLE==="admin"||SERVER_ROLE==="super_admin",available=payload.meta_authorization_available||{},hints=selectedChannelHints(onboardingAnswers()),cards=(payload.channels||[]).map(function(item){
     var channel=item.channel||item.id,status=item.status||"not_connected",soon=item.coming_soon||item.available===false,recommended=hints.includes(channel),primary=channel==="whatsapp",connected=status==="connected",billingBlocked=primary&&item.outbound_billing_blocked===true,attemptActive=primary&&item.onboarding_attempt_active===true,activeConnection=primary&&item.disconnect_available===true&&!attemptActive,verifyAvailable=attemptActive&&whatsappAttemptCanVerify(item),cancelAttemptAvailable=attemptActive&&item.cancel_attempt_available===true,verifyBusy=verifyAvailable&&whatsappVerificationBusy(),account=item.account_label?'<div class="channelAccount">'+esc(item.account_label)+'</div>':recommended?'<div class="channelAccount">Sugerido por tu cuestionario</div>':"",activationMessage=attemptActive&&item.onboarding_attempt_message||item.activation_message||primary&&!connected&&!attemptActive&&!activeConnection&&"Elige Conectar número nuevo, Conservar mi WhatsApp Business si seguirás usando la app, o Volver a conectar si el número ya estuvo en Nextfor o Cloud API. Para coexistencia, Meta puede exigir al menos 7 días de actividad real."||"",activation=activationMessage?'<div class="channelAccount">'+esc(activationMessage)+'</div>':"",actions='<span class="channelState '+attr(status)+'">'+esc(soon?"Próximamente":channelConnectionStatusLabel(status))+'</span>';
     if(!soon&&canManage){
       if(primary){
-        if(connected||activeConnection){
+        if(state.whatsappLaunch){
+          actions+=whatsappLaunchPanel();
+        }else if(connected||activeConnection){
           if(billingBlocked)actions+='<button class="primaryBtn" type="button" onclick="checkWhatsAppBillingConnection(this)"'+(state.whatsappConnecting?' disabled aria-busy="true"':'')+'>'+(state.whatsappConnecting?'Comprobando…':'Comprobar pago')+'</button>';
           if(item.disconnect_available)actions+='<button class="ghostBtn" type="button" data-channel="'+attr(channel)+'" data-name="'+attr(item.name||channel)+'" onclick="disconnectChannel(this.dataset.channel,this.dataset.name)">Desconectar</button>';
         }else if(attemptActive){
           if(verifyAvailable)actions+='<button class="primaryBtn" type="button" onclick="checkWhatsAppConnection(this)"'+(state.whatsappConnecting||verifyBusy?' disabled aria-busy="true"':'')+'>'+(verifyBusy?'Comprobando…':'Comprobar conexión')+'</button>';
           if(cancelAttemptAvailable)actions+='<button class="ghostBtn" type="button" onclick="cancelWhatsAppAttempt(this)"'+(state.whatsappConnecting||verifyBusy?' disabled aria-busy="true"':'')+'>'+(state.whatsappConnecting?'Cancelando…':'Cancelar intento')+'</button>';
         }else if((item.connect_available||item.reconnect_available)&&available.whatsapp!==false){
-          actions+=whatsappConnectAction(available.whatsapp_coexistence!==false);
+          actions+=whatsappBrowserWarning()+whatsappConnectAction(available.whatsapp_coexistence!==false);
         }
       }else{
         if(item.requires_selection){
@@ -2997,18 +3011,42 @@ function checkWhatsAppBillingConnection(){
   });
 }
 var metaSdkPromise=null,WHATSAPP_EMBEDDED_COMPLETION_TIMEOUT_MS=30000;
-function loadMetaSdk(config){
-  if(window.FB){window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});return Promise.resolve(window.FB);}
+// El SDK de Meta se descarga apenas se muestra el hub de canales. Así, cuando el
+// cliente toca "Abrir Meta", FB.login se llama en el mismo gesto del dedo y los
+// navegadores móviles (Safari iOS / Chrome Android) no bloquean la ventana.
+function preloadMetaSdk(){
+  if(window.FB)return Promise.resolve(window.FB);
   if(metaSdkPromise)return metaSdkPromise;
   metaSdkPromise=new Promise(function(resolve,reject){
-    var settled=false,existing=document.getElementById("facebook-jssdk"),script=document.createElement("script"),timer;
+    var settled=false,existing=document.getElementById("facebook-jssdk"),script=document.createElement("script"),timer,poll;
     if(existing&&existing.parentNode)existing.parentNode.removeChild(existing);
-    function fail(error){if(settled)return;settled=true;clearTimeout(timer);if(script.parentNode)script.parentNode.removeChild(script);metaSdkPromise=null;reject(error);}
-    timer=setTimeout(function(){fail(new Error("meta_sdk_timeout"));},15000);
-    window.fbAsyncInit=function(){if(settled)return;settled=true;clearTimeout(timer);window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});resolve(window.FB);};
+    function done(){if(settled)return;settled=true;clearTimeout(timer);clearInterval(poll);resolve(window.FB);}
+    function fail(error){if(settled)return;settled=true;clearTimeout(timer);clearInterval(poll);if(script.parentNode)script.parentNode.removeChild(script);metaSdkPromise=null;reject(error);}
+    timer=setTimeout(function(){if(window.FB)done();else fail(new Error("meta_sdk_timeout"));},20000);
+    poll=setInterval(function(){if(window.FB)done();},150);
+    window.fbAsyncInit=function(){done();};
     script.id="facebook-jssdk";script.async=true;script.defer=true;script.crossOrigin="anonymous";script.src="https://connect.facebook.net/es_LA/sdk.js";script.onerror=function(){fail(new Error("meta_sdk_unavailable"));};document.head.appendChild(script);
   });
   return metaSdkPromise;
+}
+function initMetaSdk(config){
+  if(!window.FB)throw new Error("meta_sdk_unavailable");
+  window.FB.init({appId:config.app_id,cookie:false,xfbml:false,version:config.graph_version||"v25.0"});
+  return window.FB;
+}
+function loadMetaSdk(config){return preloadMetaSdk().then(function(){return initMetaSdk(config);});}
+function whatsappInAppBrowser(){
+  var ua=String(navigator&&navigator.userAgent||"");
+  if(/FBAN|FBAV|FB_IAB|FBIOS|Instagram|Line[/]|MicroMessenger|TikTok|Snapchat|Twitter|WhatsApp/i.test(ua))return true;
+  if(/Android/i.test(ua)&&/; wv[)]/i.test(ua))return true;
+  if(/iPhone|iPad|iPod/i.test(ua)&&!/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS/i.test(ua))return true;
+  return false;
+}
+function copyPanelLink(button){
+  var url=location.href;
+  function ok(){if(button){button.textContent="Enlace copiado ✓";setTimeout(function(){button.textContent="Copiar enlace";},2500);}}
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(url).then(ok).catch(function(){setChannelConnectionMessage("Copia esta dirección y ábrela en Chrome o Safari: "+url,"error");});
+  else setChannelConnectionMessage("Copia esta dirección y ábrela en Chrome o Safari: "+url,"error");
 }
 function completeWhatsAppEmbeddedSignup(){
   var pending=state.whatsappEmbedded;
@@ -3021,6 +3059,7 @@ function completeWhatsAppEmbeddedSignup(){
   api("/admin/panel/channel-connections/whatsapp/complete",{method:"POST",body:JSON.stringify({state:pending.config.oauth_state,code:pending.code,session:pending.session})}).then(function(body){
     var connection=body&&body.connection||null,connected=!!(connection&&connection.status==="connected");
     state.whatsappEmbedded=null;
+    state.whatsappLaunch=null;
     state.whatsappConnecting=false;
     state.channelConnections=null;
     if(connected){
@@ -3036,6 +3075,7 @@ function completeWhatsAppEmbeddedSignup(){
     loadChannelConnections(true);
   }).catch(function(error){
     state.whatsappEmbedded=null;
+    state.whatsappLaunch=null;
     state.whatsappConnecting=false;
     stopWhatsAppVerification();
     renderChannelConnections();
@@ -3053,7 +3093,7 @@ function discardUnboundWhatsAppAttempt(message){
   var pending=state.whatsappEmbedded;
   if(!pending||pending.completing)return false;
   if(pending.sessionTimer){clearTimeout(pending.sessionTimer);pending.sessionTimer=null;}
-  stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappConnecting=false;state.channelConnections=null;
+  stopWhatsAppVerification({clearExhausted:true});state.whatsappEmbedded=null;state.whatsappLaunch=null;state.whatsappConnecting=false;state.channelConnections=null;
   renderChannelConnections();setChannelConnectionMessage(message||"Meta no devolvió la autorización completa. Ya puedes volver a intentar.","error");
   api("/admin/panel/channel-connections/whatsapp/attempt",{method:"DELETE"}).then(function(){
     state.channelConnections=null;loadChannelConnections(true);
@@ -3089,32 +3129,106 @@ function whatsappEmbeddedEventMode(eventName,expectedMode){
   if(name==="FINISH_ONLY_WABA"&&mode==="coexistence_recovery")return"coexistence_recovery";
   return whatsappEmbeddedCloudFinishEvent(name)?"cloud_api":"";
 }
-function launchWhatsAppEmbeddedSignup(config){
+function whatsappLoginExtras(config){
+  return config.onboarding_mode==="coexistence"
+    ?{setup:{},featureType:"whatsapp_business_app_onboarding",sessionInfoVersion:"3"}
+    :config.onboarding_mode==="coexistence_recovery"
+      ?{features:[{name:"app_only_install"}]}
+      :{};
+}
+function whatsappLaunchModeLabel(mode){
+  return mode==="coexistence"?"tu WhatsApp Business actual":mode==="coexistence_recovery"?"tu número existente":"tu número nuevo";
+}
+// Paso 1: pedimos la autorización al servidor y dejamos el SDK listo.
+// No abrimos ninguna ventana aquí: el navegador móvil la bloquearía.
+function prepareWhatsAppConnection(mode){
+  mode=mode==="coexistence"||mode==="coexistence_recovery"?mode:"cloud_api";
+  if(state.whatsappLaunch||state.whatsappEmbedded||state.whatsappConnecting)return;
+  var launch={mode:mode,status:"preparing",config:null,cancelled:false};
   stopWhatsAppVerification({clearExhausted:true});
+  state.whatsappLaunch=launch;
+  renderChannelConnections();
+  setChannelConnectionMessage("Preparando la conexión segura con Meta…");
+  Promise.all([
+    api("/admin/panel/channel-connections/whatsapp/connect",{method:"POST",body:JSON.stringify({onboarding_mode:mode})}),
+    preloadMetaSdk()
+  ]).then(function(results){
+    var body=results[0]||{};
+    if(launch.cancelled||state.whatsappLaunch!==launch){releaseWhatsAppAttempt();return;}
+    if(!body.embedded_signup)throw new Error("embedded_signup_unavailable");
+    initMetaSdk(body.embedded_signup);
+    launch.config=body.embedded_signup;
+    launch.status="ready";
+    renderChannelConnections();
+    setChannelConnectionMessage("Todo listo. Toca «Abrir Meta y elegir mi número» para continuar.","success");
+  }).catch(function(error){
+    var wasCancelled=launch.cancelled;
+    if(state.whatsappLaunch===launch)state.whatsappLaunch=null;
+    releaseWhatsAppAttempt();
+    if(wasCancelled)return;
+    renderChannelConnections();
+    setChannelConnectionMessage(error&&error.body&&error.body.message||"No pudimos preparar la conexión con Meta. Revisa tu internet y vuelve a intentar.","error");
+  });
+}
+function releaseWhatsAppAttempt(){
+  return api("/admin/panel/channel-connections/whatsapp/attempt",{method:"DELETE"}).catch(function(){}).then(function(){
+    state.channelConnections=null;loadChannelConnections(true);
+  });
+}
+function cancelWhatsAppLaunch(){
+  var launch=state.whatsappLaunch;
+  if(!launch)return;
+  launch.cancelled=true;
+  state.whatsappLaunch=null;
+  state.whatsappEmbedded=null;
+  state.whatsappConnecting=false;
+  stopWhatsAppVerification({clearExhausted:true});
+  renderChannelConnections();
+  setChannelConnectionMessage("Intento cancelado. Puedes empezar de nuevo cuando quieras.");
+  if(launch.status!=="preparing")releaseWhatsAppAttempt();
+}
+// Paso 2: se ejecuta DENTRO del toque del usuario, así que FB.login abre la
+// ventana de Meta sin que el navegador la bloquee. No poner nada asíncrono antes.
+function openWhatsAppMetaWindow(){
+  var launch=state.whatsappLaunch;
+  if(!launch||launch.status!=="ready"||!launch.config)return;
+  var config=launch.config,openedAt=Date.now();
+  if(!window.FB){setChannelConnectionMessage("La conexión de Meta no quedó lista. Cancela e intenta de nuevo.","error");return;}
+  launch.status="opening";
   state.whatsappEmbedded={config:config,code:null,session:null,completing:false};
   state.whatsappConnecting=true;
-  renderChannelConnections();
-  loadMetaSdk(config).then(function(FB){
-    FB.login(function(response){
-      var pending=state.whatsappEmbedded,code=response&&response.authResponse&&response.authResponse.code;
-      if(!pending)return;
-      if(!code){discardUnboundWhatsAppAttempt("La autorización de Meta no se completó. El intento se limpió de forma segura; vuelve a intentarlo.");return;}
-      pending.code=code;
-      armWhatsAppEmbeddedCompletionTimer(pending);
-      setChannelConnectionMessage("Meta autorizó la cuenta. Terminando la conexión…");completeWhatsAppEmbeddedSignup();
-    },{
-      config_id:config.configuration_id,
-      response_type:"code",
-      override_default_response_type:true,
-      extras:config.onboarding_mode==="coexistence"
-        ?{setup:{},featureType:"whatsapp_business_app_onboarding",sessionInfoVersion:"3"}
-        :config.onboarding_mode==="coexistence_recovery"
-          ?{features:[{name:"app_only_install"}]}
-          :{}
-    });
-  }).catch(function(){
-    discardUnboundWhatsAppAttempt("No pudimos abrir la conexión segura de Meta. El intento se limpió de forma segura; vuelve a intentarlo.");
+  window.FB.login(function(response){
+    var pending=state.whatsappEmbedded,code=response&&response.authResponse&&response.authResponse.code;
+    if(!pending)return;
+    if(!code){
+      var blocked=Date.now()-openedAt<1500&&!pending.session;
+      discardUnboundWhatsAppAttempt(blocked
+        ?"Tu navegador bloqueó la ventana de Meta. Permite ventanas emergentes para Nextfor, o abre este panel en Chrome o Safari, y vuelve a intentar."
+        :"La autorización de Meta no se completó. El intento se limpió de forma segura; vuelve a intentarlo.");
+      return;
+    }
+    pending.code=code;
+    armWhatsAppEmbeddedCompletionTimer(pending);
+    setChannelConnectionMessage("Meta autorizó la cuenta. Terminando la conexión…");completeWhatsAppEmbeddedSignup();
+  },{
+    config_id:config.configuration_id,
+    response_type:"code",
+    override_default_response_type:true,
+    extras:whatsappLoginExtras(config)
   });
+  renderChannelConnections();
+  setChannelConnectionMessage("Se abrió la ventana de Meta. Termina allí y vuelve a esta pantalla.");
+}
+function whatsappLaunchPanel(){
+  var launch=state.whatsappLaunch;
+  if(!launch)return "";
+  if(launch.status==="preparing")return '<div class="whatsappLaunchBox"><p class="whatsappLaunchStep">Paso 1 de 2</p><p class="whatsappLaunchTitle"><span class="whatsappLaunchSpinner"></span>Preparando la conexión segura…</p><p class="whatsappLaunchHint">Tarda unos segundos. No cierres esta pantalla.</p><button class="ghostBtn" type="button" onclick="cancelWhatsAppLaunch()">Cancelar</button></div>';
+  if(launch.status==="ready")return '<div class="whatsappLaunchBox ready"><p class="whatsappLaunchStep">Paso 2 de 2</p><p class="whatsappLaunchTitle">Listo para conectar '+esc(whatsappLaunchModeLabel(launch.mode))+'</p><p class="whatsappLaunchHint">Toca el botón y se abrirá la ventana de Meta. Inicia sesión con tu Facebook y elige tu número de WhatsApp.</p><button class="primaryBtn whatsappLaunchBtn" type="button" onclick="openWhatsAppMetaWindow()">Abrir Meta y elegir mi número</button><button class="ghostBtn" type="button" onclick="cancelWhatsAppLaunch()">Cancelar</button></div>';
+  return '<div class="whatsappLaunchBox"><p class="whatsappLaunchTitle">Ventana de Meta abierta</p><p class="whatsappLaunchHint">Termina en la ventana de Meta y vuelve a esta pantalla. Si se cerró sin terminar, toca Cancelar y empieza de nuevo.</p><button class="ghostBtn" type="button" onclick="cancelWhatsAppLaunch()">Cancelar</button></div>';
+}
+function whatsappBrowserWarning(){
+  if(!whatsappInAppBrowser())return "";
+  return '<div class="whatsappLaunchBox warn"><p class="whatsappLaunchTitle">Abre esta página en tu navegador</p><p class="whatsappLaunchHint">Estás dentro de otra app (por ejemplo WhatsApp o Instagram) y Meta no permite conectar desde ahí. Copia el enlace y ábrelo en Chrome o Safari.</p><button class="ghostBtn" type="button" onclick="copyPanelLink(this)">Copiar enlace</button></div>';
 }
 window.addEventListener("message",function(event){
   if(!trustedWhatsAppEmbeddedOrigin(event.origin))return;
@@ -3139,24 +3253,17 @@ window.addEventListener("message",function(event){
 });
 function connectChannel(channel,onboardingMode){
   if(DEMO_MODE){setChannelConnectionMessage("Demo: aquí continuarías con Meta para elegir la cuenta de tu negocio.","success");return;}
-  if(channel==="whatsapp"&&(state.whatsappConnecting||state.whatsappEmbedded))return;
-  var externalTab=channel==="whatsapp"?null:prepareExternalIntegrationTab("Meta");
-  if(channel!=="whatsapp"&&!externalTab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}
-  if(channel==="whatsapp"){
-    stopWhatsAppVerification({clearExhausted:true});
-    state.whatsappConnecting=true;
-    renderChannelConnections();
-  }
-  setChannelConnectionMessage(channel==="whatsapp"?"Abriendo la conexión segura de WhatsApp…":"Meta se abrirá en una pestaña nueva…");
-  var requestBody=channel==="whatsapp"?JSON.stringify({onboarding_mode:onboardingMode==="coexistence"||onboardingMode==="coexistence_recovery"?onboardingMode:"cloud_api"}):"{}";
+  if(channel==="whatsapp"){prepareWhatsAppConnection(onboardingMode);return;}
+  var externalTab=prepareExternalIntegrationTab("Meta");
+  if(!externalTab){setChannelConnectionMessage("Tu navegador bloqueó la nueva pestaña. Permite ventanas emergentes para Nextfor y vuelve a intentar.","error");return;}
+  setChannelConnectionMessage("Meta se abrirá en una pestaña nueva…");
+  var requestBody="{}";
   api("/admin/panel/channel-connections/"+encodeURIComponent(channel)+"/connect",{method:"POST",body:requestBody}).then(function(body){
-    if(channel==="whatsapp"&&body.embedded_signup){launchWhatsAppEmbeddedSignup(body.embedded_signup);return;}
     if(!body.authorization_url)throw new Error("authorization_unavailable");
     if(!navigateExternalIntegrationTab(externalTab,body.authorization_url))throw new Error("popup_navigation_failed");
     setChannelConnectionMessage("Meta se abrió en una pestaña nueva. Termina allí y luego vuelve a este panel.","success");
   }).catch(function(error){
     closeExternalIntegrationTab(externalTab);
-    if(channel==="whatsapp"){state.whatsappEmbedded=null;state.whatsappConnecting=false;renderChannelConnections();}
     setChannelConnectionMessage(error.body&&error.body.message||"No pudimos terminar este paso. Intenta de nuevo o habla con NextforIA.","error");
     loadChannelConnections(true);
   });

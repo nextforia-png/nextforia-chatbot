@@ -389,7 +389,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v413-web-push-activation";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v414-instagram-human-replies";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5015,6 +5015,47 @@ function splitMetaMessageText(value, maxLength) {
   return chunks.length ? chunks : [""];
 }
 
+function instagramStandardWindowClosed(error) {
+  const metaError = error && error.response && error.response.data && error.response.data.error || {};
+  return Number(metaError.code) === 10 && Number(metaError.error_subcode) === 2534022;
+}
+
+function rememberDeliveryFailure(options, input) {
+  const target = options && options.delivery_result;
+  if (!target || typeof target !== "object") return;
+  Object.assign(target, input || {});
+}
+
+async function deliverInstagramTextChunk(input) {
+  const url = `${input.graphOrigin}/${META_GRAPH_VERSION}/${input.sendId}/messages`;
+  const requestOptions = {
+    headers: { Authorization: `Bearer ${input.accessToken}`, "Content-Type": "application/json" },
+    timeout: 10000
+  };
+  const payload = { recipient: { id: input.recipientId }, message: { text: input.text } };
+  try {
+    return {
+      response: await axios.post(url, payload, requestOptions),
+      human_agent: false
+    };
+  } catch (error) {
+    if (!input.humanAgent || !instagramStandardWindowClosed(error)) throw error;
+    try {
+      return {
+        response: await axios.post(url, Object.assign({}, payload, { tag: "HUMAN_AGENT" }), requestOptions),
+        human_agent: true
+      };
+    } catch (humanAgentError) {
+      humanAgentError.nextforDeliveryFailure = {
+        error: "instagram_reply_window_closed",
+        status: 409,
+        message: "Instagram cerró esta conversación por inactividad. Pídele al cliente que envíe un nuevo mensaje por Instagram y podrás responder de inmediato."
+      };
+      throw humanAgentError;
+    }
+  }
+}
+
 async function sendText(to, text, options) {
   const recipient = parseChannelRecipient(to);
   let deliveryRuntime = options || cachedConversationRuntime(to, null);
@@ -5049,11 +5090,15 @@ async function sendText(to, text, options) {
       if (!accessToken || !sendId) throw new Error("Instagram messaging is not configured");
       const chunks = splitMetaMessageText(text, 950);
       for (const chunk of chunks) {
-        const response = await axios.post(
-          `${graphOrigin}/${META_GRAPH_VERSION}/${sendId}/messages`,
-          { recipient: { id: recipient.id }, message: { text: chunk } },
-          { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
-        );
+        const delivery = await deliverInstagramTextChunk({
+          graphOrigin,
+          sendId,
+          recipientId: recipient.id,
+          accessToken,
+          text: chunk,
+          humanAgent: options && options.human_agent === true
+        });
+        const response = delivery.response;
         rememberManagedInstagramOutbound(
           chunk,
           response && response.data && (response.data.message_id || response.data.id)
@@ -5100,6 +5145,7 @@ async function sendText(to, text, options) {
     console.log(`Text sent to ${maskedIdentifier(to)} via ${runtime.source}`);
     return true;
   } catch (err) {
+    rememberDeliveryFailure(options, err && err.nextforDeliveryFailure || null);
     if (recipient.channel === "instagram") {
       const metaError = err.response?.data?.error || {};
       instagramRuntimeState.last_error_at = new Date().toISOString();
@@ -13639,7 +13685,11 @@ app.post("/admin/takeover/:userId", async (req, res) => {
 });
 
 async function executeAdminMessageDelivery(userId, text, tenantMeta, actor, clientRequestId) {
-  const sent = await sendText(userId, text, tenantMeta);
+  const deliveryResult = {};
+  const sent = await sendText(userId, text, Object.assign({}, tenantMeta, {
+    human_agent: true,
+    delivery_result: deliveryResult
+  }));
   if (!sent) {
     await recordAdminEvent(
       userId,
@@ -13650,11 +13700,11 @@ async function executeAdminMessageDelivery(userId, text, tenantMeta, actor, clie
       tenantMeta
     );
     return {
-      status: 502,
+      status: deliveryResult.status || 502,
       body: {
         ok: false,
-        error: "channel_delivery_failed",
-        message: "Meta rechazó el envío. Vuelve a conectar este canal antes de responder.",
+        error: deliveryResult.error || "channel_delivery_failed",
+        message: deliveryResult.message || "Meta rechazó el envío. Revisa la conexión de este canal antes de responder.",
         userId,
         handoff: hasHumanHandoff(userId, tenantMeta.tenant_id),
         meta_sent: false,

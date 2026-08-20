@@ -86,6 +86,15 @@ const {
   createResendEmailSender
 } = require("./customer-access-v2");
 const {
+  NEXTFORIA_SETUP_EMAIL_FROM,
+  createResendSetupJourneySender,
+  setupEmailDedupeKey
+} = require("./setup-email-journey");
+const {
+  SupabaseSetupEmailJourneyStore,
+  createSetupEmailJourneyService
+} = require("./setup-email-journey-service");
+const {
   DEFAULT_PLATFORM_GOALS,
   PLATFORM_GOAL_RECORD_ID,
   PLATFORM_GOAL_TOOL,
@@ -532,9 +541,12 @@ const CHANNEL_CONNECTIONS_V1_VISIBLE = CHANNEL_CONNECTIONS_V1_ENABLED ||
   CHANNEL_CONNECTIONS_STAGING_PREVIEW || CHANNEL_CONNECTIONS_PRODUCTION_PREVIEW ||
   CHANNEL_CONNECTIONS_DEDICATED_STORE_ENABLED;
 const CUSTOMER_ACCESS_EMAIL_PROVIDER = String(process.env.CUSTOMER_ACCESS_EMAIL_PROVIDER || "").trim().toLowerCase();
-const CUSTOMER_INVITE_FROM_EMAIL = String(process.env.CUSTOMER_INVITE_FROM_EMAIL || "").trim();
-const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "").trim();
+const CUSTOMER_INVITE_FROM_EMAIL = NEXTFORIA_SETUP_EMAIL_FROM;
+const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "info@nextforia.com").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
+const SETUP_EMAIL_JOURNEY_ENABLED = process.env.SETUP_EMAIL_JOURNEY_ENABLED === "1";
+const SETUP_EMAIL_INCOMPLETE_DELAY_MINUTES = boundedEnvInt("SETUP_EMAIL_INCOMPLETE_DELAY_MINUTES", 120, 30, 10080);
+const SETUP_EMAIL_PAYMENT_DELAY_MINUTES = boundedEnvInt("SETUP_EMAIL_PAYMENT_DELAY_MINUTES", 120, 30, 10080);
 const BOT_OPS_ALERT_FROM_EMAIL = String(process.env.BOT_OPS_ALERT_FROM_EMAIL || CUSTOMER_INVITE_FROM_EMAIL || "").trim();
 const BOT_OPS_ALERT_EMAILS = String(process.env.BOT_OPS_ALERT_EMAIL || "").split(",").map(function (value) {
   return value.trim().toLowerCase();
@@ -770,7 +782,9 @@ if (process.env.NODE_ENV === "production" && SUPABASE_ENABLED && !DATA_ENCRYPTIO
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_ACCESS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("SUPABASE_URL and SUPABASE_KEY are required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_ENABLED && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL must be a valid HTTPS origin when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMAIL_PROVIDER !== "resend") productionConfigErrors.push("CUSTOMER_ACCESS_EMAIL_PROVIDER=resend is required when CUSTOMER_ACCESS_V2_ENABLED=1");
-if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && (!RESEND_API_KEY || !CUSTOMER_INVITE_FROM_EMAIL)) productionConfigErrors.push("RESEND_API_KEY and CUSTOMER_INVITE_FROM_EMAIL are required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && !RESEND_API_KEY) productionConfigErrors.push("RESEND_API_KEY is required when CUSTOMER_ACCESS_V2_ENABLED=1");
+if (SETUP_EMAIL_JOURNEY_ENABLED && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when SETUP_EMAIL_JOURNEY_ENABLED=1");
+if (SETUP_EMAIL_JOURNEY_ENABLED && !RESEND_API_KEY) productionConfigErrors.push("RESEND_API_KEY is required when SETUP_EMAIL_JOURNEY_ENABLED=1");
 if ((WEB_PUSH_VAPID_PUBLIC_KEY || WEB_PUSH_VAPID_PRIVATE_KEY) && !WEB_PUSH_CONFIGURED) productionConfigErrors.push("WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY and WEB_PUSH_VAPID_SUBJECT must be configured together");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
@@ -1403,7 +1417,7 @@ if (CUSTOMER_ACCESS_TEST_MODE && process.env.CUSTOMER_ACCESS_TEST_INVITATIONS) {
 const customerAccessEmailSender = CUSTOMER_ACCESS_V2_ENABLED
   ? (CUSTOMER_ACCESS_TEST_MODE
       ? createMemoryEmailSender()
-      : createResendEmailSender({ apiKey: RESEND_API_KEY, from: CUSTOMER_INVITE_FROM_EMAIL, replyTo: CUSTOMER_INVITE_REPLY_TO, axiosClient: axios }))
+      : createResendEmailSender({ apiKey: RESEND_API_KEY, replyTo: CUSTOMER_INVITE_REPLY_TO, axiosClient: axios }))
   : null;
 const customerAccessService = CUSTOMER_ACCESS_V2_ENABLED
   ? createCustomerAccessService({
@@ -2432,6 +2446,116 @@ const paymentService = PAYMENTS_V1_ENABLED ? createPaymentService({
   estimatedTaxRate: WOMPI_ESTIMATED_FEE_TAX_RATE,
   publicBaseUrl: PUBLIC_BASE_URL
 }) : null;
+
+function setupEmailRecipient(auth, record, tenant) {
+  const answers = record && record.answers || {};
+  const business = answers.business || {};
+  const team = answers.team || {};
+  return String(
+    auth && (auth.email || auth.username) ||
+    tenant && (tenant.admin_email || tenant.email) ||
+    team.admin_email || business.contact_email || ""
+  ).trim().toLowerCase();
+}
+
+function setupEmailCustomerName(auth, record, tenant) {
+  const answers = record && record.answers || {};
+  const business = answers.business || {};
+  const team = answers.team || {};
+  return String(
+    team.admin_name || business.contact_name ||
+    auth && auth.name || tenant && (tenant.company_name || tenant.name) ||
+    business.brand_name || ""
+  ).trim().slice(0, 120);
+}
+
+function setupEmailWhatsAppUrl(record, tenant) {
+  const answers = record && record.answers || {};
+  const meta = answers.meta || {};
+  const digits = String(meta.whatsapp_number || tenant && tenant.display_phone || "").replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15 ? "https://wa.me/" + digits : "";
+}
+
+async function setupEmailJourneyApplicable(row) {
+  if (!row || !row.tenant_id) return false;
+  if (row.template_key === "welcome") return true;
+  const record = await loadClientOnboarding(true, row.tenant_id).catch(function () { return null; });
+  if (row.template_key === "live") {
+    return !!record && setupReviewSummary(record).status === "live";
+  }
+  if (row.template_key === "training_incomplete") return !!record && record.setup_completed !== true;
+  if (row.template_key === "preparing") {
+    return !!record && record.setup_completed === true && setupReviewSummary(record).status === "testing";
+  }
+  if (row.template_key === "payment_abandoned") {
+    if (!PAYMENTS_V1_ENABLED || !paymentService) return false;
+    const billing = await paymentService.tenantBilling(row.tenant_id).catch(function () { return null; });
+    return !!billing && !billingMakesCustomer(billing) && String(billing.payment_status || "").toLowerCase() === "pending";
+  }
+  return false;
+}
+
+const setupEmailJourneyStore = SETUP_EMAIL_JOURNEY_ENABLED
+  ? new SupabaseSetupEmailJourneyStore({
+      url: SUPABASE_URL,
+      headers: SB_HEADERS,
+      axiosClient: axios
+    })
+  : null;
+const setupEmailJourneySender = SETUP_EMAIL_JOURNEY_ENABLED
+  ? createResendSetupJourneySender({
+      apiKey: RESEND_API_KEY,
+      replyTo: CUSTOMER_INVITE_REPLY_TO,
+      axiosClient: axios
+    })
+  : null;
+const setupEmailJourneyService = SETUP_EMAIL_JOURNEY_ENABLED
+  ? createSetupEmailJourneyService({
+      store: setupEmailJourneyStore,
+      sender: setupEmailJourneySender,
+      shouldSend: setupEmailJourneyApplicable
+    })
+  : null;
+let setupEmailJourneyProcessing = false;
+
+async function processSetupEmailJourney() {
+  if (!setupEmailJourneyService || setupEmailJourneyProcessing) return null;
+  setupEmailJourneyProcessing = true;
+  try {
+    const outcome = await setupEmailJourneyService.processDue(20);
+    if (outcome.sent || outcome.failed || outcome.cancelled) {
+      log(outcome.failed ? "warn" : "info", "setup_email_journey_processed", outcome);
+    }
+    return outcome;
+  } catch (error) {
+    log("warn", "setup_email_journey_failed", { error: cleanRuntimeText(error && error.message, 240) });
+    return null;
+  } finally {
+    setupEmailJourneyProcessing = false;
+  }
+}
+
+async function scheduleSetupEmail(input) {
+  if (!setupEmailJourneyService) return null;
+  try {
+    const scheduled = await setupEmailJourneyService.schedule(input);
+    setTimeout(processSetupEmailJourney, 0);
+    return scheduled;
+  } catch (error) {
+    log("warn", "setup_email_schedule_failed", {
+      tenant_id: cleanTenantId(input && input.tenant_id),
+      template: cleanRuntimeText(input && input.template, 40),
+      error: cleanRuntimeText(error && error.message, 240)
+    });
+    return null;
+  }
+}
+
+if (SETUP_EMAIL_JOURNEY_ENABLED) {
+  const setupEmailJourneyTimer = setInterval(processSetupEmailJourney, 60000);
+  if (setupEmailJourneyTimer.unref) setupEmailJourneyTimer.unref();
+  setTimeout(processSetupEmailJourney, 1000);
+}
 
 async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
@@ -12889,6 +13013,20 @@ app.post("/admin/panel/billing/checkout", async (req, res) => {
       bot_id: business.assigned_bot_id,
       actor: auth.email || auth.username || "customer"
     });
+    const billing = await paymentService.tenantBilling(business.id).catch(function () { return null; });
+    await scheduleSetupEmail({
+      tenant_id: business.id,
+      to: auth.email || auth.username,
+      template: "payment_abandoned",
+      dedupe_key: setupEmailDedupeKey("payment_abandoned", business.id, checkout.reference),
+      send_after: new Date(Date.now() + SETUP_EMAIL_PAYMENT_DELAY_MINUTES * 60 * 1000).toISOString(),
+      payload: {
+        name: auth.name || business.name,
+        plan_name: billing && billing.plan_name || business.plan_id,
+        monthly_price: billing && billing.contracted_monthly_price,
+        payment_url: "https://nextforia.com/admin/panel?tab=plan"
+      }
+    });
     res.json({ ok: true, checkout });
   } catch (error) {
     sendPaymentError(res, error);
@@ -13165,6 +13303,17 @@ app.post("/admin/create-account", loginRateLimiter, async (req, res) => {
     }
     const redirect = await customerPanelEntryRedirect(user);
     setDashboardSessionCookie(req, res, user);
+    await scheduleSetupEmail({
+      tenant_id: user.tenant_id,
+      to: user.email,
+      template: "welcome",
+      dedupe_key: setupEmailDedupeKey("welcome", user.tenant_id, "account-created"),
+      payload: {
+        name: user.name || user.company_name,
+        company_name: user.company_name,
+        setup_url: "https://nextforia.com/admin/client-onboarding"
+      }
+    });
     res.status(201).json({
       ok: true,
       tenant: { id: user.tenant_id, company_name: user.company_name, plan_id: user.plan_id, assigned_bot_id: user.assigned_bot_id },
@@ -13247,6 +13396,17 @@ app.post("/admin/setup/:tenantId", async (req, res) => {
       }
       const redirect = await customerPanelEntryRedirect(user);
       setDashboardSessionCookie(req, res, user);
+      await scheduleSetupEmail({
+        tenant_id: user.tenant_id,
+        to: user.email,
+        template: "welcome",
+        dedupe_key: setupEmailDedupeKey("welcome", user.tenant_id, "account-created"),
+        payload: {
+          name: user.name || user.company_name,
+          company_name: user.company_name,
+          setup_url: "https://nextforia.com/admin/client-onboarding"
+        }
+      });
       res.status(201).json({
         ok: true,
         tenant: { id: user.tenant_id, company_name: user.company_name },
@@ -14576,10 +14736,37 @@ app.put("/admin/customer-setups/:tenantId", async (req, res) => {
     const tenant = await setupReviewTenant(req.params.tenantId);
     const questionnaire = await loadCustomerSetupQuestionnaire(false);
     const channels = tenant ? await setupReviewChannels(tenant.id).catch(function () { return []; }) : [];
+    const review = setupReviewSummary(record);
+    if (tenant && review.status === "testing") {
+      await scheduleSetupEmail({
+        tenant_id: tenant.id,
+        to: setupEmailRecipient(null, record, tenant),
+        template: "preparing",
+        dedupe_key: setupEmailDedupeKey("preparing", tenant.id, "testing"),
+        payload: {
+          name: setupEmailCustomerName(null, record, tenant),
+          plan_name: tenant.plan_name || tenant.plan_id,
+          panel_url: "https://nextforia.com/admin/panel"
+        }
+      });
+    }
+    if (tenant && review.status === "live") {
+      await scheduleSetupEmail({
+        tenant_id: tenant.id,
+        to: setupEmailRecipient(null, record, tenant),
+        template: "live",
+        dedupe_key: setupEmailDedupeKey("live", tenant.id, "first-live"),
+        payload: {
+          name: setupEmailCustomerName(null, record, tenant),
+          panel_url: "https://nextforia.com/admin/panel",
+          whatsapp_url: setupEmailWhatsAppUrl(record, tenant)
+        }
+      });
+    }
     res.json({
       ok: true,
       onboarding: record,
-      review: setupReviewSummary(record),
+      review,
       appointment_integrations: tenant ? await appointmentIntegrationsForRecord(record, tenant.id, channels) : null,
       launch: tenant ? await buildSetupLaunchReadiness(tenant, record, questionnaire, channels) : null
     });
@@ -14697,6 +14884,20 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
       }
     }
     const record = await persistClientOnboarding(candidate.answers, requestedStatus, auth, tenantId);
+    if (requestedStatus === "draft" && record.completion > 0) {
+      const reminderDay = new Date().toISOString().slice(0, 10);
+      await scheduleSetupEmail({
+        tenant_id: tenantId,
+        to: setupEmailRecipient(auth, record),
+        template: "training_incomplete",
+        dedupe_key: setupEmailDedupeKey("training_incomplete", tenantId, reminderDay),
+        send_after: new Date(Date.now() + SETUP_EMAIL_INCOMPLETE_DELAY_MINUTES * 60 * 1000).toISOString(),
+        payload: {
+          name: setupEmailCustomerName(auth, record),
+          setup_url: "https://nextforia.com/admin/client-onboarding"
+        }
+      });
+    }
     if (requestedStatus === "completed" && paymentChoice === "pay") {
       const business = customerBusinessForOnboarding(auth, tenantId, candidate.answers);
       checkout = await paymentService.startCheckout({
@@ -14706,6 +14907,19 @@ app.put("/admin/client-onboarding/data", async (req, res) => {
         plan_id: selectedPlanId,
         bot_id: selectedBotId,
         actor: auth.email || auth.username || "customer"
+      });
+      await scheduleSetupEmail({
+        tenant_id: tenantId,
+        to: setupEmailRecipient(auth, record),
+        template: "payment_abandoned",
+        dedupe_key: setupEmailDedupeKey("payment_abandoned", tenantId, checkout.reference),
+        send_after: new Date(Date.now() + SETUP_EMAIL_PAYMENT_DELAY_MINUTES * 60 * 1000).toISOString(),
+        payload: {
+          name: setupEmailCustomerName(auth, record),
+          plan_name: billing && billing.plan_name || selectedPlanId,
+          monthly_price: billing && billing.contracted_monthly_price,
+          payment_url: "https://nextforia.com/admin/panel?tab=plan"
+        }
       });
     }
     res.json({

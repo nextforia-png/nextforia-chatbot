@@ -311,7 +311,11 @@ async function waitForJson(url, predicate, timeoutMs) {
 
     response = await fetch(base + "/");
     assert.strictEqual(response.status, 200);
-    assert((await response.text()).includes("NextforIA Chatbot v412-whatsapp-mobile-and-sales-nav"));
+    assert.match(
+      await response.text(),
+      /NextforIA Chatbot v\d+[A-Za-z0-9._-]*/,
+      "root health text must expose the deployed bot version without pinning an obsolete release"
+    );
 
     response = await fetch(base + "/admin/panel/channel-connections");
     assert.strictEqual(response.status, 401, "real channel endpoint must be enabled, not demo-only");

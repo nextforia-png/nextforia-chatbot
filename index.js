@@ -389,7 +389,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v412-whatsapp-mobile-and-sales-nav";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v413-web-push-activation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -469,6 +469,9 @@ const APPOINTMENT_SETUP_TENANT_IDS = parseAppointmentSetupTenantIds(process.env.
 const CUSTOMER_ACCESS_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_ACCESS_TEST_MODE === "1";
 const CUSTOMER_ACCESS_V2_GATE = process.env.CUSTOMER_ACCESS_V2_ENABLED === "1";
 const CHANNEL_CONNECTIONS_V1_ENABLED = process.env.CHANNEL_CONNECTIONS_V1_ENABLED === "1";
+// La PWA (manifest, iconos, instalacion, offline) va detras de esta bandera.
+// Apagada -> el panel es byte por byte el de hoy. Se prende con PWA_V1_ENABLED=1.
+const PWA_V1_ENABLED = process.env.PWA_V1_ENABLED === "1";
 const CUSTOMER_ORDERS_V1_FLAG = String(process.env.CUSTOMER_ORDERS_V1_ENABLED || "").trim();
 // The customer orders module is part of the approved support-bot panel. Keep it
 // enabled by default in every environment and retain an explicit emergency
@@ -16607,10 +16610,56 @@ app.post("/admin/appointment-calendar-connections/:tenantId/disconnect", async (
   }
 });
 
+// Manifest de la PWA. Detras de la bandera y de la sesion del panel: es la
+// misma app, no una nueva. start_url apunta al panel autenticado, asi que abrir
+// el icono continua la sesion existente (la cookie viaja igual).
+app.get("/admin/panel/manifest.webmanifest", (req, res) => {
+  const demoPreview = req.query.pwa === "demo";
+  if (!PWA_V1_ENABLED && !demoPreview) {
+    res.status(404).json({ ok: false, error: "pwa_disabled" });
+    return;
+  }
+  res.setHeader("content-type", "application/manifest+json; charset=utf-8");
+  res.setHeader("cache-control", "public, max-age=3600");
+  res.json({
+    name: "Nextfor IA",
+    short_name: "Nextfor",
+    description: "Atiende a tus clientes y no pierdas ninguna conversación.",
+    id: demoPreview ? "/admin/panel-demo" : "/admin/panel",
+    start_url: demoPreview
+      ? "/admin/panel-demo?tab=summary&pwa=1&source=pwa"
+      : "/admin/panel?tab=summary&source=pwa",
+    scope: "/admin/",
+    display: "standalone",
+    orientation: "portrait",
+    background_color: "#0A1836",
+    theme_color: "#0A1836",
+    lang: "es",
+    dir: "ltr",
+    categories: ["business", "productivity"],
+    icons: [
+      { src: "/admin/assets/pwa-icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "/admin/assets/pwa-icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+      { src: "/admin/assets/pwa-icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" }
+    ],
+    shortcuts: [
+      { name: "Conversaciones", url: "/admin/panel?tab=conversations&source=pwa" },
+      { name: "Notificaciones", url: "/admin/panel?tab=notifications&source=pwa" }
+    ]
+  });
+});
+
 app.get("/admin/customer-notification-sw.js", (req, res) => {
+  const pwaWorkerEnabled = PWA_V1_ENABLED || req.query.pwa === "1";
   res.setHeader("content-type", "application/javascript; charset=utf-8");
   res.setHeader("cache-control", "no-cache, no-store, must-revalidate");
   res.send(`"use strict";
+// El panel avisa de una version nueva y espera a que el usuario acepte antes de
+// activarla: recargar debajo de alguien que escribe una respuesta es peor que
+// esperar. skipWaiting solo corre cuando el cliente toca "Actualizar".
+self.addEventListener("message", function (event) {
+  if (event.data && event.data.type === "NEXTFOR_APPLY_UPDATE") self.skipWaiting();
+});
 self.addEventListener("push", function (event) {
   var payload = {};
   try { payload = event.data ? event.data.json() : {}; } catch (_) {}
@@ -16638,7 +16687,29 @@ self.addEventListener("notificationclick", function (event) {
     }
     return clients.openWindow(action);
   }));
-});`);
+});
+${pwaWorkerEnabled ? `
+// Offline minimo y seguro. El HTML autenticado no se guarda en Cache Storage:
+// un dispositivo compartido no puede reutilizar el nombre o la configuracion
+// de un tenant anterior. Las APIs tampoco se cachean.
+self.addEventListener("activate", function (event) {
+  event.waitUntil(self.clients.claim());
+});
+self.addEventListener("fetch", function (event) {
+  var request = event.request;
+  if (request.method !== "GET") return;
+  var url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  var isPanelShell = request.mode === "navigate" &&
+    (url.pathname === "/admin/panel" || url.pathname === "/admin/panel-demo");
+  if (!isPanelShell) return;
+  event.respondWith(
+    fetch(request).catch(function () {
+      return new Response("<!doctype html><html lang=\"es\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"theme-color\" content=\"#0A1836\"><title>Nextfor sin conexión</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f7fb;color:#0a1836;font:16px system-ui,sans-serif\"><main style=\"max-width:360px;padding:32px;text-align:center\"><img src=\"/admin/assets/pwa-icon-192.png\" alt=\"\" width=\"72\" height=\"72\" style=\"border-radius:18px\"><h1 style=\"font-size:24px\">Estás sin conexión</h1><p style=\"line-height:1.5;color:#63728a\">Cuando vuelva la señal, abre Nextfor de nuevo para cargar la información más reciente.</p></main></body></html>",
+        { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }, status: 503 });
+    })
+  );
+});` : ""}`);
 });
 
 if (process.env.NODE_ENV === "test") {
@@ -18113,6 +18184,7 @@ app.get("/admin/panel", async (req, res) => {
     ordersPath: "/admin/panel/orders-data",
     setupPath: auth.version === 2 ? null : undefined,
     healthPath: auth.version === 2 ? null : undefined,
+    pwaEnabled: PWA_V1_ENABLED,
     botVersion: BOT_VERSION
   });
 });
@@ -18176,6 +18248,11 @@ app.get("/admin/panel-demo", (req, res) => {
         }
       ]
     },
+    // La PWA en el demo es opt-in por query (?pwa=1): permite probar instalacion,
+    // iconos, standalone y offline SIN credenciales, sin cambiar el demo para
+    // nadie que no ponga el parametro. La bandera global sigue mandando en el
+    // panel autenticado real.
+    pwaEnabled: PWA_V1_ENABLED || req.query.pwa === "1",
     botVersion: BOT_VERSION
   });
 });
@@ -18981,6 +19058,9 @@ app.get("/admin/health", async (req, res) => {
           String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32 &&
           NEXFORIA_COMMERCE_SERVICE_SECRET.length >= 32
         )
+      },
+      notifications: {
+        web_push_ready: WEB_PUSH_CONFIGURED
       },
       status: "running"
     });

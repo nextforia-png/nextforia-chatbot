@@ -3026,8 +3026,8 @@ function initMetaSdk(config){
 function loadMetaSdk(config){return preloadMetaSdk().then(function(){return initMetaSdk(config);});}
 function whatsappInAppBrowser(){
   var ua=String(navigator&&navigator.userAgent||"");
-  if(/FBAN|FBAV|FB_IAB|FBIOS|Instagram|Line\/|MicroMessenger|TikTok|Snapchat|Twitter|WhatsApp/i.test(ua))return true;
-  if(/Android/i.test(ua)&&/; wv\)/i.test(ua))return true;
+  if(/FBAN|FBAV|FB_IAB|FBIOS|Instagram|Line[/]|MicroMessenger|TikTok|Snapchat|Twitter|WhatsApp/i.test(ua))return true;
+  if(/Android/i.test(ua)&&/; wv[)]/i.test(ua))return true;
   if(/iPhone|iPad|iPod/i.test(ua)&&!/Safari/i.test(ua)&&!/CriOS|FxiOS|EdgiOS/i.test(ua))return true;
   return false;
 }

@@ -11,9 +11,14 @@
 //    es que la version siga estando en algun lado para soporte.
 
 const assert = require("assert");
+const fs = require("fs");
 const vm = require("vm");
 const renderCustomerPanel = require("./customer-panel");
 const { createBotOpsService, InMemoryBotOpsStore } = require("./bot-ops");
+const {
+  CUSTOMER_CONVERSATION_CLEAR_TOOL,
+  filterClearedConversationTurns
+} = require("./customer-conversation-clear");
 
 // customer-panel.js no exporta piezas: renderiza el HTML completo. Lo pedimos
 // una vez y sobre ese HTML corren las aserciones.
@@ -87,6 +92,55 @@ assert(!/panelVersionFixed/.test(markup), "el badge flotante sale de la vista de
 assert(!/panelVersionFixed/.test(styles), "y sus estilos tambien, para no dejar CSS muerto");
 assert(/mobileProfileVersion/.test(markup),
   "la version tiene que seguir visible en Mi Perfil o soporte se queda sin ella");
+
+// ─── Papelera de conversaciones ──────────────────────────────────────────
+
+assert(/id="conversationTrashButton"/.test(markup), "falta la papelera discreta en el encabezado del chat");
+assert(/aria-label="Vaciar conversación"/.test(markup), "la papelera necesita un nombre accesible");
+assert(/id="conversationClearModal"[^>]*hidden/.test(markup), "la confirmacion debe iniciar cerrada");
+assert(markup.includes("Su perfil y sus pedidos se conservan."),
+  "la confirmacion debe explicar exactamente que datos se conservan");
+assert(markup.includes("Si vuelve a escribir, aparecerá como una conversación nueva."),
+  "la confirmacion debe explicar que ocurre con el siguiente mensaje");
+assert(clientScript.includes('method:"DELETE"'), "vaciar debe usar una mutacion explicita");
+assert(clientScript.includes('/admin/panel/conversations/'), "la papelera debe llamar al endpoint tenant-scoped");
+assert(!/tenant_id/.test((/function confirmConversationClear\(\)[\s\S]*?\n(?=function |var )/.exec(clientScript + "\nfunction ") || [""])[0]),
+  "el navegador nunca puede elegir el tenant que se vacia");
+
+const clearOptions = {
+  cleanTenantId: function (value) { return String(value || "").trim().toLowerCase(); },
+  normalizeUserId: function (value) { return String(value || "").trim(); },
+  isInternalTurn: function (turn) { return !!turn.internal; }
+};
+const clearTurn = {
+  ts: "2026-08-20T12:00:00.000Z",
+  tenantId: "tenant-a",
+  userId: "instagram:client-1",
+  tools: [CUSTOMER_CONVERSATION_CLEAR_TOOL],
+  botReply: '[CustomerConversationClear] {"tenant_id":"tenant-a","user_id":"instagram:client-1","cleared_at":"2026-08-20T12:00:00.000Z"}'
+};
+const cleared = filterClearedConversationTurns([
+  { ts: "2026-08-20T11:00:00.000Z", userId: "instagram:client-1", text: "old" },
+  { ts: "2026-08-20T11:30:00.000Z", userId: "instagram:client-2", text: "other" },
+  { ts: "2026-08-20T11:40:00.000Z", userId: "instagram:client-1", internal: true, text: "profile" },
+  { ts: "2026-08-20T12:05:00.000Z", userId: "instagram:client-1", text: "new" }
+], [clearTurn], "tenant-a", clearOptions);
+assert(!cleared.some(function (turn) { return turn.text === "old"; }), "el historial anterior debe desaparecer");
+assert(cleared.some(function (turn) { return turn.text === "new"; }), "un mensaje posterior debe abrir una conversacion nueva");
+assert(cleared.some(function (turn) { return turn.text === "profile"; }), "el perfil interno se debe conservar");
+assert(cleared.some(function (turn) { return turn.text === "other"; }), "otros clientes del mismo tenant no cambian");
+const tenantB = filterClearedConversationTurns([
+  { ts: "2026-08-20T11:00:00.000Z", userId: "instagram:client-1", text: "tenant-b-history" }
+], [clearTurn], "tenant-b", clearOptions);
+assert.strictEqual(tenantB.length, 1, "una papelera del tenant A no puede ocultar chats del tenant B");
+const indexSource = fs.readFileSync(require.resolve("./index"), "utf8");
+const clearEndpoint = /app\.delete\("\/admin\/panel\/conversations\/:userId"[\s\S]*?\n\}\);/.exec(indexSource);
+assert(clearEndpoint, "falta el endpoint real para vaciar conversaciones");
+assert(clearEndpoint[0].includes('conversationActionAuthOk(req, "agent")'), "viewer debe seguir siendo solo lectura");
+assert(clearEndpoint[0].includes("customerTenantForAuth(auth)"), "el tenant debe salir de la sesion firmada");
+assert(!/req\.(body|query).*tenant/i.test(clearEndpoint[0]), "el endpoint no puede confiar en tenant del navegador");
+assert(clearEndpoint[0].includes("profile_preserved: true") && clearEndpoint[0].includes("orders_preserved: true"),
+  "la respuesta debe confirmar que perfil y pedidos no se borraron");
 
 // ─── 3. Reportar un bug del bot ───────────────────────────────────────────
 

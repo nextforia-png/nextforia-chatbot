@@ -6,6 +6,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
+const vm = require("vm");
+const renderCustomerPanel = require("./customer-panel");
 
 function availablePort() {
   return new Promise(function (resolve, reject) {
@@ -64,6 +66,19 @@ async function waitForJson(url, predicate, timeoutMs) {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   const connectionSource = fs.readFileSync(path.join(__dirname, "channel-connections.js"), "utf8");
   const panelSource = fs.readFileSync(path.join(__dirname, "customer-panel.js"), "utf8");
+  let renderedPanel = "";
+  renderCustomerPanel({
+    setHeader: function () {},
+    status: function () { return this; },
+    send: function (html) { renderedPanel = String(html || ""); }
+  }, { role: "admin", username: "panel-script-test", context: {} });
+  const renderedPanelScripts = Array.from(renderedPanel.matchAll(/<script>([\s\S]*?)<\/script>/g));
+  assert(renderedPanelScripts.length > 0, "the rendered Customer Panel must include its client script");
+  renderedPanelScripts.forEach(function (match, index) {
+    assert.doesNotThrow(function () {
+      new vm.Script(match[1], { filename: "customer-panel-inline-" + index + ".js" });
+    }, "every rendered Customer Panel script must be valid JavaScript");
+  });
   const whatsappV2MigrationSource = fs.readFileSync(
     path.join(__dirname, "docs/migrations/20260808_whatsapp_onboarding_v2_up.sql"),
     "utf8"
@@ -208,6 +223,24 @@ async function waitForJson(url, predicate, timeoutMs) {
   assert.match(panelSource, /Conservar mi WhatsApp Business/);
   assert.match(panelSource, /featureType:"whatsapp_business_app_onboarding"/);
   assert.match(panelSource, /FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING/);
+  // El popup de Meta debe abrirse dentro del gesto del usuario. Si FB.login vuelve a
+  // quedar detrás de un fetch o de la carga del SDK, Safari iOS y Chrome Android lo
+  // bloquean en silencio y el cliente ve que "no pasa nada" al tocar el botón.
+  const openWhatsAppWindowStart = panelSource.indexOf("function openWhatsAppMetaWindow()");
+  const openWhatsAppWindowEnd = panelSource.indexOf("\nfunction whatsappLaunchPanel()", openWhatsAppWindowStart);
+  assert(openWhatsAppWindowStart >= 0 && openWhatsAppWindowEnd > openWhatsAppWindowStart,
+    "the WhatsApp popup must be opened by its own dedicated user-gesture handler");
+  const openWhatsAppWindow = panelSource.slice(openWhatsAppWindowStart, openWhatsAppWindowEnd);
+  assert.match(openWhatsAppWindow, /window\.FB\.login\(/,
+    "the second tap must call FB.login directly");
+  assert.doesNotMatch(openWhatsAppWindow, /\bapi\(|\.then\(|await /,
+    "no async work may run before FB.login or mobile browsers block the Meta window");
+  assert.match(panelSource, /function prepareWhatsAppConnection\(mode\)[\s\S]*?preloadMetaSdk\(\)/,
+    "step one must fetch the authorization and warm the Meta SDK before the user taps open");
+  assert.doesNotMatch(panelSource, /embedded_signup\)\{launchWhatsAppEmbeddedSignup/,
+    "the old single-tap flow opened the popup after a fetch and failed on mobile");
+  assert.match(panelSource, /function whatsappInAppBrowser\(\)[\s\S]*?FBAN\|FBAV/,
+    "in-app browsers cannot run Embedded Signup and must be warned before the attempt");
   assert.match(connectionSource, /registration_managed_by: coexistence \? "meta_embedded_signup" : "nextfor"/);
 
   const port = await availablePort();

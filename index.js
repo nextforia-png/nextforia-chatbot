@@ -380,7 +380,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v412-customer-panel-pwa";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v413-web-push-activation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -18844,6 +18844,9 @@ app.get("/admin/health", async (req, res) => {
           String(process.env.NEXFORIA_PAIRING_SECRET || "").trim().length >= 32 &&
           NEXFORIA_COMMERCE_SERVICE_SECRET.length >= 32
         )
+      },
+      notifications: {
+        web_push_ready: WEB_PUSH_CONFIGURED
       },
       status: "running"
     });

@@ -108,6 +108,13 @@ module.exports = function renderCustomerPanel(res, options) {
   // non-tenant panel untouched.
   const panelRedesignEnabled = (demoMode || (panelContext.v2 && panelContext.support)) && panelRedesignFlag !== "0";
   const botVersion = options.botVersion || "dev";
+  // Todo lo de la PWA (manifest, iconos, instalacion, offline) va detras de una
+  // sola bandera. Apagada, el panel renderiza exactamente el mismo HTML que
+  // antes: es la valvula de escape si algo sale mal en produccion.
+  const pwaEnabled = !!options.pwaEnabled;
+  const pwaManifestPath = demoMode
+    ? "/admin/panel/manifest.webmanifest?pwa=demo"
+    : "/admin/panel/manifest.webmanifest?pwa=1";
   const paymentGateRequired = !!options.paymentGateRequired;
   const channelConnectionsV1Enabled = !!options.channelConnectionsV1Enabled && !paymentGateRequired;
   const channelConnectionsDemo = options.channelConnectionsDemo || null;
@@ -256,8 +263,17 @@ module.exports = function renderCustomerPanel(res, options) {
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1${pwaEnabled ? ", viewport-fit=cover" : ""}">
 <title>Nextfor IA · ${escapeHtml(panelContext.businessName)}</title>
+${pwaEnabled ? `<link rel="manifest" href="${pwaManifestPath}">
+<meta name="theme-color" content="#0A1836">
+<meta name="application-name" content="Nextfor IA">
+<!-- iOS ignora el manifest para el icono y el modo standalone: necesita estas
+     tres etiquetas propias, y el icono tiene que ser PNG cuadrado. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nextfor">
+<link rel="apple-touch-icon" href="/admin/assets/pwa-icon-apple-180.png">` : ""}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -422,7 +438,7 @@ button{cursor:pointer}
 .notificationEmpty{background:#fff;border:1px solid var(--line);border-radius:20px;padding:24px;color:var(--slate-500);font-weight:800;box-shadow:var(--shadow)}
 .notificationControls{display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid #CBEAFF;background:#F4FBFF;border-radius:18px;padding:14px 16px;color:var(--navy-900)}
 .notificationControls strong{display:block;font-size:14px}.notificationControls span{display:block;margin-top:3px;color:var(--slate-500);font-size:12px;font-weight:700}
-.reportBugRow{display:flex;justify-content:flex-end;padding:2px 2px 0}.reportBugTrigger{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:#fff;color:var(--slate-500);font-family:inherit;font-size:12px;font-weight:700;border-radius:999px;padding:7px 13px;cursor:pointer;transition:color .16s,border-color .16s,background .16s}.reportBugTrigger:hover{color:#9A6B12;border-color:#F3D290;background:#FFFBF2}.reportBugFlag{font-size:12px;line-height:1}.bugModal{position:fixed;inset:0;z-index:120;background:rgba(7,22,50,.52);display:flex;align-items:center;justify-content:center;padding:20px}.bugModal[hidden]{display:none}.bugModalCard{position:relative;width:min(520px,100%);max-height:92vh;overflow-y:auto;background:#fff;border-radius:22px;box-shadow:0 30px 70px rgba(7,22,50,.32);padding:26px 26px 20px}.bugModalClose{position:absolute;right:14px;top:12px;border:0;background:transparent;color:var(--slate-500);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px}.bugModalEyebrow{display:block;color:var(--cyan-500);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.13em}.bugModalCard h3{font-family:var(--font-display);font-size:21px;line-height:1.18;color:var(--navy-900);margin:9px 0 0;max-width:24ch}.bugModalLead{margin:9px 0 0;font-size:13.5px;line-height:1.5;color:var(--slate-500)}.bugReasons{display:flex;flex-wrap:wrap;gap:8px;margin:17px 0 0}.bugReason{border:1px solid var(--line);background:#fff;color:var(--navy-900);font-family:inherit;font-size:12.5px;font-weight:700;border-radius:999px;padding:8px 13px;cursor:pointer;transition:all .16s}.bugReason:hover{border-color:var(--cyan-500)}.bugReason.active{background:#E8F6FF;border-color:var(--cyan-500);color:#0672A8}.bugNoteLabel{display:block;margin:18px 0 6px;font-size:12.5px;font-weight:800;color:var(--navy-900)}.bugNoteLabel span{color:var(--slate-500);font-weight:600}#bugNote{width:100%;min-height:86px;resize:vertical;font-family:inherit;font-size:13.5px;color:var(--navy-900);border:1px solid var(--line);border-radius:14px;padding:11px 13px;outline:none;box-sizing:border-box}#bugNote:focus{border-color:var(--cyan-500)}.bugModalError{margin:11px 0 0;font-size:12.5px;font-weight:700;color:#C0392B}.bugModalActions{display:flex;justify-content:flex-end;gap:9px;margin:18px 0 0}.bugModalGhost{border:1px solid var(--line);background:#fff;color:var(--slate-500);font-family:inherit;font-size:13px;font-weight:700;border-radius:12px;padding:10px 15px;cursor:pointer}.bugModalSend{border:0;background:var(--cyan-500);color:#fff;font-family:inherit;font-size:13px;font-weight:800;border-radius:12px;padding:10px 18px;cursor:pointer}.bugModalSend[disabled]{opacity:.6;cursor:default}.bugModalFoot{margin:14px 0 0;font-size:11.5px;line-height:1.45;color:var(--slate-500);text-align:center}@media(max-width:760px){.bugModalCard{padding:22px 18px 16px;border-radius:18px}.bugModalCard h3{font-size:19px}}@keyframes nxToastPulse{0%,100%{transform:scale(1);box-shadow:0 24px 60px rgba(7,22,50,.24)}50%{transform:scale(1.035);box-shadow:0 26px 68px rgba(245,165,36,.42)}}.handoffToast[style*="grid"]{animation:nxToastPulse .62s ease-in-out 3}.handoffToast{position:fixed;right:24px;top:24px;z-index:90;width:min(420px,calc(100vw - 32px));border:1px solid #F3D290;border-radius:20px;background:#FFF9ED;box-shadow:0 24px 60px rgba(7,22,50,.24);padding:18px;display:none;grid-template-columns:46px minmax(0,1fr) auto;gap:13px;align-items:center;color:var(--navy-900)}
+.reportBugRow{display:flex;justify-content:flex-end;padding:2px 2px 0}.reportBugTrigger{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);background:#fff;color:var(--slate-500);font-family:inherit;font-size:12px;font-weight:700;border-radius:999px;padding:7px 13px;cursor:pointer;transition:color .16s,border-color .16s,background .16s}.reportBugTrigger:hover{color:#9A6B12;border-color:#F3D290;background:#FFFBF2}.reportBugFlag{font-size:12px;line-height:1}.bugModal{position:fixed;inset:0;z-index:120;background:rgba(7,22,50,.52);display:flex;align-items:center;justify-content:center;padding:20px}.bugModal[hidden]{display:none}.bugModalCard{position:relative;width:min(520px,100%);max-height:92vh;overflow-y:auto;background:#fff;border-radius:22px;box-shadow:0 30px 70px rgba(7,22,50,.32);padding:26px 26px 20px}.bugModalClose{position:absolute;right:14px;top:12px;border:0;background:transparent;color:var(--slate-500);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px}.bugModalEyebrow{display:block;color:var(--cyan-500);font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.13em}.bugModalCard h3{font-family:var(--font-display);font-size:21px;line-height:1.18;color:var(--navy-900);margin:9px 0 0;max-width:24ch}.bugModalLead{margin:9px 0 0;font-size:13.5px;line-height:1.5;color:var(--slate-500)}.bugReasons{display:flex;flex-wrap:wrap;gap:8px;margin:17px 0 0}.bugReason{border:1px solid var(--line);background:#fff;color:var(--navy-900);font-family:inherit;font-size:12.5px;font-weight:700;border-radius:999px;padding:8px 13px;cursor:pointer;transition:all .16s}.bugReason:hover{border-color:var(--cyan-500)}.bugReason.active{background:#E8F6FF;border-color:var(--cyan-500);color:#0672A8}.bugNoteLabel{display:block;margin:18px 0 6px;font-size:12.5px;font-weight:800;color:var(--navy-900)}.bugNoteLabel span{color:var(--slate-500);font-weight:600}#bugNote{width:100%;min-height:86px;resize:vertical;font-family:inherit;font-size:13.5px;color:var(--navy-900);border:1px solid var(--line);border-radius:14px;padding:11px 13px;outline:none;box-sizing:border-box}#bugNote:focus{border-color:var(--cyan-500)}.bugModalError{margin:11px 0 0;font-size:12.5px;font-weight:700;color:#C0392B}.bugModalActions{display:flex;justify-content:flex-end;gap:9px;margin:18px 0 0}.bugModalGhost{border:1px solid var(--line);background:#fff;color:var(--slate-500);font-family:inherit;font-size:13px;font-weight:700;border-radius:12px;padding:10px 15px;cursor:pointer}.bugModalSend{border:0;background:var(--cyan-500);color:#fff;font-family:inherit;font-size:13px;font-weight:800;border-radius:12px;padding:10px 18px;cursor:pointer}.bugModalSend[disabled]{opacity:.6;cursor:default}.bugModalFoot{margin:14px 0 0;font-size:11.5px;line-height:1.45;color:var(--slate-500);text-align:center}@media(max-width:760px){.bugModalCard{padding:22px 18px 16px;border-radius:18px}.bugModalCard h3{font-size:19px}}@keyframes nxToastPulse{0%,100%{transform:scale(1);box-shadow:0 24px 60px rgba(7,22,50,.24)}50%{transform:scale(1.035);box-shadow:0 26px 68px rgba(245,165,36,.42)}}.handoffToast.show{animation:nxToastPulse .62s ease-in-out 3}.pwaInstall{position:fixed;left:50%;bottom:18px;z-index:2400;transform:translateX(-50%);width:min(460px,calc(100vw - 24px));display:grid;grid-template-columns:44px minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:0 22px 54px rgba(7,22,50,.26)}.pwaInstall[hidden]{display:none}.pwaInstallIcon{width:44px;height:44px;border-radius:11px}.pwaInstallCopy strong{display:block;font-family:var(--font-display);font-size:14.5px;color:var(--navy-900)}.pwaInstallCopy p{margin:3px 0 0;font-size:12px;line-height:1.4;color:var(--slate-500)}.pwaInstallCta{flex:none;border:0;border-radius:12px;background:var(--cyan-500);color:#fff;font-family:inherit;font-size:13px;font-weight:800;padding:10px 16px;cursor:pointer}.pwaInstallClose{position:absolute;right:8px;top:6px;border:0;background:transparent;color:var(--slate-500);font-size:18px;line-height:1;cursor:pointer;padding:2px 6px}.pwaInstall.ios{grid-template-columns:44px minmax(0,1fr)}.pwaInstall.ios .pwaInstallCta{display:none}.pwaOffline{position:fixed;left:0;right:0;top:0;z-index:2500;padding:9px 14px;background:#9A6B12;color:#fff;font-size:12.5px;font-weight:800;text-align:center}.pwaOffline[hidden]{display:none}.pwaUpdate{position:fixed;left:50%;bottom:18px;z-index:2400;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:14px;background:#0B2348;color:#fff;font-size:12.5px;font-weight:800;box-shadow:0 18px 46px rgba(6,15,34,.24)}.pwaUpdate[hidden]{display:none}.pwaUpdate button{border:0;border-radius:10px;background:var(--cyan-500);color:#fff;font-family:inherit;font-size:12.5px;font-weight:800;padding:7px 13px;cursor:pointer}@media(display-mode:standalone){.pwaInstall{display:none!important}}.handoffToast{position:fixed;right:24px;top:24px;z-index:90;width:min(420px,calc(100vw - 32px));border:1px solid #F3D290;border-radius:20px;background:#FFF9ED;box-shadow:0 24px 60px rgba(7,22,50,.24);padding:18px;display:none;grid-template-columns:46px minmax(0,1fr) auto;gap:13px;align-items:center;color:var(--navy-900)}
 .handoffToast.show{display:grid;animation:handoffIn .24s ease-out}.handoffToastIcon{width:46px;height:46px;border-radius:15px;background:#F7A928;color:#fff;display:grid;place-items:center;font-size:23px}.handoffToast strong{display:block;font-size:15px;font-weight:950}.handoffToast p{margin-top:3px;color:#6B7280;font-size:12.5px;line-height:1.4;font-weight:700}.handoffToast button{border:0;border-radius:12px;background:var(--navy-900);color:#fff;padding:11px 13px;font-weight:900;cursor:pointer}
 @keyframes handoffIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
 .metricRow{grid-column:1/-1;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px}
@@ -2573,12 +2589,26 @@ body.panel-redesign .orderMobileOpenChat{display:none}
   </div>
 </div>
 <div class="bugModal" id="bugModal" hidden role="dialog" aria-modal="true" aria-labelledby="bugModalTitle"><div class="bugModalCard"><button class="bugModalClose" type="button" onclick="closeBugReport()" aria-label="Cerrar">×</button><span class="bugModalEyebrow">Nextfor te respalda</span><h3 id="bugModalTitle">¿La IA respondió mal en este chat?</h3><p class="bugModalLead">Cuéntanos qué pasó y lo corregimos. Nos llevamos la conversación completa, así que no tienes que explicar el contexto.</p><div class="bugReasons" id="bugReasons" role="radiogroup" aria-label="Qué fue lo que pasó"><button type="button" class="bugReason" data-bug-reason="respuesta_incorrecta" role="radio" aria-checked="false" onclick="pickBugReason(this)">Respondió algo incorrecto</button><button type="button" class="bugReason" data-bug-reason="no_entendio" role="radio" aria-checked="false" onclick="pickBugReason(this)">No entendió al cliente</button><button type="button" class="bugReason" data-bug-reason="no_respondio" role="radio" aria-checked="false" onclick="pickBugReason(this)">Se quedó sin responder</button><button type="button" class="bugReason" data-bug-reason="tono" role="radio" aria-checked="false" onclick="pickBugReason(this)">Respondió fuera de tono</button><button type="button" class="bugReason" data-bug-reason="otro" role="radio" aria-checked="false" onclick="pickBugReason(this)">Otra cosa</button></div><label class="bugNoteLabel" for="bugNote">¿Qué debió responder? <span>Opcional</span></label><textarea id="bugNote" maxlength="1000" placeholder="Ej. debió ofrecer el envío gratis a Bogotá."></textarea><p class="bugModalError" id="bugModalError" role="alert" hidden></p><div class="bugModalActions"><button class="bugModalGhost" type="button" onclick="closeBugReport()">Ahora no</button><button class="bugModalSend" id="bugSubmitBtn" type="button" onclick="submitBugReport()">Enviar a Nextfor</button></div><p class="bugModalFoot">Lo revisa nuestro equipo y lo corregimos. Tu bot aprende, tú no pierdes clientes.</p></div></div>
+${pwaEnabled ? `<div class="pwaInstall" id="pwaInstall" hidden role="dialog" aria-labelledby="pwaInstallTitle">
+  <button class="pwaInstallClose" type="button" onclick="dismissInstall()" aria-label="Ahora no">×</button>
+  <img class="pwaInstallIcon" src="/admin/assets/pwa-icon-192.png" alt="" aria-hidden="true">
+  <div class="pwaInstallCopy">
+    <strong id="pwaInstallTitle">Ten Nextfor a un toque</strong>
+    <p id="pwaInstallText">Instálalo en tu pantalla de inicio y entérate al instante cuando un cliente te necesite.</p>
+  </div>
+  <button class="pwaInstallCta" id="pwaInstallCta" type="button" onclick="runInstall()">Instalar</button>
+</div>
+<div class="pwaOffline" id="pwaOffline" hidden role="status">Sin conexión. Te mostramos lo último que cargamos.</div>
+<div class="pwaUpdate" id="pwaUpdate" hidden role="status">
+  <span>Hay una versión nueva de Nextfor.</span>
+  <button type="button" onclick="applyPwaUpdate()">Actualizar</button>
+</div>` : ""}
 <aside class="handoffToast" id="handoffToast" role="alert" aria-live="assertive">
   <span class="handoffToastIcon">🙋</span><div><strong id="handoffToastTitle">Un cliente necesita tu ayuda</strong><p id="handoffToastMessage">Abre la conversación para continuar.</p></div><button id="handoffToastButton" type="button" onclick="if(this.dataset.actionUrl)notificationAction(this.dataset.actionUrl,this.dataset.notificationId)">Abrir chat</button>
 </aside>
 ${panelRedesignEnabled ? '<div class="panelActionToast" id="panelActionToast" role="status" aria-live="polite" hidden></div>' : ""}
 <script>
-var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},INITIAL_CONVERSATION=${safeJson(initialConversation)},INITIAL_ORDER=${safeJson(initialOrder)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_PERSONALITY_PATH="/admin/panel/bot-personality",PANEL_ACCOUNT_PATH="/admin/panel/account-profile",PANEL_PASSWORD_PATH="/admin/panel/account-password",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_ORDERS_PATH=${safeJson(ordersPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_REDESIGN_ENABLED=${panelRedesignEnabled ? "true" : "false"},PANEL_ORDERS_ENABLED=${ordersEnabled ? "true" : "false"},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_ENABLED=${channelConnectionsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_DEMO=${safeJson(channelConnectionsDemo)};
+var INITIAL_TAB=${safeJson(initialTab)},INITIAL_CHANNEL=${safeJson(initialChannel)},INITIAL_CONVERSATION=${safeJson(initialConversation)},INITIAL_ORDER=${safeJson(initialOrder)},SERVER_ROLE=${safeJson(auth.role)},SERVER_CAPABILITIES=${safeJson(capabilities)},PANEL_DATA_PATH=${safeJson(dataPath)},PANEL_HEALTH_PATH=${safeJson(healthPath)},PANEL_SETUP_PATH=${safeJson(setupPath)},PANEL_ONBOARDING_PATH="/admin/client-onboarding/data",PANEL_PERSONALITY_PATH="/admin/panel/bot-personality",PANEL_ACCOUNT_PATH="/admin/panel/account-profile",PANEL_PASSWORD_PATH="/admin/panel/account-password",PANEL_RETARGETING_PATH=${safeJson(retargetingPath)},PANEL_APPOINTMENTS_PATH=${safeJson(appointmentsPath)},PANEL_ORDERS_PATH=${safeJson(ordersPath)},PANEL_LOGIN_PATH=${safeJson(loginPath)},DEMO_MODE=${safeJson(demoMode)},PANEL_REDESIGN_ENABLED=${panelRedesignEnabled ? "true" : "false"},PANEL_ORDERS_ENABLED=${ordersEnabled ? "true" : "false"},PANEL_CONTEXT=${safeJson(panelContext)},PANEL_CHECK_ICON=${safeJson(PANEL_ICONS.check)},PANEL_PAYMENTS_ENABLED=${options.paymentsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_ENABLED=${channelConnectionsV1Enabled ? "true" : "false"},PANEL_CHANNEL_CONNECTIONS_DEMO=${safeJson(channelConnectionsDemo)},PWA_ENABLED=${pwaEnabled ? "true" : "false"};
 var PLAN_DATA=${safeJson(planData)};
 var PANEL_DEMO_ORDERS=[
  {id:1042,name:"Valentina Ríos",phone:"+57 311 456 7890",channel:"whatsapp",stage:"por_confirmar",created_at:new Date(Date.now()-8*60000).toISOString(),payment:"Transferencia · Bancolombia",paymentNote:"Comprobante recibido en el chat",location:"Bogotá · Chapinero",address:"Cra 13 #85-32, Apto 501",items:[{name:"Set Lego Technic 42143",qty:1,price:289900},{name:"Bloques MEGA 250 pzs",qty:1,price:39900}],shipping:12900},
@@ -2611,6 +2641,44 @@ var panelActionToastTimer=null;
 var bugReportReason="";
 // El reporte viaja SIN tenant: el servidor lo saca de la sesion firmada.
 // Aca solo mandamos que conversacion se estaba mirando y que fue lo que paso.
+// ─── PWA ────────────────────────────────────────────────────────────────────
+// El service worker es el MISMO que ya usaban las notificaciones. No se
+// registra uno nuevo: dos workers en el mismo scope se pisan y se pierde la
+// suscripcion push que el cliente ya acepto.
+var pwaInstallEvent=null,pwaWaitingWorker=null;
+function pwaStandalone(){return window.matchMedia&&window.matchMedia("(display-mode: standalone)").matches||navigator.standalone===true;}
+function pwaIsIos(){return /iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;}
+// La cascara PWA (SW para instalar y offline) corre tambien en el demo, para
+// poder probar instalacion sin credenciales. La suscripcion push sigue aparte y
+// sí queda deshabilitada en demo (no hay backend de suscripcion para el demo).
+function setupPwa(){if(!PWA_ENABLED||!("serviceWorker" in navigator))return;
+navigator.serviceWorker.register("/admin/customer-notification-sw.js?pwa=1",{scope:"/admin/"}).then(function(registration){
+// Si ya hay una version nueva esperando, se avisa en vez de aplicarla sola:
+// recargar el panel debajo de alguien que esta escribiendo es peor que esperar.
+if(registration.waiting){pwaWaitingWorker=registration.waiting;show("pwaUpdate",true);}
+registration.addEventListener("updatefound",function(){var incoming=registration.installing;if(!incoming)return;
+incoming.addEventListener("statechange",function(){if(incoming.state==="installed"&&navigator.serviceWorker.controller){pwaWaitingWorker=incoming;show("pwaUpdate",true);}});});
+}).catch(function(){});
+var reloading=false;
+navigator.serviceWorker.addEventListener("controllerchange",function(){if(reloading)return;reloading=true;location.reload();});
+window.addEventListener("beforeinstallprompt",function(event){event.preventDefault();pwaInstallEvent=event;maybeOfferInstall();});
+window.addEventListener("appinstalled",function(){show("pwaInstall",false);pwaInstallEvent=null;});
+window.addEventListener("online",function(){show("pwaOffline",false);});
+window.addEventListener("offline",function(){show("pwaOffline",true);});
+if(!navigator.onLine)show("pwaOffline",true);
+maybeOfferInstall();}
+function maybeOfferInstall(){if(!PWA_ENABLED||pwaStandalone())return;
+try{if(localStorage.getItem("nextfor_install_dismissed")==="1")return;}catch(_){}
+var card=document.getElementById("pwaInstall");if(!card)return;
+if(pwaInstallEvent){card.classList.remove("ios");show("pwaInstall",true);return;}
+// En iPhone no existe el boton de instalar: Safari obliga a Compartir >
+// Anadir a inicio, y sin ese paso NO hay notificaciones push en iOS.
+if(pwaIsIos()){card.classList.add("ios");
+text("pwaInstallText","Toca Compartir y luego \\u201cAñadir a pantalla de inicio\\u201d. En iPhone ese paso es el que habilita los avisos.");
+show("pwaInstall",true);}}
+function runInstall(){if(!pwaInstallEvent)return;pwaInstallEvent.prompt();pwaInstallEvent.userChoice.then(function(){pwaInstallEvent=null;show("pwaInstall",false);});}
+function dismissInstall(){show("pwaInstall",false);try{localStorage.setItem("nextfor_install_dismissed","1");}catch(_){}}
+function applyPwaUpdate(){if(!pwaWaitingWorker){location.reload();return;}pwaWaitingWorker.postMessage({type:"NEXTFOR_APPLY_UPDATE"});show("pwaUpdate",false);}
 function unlockConversationSearch(input){if(!input||!input.readOnly)return;input.readOnly=false;if(input.value){input.value="";if(typeof renderThreads==="function")renderThreads();}}
 function openBugReport(){var modal=document.getElementById("bugModal");if(!modal)return;bugReportReason="";document.querySelectorAll("#bugReasons .bugReason").forEach(function(button){button.classList.remove("active");button.setAttribute("aria-checked","false");});var note=document.getElementById("bugNote");if(note)note.value="";bugReportError("");var send=document.getElementById("bugSubmitBtn");if(send){send.disabled=false;send.textContent="Enviar a Nextfor";}modal.hidden=false;}
 function closeBugReport(){var modal=document.getElementById("bugModal");if(modal)modal.hidden=true;}
@@ -3748,7 +3816,7 @@ document.addEventListener("pointerdown",unlockNotificationAudio,{once:true});
 try{var initialView=new URL(location.href).searchParams.get("view");if(["agenda","chats","reminders"].includes(initialView))state.appointmentSection=initialView;}catch(e){}
 function panelNeedsLiveRefresh(){return !document.hidden&&["summary","conversations"].includes(state.tab)&&!state.metaDirty;}
 document.addEventListener("visibilitychange",function(){if(panelNeedsLiveRefresh()&&Date.now()-state.lastPanelLoadedAt>=120000)loadPanelData(false);});
-renderChannelStrips();setupSummaryCustomization();showTab(INITIAL_TAB);loadBotSetup();loadClientOnboardingSummary();loadPanelData(false);loadPanelHealth();startNotificationStream();if(INITIAL_TAB==="plan")loadBilling(false);setInterval(function(){if(!DEMO_MODE&&panelNeedsLiveRefresh())loadPanelData(false);},120000);setInterval(function(){if(!document.hidden)loadPanelHealth();},300000);
+renderChannelStrips();setupSummaryCustomization();showTab(INITIAL_TAB);loadBotSetup();loadClientOnboardingSummary();loadPanelData(false);loadPanelHealth();startNotificationStream();if(INITIAL_TAB==="plan")loadBilling(false);setInterval(function(){if(!DEMO_MODE&&panelNeedsLiveRefresh())loadPanelData(false);},120000);setInterval(function(){if(!document.hidden)loadPanelHealth();},300000);setupPwa();
 </script>
 </body>
 </html>`);

@@ -6,6 +6,8 @@ const crypto = require("crypto");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
+const vm = require("vm");
+const renderCustomerPanel = require("./customer-panel");
 
 function availablePort() {
   return new Promise(function (resolve, reject) {
@@ -64,6 +66,19 @@ async function waitForJson(url, predicate, timeoutMs) {
   const source = fs.readFileSync(path.join(__dirname, "index.js"), "utf8");
   const connectionSource = fs.readFileSync(path.join(__dirname, "channel-connections.js"), "utf8");
   const panelSource = fs.readFileSync(path.join(__dirname, "customer-panel.js"), "utf8");
+  let renderedPanel = "";
+  renderCustomerPanel({
+    setHeader: function () {},
+    status: function () { return this; },
+    send: function (html) { renderedPanel = String(html || ""); }
+  }, { role: "admin", username: "panel-script-test", context: {} });
+  const renderedPanelScripts = Array.from(renderedPanel.matchAll(/<script>([\s\S]*?)<\/script>/g));
+  assert(renderedPanelScripts.length > 0, "the rendered Customer Panel must include its client script");
+  renderedPanelScripts.forEach(function (match, index) {
+    assert.doesNotThrow(function () {
+      new vm.Script(match[1], { filename: "customer-panel-inline-" + index + ".js" });
+    }, "every rendered Customer Panel script must be valid JavaScript");
+  });
   const whatsappV2MigrationSource = fs.readFileSync(
     path.join(__dirname, "docs/migrations/20260808_whatsapp_onboarding_v2_up.sql"),
     "utf8"

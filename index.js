@@ -50,6 +50,10 @@ const {
   enrichCustomerOrderContact
 } = require("./customer-orders");
 const {
+  CUSTOMER_CONVERSATION_CLEAR_TOOL,
+  filterClearedConversationTurns
+} = require("./customer-conversation-clear");
+const {
   checkoutAmounts,
   confirmedPaymentMessage
 } = require("./checkout-shipping");
@@ -397,7 +401,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v417-notification-preferences-storybrand";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v418-conversation-trash";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -755,7 +759,8 @@ const CUSTOMER_PANEL_INTERNAL_STATE_TOOLS = Object.freeze([
   CHANNEL_CONNECTION_STATE_TOOL,
   SHOPIFY_SESSION_STATE_TOOL,
   SIGNATURE_TOOL,
-  APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL
+  APPOINTMENT_CALENDAR_CONNECTION_STATE_TOOL,
+  CUSTOMER_CONVERSATION_CLEAR_TOOL
 ]);
 const CUSTOMER_PANEL_TURN_COLUMNS = "id,ts,tenant_id,phone_number_id,channel,user_id,user_message,bot_reply,tools,zero_result_queries,handoff,rating,num_tools,status,eval";
 const RETARGETING_EVENT_RECORD_PREFIX = "retargeting-events:";
@@ -3245,6 +3250,63 @@ function isCustomerMetaTurn(turn) {
   return tools.includes(CUSTOMER_META_TOOL);
 }
 
+function isCustomerConversationClearTurn(turn) {
+  const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
+  return tools.includes(CUSTOMER_CONVERSATION_CLEAR_TOOL);
+}
+
+function filterClearedCustomerConversationTurns(turns, clearTurns, tenantId) {
+  return filterClearedConversationTurns(turns, clearTurns, tenantId, {
+    cleanTenantId,
+    normalizeUserId: normalizeConversationUserId,
+    isInternalTurn: isInternalAdminTurn
+  });
+}
+
+async function loadCustomerConversationClearTurns(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  if (!cleanTenant) return [];
+  if (SUPABASE_ENABLED) {
+    const rows = await supabaseFetchLatestToolStates(CUSTOMER_CONVERSATION_CLEAR_TOOL, { tenantId: cleanTenant });
+    return (rows || []).map(normalizeTurnRow);
+  }
+  return conversationLogs.filter(function (turn) {
+    return cleanTenantId(turn && (turn.tenantId || turn.tenant_id)) === cleanTenant && isCustomerConversationClearTurn(turn);
+  });
+}
+
+async function recordCustomerConversationClear(userId, tenantId, actor) {
+  const clearedAt = new Date().toISOString();
+  const payload = {
+    tenant_id: cleanTenantId(tenantId),
+    user_id: normalizeConversationUserId(userId),
+    cleared_at: clearedAt,
+    cleared_by: cleanRuntimeText(actor, 160) || "customer_panel"
+  };
+  const rec = {
+    ts: clearedAt,
+    tenantId: payload.tenant_id,
+    channel: conversationChannel(payload.user_id),
+    userId: payload.user_id,
+    sourceEventId: "customer-conversation-clear:" + crypto.createHash("sha256").update(payload.user_id).digest("hex"),
+    userMessage: "",
+    botReply: "[CustomerConversationClear] " + JSON.stringify(payload),
+    tools: [CUSTOMER_CONVERSATION_CLEAR_TOOL],
+    zeroResultQueries: [],
+    handoff: false,
+    rating: null,
+    numTools: 1,
+    status: "ok",
+    eval: { skip: true, reason: CUSTOMER_CONVERSATION_CLEAR_TOOL }
+  };
+  if (SUPABASE_ENABLED) await supabaseInsertStrict(rec);
+  else {
+    conversationLogs.push(rec);
+    if (conversationLogs.length > 300) conversationLogs.shift();
+  }
+  return payload;
+}
+
 function isDashboardCustomerUserTurn(turn) {
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
   return tools.includes(DASHBOARD_CUSTOMER_USER_TOOL);
@@ -3303,8 +3365,9 @@ function isShopifySessionStateTurn(turn) {
 function isInternalAdminTurn(turn) {
   const botReply = String(turn && turn.botReply || "");
   const tools = Array.isArray(turn && turn.tools) ? turn.tools : [];
-  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|CustomerOrderState|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
+  if (/^\[(ShopifySessionState|ChannelConnectionState|AppointmentCalendarConnectionState|NextforSignature|CustomerMemory|ClientOnboarding|CustomerSetupQuestionnaire|DashboardUser|SuperAdminAccess|RetargetingEvent|PublicCustomerAccess|InstagramProfile|LegacyClientVisibility|BotSetup|CustomerConversationClear|CustomerPanelNotification|CustomerPanelNotificationRead|CustomerPanelPushSubscription|CustomerOrderState|Meta|DeliveryFailure)\]\s*/.test(botReply)) return true;
   return isCustomerMetaTurn(turn) ||
+    isCustomerConversationClearTurn(turn) ||
     isDashboardCustomerUserTurn(turn) ||
     isSuperAdminAccessTurn(turn) ||
     isBotSetupTurn(turn) ||
@@ -12101,6 +12164,7 @@ function customerPanelCapabilities(role) {
     intervene: level >= DASHBOARD_ROLES.agent,
     respond: level >= DASHBOARD_ROLES.agent,
     manage_notes_tags: level >= DASHBOARD_ROLES.agent,
+    clear_conversations: level >= DASHBOARD_ROLES.agent,
     manage_orders: level >= DASHBOARD_ROLES.agent,
     run_tests: level >= DASHBOARD_ROLES.admin,
     run_evaluation: level >= DASHBOARD_ROLES.admin,
@@ -13746,6 +13810,41 @@ function releaseAdminConversation(req, res) {
 }
 
 app.post("/admin/release/:userId", releaseAdminConversation);
+
+app.delete("/admin/panel/conversations/:userId", async (req, res) => {
+  if (!conversationActionAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const userId = normalizeConversationUserId(req.params.userId);
+  if (!userId) {
+    res.status(400).json({ ok: false, error: "missing_user_id" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth) || DEFAULT_TENANT_ID;
+  try {
+    const cleared = await recordCustomerConversationClear(userId, tenantId, auth.email || auth.username || auth.name || "customer_panel");
+    const stateKey = tenantConversationStateKey(userId, tenantId);
+    conversations.delete(stateKey);
+    conversationLastActiveAt.delete(stateKey);
+    deleteHumanHandoff(userId, tenantId);
+    res.json({
+      ok: true,
+      userId,
+      cleared_at: cleared.cleared_at,
+      profile_preserved: true,
+      orders_preserved: true
+    });
+  } catch (error) {
+    log("error", "customer_conversation_clear_failed", {
+      tenant_id: tenantId,
+      user_id_suffix: userId.slice(-6),
+      error: String(error && error.message || error || "unknown").slice(0, 180)
+    });
+    res.status(503).json({ ok: false, error: "conversation_not_cleared" });
+  }
+});
 
 app.post("/admin/support/tenants/:tenantId/release-handoffs", async (req, res) => {
   const auth = dashboardAuth(req);
@@ -17182,6 +17281,16 @@ app.get("/admin/panel/data", async (req, res) => {
       turns = pageRows.concat(before ? [] : contextRows).map(normalizeTurnRow);
     }
   }
+  let conversationClearTurns = turns.filter(isCustomerConversationClearTurn);
+  try {
+    conversationClearTurns = conversationClearTurns.concat(await loadCustomerConversationClearTurns(tenantId));
+  } catch (error) {
+    log("warn", "customer_conversation_clear_state_unavailable", {
+      tenant_id: tenantId,
+      error: String(error && error.message || error || "unknown").slice(0, 180)
+    });
+  }
+  turns = filterClearedCustomerConversationTurns(turns, conversationClearTurns, tenantId);
   turns.sort(function (a, b) {
     return new Date(b.ts || 0) - new Date(a.ts || 0);
   });

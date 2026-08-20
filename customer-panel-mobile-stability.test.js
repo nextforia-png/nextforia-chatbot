@@ -64,11 +64,13 @@ assert(/\.notificationCard\{grid-template-columns:40px minmax\(0,1fr\)[^}]*overf
   "la tarjeta de notificación móvil debe reservar espacio al texto");
 assert(/\.notificationCopy\{min-width:0\}/.test(html),
   "el texto de notificaciones debe poder encogerse dentro de la grilla");
-assert(/\.notificationEmailType span\{min-width:0;overflow-wrap:anywhere\}/.test(html),
-  "las etiquetas de correo deben ajustarse dentro de su tarjeta");
+assert(/\.notificationEmailType\{[^}]*grid-template-columns:22px minmax\(0,1fr\)/.test(html),
+  "cada alerta debe reservar una columna real para el texto");
+assert(/\.notificationEmailTypeCopy\{min-width:0\}/.test(html),
+  "el texto de cada alerta debe poder encogerse dentro de su tarjeta");
 ["payment_pending", "shipping_pending", "sales_opportunity", "product_update", "human_attention"].forEach(function (type) {
-  assert(new RegExp('data-notification-email-type="' + type + '"><span>').test(html),
-    "la etiqueta " + type + " debe tener un contenedor ajustable");
+  assert(new RegExp('data-notification-email-type="' + type + '"><span class="notificationEmailTypeCheck"').test(html),
+    "la alerta " + type + " debe tener un control visual estable");
 });
 
 assert(clientScript.includes("window.scrollTo(0,0);resetMobileAccountViewport();"),

@@ -91,6 +91,14 @@ const {
   setupEmailDedupeKey
 } = require("./setup-email-journey");
 const {
+  createResendCustomerNotificationEmailSender
+} = require("./customer-notification-emails");
+const {
+  InMemoryCustomerNotificationEmailStore,
+  SupabaseCustomerNotificationEmailStore,
+  createCustomerNotificationEmailService
+} = require("./customer-notification-email-service");
+const {
   SupabaseSetupEmailJourneyStore,
   createSetupEmailJourneyService
 } = require("./setup-email-journey-service");
@@ -548,6 +556,8 @@ const CUSTOMER_INVITE_FROM_EMAIL = NEXTFORIA_SETUP_EMAIL_FROM;
 const CUSTOMER_INVITE_REPLY_TO = String(process.env.CUSTOMER_INVITE_REPLY_TO || "info@nextforia.com").trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || "").trim();
 const SETUP_EMAIL_JOURNEY_ENABLED = process.env.SETUP_EMAIL_JOURNEY_ENABLED === "1";
+const CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE = process.env.NODE_ENV === "test" && process.env.CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE === "1";
+const CUSTOMER_NOTIFICATION_EMAIL_GATE = process.env.CUSTOMER_NOTIFICATION_EMAIL_ENABLED === "1";
 const SETUP_EMAIL_INCOMPLETE_DELAY_MINUTES = boundedEnvInt("SETUP_EMAIL_INCOMPLETE_DELAY_MINUTES", 120, 30, 10080);
 const SETUP_EMAIL_PAYMENT_DELAY_MINUTES = boundedEnvInt("SETUP_EMAIL_PAYMENT_DELAY_MINUTES", 120, 30, 10080);
 const BOT_OPS_ALERT_FROM_EMAIL = String(process.env.BOT_OPS_ALERT_FROM_EMAIL || CUSTOMER_INVITE_FROM_EMAIL || "").trim();
@@ -571,6 +581,9 @@ const CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED = process.env.CUSTOMER_ACCESS_V2_E
   && !!DATA_ENCRYPTION_KEY
   && !!CUSTOMER_PANEL_BASE_URL;
 const CUSTOMER_ACCESS_V2_ENABLED = CUSTOMER_ACCESS_V2_GATE || CUSTOMER_ACCESS_TEST_MODE || CUSTOMER_ACCESS_PRODUCTION_AUTO_ENABLED;
+const CUSTOMER_NOTIFICATION_EMAIL_ENABLED = CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE || (
+  CUSTOMER_NOTIFICATION_EMAIL_GATE && CUSTOMER_ACCESS_V2_ENABLED && SUPABASE_ENABLED && !!RESEND_API_KEY && !!CUSTOMER_PANEL_BASE_URL
+);
 const LEGACY_CUSTOMER_PANEL_USERS_ENABLED = !CUSTOMER_ACCESS_V2_ENABLED || process.env.NODE_ENV === "test" || process.env.LEGACY_CUSTOMER_PANEL_USERS_ENABLED === "1";
 const PAYMENTS_PRODUCTION_AUTO_ENABLED = process.env.PAYMENTS_V1_ENABLED !== "0"
   && process.env.NODE_ENV === "production"
@@ -788,6 +801,10 @@ if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && CUSTOMER_ACCESS_EMA
 if (CUSTOMER_ACCESS_V2_GATE && !CUSTOMER_ACCESS_TEST_MODE && !RESEND_API_KEY) productionConfigErrors.push("RESEND_API_KEY is required when CUSTOMER_ACCESS_V2_ENABLED=1");
 if (SETUP_EMAIL_JOURNEY_ENABLED && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when SETUP_EMAIL_JOURNEY_ENABLED=1");
 if (SETUP_EMAIL_JOURNEY_ENABLED && !RESEND_API_KEY) productionConfigErrors.push("RESEND_API_KEY is required when SETUP_EMAIL_JOURNEY_ENABLED=1");
+if (CUSTOMER_NOTIFICATION_EMAIL_GATE && !CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CUSTOMER_NOTIFICATION_EMAIL_ENABLED=1");
+if (CUSTOMER_NOTIFICATION_EMAIL_GATE && !CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE && !CUSTOMER_ACCESS_V2_ENABLED) productionConfigErrors.push("CUSTOMER_ACCESS_V2_ENABLED=1 is required when CUSTOMER_NOTIFICATION_EMAIL_ENABLED=1");
+if (CUSTOMER_NOTIFICATION_EMAIL_GATE && !CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE && !RESEND_API_KEY) productionConfigErrors.push("RESEND_API_KEY is required when CUSTOMER_NOTIFICATION_EMAIL_ENABLED=1");
+if (CUSTOMER_NOTIFICATION_EMAIL_GATE && !CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE && !CUSTOMER_PANEL_BASE_URL) productionConfigErrors.push("CUSTOMER_PANEL_BASE_URL is required when CUSTOMER_NOTIFICATION_EMAIL_ENABLED=1");
 if ((WEB_PUSH_VAPID_PUBLIC_KEY || WEB_PUSH_VAPID_PRIVATE_KEY) && !WEB_PUSH_CONFIGURED) productionConfigErrors.push("WEB_PUSH_VAPID_PUBLIC_KEY, WEB_PUSH_VAPID_PRIVATE_KEY and WEB_PUSH_VAPID_SUBJECT must be configured together");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !CHANNEL_CONNECTIONS_TEST_MODE && !SUPABASE_ENABLED) productionConfigErrors.push("Supabase is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
 if (CHANNEL_CONNECTIONS_V1_ENABLED && !DATA_ENCRYPTION_KEY) productionConfigErrors.push("DATA_ENCRYPTION_KEY is required when CHANNEL_CONNECTIONS_V1_ENABLED=1");
@@ -1277,9 +1294,91 @@ if (WEB_PUSH_CONFIGURED) {
     }
   };
 }
+const customerNotificationEmailTestOutbox = [];
+const customerNotificationEmailStore = CUSTOMER_NOTIFICATION_EMAIL_ENABLED
+  ? (CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE
+      ? new InMemoryCustomerNotificationEmailStore()
+      : new SupabaseCustomerNotificationEmailStore({ url: SUPABASE_URL, headers: SB_HEADERS, axiosClient: axios }))
+  : new InMemoryCustomerNotificationEmailStore();
+const customerNotificationEmailSender = CUSTOMER_NOTIFICATION_EMAIL_ENABLED
+  ? (CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE
+      ? {
+          send: async function (message) {
+            customerNotificationEmailTestOutbox.push(JSON.parse(JSON.stringify(message)));
+            return { id: "test-customer-notification-email-" + customerNotificationEmailTestOutbox.length };
+          }
+        }
+      : createResendCustomerNotificationEmailSender({
+          apiKey: RESEND_API_KEY,
+          replyTo: CUSTOMER_INVITE_REPLY_TO,
+          axiosClient: axios
+        }))
+  : null;
+const customerNotificationEmailService = createCustomerNotificationEmailService({
+  store: customerNotificationEmailStore,
+  sender: customerNotificationEmailSender,
+  available: CUSTOMER_NOTIFICATION_EMAIL_ENABLED,
+  baseUrl: CUSTOMER_PANEL_BASE_URL || PUBLIC_BASE_URL || "https://nextforia.com",
+  recipientAllowed: async function (preference) {
+    if (!CUSTOMER_ACCESS_V2_ENABLED) return false;
+    const recipient = String(preference && preference.recipient || "").trim().toLowerCase();
+    const actorId = String(preference && preference.actor_id || "").trim().toLowerCase();
+    if (!recipient || recipient !== actorId) return false;
+    const membership = await customerAccessStore.activeUserByEmail(recipient);
+    return !!(membership && membership.active && membership.status === "active" &&
+      cleanTenantId(membership.tenant_id) === cleanTenantId(preference.tenant_id) &&
+      String(membership.email_normalized || "").trim().toLowerCase() === recipient);
+  },
+  deliveryAllowed: async function (delivery) {
+    if (!delivery || delivery.template_key !== "shipping_pending") return true;
+    const first = delivery.payload && Array.isArray(delivery.payload.orders) && delivery.payload.orders[0];
+    const orderId = first && String(first.id || "").trim();
+    if (!orderId) return false;
+    try {
+      const order = await customerOrderService.get(delivery.tenant_id, orderId);
+      return !!(order && ["pagado", "preparacion"].includes(order.stage) && !order.tracking_sent_at);
+    } catch (_) {
+      return false;
+    }
+  }
+});
+let customerNotificationEmailProcessing = false;
+
+async function processCustomerNotificationEmails() {
+  if (!CUSTOMER_NOTIFICATION_EMAIL_ENABLED || customerNotificationEmailProcessing) return null;
+  customerNotificationEmailProcessing = true;
+  try {
+    const outcome = await customerNotificationEmailService.processDue(20);
+    if (outcome.sent || outcome.failed || outcome.cancelled) {
+      log(outcome.failed ? "warn" : "info", "customer_notification_emails_processed", outcome);
+    }
+    return outcome;
+  } catch (error) {
+    log("warn", "customer_notification_email_worker_failed", {
+      error: String(error && error.message || "email_worker_failed").slice(0, 180)
+    });
+    return null;
+  } finally {
+    customerNotificationEmailProcessing = false;
+  }
+}
+
+if (CUSTOMER_NOTIFICATION_EMAIL_ENABLED) {
+  const customerNotificationEmailTimer = setInterval(processCustomerNotificationEmails, 60000);
+  if (customerNotificationEmailTimer.unref) customerNotificationEmailTimer.unref();
+  setTimeout(processCustomerNotificationEmails, 1000);
+}
 const customerNotificationService = createCustomerNotificationService({
   store: SUPABASE_ENABLED ? persistentCustomerNotificationStore : new InMemoryCustomerNotificationStore(),
   pushSender: customerNotificationPushSender,
+  emailDelivery: {
+    available: CUSTOMER_NOTIFICATION_EMAIL_ENABLED,
+    scheduleNotification: async function (notification) {
+      const result = await customerNotificationEmailService.scheduleNotification(notification);
+      if (result && result.scheduled) setTimeout(processCustomerNotificationEmails, 0);
+      return result;
+    }
+  },
   subscriptionAllowed: async function (subscription) {
     if (!CUSTOMER_ACCESS_V2_ENABLED) return true;
     const email = String(subscription && subscription.actor_id || "").trim().toLowerCase();
@@ -10469,6 +10568,20 @@ function customerNotificationActorId(auth) {
   return String(auth && (auth.email || auth.username || auth.user_id || auth.name) || "").trim().toLowerCase();
 }
 
+function customerNotificationEmailScope(auth) {
+  const actorId = customerNotificationActorId(auth);
+  if (!auth || auth.version !== 2 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(actorId)) {
+    const error = new Error("customer_notification_email_membership_required");
+    error.status = 403;
+    throw error;
+  }
+  return {
+    tenant_id: customerTenantForAuth(auth),
+    actor_id: actorId,
+    recipient: actorId
+  };
+}
+
 async function buildCustomerNotificationSnapshot(tenantId, auth, onboarding, questionnaire) {
   const base = buildNextforNotifications(onboarding, questionnaire);
   const handoffs = await customerNotificationService.list(tenantId, customerNotificationActorId(auth), 100);
@@ -10727,7 +10840,7 @@ async function createRetargetingJobForCustomer(tenantId, userId, eventType, sour
       back_in_stock: "back_in_stock_rav",
       recommendation: "product_recommendation_rav"
     };
-    return await retargetingEngine.createJob({
+    const result = await retargetingEngine.createJob({
       tenant_id: tenantId,
       customer_id: userId,
       channel: userId.startsWith("ig:") ? "instagram" : userId.startsWith("ms:") ? "messenger" : "whatsapp",
@@ -10740,6 +10853,41 @@ async function createRetargetingJobForCustomer(tenantId, userId, eventType, sour
       context: context || {},
       actor: "system"
     }, policy);
+    const job = result && result.job;
+    if (result && result.created === true && job && ["pending_approval", "simulation_pending"].includes(job.status)) {
+      const eventLabels = {
+        abandoned_cart: "Dejó una compra a medias y la conversación conserva el contexto para retomarla.",
+        post_purchase: "Ya compró antes y existe una oportunidad comprobable de seguimiento.",
+        back_in_stock: "El producto que buscaba volvió a estar disponible.",
+        recommendation: "La conversación muestra una oportunidad de recomendación relevante.",
+        high_intent: "La conversación muestra intención alta de compra."
+      };
+      try {
+        await customerNotificationEmailService.scheduleEvent({
+          tenant_id: tenantId,
+          notification_id: "retargeting:" + job.id,
+          template: "sales_opportunity",
+          payload: {
+            action_url: "/admin/panel?tab=retargeting",
+            opportunity: {
+              customer_name: job.context && job.context.preferred_name || "Cliente",
+              signal: eventLabels[job.event_type] || "La IA detectó una oportunidad en una conversación real.",
+              suggestion: "Revisa la conversación y decide si tu equipo debe retomarla.",
+              potential_value: job.context && job.context.amount_cop || 0,
+              currency: "COP"
+            }
+          }
+        });
+        setTimeout(processCustomerNotificationEmails, 0);
+      } catch (emailError) {
+        log("warn", "customer_notification_sales_opportunity_schedule_failed", {
+          tenant_id: tenantId,
+          job_id: job.id,
+          error: String(emailError && emailError.message || emailError || "unknown").slice(0, 180)
+        });
+      }
+    }
+    return result;
   } catch (error) {
     console.error("retargeting job error:", error.message);
     return { created: false, error: error.message };
@@ -16837,6 +16985,76 @@ app.get("/admin/panel/notifications", async (req, res) => {
   }
 });
 
+app.get("/admin/panel/notifications/email-preferences", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  try {
+    const preferences = await customerNotificationEmailService.getPreferences(
+      customerNotificationEmailScope(dashboardAuth(req))
+    );
+    res.json({ ok: true, preferences });
+  } catch (error) {
+    res.status(error && error.status || 503).json({
+      ok: false,
+      error: error && error.message || "customer_notification_email_preferences_unavailable"
+    });
+  }
+});
+
+app.put("/admin/panel/notifications/email-preferences", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const input = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const allowed = ["enabled", "types"];
+  const typeKeys = ["payment_pending", "shipping_pending", "sales_opportunity", "product_update", "human_attention"];
+  if (Object.keys(input).some(function (key) { return !allowed.includes(key); }) ||
+      typeof input.enabled !== "boolean" || !input.types || typeof input.types !== "object" || Array.isArray(input.types) ||
+      Object.keys(input.types).some(function (key) { return !typeKeys.includes(key) || typeof input.types[key] !== "boolean"; })) {
+    res.status(400).json({ ok: false, error: "customer_notification_email_preferences_invalid" });
+    return;
+  }
+  try {
+    const preferences = await customerNotificationEmailService.savePreferences(
+      customerNotificationEmailScope(dashboardAuth(req)),
+      input
+    );
+    res.json({ ok: true, preferences });
+  } catch (error) {
+    const unavailable = error && error.message === "customer_notification_email_unavailable";
+    res.status(error && error.status || (unavailable ? 503 : 403)).json({
+      ok: false,
+      error: error && error.message || "customer_notification_email_preferences_unavailable"
+    });
+  }
+});
+
+if (CUSTOMER_NOTIFICATION_EMAIL_TEST_MODE) {
+  app.get("/admin/test/customer-notification-email-outbox", function (req, res) {
+    if (!customerPanelAuthOk(req, "viewer")) {
+      res.status(401).json({ ok: false, error: "unauthorized" });
+      return;
+    }
+    const auth = dashboardAuth(req);
+    let scope;
+    try { scope = customerNotificationEmailScope(auth); }
+    catch (error) {
+      res.status(403).json({ ok: false, error: error.message });
+      return;
+    }
+    const items = customerNotificationEmailTestOutbox.filter(function (message) {
+      return cleanTenantId(message.tenant_id) === cleanTenantId(scope.tenant_id) &&
+        String(message.to || "").trim().toLowerCase() === scope.actor_id;
+    }).map(function (message) {
+      return { tenant_id: message.tenant_id, to: message.to, template: message.template };
+    });
+    res.json({ ok: true, count: items.length, items });
+  });
+}
+
 app.post("/admin/panel/notifications/:notificationId/read", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -17186,6 +17404,32 @@ app.post("/admin/panel/orders/action", async (req, res) => {
       { tracking_number: body.tracking_number, tracking_url: body.tracking_url, shipping: body.shipping },
       auth.email || auth.username || auth.name || "customer_panel"
     );
+    if (body.action === "confirm_payment") {
+      try {
+        await customerNotificationEmailService.scheduleEvent({
+          tenant_id: tenantId,
+          notification_id: "shipping-pending:" + order.id + ":" + order.revision,
+          template: "shipping_pending",
+          send_after: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          payload: {
+            action_url: "/admin/panel?tab=orders&order=" + encodeURIComponent(order.id),
+            orders: [{
+              id: order.id,
+              order_number: order.order_number,
+              name: order.name,
+              item_count: (order.items || []).reduce(function (total, item) { return total + (Number(item.qty) || 1); }, 0),
+              wait_days: 1
+            }]
+          }
+        });
+      } catch (emailError) {
+        log("warn", "customer_notification_shipping_schedule_failed", {
+          tenant_id: tenantId,
+          order_id: order.id,
+          error: String(emailError && emailError.message || emailError || "unknown").slice(0, 180)
+        });
+      }
+    }
     let panelOrder = order;
     try {
       const profile = await loadCustomerMeta(order.conversation_id, tenantId);

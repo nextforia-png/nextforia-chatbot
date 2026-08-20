@@ -103,6 +103,7 @@ Plataforma multi-tenant de NextforIA para atención al cliente y agendamiento po
 | `SETUP_EMAIL_JOURNEY_ENABLED` | Activa los cinco correos del setup después de aplicar `20260815_setup_email_journey_up.sql` |
 | `SETUP_EMAIL_INCOMPLETE_DELAY_MINUTES` | Espera antes de recordar un entrenamiento incompleto (default `120`) |
 | `SETUP_EMAIL_PAYMENT_DELAY_MINUTES` | Espera antes de recordar un pago pendiente (default `120`) |
+| `CUSTOMER_NOTIFICATION_EMAIL_ENABLED` | Permite que cada usuario active desde Customer Panel sus correos operativos; exige Customer Access v2, Supabase, Resend y la migración `20260820_customer_notification_emails_up.sql` |
 | `CUSTOMER_ALL_PLANS_ENABLED` | Expone Uno, Aura, Tempo y Atlas en el setup de clientes; activo por defecto, `0` sirve como rollback |
 | `APPOINTMENT_SETUP_ENABLED` | Gate heredado para pilotos de Appointment cuando `CUSTOMER_ALL_PLANS_ENABLED=0` |
 | `ELEVENLABS_WEBHOOK_SECRET` | Secreto HMAC del webhook post-conversación de ElevenLabs |

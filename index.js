@@ -16782,6 +16782,52 @@ app.get("/admin/panel/orders-data", async (req, res) => {
   }
 });
 
+// Reporte de bug del bot hecho por el cliente desde Conversaciones.
+// El tenant sale SIEMPRE de la sesion firmada, nunca del body: si viniera del
+// navegador, un cliente podria abrir incidencias a nombre de otro.
+app.post("/admin/panel/bug-reports", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  if (!botOpsService) {
+    res.status(503).json({ ok: false, error: "bot_ops_unavailable", message: "No pudimos registrar el reporte. Intenta de nuevo en unos minutos." });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const body = req.body || {};
+  const reason = String(body.reason || "otro").trim().toLowerCase();
+  const note = String(body.note || "").trim().slice(0, 1000);
+  const allowedReasons = ["respuesta_incorrecta", "no_entendio", "no_respondio", "tono", "otro"];
+  if (!allowedReasons.includes(reason)) {
+    res.status(400).json({ ok: false, error: "invalid_reason", message: "Elige qué fue lo que pasó." });
+    return;
+  }
+  try {
+    const result = await botOpsService.reportIssue({
+      tenant_id: tenantId,
+      bot_id: String(body.bot_id || auth.assigned_bot_id || "").trim().toLowerCase(),
+      channel: String(body.channel || "").trim().toLowerCase(),
+      conversation_key: String(body.conversation_id || "").trim().slice(0, 80),
+      reason,
+      note,
+      reported_by: auth.email || auth.username || auth.name || "customer_panel",
+      bot_version: BOT_VERSION,
+      customer_message: body.customer_message,
+      bot_reply: body.bot_reply
+    });
+    if (!result.ok) {
+      res.status(503).json({ ok: false, error: "report_not_stored", message: "No pudimos registrar el reporte. Intenta de nuevo en unos minutos." });
+      return;
+    }
+    res.json({ ok: true, finding_recorded: result.finding_recorded });
+  } catch (error) {
+    console.error("customer bug report error:", error.message);
+    res.status(503).json({ ok: false, error: "report_failed", message: "No pudimos registrar el reporte. Intenta de nuevo en unos minutos." });
+  }
+});
+
 app.post("/admin/panel/orders/action", async (req, res) => {
   if (!customerPanelAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });

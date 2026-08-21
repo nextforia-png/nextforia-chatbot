@@ -112,6 +112,17 @@ function cleanDurationMinutes(value) {
   return Number.isFinite(minutes) && minutes >= 5 && minutes <= 24 * 60 ? minutes : 60;
 }
 
+function cleanBookingFields(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const result = {};
+  Object.keys(source).slice(0, 60).forEach(function (key) {
+    const cleanKey = cleanText(key, 80).toLowerCase().replace(/[^a-z0-9_]/g, "");
+    const cleanValue = cleanText(source[key], 2000);
+    if (cleanKey && cleanValue) result[cleanKey] = cleanValue;
+  });
+  return result;
+}
+
 function appointmentCustomerPhone(channel, conversationIdentity, requestedPhone) {
   if (cleanText(channel, 40).toLowerCase() === "whatsapp") {
     const channelDigits = cleanText(conversationIdentity, 100)
@@ -237,6 +248,11 @@ function normalizeAppointment(input) {
     created_at: validIsoDate(input.created_at) || new Date().toISOString(),
     updated_at: validIsoDate(input.updated_at) || new Date().toISOString()
   };
+  const bookingFields = cleanBookingFields(input.booking_fields);
+  if (Object.keys(bookingFields).length) normalized.booking_fields = bookingFields;
+  if (Object.prototype.hasOwnProperty.call(input, "booking_requirements_version")) {
+    normalized.booking_requirements_version = Math.max(1, Math.min(100, Math.round(Number(input.booking_requirements_version) || 1)));
+  }
   const customerConversationId = cleanText(input.customer_conversation_id, 200);
   if (customerConversationId) normalized.customer_conversation_id = customerConversationId;
   if (Object.prototype.hasOwnProperty.call(input, "reminder_state")) {
@@ -385,6 +401,7 @@ module.exports = {
   appointmentFromElevenLabsEvent,
   appointmentIdFromInput,
   appointmentCustomerPhone,
+  cleanBookingFields,
   cleanReminderState,
   cleanReminderDeliveries,
   normalizeAppointment,

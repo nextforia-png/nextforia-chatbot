@@ -91,9 +91,14 @@ assert(atlas.includes('id="nav-orders"'));
 assert(atlas.includes("Oportunidades de venta"));
 assert(atlas.includes('<strong>Atención al cliente</strong><span>Chatbot 24/7</span>'));
 assert(atlas.includes('<strong>Agendamiento</strong><span>Citas y recordatorios</span>'));
-assert(atlas.includes("Cómo agendar"));
+assert(atlas.includes("Configuración"));
 assert(atlas.includes('id="mnav-appointment-reminders"'));
+assert(atlas.includes('id="mnav-appointment-settings"'));
 assert(atlas.includes("openAppointmentConversations()"));
+assert(atlas.includes('data-appt-nav="conversations"'), "conversaciones debe participar en el estado exclusivo del menú de citas");
+assert(atlas.includes('data-appt-mobile="conversations"'), "el menú móvil debe compartir el mismo estado exclusivo");
+assert(atlas.includes('document.body.classList.toggle("appointment-bot-view",appointments)'), "el estilo limpio debe activarse solo para el bot de citas");
+assert(atlas.includes('button.getAttribute("data-appt-nav")==="conversations"'), "abrir conversaciones debe retirar cualquier selección anterior");
 
 const tempoInbox = render({
   initialTab: "conversations",
@@ -102,6 +107,7 @@ const tempoInbox = render({
 assert(tempoInbox.includes('INITIAL_TAB="conversations"'), "un tenant de citas puede abrir el inbox compartido");
 assert(tempoInbox.includes('id="panel-inbox"'));
 assert(tempoInbox.includes('id="nav-appointment-conversations"'));
+assert(tempoInbox.includes('id="mnav-appointment-settings"'));
 assert(!tempoInbox.includes('id="nav-orders"'));
 
 const escaped = render({

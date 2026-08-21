@@ -93,6 +93,16 @@ assert(reminders.every(function (row) { return row.conversation_id === "wa:57300
 assert(reminders.every(function (row) { return row.reminder_key && row.reminder_key.includes("tenant-a"); }));
 assert.notStrictEqual(reminders[0].id, reminders[1].id);
 
+const storedWithDatabaseIds = reminders.map(function (row, index) {
+  return Object.assign({}, row, {
+    id: index ? "11111111-1111-4111-8111-111111111111" : "22222222-2222-4222-8222-222222222222",
+    status: "sent"
+  });
+});
+const rematerialized = materializeAppointmentReminders(appointment, updated, storedWithDatabaseIds, { now: NOW });
+assert.strictEqual(rematerialized.length, 2, "database UUIDs must match existing reminders by reminder_key");
+assert(rematerialized.every(function (row) { return row.status === "sent"; }));
+
 const voiceWithoutCustomerThread = materializeAppointmentReminders({
   tenant_id: "tenant-a",
   appointment_id: "voice-appointment",

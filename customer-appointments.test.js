@@ -6,6 +6,7 @@ const {
   clientScript,
   customerAppointmentSnapshot,
   demoAppointmentSnapshot,
+  markup,
   styles
 } = require("./customer-appointments");
 
@@ -15,6 +16,9 @@ assert.strictEqual(demo.appointments.length, 11);
 assert.strictEqual(demo.appointments.every(function (row) { return row.tenant_id === demo.tenant_id; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "confirmed"; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "no_response"; }), true);
+assert.strictEqual(demo.capabilities.manage_settings, true);
+assert.strictEqual(demo.settings.rules.length, 1);
+assert.strictEqual(demo.settings.reminder_policy.channel, "whatsapp");
 
 const shaped = customerAppointmentSnapshot({
   tenant_id: "tenant-a",
@@ -30,6 +34,7 @@ assert.strictEqual(shaped.appointments[0].ui_status, "confirmed");
 assert.strictEqual(shaped.appointments[0].sync, "pending");
 assert.strictEqual(shaped.appointments[1].ui_status, "needs_you");
 assert.strictEqual(shaped.appointments.every(function (row) { return row.tenant_id === "tenant-a"; }), true);
+assert.strictEqual(shaped.appointments[0].appointment_id, "one");
 new vm.Script(clientScript);
 assert(clientScript.includes("Conectar Meta"));
 assert(clientScript.includes("Número público de citas."));
@@ -38,5 +43,14 @@ assert(clientScript.includes("No requiere extensión."));
 assert(clientScript.includes("copyAppointmentCallNumber"));
 assert(styles.includes("apptGatePhone"));
 assert(styles.includes("auto-fit"));
+assert(markup.includes('id="apptRulesView"'));
+assert(markup.includes('id="apptMobilePanelView"'));
+assert(!markup.includes('id="apptChatsView"'));
+assert(clientScript.includes('/admin/panel/appointment-settings'));
+assert(clientScript.includes('/admin/panel/appointment-reminders/'));
+assert(clientScript.includes('customer_conversation_id'));
+assert(clientScript.includes('appointmentRowsInWeek'));
+assert(clientScript.includes('openAppointmentConversations'));
+assert(clientScript.includes('reminder_policy'));
 
 console.log("customer appointment panel tests: ok");

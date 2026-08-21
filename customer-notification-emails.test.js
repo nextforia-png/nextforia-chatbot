@@ -35,6 +35,13 @@ const fixtures = {
     customer_label: "Daniel",
     channel: "whatsapp",
     message: "El cliente está esperando que continúes."
+  },
+  appointment_confirmed: {
+    base_url: "https://staging.nextforia.com",
+    action_url: "/admin/panel?tab=appointments&appointment=appointment-42",
+    appointment_id: "appointment-42",
+    customer_label: "María Pérez",
+    appointment_when: "viernes 21 de agosto, 03:00 p. m."
   }
 };
 
@@ -51,6 +58,8 @@ CUSTOMER_NOTIFICATION_EMAIL_TEMPLATES.forEach(function (template) {
 assert.strictEqual(CUSTOMER_NOTIFICATION_EMAIL_FROM, "Nextfor IA <info@nextforia.com>");
 assert(!buildCustomerNotificationEmail("payment_pending", fixtures.payment_pending).html.includes("<script>"));
 assert(buildCustomerNotificationEmail("payment_pending", Object.assign({}, fixtures.payment_pending, { action_url: "https://attacker.example/steal" })).html.includes("https://staging.nextforia.com/admin/panel"));
+assert(buildCustomerNotificationEmail("appointment_confirmed", fixtures.appointment_confirmed).subject.includes("cita confirmada"));
+assert(buildCustomerNotificationEmail("appointment_confirmed", fixtures.appointment_confirmed).html.includes("María Pérez"));
 assert.throws(function () { buildCustomerNotificationEmail("unknown", {}); }, /template_invalid/);
 
 (async function () {

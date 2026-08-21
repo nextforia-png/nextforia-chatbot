@@ -17180,7 +17180,7 @@ app.put("/admin/panel/notifications/email-preferences", async (req, res) => {
   }
   const input = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
   const allowed = ["enabled", "types"];
-  const typeKeys = ["payment_pending", "shipping_pending", "sales_opportunity", "product_update", "human_attention"];
+  const typeKeys = ["payment_pending", "shipping_pending", "sales_opportunity", "product_update", "human_attention", "appointment_confirmed"];
   if (Object.keys(input).some(function (key) { return !allowed.includes(key); }) ||
       typeof input.enabled !== "boolean" || !input.types || typeof input.types !== "object" || Array.isArray(input.types) ||
       Object.keys(input.types).some(function (key) { return !typeKeys.includes(key) || typeof input.types[key] !== "boolean"; })) {

@@ -3039,19 +3039,29 @@ async function deliverAppointmentReminder(row, appointment) {
     (row && row.channel === "whatsapp" ? cleanRuntimeText(appointment && appointment.customer_phone, 80) : "");
   if (!recipient) throw new Error("appointment_reminder_recipient_missing");
   const message = appointmentReminderMessage(row, appointment);
-  if (row.channel === "whatsapp" && APPOINTMENT_REMINDER_TEMPLATE_NAME) {
+  if (row.channel === "whatsapp") {
     const configuration = await appointmentReminderConfiguration(row.tenant_id);
     const when = appointmentDateTime(appointment && appointment.starts_at, configuration.timezone);
-    const result = await sendTemplate(recipient, APPOINTMENT_REMINDER_TEMPLATE_NAME, {
-      customer_name: cleanRuntimeText(row.customer_name || appointment && appointment.customer_name, 80) || "Cliente",
-      appointment_date: when.date,
-      appointment_time: when.time,
-      business_name: configuration.business_name || "Nextfor"
-    }, { tenant_id: row.tenant_id });
+    const result = await deliverAppointmentWhatsApp({
+      appointment: Object.assign({}, appointment, {
+        tenant_id: row.tenant_id,
+        customer_phone: recipient
+      }),
+      template: APPOINTMENT_REMINDER_TEMPLATE_NAME,
+      params: {
+        customer_name: cleanRuntimeText(row.customer_name || appointment && appointment.customer_name, 80) || "Cliente",
+        appointment_date: when.date,
+        appointment_time: when.time,
+        business_name: configuration.business_name || "Nextfor"
+      },
+      customerWindowOpen: whatsappCustomerServiceWindowOpen,
+      sendText,
+      sendTemplate
+    });
     if (!result || result.ok !== true) {
-      throw new Error("appointment_reminder_template_failed:" + cleanRuntimeText(result && result.error && (result.error.code || result.error.message), 160));
+      throw new Error("appointment_reminder_whatsapp_failed:" + cleanRuntimeText(result && result.error && (result.error.code || result.error.message), 160));
     }
-    return result.meta && result.meta.messages && result.meta.messages[0] && result.meta.messages[0].id || "";
+    return result.provider_id || "";
   }
   const sent = await sendText(recipient, message, { tenant_id: row.tenant_id, human_agent: false });
   if (!sent) throw new Error("appointment_reminder_text_failed");

@@ -73,6 +73,23 @@ function cleanReminderDeliveries(input) {
   return result;
 }
 
+function cleanConfirmationDelivery(input) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const status = cleanText(source.status, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  if (!["sending", "delivered", "retrying", "failed"].includes(status)) return null;
+  return {
+    status,
+    attempts: Math.max(0, Math.min(10, Math.round(Number(source.attempts) || 0))),
+    sent_at: validIsoDate(source.sent_at),
+    delivered_at: validIsoDate(source.delivered_at),
+    next_attempt_at: validIsoDate(source.next_attempt_at),
+    updated_at: validIsoDate(source.updated_at),
+    provider_id: cleanText(source.provider_id, 240),
+    mode: cleanText(source.mode, 40),
+    error: cleanText(source.error, 240)
+  };
+}
+
 function analysisValue(collection, key) {
   const entry = collection && collection[key];
   if (entry == null) return "";
@@ -165,6 +182,8 @@ function normalizeAppointment(input) {
   if (calendarLastError) normalized.calendar_last_error = calendarLastError;
   const reminderDeliveries = cleanReminderDeliveries(input.reminder_deliveries);
   if (Object.keys(reminderDeliveries).length) normalized.reminder_deliveries = reminderDeliveries;
+  const confirmationDelivery = cleanConfirmationDelivery(input.confirmation_delivery);
+  if (confirmationDelivery) normalized.confirmation_delivery = confirmationDelivery;
   return normalized;
 }
 

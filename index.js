@@ -490,8 +490,13 @@ const APPOINTMENT_CONFIRMATION_BACKFILL_HOURS = boundedEnvInt("APPOINTMENT_CONFI
 const APPOINTMENT_REMINDER_INTERVAL_MS = boundedEnvInt("APPOINTMENT_REMINDER_INTERVAL_SECONDS", 60, 30, 300) * 1000;
 const APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE = String(process.env.APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE || "").trim();
 const APPOINTMENT_PANEL_V2_ENABLED = process.env.APPOINTMENT_PANEL_V2_ENABLED !== "0";
-const APPOINTMENT_REMINDER_SENDS_ENABLED = process.env.APPOINTMENT_REMINDER_SENDS_ENABLED === "1";
-const APPOINTMENT_REMINDER_TEMPLATE_NAME = String(process.env.APPOINTMENT_REMINDER_TEMPLATE_NAME || "").trim();
+// Reminder sends are part of the appointment product. Keep an explicit kill
+// switch for rollback, but do not require a second production flag after the
+// appointment/reminder module itself has already been enabled.
+const APPOINTMENT_REMINDER_SENDS_ENABLED = process.env.APPOINTMENT_REMINDER_SENDS_ENABLED !== "0";
+const APPOINTMENT_REMINDER_TEMPLATE_NAME = String(
+  process.env.APPOINTMENT_REMINDER_TEMPLATE_NAME || APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE
+).trim();
 const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
   process.env.APPOINTMENT_STORAGE_TEST_READY === "1";
 const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };

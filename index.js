@@ -2864,7 +2864,6 @@ function appointmentReminderDbPayload(row) {
     metadata,
     updated_at: row && row.updated_at || new Date().toISOString()
   };
-  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(String(row && row.id || ""))) payload.id = row.id;
   return payload;
 }
 

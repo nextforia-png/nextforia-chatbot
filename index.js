@@ -412,7 +412,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v419-appointment-module-enhancement";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v420-appointment-panel-demo-routing";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -19482,7 +19482,12 @@ app.get("/admin/panel-demo", (req, res) => {
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
   const initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "summary";
-  const demoPlan = String(req.query.plan || "").trim().toLowerCase();
+  const requestedDemoPlan = String(req.query.plan || "").trim().toLowerCase();
+  // The appointment review link historically used only ?tab=appointments.
+  // Without a plan it silently rendered Aura and redirected to Resumen, which
+  // made a successful appointment release look unchanged. Keep explicit plan
+  // choices authoritative and infer Tempo only for this appointment entrypoint.
+  const demoPlan = requestedDemoPlan || (initialTab === "appointments" ? "tempo" : "");
   const appointmentDemo = demoPlan === "tempo" || demoPlan === "atlas";
   const supportDemo = demoPlan !== "tempo";
   const planId = demoPlan === "tempo" ? "nextfor-tempo" : demoPlan === "atlas" ? "nextfor-atlas" : "nextfor-aura";

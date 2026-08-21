@@ -148,6 +148,18 @@ async function seedAppointment(base, secret, agentId, customerName) {
 
   try {
     await waitForServer(child, port);
+
+    let response = await fetch(base + "/admin/panel-demo?tab=appointments");
+    assert.strictEqual(response.status, 200);
+    const appointmentDemoHtml = await response.text();
+    assert(appointmentDemoHtml.includes('INITIAL_TAB="appointments"'),
+      "the appointment demo entrypoint must open the appointment module");
+    assert(appointmentDemoHtml.includes('"planId":"nextfor-tempo"'),
+      "the appointment demo entrypoint must infer the Tempo entitlement");
+    assert(appointmentDemoHtml.includes('id="nav-appointments"'));
+    assert(appointmentDemoHtml.includes('data-appt-nav="reminders"'));
+    assert(appointmentDemoHtml.includes('data-appt-nav="rules"'));
+
     await seedAppointment(base, secret, "agent_a", "Cliente A");
     await seedAppointment(base, secret, "agent_b", "Cliente B");
 
@@ -155,7 +167,7 @@ async function seedAppointment(base, secret, agentId, customerName) {
     const cookieB = await login(base, "admin-b@example.test", password);
     const viewerCookie = await login(base, "viewer-a@example.test", password);
 
-    let response = await fetch(base + "/admin/panel/appointment-settings", { headers: { cookie: cookieA } });
+    response = await fetch(base + "/admin/panel/appointment-settings", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);
     let payload = await response.json();
     const revisionA = payload.revision;

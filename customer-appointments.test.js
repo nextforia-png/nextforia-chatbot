@@ -88,7 +88,7 @@ assert(clientScript.includes('updateAppointmentBookingPolicy'));
 assert(clientScript.includes('booking_requirements'));
 assert(clientScript.includes('addAppointmentRequirement'));
 assert(markup.includes('id="apptRequirementList"'));
-assert(markup.includes('Tipo de cita'));
+assert(clientScript.includes('Tipo de cita'));
 assert(markup.includes('Obligatorio'));
 
 console.log("customer appointment panel tests: ok");

@@ -209,7 +209,8 @@ const {
   materializeAppointmentReminders,
   normalizeReminder,
   reminderSnapshot,
-  updateAppointmentSettings
+  updateAppointmentSettings,
+  validateBookingRequirements
 } = require("./appointment-operations");
 const {
   buildAppointmentIntegrations,
@@ -414,7 +415,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v422-appointment-scheduling-rules";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v423-appointment-booking-requirements";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5114,9 +5115,14 @@ const APPOINTMENT_TOOLS = [
         customer_phone: { type: "string" },
         customer_email: { type: "string" },
         consultation_reason: { type: "string", description: "Servicio o motivo de la cita." },
+        booking_fields: {
+          type: "object",
+          description: "Respuestas de los requisitos configurados por el negocio, usando exactamente el ID de cada campo.",
+          additionalProperties: { type: "string" }
+        },
         data_processing_consent: { type: "boolean", description: "Debe ser true solo cuando el cliente autorizó el tratamiento de datos." }
       },
-      required: ["starts_at", "duration_minutes", "customer_name", "consultation_reason", "data_processing_consent"]
+      required: ["starts_at", "duration_minutes", "data_processing_consent"]
     }
   },
   TOOLS.find(function (tool) { return tool.name === "request_human_handoff"; })
@@ -5157,10 +5163,11 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "REGLAS OPERATIVAS DEL CANAL DE CITAS:",
   "- Trata la conversación como un formulario acumulativo: conserva cada dato que el cliente ya entregó.",
   "- Nunca vuelvas a pedir nombre, teléfono, correo, servicio, fecha, hora o consentimiento si ya están confirmados. Pregunta solo el campo obligatorio que falte.",
+  "- Sigue la lista de requisitos del negocio: los obligatorios bloquean la reserva y los opcionales no. Guarda sus respuestas en booking_fields usando el ID configurado.",
   "- En WhatsApp usa el número del canal como teléfono de contacto; no lo preguntes de nuevo salvo que el cliente quiera usar otro.",
   "- Antes de reservar resume una sola vez los datos reunidos y pide confirmación; no los solicites nuevamente.",
   "- Para consultar un horario usa check_appointment_availability.",
-  "- Antes de reservar confirma servicio, fecha/hora, nombre y consentimiento de datos.",
+  "- Antes de reservar confirma fecha/hora, consentimiento de datos y todos los requisitos obligatorios configurados.",
   "- Usa book_appointment únicamente después de que el cliente confirme explícitamente.",
   "- Si el calendario no está conectado o una herramienta falla, no inventes disponibilidad: ofrece apoyo humano.",
   "- Informa que la cita quedó confirmada solo cuando book_appointment responda status=booked y calendar_sync_status=synced."
@@ -7017,6 +7024,35 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   if (!Number.isFinite(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
     return { ok: false, error: "invalid_appointment_datetime" };
   }
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const bookingRequirements = appointmentSettingsFromOnboarding(onboarding).booking_requirements;
+  let knownProfile = normalizeCustomerMeta({});
+  if (normalizeConversationUserId(userId)) {
+    try { knownProfile = await loadCustomerMeta(userId, tenantId); }
+    catch (_) {}
+  }
+  const channelPhone = !String(userId || "").startsWith("voice:") && conversationChannel(userId) === "whatsapp"
+    ? "+" + conversationExternalId(userId)
+    : "";
+  const requirementCheck = validateBookingRequirements(bookingRequirements, input, {
+    profile: knownProfile,
+    channelPhone
+  });
+  if (!requirementCheck.ok) {
+    return {
+      ok: false,
+      error: "missing_booking_requirements",
+      message: "Faltan datos obligatorios antes de confirmar.",
+      missing_fields: requirementCheck.missing
+    };
+  }
+  input = Object.assign({}, input, {
+    consultation_reason: input && input.consultation_reason || requirementCheck.values.appointment_type,
+    customer_name: input && input.customer_name || requirementCheck.values.full_name,
+    customer_phone: input && input.customer_phone || requirementCheck.values.phone,
+    customer_email: input && input.customer_email || requirementCheck.values.email,
+    booking_fields: requirementCheck.values
+  });
   const availability = await executeCheckAppointmentAvailability(tenantId, {
     starts_at: startsAt.toISOString(),
     duration_minutes: Number(input && input.duration_minutes) || undefined
@@ -7035,7 +7071,8 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   const appointmentProfile = profilePatchFromAppointment({
     customer_name: input && input.customer_name,
     customer_phone: cleanRuntimeText(input && input.customer_phone, 80),
-    customer_email: input && input.customer_email
+    customer_email: input && input.customer_email,
+    booking_fields: input && input.booking_fields
   });
   if (normalizeConversationUserId(userId)) {
     await saveCustomerMeta(userId, appointmentProfile, tenantId, {
@@ -7067,6 +7104,8 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     ),
     customer_email: cleanRuntimeText(input && input.customer_email, 200).toLowerCase(),
     consultation_reason: cleanRuntimeText(input && input.consultation_reason, 1000),
+    booking_fields: input.booking_fields,
+    booking_requirements_version: 2,
     data_processing_consent: "authorized",
     transcript_summary: "Cita creada desde el bot Appointment por " + bookingChannel + ".",
     source: "nextfor_appointment_bot",
@@ -18296,6 +18335,7 @@ function publicAppointmentSettings(settings, configuration) {
     booking_policy: settings.booking_policy,
     default_duration_minutes: settings.booking_policy.default_duration_minutes,
     buffer_minutes: settings.booking_policy.buffer_minutes,
+    booking_requirements: settings.booking_requirements,
     availability_rules: settings.availability_rules,
     timezone: cleanRuntimeText(configuration && configuration.time_zone, 120) || "America/Bogota",
     sync_status: cleanRuntimeText(configuration && configuration.settings_sync_status, 80) || "applied",
@@ -18431,6 +18471,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     settingsPatch.schedule_exceptions = Object.prototype.hasOwnProperty.call(patch, "exceptions") ? patch.exceptions : patch.schedule_exceptions;
   }
   if (Object.prototype.hasOwnProperty.call(patch, "reminder_policy")) settingsPatch.reminder_policy = patch.reminder_policy;
+  if (Object.prototype.hasOwnProperty.call(patch, "booking_requirements")) settingsPatch.booking_requirements = patch.booking_requirements;
   if (Object.prototype.hasOwnProperty.call(patch, "booking_policy") ||
       Object.prototype.hasOwnProperty.call(patch, "default_duration_minutes") ||
       Object.prototype.hasOwnProperty.call(patch, "buffer_minutes")) {
@@ -18453,6 +18494,8 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     booking_policy: updated.booking_policy,
     default_duration_minutes: updated.booking_policy.default_duration_minutes,
     buffer_minutes: updated.booking_policy.buffer_minutes,
+    booking_requirements: updated.booking_requirements,
+    required_booking_fields: updated.required_booking_fields,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
     reminder_timing: updated.reminder_policy.offsets_minutes
@@ -18465,6 +18508,8 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     booking_policy: updated.booking_policy,
     default_duration_minutes: updated.booking_policy.default_duration_minutes,
     buffer_minutes: updated.booking_policy.buffer_minutes,
+    booking_requirements: updated.booking_requirements,
+    required_booking_fields: updated.required_booking_fields,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
     reminder_timing: updated.reminder_policy.offsets_minutes.map(function (minutes) { return Math.round(minutes / 60) + " h antes"; }).join(" y "),

@@ -8,13 +8,16 @@ const {
   applyReminderAction,
   appointmentSettingsFromOnboarding,
   compileAvailabilityRules,
+  compileBookingRequirements,
   deriveAppointmentReminderStatus,
   evaluateScheduleException,
   materializeAppointmentReminders,
   normalizeAppointmentSettings,
+  normalizeBookingRequirements,
   reminderSnapshot,
   timingOffsets,
-  updateAppointmentSettings
+  updateAppointmentSettings,
+  validateBookingRequirements
 } = require("./appointment-operations");
 
 const NOW = "2026-08-20T12:00:00.000Z";
@@ -37,6 +40,35 @@ assert.strictEqual(fromOnboarding.scheduling_rules.length, 1);
 assert.strictEqual(fromOnboarding.reminder_policy.enabled, true);
 assert.deepStrictEqual(fromOnboarding.reminder_policy.offsets_minutes, [1440, 360]);
 assert.match(fromOnboarding.availability_rules, /Johan atiende/);
+assert.strictEqual(fromOnboarding.booking_requirements.find(function (row) { return row.id === "appointment_type"; }).required, true);
+assert.strictEqual(fromOnboarding.booking_requirements.find(function (row) { return row.id === "full_name"; }).required, true);
+
+const configuredRequirements = normalizeBookingRequirements([
+  { type: "appointment_type", active: true, required: true },
+  { type: "full_name", active: true, required: true },
+  { type: "phone", active: true, required: true },
+  { type: "email", active: true, required: false },
+  { id: "primera_cita", type: "custom", label: "Primera cita", question: "¿Es tu primera cita?", active: true, required: true }
+]);
+assert.match(compileBookingRequirements(configuredRequirements), /appointment_type.*OBLIGATORIO/);
+assert.match(compileBookingRequirements(configuredRequirements), /primera_cita.*OBLIGATORIO/);
+const completeRequirements = validateBookingRequirements(configuredRequirements, {
+  consultation_reason: "Valoración",
+  booking_fields: { primera_cita: "Sí" }
+}, { profile: { name: "Ana Pérez" }, channelPhone: "+573001112233" });
+assert.strictEqual(completeRequirements.ok, true);
+assert.strictEqual(completeRequirements.values.appointment_type, "Valoración");
+assert.strictEqual(completeRequirements.values.full_name, "Ana Pérez");
+assert.strictEqual(completeRequirements.values.phone, "+573001112233");
+const missingAppointmentType = validateBookingRequirements(configuredRequirements, {
+  booking_fields: { primera_cita: "Sí" }
+}, { profile: { name: "Ana Pérez" }, channelPhone: "+573001112233" });
+assert.strictEqual(missingAppointmentType.missing[0].id, "appointment_type");
+const isolatedTenantRequirements = normalizeBookingRequirements([
+  { id: "sede", type: "custom", label: "Sede", question: "¿Qué sede prefieres?", active: true, required: true }
+]);
+assert.strictEqual(validateBookingRequirements(isolatedTenantRequirements, {}, {}).missing[0].id, "sede");
+assert.strictEqual(configuredRequirements.some(function (row) { return row.id === "sede"; }), false);
 
 const normalized = normalizeAppointmentSettings({
   revision: 3,
@@ -78,6 +110,7 @@ assert.strictEqual(partialBlocked.available_until, "12:00");
 const updated = updateAppointmentSettings(normalized, {
   booking_policy: { default_duration_minutes: 60, buffer_minutes: 20 },
   reminder_policy: { max_attempts: 3 },
+  booking_requirements: configuredRequirements,
   scheduling_rules: normalized.scheduling_rules.concat([{ text: "Atender sábados en la mañana." }])
 }, { expectedRevision: 3, actor: "admin@tenant-a.test", now: "2026-08-20T12:05:00.000Z" });
 assert.strictEqual(updated.revision, 4);
@@ -85,6 +118,7 @@ assert.strictEqual(updated.updated_by, "admin@tenant-a.test");
 assert.strictEqual(updated.scheduling_rules.length, 3);
 assert.strictEqual(updated.reminder_policy.max_attempts, 3);
 assert.deepStrictEqual(updated.booking_policy, { default_duration_minutes: 60, buffer_minutes: 20 });
+assert.strictEqual(updated.booking_requirements.some(function (row) { return row.id === "primera_cita" && row.required; }), true);
 assert.throws(function () {
   updateAppointmentSettings(updated, {}, { expectedRevision: 3, now: NOW });
 }, function (error) {

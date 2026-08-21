@@ -32,7 +32,7 @@ create table if not exists public.appointment_reminders (
   appointment_id text not null,
   reminder_key text not null,
   conversation_id text,
-  channel text not null check (channel in ('whatsapp','email','sms')),
+  "channel" text not null check ("channel" in ('whatsapp','email','sms')),
   offset_minutes integer not null check (offset_minutes > 0 and offset_minutes <= 43200),
   scheduled_for timestamptz not null,
   status text not null default 'scheduled' check (status in (

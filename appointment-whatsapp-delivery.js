@@ -20,8 +20,18 @@ async function deliverAppointmentWhatsApp(options) {
   const phone = clean(appointment.customer_phone, 80);
   const withinWindow = await options.customerWindowOpen(tenantId, phone);
   if (withinWindow) {
-    const delivered = await options.sendText(phone, reminderText(options.params), { tenant_id: tenantId });
-    if (delivered) return { ok: true, provider_id: "customer_window_text", mode: "text" };
+    const deliveryResult = {};
+    const delivered = await options.sendText(phone, reminderText(options.params), {
+      tenant_id: tenantId,
+      delivery_result: deliveryResult
+    });
+    if (delivered) {
+      return {
+        ok: true,
+        provider_id: clean(deliveryResult.provider_message_id, 500) || "customer_window_text",
+        mode: "text"
+      };
+    }
   }
   const sent = await options.sendTemplate(phone, options.template, options.params, { tenant_id: tenantId });
   const message = sent && sent.meta && sent.meta.messages && sent.meta.messages[0];

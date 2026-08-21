@@ -3172,12 +3172,30 @@ async function recoverUpcomingAppointmentReminderSchedules() {
   if (!APPOINTMENT_REMINDERS_V1_ENABLED || !SUPABASE_APPOINTMENTS_ENABLED) return;
   try {
     const appointments = await loadUpcomingAppointmentsForReminderWorker();
+    let recovered = 0;
+    let failed = 0;
     for (const appointment of appointments) {
-      await syncAppointmentReminderSchedule(appointment.tenant_id, appointment);
+      try {
+        await syncAppointmentReminderSchedule(appointment.tenant_id, appointment);
+        recovered += 1;
+      } catch (error) {
+        failed += 1;
+        const response = error && error.response && error.response.data || {};
+        log("warn", "appointment_reminder_schedule_recovery_item_failed", {
+          tenant_id: cleanTenantId(appointment && appointment.tenant_id),
+          appointment_id_suffix: String(appointment && (appointment.appointment_id || appointment.conversation_id) || "").slice(-12),
+          code: cleanRuntimeText(response.code, 80) || null,
+          error: cleanRuntimeText(response.message || error && error.message, 240)
+        });
+      }
     }
     await processDueAppointmentReminders();
     if (appointments.length) {
-      log("info", "appointment_reminder_schedules_recovered", { inspected: appointments.length });
+      log(failed ? "warn" : "info", "appointment_reminder_schedules_recovered", {
+        inspected: appointments.length,
+        recovered,
+        failed
+      });
     }
   } catch (error) {
     log("warn", "appointment_reminder_schedule_recovery_failed", {

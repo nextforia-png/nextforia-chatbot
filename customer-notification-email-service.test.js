@@ -65,11 +65,26 @@ const {
   assert.strictEqual(sent[0].to, "admin@a.example");
   assert.strictEqual(sent[0].tenant_id, "tenant-a");
 
+  scheduled = await service.scheduleNotification({
+    id: "appointment-a-1",
+    tenant_id: "tenant-a",
+    type: "appointment_created",
+    appointment_id: "appointment-a-1",
+    customer_label: "Cliente A",
+    message: "viernes 21 de agosto, 03:00 p. m.",
+    action_url: "/admin/panel?tab=appointments&appointment=appointment-a-1"
+  });
+  assert.strictEqual(scheduled.scheduled, 1, "confirmed appointments must schedule email delivery");
+  outcome = await service.processDue();
+  assert.strictEqual(outcome.sent, 1);
+  assert.strictEqual(sent[1].template, "appointment_confirmed");
+  assert.strictEqual(sent[1].to, "admin@a.example");
+
   await service.scheduleNotification({ id: "order-a-1", tenant_id: "tenant-a", type: "customer_order_created", order_id: "order-a", customer_label: "Cliente A" });
   active.delete("tenant-a:admin@a.example");
   outcome = await service.processDue();
   assert.strictEqual(outcome.cancelled, 1, "disabled membership must cancel queued email");
-  assert.strictEqual(sent.length, 1);
+  assert.strictEqual(sent.length, 2);
 
   const unavailable = createCustomerNotificationEmailService({ available: false, store: new InMemoryCustomerNotificationEmailStore() });
   const disabled = await unavailable.getPreferences({ tenant_id: "tenant-a", actor_id: "admin@a.example" });

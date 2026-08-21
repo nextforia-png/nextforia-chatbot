@@ -239,15 +239,26 @@ async function seedAppointment(base, secret, agentId, customerName) {
         revision: revisionAfterFirstSave,
         settings: {
           rules: [{ id: "rule-a", text: "Atender únicamente en horario de Clínica A.", active: true }],
-          exceptions: [{ id: "reschedule-a", date: "2030-07-21", mode: "reschedule", note: "Cierre excepcional" }],
+          exceptions: [{
+            id: "partial-a",
+            date: "2030-07-21",
+            mode: "partial",
+            available_from: "09:30",
+            available_until: "12:00",
+            outside_action: "reschedule",
+            note: "Congreso médico"
+          }],
+          booking_policy: { default_duration_minutes: 45, buffer_minutes: 15 },
           reminder_policy: { enabled: true, channel: "whatsapp", offsets_minutes: [1440, 360] }
         }
       })
     });
     assert.strictEqual(response.status, 200);
     payload = await response.json();
+    assert.deepStrictEqual(payload.settings.booking_policy, { default_duration_minutes: 45, buffer_minutes: 15 });
+    assert.strictEqual(payload.settings.exceptions[0].mode, "partial");
     assert.deepStrictEqual(payload.affected_appointments, ["shared-appointment-id"],
-      "a reschedule exception must create a real review workflow for affected appointments");
+      "a partial-day exception must create a real review workflow for appointments outside the allowed window");
 
     response = await fetch(base + "/admin/panel/appointments/action", {
       method: "POST",

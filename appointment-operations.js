@@ -2,7 +2,7 @@
 
 const crypto = require("crypto");
 
-const APPOINTMENT_SETTINGS_VERSION = 1;
+const APPOINTMENT_SETTINGS_VERSION = 2;
 const APPOINTMENT_REMINDER_VERSION = 1;
 const REMINDER_CHANNELS = new Set(["whatsapp", "email", "sms"]);
 const REMINDER_STATUSES = new Set([
@@ -59,6 +59,40 @@ function integer(value, fallback, min, max) {
   return Math.max(min, Math.min(max, parsed));
 }
 
+function timeOfDay(value, fallback) {
+  const raw = text(value, 8);
+  if (!raw) return fallback || "";
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return fallback || "";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return fallback || "";
+  return String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0");
+}
+
+function normalizeBookingPolicy(input, fallback) {
+  const source = input && typeof input === "object" ? input : {};
+  const previous = fallback && typeof fallback === "object" ? fallback : {};
+  return {
+    default_duration_minutes: integer(
+      Object.prototype.hasOwnProperty.call(source, "default_duration_minutes")
+        ? source.default_duration_minutes
+        : previous.default_duration_minutes,
+      60,
+      5,
+      24 * 60
+    ),
+    buffer_minutes: integer(
+      Object.prototype.hasOwnProperty.call(source, "buffer_minutes")
+        ? source.buffer_minutes
+        : previous.buffer_minutes,
+      0,
+      0,
+      8 * 60
+    )
+  };
+}
+
 function stableId(prefix, parts) {
   return prefix + crypto.createHash("sha256").update(parts.map(function (part) {
     return String(part == null ? "" : part);
@@ -86,15 +120,27 @@ function normalizeException(input, index, now) {
   const source = input && typeof input === "object" ? input : {};
   const date = text(source.date, 20);
   if (!validDateOnly(date)) return null;
-  const mode = source.mode === "reschedule" || source.mode === "reagendar" ? "reschedule" : "close";
+  const requestedMode = text(source.mode, 30).toLowerCase();
+  const mode = requestedMode === "partial" || requestedMode === "parcial"
+    ? "partial"
+    : (requestedMode === "reschedule" || requestedMode === "reagendar" ? "reschedule" : "close");
+  const availableFrom = mode === "partial" ? timeOfDay(source.available_from || source.start_time) : "";
+  const availableUntil = mode === "partial" ? timeOfDay(source.available_until || source.end_time) : "";
+  if (mode === "partial" && (!availableFrom || !availableUntil || availableFrom >= availableUntil)) return null;
+  const outsideAction = source.outside_action === "cancel" || source.outside_action === "cancelar"
+    ? "cancel"
+    : "reschedule";
   const note = text(source.note, 1000);
   const id = text(source.id, 120).replace(/[^a-zA-Z0-9_-]/g, "") ||
-    stableId("exception_", [date, mode, note.toLowerCase()]);
+    stableId("exception_", [date, mode, availableFrom, availableUntil, outsideAction, note.toLowerCase()]);
   const createdAt = iso(source.created_at, now);
   return {
     id,
     date,
     mode,
+    available_from: availableFrom,
+    available_until: availableUntil,
+    outside_action: outsideAction,
     note,
     active: source.active !== false,
     order: integer(source.order, index, 0, 10000),
@@ -168,13 +214,18 @@ function normalizeReminderPolicy(input, fallback, now) {
   };
 }
 
-function compileAvailabilityRules(rules, exceptions) {
+function compileAvailabilityRules(rules, exceptions, bookingPolicy) {
   const activeRules = (rules || []).filter(function (row) { return row.active !== false && text(row.text, 2000); })
     .sort(function (a, b) { return Number(a.order) - Number(b.order); });
   const activeExceptions = (exceptions || []).filter(function (row) { return row.active !== false; })
     .sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
   const lines = [];
+  const policy = normalizeBookingPolicy(bookingPolicy);
+  lines.push("Política operativa de citas:");
+  lines.push("- Duración predeterminada: " + policy.default_duration_minutes + " minutos.");
+  lines.push("- Separación mínima después de cada cita: " + policy.buffer_minutes + " minutos.");
   if (activeRules.length) {
+    lines.push("");
     lines.push("Reglas activas de disponibilidad:");
     activeRules.forEach(function (row) { lines.push("- " + row.text); });
   }
@@ -182,12 +233,77 @@ function compileAvailabilityRules(rules, exceptions) {
     if (lines.length) lines.push("");
     lines.push("Excepciones (siempre tienen prioridad sobre las reglas generales):");
     activeExceptions.forEach(function (row) {
+      const action = row.outside_action === "cancel" ? "cancelar" : "reagendar";
       lines.push("- " + row.date + ": " +
-        (row.mode === "reschedule" ? "reagendar las citas" : "no dar citas") +
+        (row.mode === "partial"
+          ? "dar citas únicamente de " + row.available_from + " a " + row.available_until + "; fuera de ese horario " + action + " las citas"
+          : (row.mode === "reschedule" ? "reagendar las citas" : "no dar citas")) +
         (row.note ? " — " + row.note : ""));
     });
   }
   return lines.join("\n").slice(0, 8000);
+}
+
+function appointmentLocalParts(value, timeZone) {
+  const parsed = new Date(value || "");
+  if (!Number.isFinite(parsed.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: text(timeZone, 120) || "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(parsed).reduce(function (result, part) {
+      result[part.type] = part.value;
+      return result;
+    }, {});
+    return {
+      date: [parts.year, parts.month, parts.day].join("-"),
+      minutes: Number(parts.hour) * 60 + Number(parts.minute)
+    };
+  } catch (_) {
+    return {
+      date: parsed.toISOString().slice(0, 10),
+      minutes: parsed.getUTCHours() * 60 + parsed.getUTCMinutes()
+    };
+  }
+}
+
+function evaluateScheduleException(settingsInput, startsAt, durationMinutes, timeZone) {
+  const settings = normalizeAppointmentSettings(settingsInput);
+  const local = appointmentLocalParts(startsAt, timeZone);
+  if (!local) return null;
+  const exception = settings.schedule_exceptions.find(function (row) {
+    return row.active !== false && row.date === local.date;
+  });
+  if (!exception) return null;
+  if (exception.mode !== "partial") {
+    return {
+      blocked: true,
+      date: local.date,
+      mode: exception.mode,
+      outside_action: exception.mode === "reschedule" ? "reschedule" : "cancel",
+      reason: exception.note || "Este día no está disponible según las reglas del negocio."
+    };
+  }
+  const fromParts = exception.available_from.split(":").map(Number);
+  const untilParts = exception.available_until.split(":").map(Number);
+  const availableFrom = fromParts[0] * 60 + fromParts[1];
+  const availableUntil = untilParts[0] * 60 + untilParts[1];
+  const requestedUntil = local.minutes + integer(durationMinutes, settings.booking_policy.default_duration_minutes, 5, 24 * 60);
+  if (local.minutes >= availableFrom && requestedUntil <= availableUntil) return null;
+  return {
+    blocked: true,
+    date: local.date,
+    mode: "partial",
+    available_from: exception.available_from,
+    available_until: exception.available_until,
+    outside_action: exception.outside_action,
+    reason: exception.note || "Ese día solo hay citas de " + exception.available_from + " a " + exception.available_until + "."
+  };
 }
 
 function legacyRule(availabilityRules, now) {
@@ -209,13 +325,20 @@ function normalizeAppointmentSettings(input, options) {
   const exceptions = uniqueById((Array.isArray(source.schedule_exceptions) ? source.schedule_exceptions : [])
     .map(function (row, index) { return normalizeException(row, index, now); }), 500);
   const reminderPolicy = normalizeReminderPolicy(source.reminder_policy, null, now);
+  const bookingPolicy = normalizeBookingPolicy(source.booking_policy || {
+    default_duration_minutes: source.default_duration_minutes,
+    buffer_minutes: source.buffer_minutes
+  });
   return {
     version: APPOINTMENT_SETTINGS_VERSION,
     revision: integer(source.revision, 0, 0, Number.MAX_SAFE_INTEGER),
     scheduling_rules: rules,
     schedule_exceptions: exceptions,
     reminder_policy: reminderPolicy,
-    availability_rules: compileAvailabilityRules(rules, exceptions),
+    booking_policy: bookingPolicy,
+    default_duration_minutes: bookingPolicy.default_duration_minutes,
+    buffer_minutes: bookingPolicy.buffer_minutes,
+    availability_rules: compileAvailabilityRules(rules, exceptions, bookingPolicy),
     updated_at: iso(source.updated_at, now),
     updated_by: text(source.updated_by, 160)
   };
@@ -237,6 +360,12 @@ function appointmentSettingsFromOnboarding(onboarding, options) {
   }
   if (!Array.isArray(source.schedule_exceptions) && Array.isArray(answerSetup.schedule_exceptions)) {
     source.schedule_exceptions = answerSetup.schedule_exceptions;
+  }
+  if (!source.booking_policy) {
+    source.booking_policy = answerSetup.booking_policy || {
+      default_duration_minutes: configuration.default_duration_minutes || answerSetup.default_duration_minutes,
+      buffer_minutes: configuration.buffer_minutes || answerSetup.buffer_minutes
+    };
   }
   if (!source.reminder_policy) {
     const channel = text(configuration.reminder_channel || answerSetup.reminder_channel, 40).toLowerCase();
@@ -275,6 +404,7 @@ function updateAppointmentSettings(currentInput, patchInput, options) {
     schedule_exceptions: Object.prototype.hasOwnProperty.call(patch, "schedule_exceptions")
       ? patch.schedule_exceptions
       : current.schedule_exceptions,
+    booking_policy: normalizeBookingPolicy(patch.booking_policy, current.booking_policy),
     reminder_policy: normalizeReminderPolicy(patch.reminder_policy, current.reminder_policy, now),
     updated_at: now,
     updated_by: text(optionsValue.actor, 160)
@@ -497,8 +627,10 @@ module.exports = {
   appointmentSettingsFromOnboarding,
   compileAvailabilityRules,
   deriveAppointmentReminderStatus,
+  evaluateScheduleException,
   materializeAppointmentReminders,
   normalizeAppointmentSettings,
+  normalizeBookingPolicy,
   normalizeReminder,
   normalizeReminderPolicy,
   reminderId,

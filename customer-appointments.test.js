@@ -19,6 +19,7 @@ assert.strictEqual(demo.reminders.some(function (row) { return row.status === "n
 assert.strictEqual(demo.capabilities.manage_settings, true);
 assert.strictEqual(demo.settings.rules.length, 1);
 assert.strictEqual(demo.settings.reminder_policy.channel, "whatsapp");
+assert.strictEqual(demo.settings.booking_requirements[0].id, "full_name");
 
 const shaped = customerAppointmentSnapshot({
   tenant_id: "tenant-a",
@@ -75,5 +76,9 @@ assert(clientScript.includes('appointmentReminderAction(this.dataset.id,this.dat
 assert(clientScript.includes('openAppointmentReminderConversation'));
 assert(clientScript.includes('openAppointmentConversations'));
 assert(clientScript.includes('reminder_policy'));
+assert(clientScript.includes('booking_requirements'));
+assert(clientScript.includes('addAppointmentRequirement'));
+assert(markup.includes('id="apptRequirementList"'));
+assert(markup.includes('Obligatorio'));
 
 console.log("customer appointment panel tests: ok");

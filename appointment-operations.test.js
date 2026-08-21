@@ -9,6 +9,7 @@ const {
   appointmentSettingsFromOnboarding,
   compileAvailabilityRules,
   deriveAppointmentReminderStatus,
+  evaluateScheduleException,
   materializeAppointmentReminders,
   normalizeAppointmentSettings,
   reminderSnapshot,
@@ -45,9 +46,12 @@ const normalized = normalizeAppointmentSettings({
   ],
   schedule_exceptions: [
     { id: "holiday", date: "2026-08-24", mode: "close", note: "Festivo" },
+    { id: "partial-day", date: "2026-09-07", mode: "partial", available_from: "09:00", available_until: "12:00", outside_action: "reschedule", note: "Congreso médico" },
+    { id: "partial-invalid", date: "2026-09-08", mode: "partial", available_from: "13:00", available_until: "09:00" },
     { id: "overflow", date: "2026-02-30", mode: "close" },
     { id: "invalid", date: "24 de agosto", mode: "close" }
   ],
+  booking_policy: { default_duration_minutes: 45, buffer_minutes: 15 },
   reminder_policy: {
     enabled: true,
     channel: "whatsapp",
@@ -58,13 +62,21 @@ const normalized = normalizeAppointmentSettings({
   }
 }, { now: NOW });
 assert.strictEqual(normalized.revision, 3);
-assert.strictEqual(normalized.schedule_exceptions.length, 1);
+assert.strictEqual(normalized.schedule_exceptions.length, 2);
+assert.deepStrictEqual(normalized.booking_policy, { default_duration_minutes: 45, buffer_minutes: 15 });
 assert.deepStrictEqual(normalized.reminder_policy.offsets_minutes, [1440, 360]);
 assert.match(normalized.availability_rules, /Excepciones/);
 assert.doesNotMatch(normalized.availability_rules, /almuerzo/);
 assert.match(compileAvailabilityRules(normalized.scheduling_rules, normalized.schedule_exceptions), /Festivo/);
+assert.match(normalized.availability_rules, /09:00 a 12:00/);
+assert.strictEqual(evaluateScheduleException(normalized, "2026-09-07T14:30:00.000Z", 45, "America/Bogota"), null);
+const partialBlocked = evaluateScheduleException(normalized, "2026-09-07T16:45:00.000Z", 30, "America/Bogota");
+assert.strictEqual(partialBlocked.mode, "partial");
+assert.strictEqual(partialBlocked.outside_action, "reschedule");
+assert.strictEqual(partialBlocked.available_until, "12:00");
 
 const updated = updateAppointmentSettings(normalized, {
+  booking_policy: { default_duration_minutes: 60, buffer_minutes: 20 },
   reminder_policy: { max_attempts: 3 },
   scheduling_rules: normalized.scheduling_rules.concat([{ text: "Atender sábados en la mañana." }])
 }, { expectedRevision: 3, actor: "admin@tenant-a.test", now: "2026-08-20T12:05:00.000Z" });
@@ -72,6 +84,7 @@ assert.strictEqual(updated.revision, 4);
 assert.strictEqual(updated.updated_by, "admin@tenant-a.test");
 assert.strictEqual(updated.scheduling_rules.length, 3);
 assert.strictEqual(updated.reminder_policy.max_attempts, 3);
+assert.deepStrictEqual(updated.booking_policy, { default_duration_minutes: 60, buffer_minutes: 20 });
 assert.throws(function () {
   updateAppointmentSettings(updated, {}, { expectedRevision: 3, now: NOW });
 }, function (error) {

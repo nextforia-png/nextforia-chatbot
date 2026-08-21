@@ -621,6 +621,14 @@ function normalizeOnboarding(input) {
       reminder_policy: appointmentSetup.reminder_policy && typeof appointmentSetup.reminder_policy === "object"
         ? Object.assign({}, appointmentSetup.reminder_policy)
         : null,
+      booking_policy: appointmentSetup.booking_policy && typeof appointmentSetup.booking_policy === "object"
+        ? {
+            default_duration_minutes: Math.max(5, Math.min(1440, Math.round(Number(appointmentSetup.booking_policy.default_duration_minutes) || 60))),
+            buffer_minutes: Math.max(0, Math.min(480, Math.round(Number(appointmentSetup.booking_policy.buffer_minutes) || 0)))
+          }
+        : null,
+      default_duration_minutes: Math.max(5, Math.min(1440, Math.round(Number(appointmentSetup.default_duration_minutes) || 60))),
+      buffer_minutes: Math.max(0, Math.min(480, Math.round(Number(appointmentSetup.buffer_minutes) || 0))),
       revision: Math.max(0, Math.floor(Number(appointmentSetup.revision) || 0)),
       required_booking_fields: text(appointmentSetup.required_booking_fields, 2500),
       minimum_booking_notice: text(appointmentSetup.minimum_booking_notice, 500),
@@ -908,6 +916,8 @@ function buildAppointmentSystemPrompt(configuration) {
     ["Quién atiende", config.staff_mode],
     ["Ubicaciones/modalidad", config.appointment_locations],
     ["Reglas de disponibilidad", config.availability_rules],
+    ["Duración predeterminada de cada cita", config.default_duration_minutes ? config.default_duration_minutes + " minutos" : ""],
+    ["Separación mínima entre citas", config.buffer_minutes != null ? config.buffer_minutes + " minutos" : ""],
     ["Datos obligatorios para reservar", config.required_booking_fields],
     ["Confirmación de reserva", config.booking_confirmation_mode],
     ["Cancelaciones y cambios", config.cancellation_policy],
@@ -981,6 +991,11 @@ function normalizeAppointmentConfiguration(input, meta) {
     reminder_policy: source.reminder_policy && typeof source.reminder_policy === "object"
       ? Object.assign({}, source.reminder_policy)
       : null,
+    booking_policy: source.booking_policy && typeof source.booking_policy === "object"
+      ? Object.assign({}, source.booking_policy)
+      : null,
+    default_duration_minutes: Math.max(5, Math.min(1440, Math.round(Number(source.default_duration_minutes) || 60))),
+    buffer_minutes: Math.max(0, Math.min(480, Math.round(Number(source.buffer_minutes) || 0))),
     revision: Math.max(0, Math.floor(Number(source.revision) || 0)),
     settings_sync_status: choice(source.settings_sync_status, ["", "applied", "pending_external_apply", "failed"], ""),
     settings_synced_at: text(source.settings_synced_at, 40),
@@ -1068,6 +1083,9 @@ function generateAppointmentConfiguration(input, meta) {
     scheduling_rules: appointment.scheduling_rules,
     schedule_exceptions: appointment.schedule_exceptions,
     reminder_policy: appointment.reminder_policy,
+    booking_policy: appointment.booking_policy,
+    default_duration_minutes: appointment.default_duration_minutes,
+    buffer_minutes: appointment.buffer_minutes,
     revision: appointment.revision,
     required_booking_fields: appointment.required_booking_fields,
     minimum_booking_notice: appointment.minimum_booking_notice,

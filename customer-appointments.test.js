@@ -17,7 +17,9 @@ assert.strictEqual(demo.appointments.every(function (row) { return row.tenant_id
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "confirmed"; }), true);
 assert.strictEqual(demo.reminders.some(function (row) { return row.status === "no_response"; }), true);
 assert.strictEqual(demo.capabilities.manage_settings, true);
-assert.strictEqual(demo.settings.rules.length, 1);
+assert.strictEqual(demo.settings.rules.length, 3);
+assert.strictEqual(demo.settings.exceptions[0].mode, "partial");
+assert.deepStrictEqual(demo.settings.booking_policy, { default_duration_minutes: 60, buffer_minutes: 15 });
 assert.strictEqual(demo.settings.reminder_policy.channel, "whatsapp");
 
 const shaped = customerAppointmentSnapshot({
@@ -47,6 +49,12 @@ assert(markup.includes('id="apptRulesView"'));
 assert(markup.includes('class="apptRulesV3"'));
 assert(markup.includes('id="apptExceptionMode" hidden'));
 assert(markup.includes('id="apptSettingsSave"'));
+assert(markup.includes('id="apptDefaultDuration"'));
+assert(markup.includes('<option value="480">8 horas</option>'));
+assert(markup.includes('id="apptBufferMinutes"'));
+assert(markup.includes('data-appt-exception-mode="partial"'));
+assert(markup.includes('class="apptExceptionModeIcon"'));
+assert(markup.includes('id="apptExceptionOutsideAction"'));
 assert(markup.includes('id="apptMobilePanelView"'));
 assert(markup.includes('id="apptMonthView"'));
 assert(markup.includes('id="apptYearView"'));
@@ -75,5 +83,7 @@ assert(clientScript.includes('appointmentReminderAction(this.dataset.id,this.dat
 assert(clientScript.includes('openAppointmentReminderConversation'));
 assert(clientScript.includes('openAppointmentConversations'));
 assert(clientScript.includes('reminder_policy'));
+assert(clientScript.includes('booking_policy'));
+assert(clientScript.includes('updateAppointmentBookingPolicy'));
 
 console.log("customer appointment panel tests: ok");

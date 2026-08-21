@@ -205,6 +205,7 @@ const {
   AppointmentOperationsError,
   applyReminderAction,
   appointmentSettingsFromOnboarding,
+  evaluateScheduleException,
   materializeAppointmentReminders,
   normalizeReminder,
   reminderSnapshot,
@@ -413,7 +414,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v421-appointment-calendar-views";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v422-appointment-scheduling-rules";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -6918,7 +6919,6 @@ async function executeHumanHandoff(userId, input, runtime) {
 
 async function executeCheckAppointmentAvailability(tenantId, input, actor) {
   const startsAt = String(input && input.starts_at || "").trim();
-  const durationMinutes = Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
   const parsed = new Date(startsAt);
   if (!startsAt || !Number.isFinite(parsed.getTime())) {
     return { ok: false, error: "invalid_appointment_datetime" };
@@ -6932,35 +6932,41 @@ async function executeCheckAppointmentAvailability(tenantId, input, actor) {
   }
   const onboarding = await loadClientOnboarding(false, tenantId);
   const appointmentSettings = appointmentSettingsFromOnboarding(onboarding);
+  const durationMinutes = Math.max(5, Math.min(
+    Number(input && input.duration_minutes) || appointmentSettings.booking_policy.default_duration_minutes,
+    24 * 60
+  ));
   const configuredTimeZone = cleanRuntimeText(
     onboarding && onboarding.appointment_configuration && onboarding.appointment_configuration.time_zone,
     120
   ) || "America/Bogota";
-  let requestedBusinessDate;
-  try {
-    requestedBusinessDate = new Intl.DateTimeFormat("en-CA", {
-      timeZone: configuredTimeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).format(parsed);
-  } catch (_) {
-    requestedBusinessDate = parsed.toISOString().slice(0, 10);
-  }
-  const blockingException = appointmentSettings.schedule_exceptions.find(function (row) {
-    return row.active !== false && row.date === requestedBusinessDate;
-  });
+  const blockingException = evaluateScheduleException(
+    appointmentSettings,
+    parsed.toISOString(),
+    durationMinutes,
+    configuredTimeZone
+  );
   if (blockingException) {
     return {
       ok: false,
       available: false,
       error: "appointment_date_exception",
-      date: requestedBusinessDate,
+      date: blockingException.date,
       mode: blockingException.mode,
-      reason: blockingException.note || "Este día no está disponible según las reglas del negocio."
+      available_from: blockingException.available_from || null,
+      available_until: blockingException.available_until || null,
+      outside_action: blockingException.outside_action || null,
+      reason: blockingException.reason
     };
   }
-  const result = await appointmentCalendarService.checkAvailability(tenantId, parsed.toISOString(), durationMinutes, actor);
+  const bufferMinutes = appointmentSettings.booking_policy.buffer_minutes;
+  const availabilityStart = new Date(parsed.getTime() - bufferMinutes * 60 * 1000);
+  const result = await appointmentCalendarService.checkAvailability(
+    tenantId,
+    availabilityStart.toISOString(),
+    durationMinutes + bufferMinutes * 2,
+    actor
+  );
   let timeZone = cleanRuntimeText(result && result.primary_time_zone, 120) || "America/Bogota";
   let requestedLabel;
   let currentLabel;
@@ -6991,6 +6997,10 @@ async function executeCheckAppointmentAvailability(tenantId, input, actor) {
     currentLabel = formatter.format(new Date());
   }
   return Object.assign({ ok: true }, result, {
+    starts_at: parsed.toISOString(),
+    ends_at: new Date(parsed.getTime() + durationMinutes * 60 * 1000).toISOString(),
+    duration_minutes: durationMinutes,
+    buffer_minutes: bufferMinutes,
     date_context: {
       current_time: currentLabel,
       requested_time: requestedLabel,
@@ -7007,10 +7017,9 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   if (!Number.isFinite(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
     return { ok: false, error: "invalid_appointment_datetime" };
   }
-  const durationMinutes = Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
   const availability = await executeCheckAppointmentAvailability(tenantId, {
     starts_at: startsAt.toISOString(),
-    duration_minutes: durationMinutes
+    duration_minutes: Number(input && input.duration_minutes) || undefined
   }, actor);
   if (!availability.ok || !availability.available) {
     return {
@@ -7021,6 +7030,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
       date: availability.date
     };
   }
+  const durationMinutes = availability.duration_minutes || Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
   const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
   const appointmentProfile = profilePatchFromAppointment({
     customer_name: input && input.customer_name,
@@ -18283,6 +18293,9 @@ function publicAppointmentSettings(settings, configuration) {
     exceptions: settings.schedule_exceptions,
     schedule_exceptions: settings.schedule_exceptions,
     reminder_policy: settings.reminder_policy,
+    booking_policy: settings.booking_policy,
+    default_duration_minutes: settings.booking_policy.default_duration_minutes,
+    buffer_minutes: settings.booking_policy.buffer_minutes,
     availability_rules: settings.availability_rules,
     timezone: cleanRuntimeText(configuration && configuration.time_zone, 120) || "America/Bogota",
     sync_status: cleanRuntimeText(configuration && configuration.settings_sync_status, 80) || "applied",
@@ -18338,21 +18351,35 @@ function appointmentDateInTimezone(value, timezone) {
 }
 
 async function createAppointmentExceptionWorkflows(tenantId, settings, actor) {
-  const dates = new Set((settings.schedule_exceptions || []).filter(function (row) {
-    return row.active !== false && row.mode === "reschedule" && row.date;
-  }).map(function (row) { return row.date; }));
-  if (!dates.size) return [];
+  const actionable = new Map((settings.schedule_exceptions || []).filter(function (row) {
+    return row.active !== false && ["reschedule", "partial"].includes(row.mode) && row.date;
+  }).map(function (row) { return [row.date, row]; }));
+  if (!actionable.size) return [];
   await hydrateAppointmentsForTenant(tenantId);
   const affected = appointmentRegistry.list(tenantId).filter(function (appointment) {
-    return ["booked", "rescheduled"].includes(appointment.status) &&
-      dates.has(appointmentDateInTimezone(appointment.starts_at, settings.timezone));
+    if (!["booked", "rescheduled"].includes(appointment.status)) return false;
+    const date = appointmentDateInTimezone(appointment.starts_at, settings.timezone);
+    if (!actionable.has(date)) return false;
+    const exception = actionable.get(date);
+    return exception.mode === "reschedule" || !!evaluateScheduleException(
+      settings,
+      appointment.starts_at,
+      appointment.duration_minutes,
+      settings.timezone
+    );
   });
   const updated = [];
   for (const appointment of affected) {
-    const row = await appointmentRegistry.applyPanelAction(tenantId, appointment.appointment_id, "reprogram", {
+    const exception = actionable.get(appointmentDateInTimezone(appointment.starts_at, settings.timezone));
+    const action = exception && exception.mode === "partial" && exception.outside_action === "cancel"
+      ? "cancel"
+      : "reprogram";
+    const row = await appointmentRegistry.applyPanelAction(tenantId, appointment.appointment_id, action, {
       actor,
       reason: "Excepción de agenda creada desde el Customer Panel",
-      message: "Esta cita requiere acordar una nueva fecha con el cliente.",
+      message: action === "cancel"
+        ? "Cita cancelada porque quedó fuera del horario especial configurado."
+        : "Esta cita requiere acordar una nueva fecha con el cliente.",
       persist: false
     });
     await persistAppointment(row);
@@ -18366,8 +18393,10 @@ async function createAppointmentExceptionWorkflows(tenantId, settings, actor) {
           channel: row.channel === "whatsapp" ? "whatsapp" : conversationChannel(row.customer_conversation_id),
           customer_label: row.customer_name || "Un cliente",
           reason: "appointment_schedule_exception",
-          title: "Una cita necesita nueva fecha",
-          message: "Cerraste este día en tu agenda. Abre la conversación para acordar una nueva fecha."
+          title: action === "cancel" ? "Una cita fue cancelada" : "Una cita necesita nueva fecha",
+          message: action === "cancel"
+            ? "La cita quedó fuera del horario especial y fue cancelada según tu regla."
+            : "La cita quedó fuera del horario especial. Abre la conversación para acordar una nueva fecha."
         });
       } catch (error) {
         log("warn", "appointment_exception_notification_failed", {
@@ -18402,6 +18431,17 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     settingsPatch.schedule_exceptions = Object.prototype.hasOwnProperty.call(patch, "exceptions") ? patch.exceptions : patch.schedule_exceptions;
   }
   if (Object.prototype.hasOwnProperty.call(patch, "reminder_policy")) settingsPatch.reminder_policy = patch.reminder_policy;
+  if (Object.prototype.hasOwnProperty.call(patch, "booking_policy") ||
+      Object.prototype.hasOwnProperty.call(patch, "default_duration_minutes") ||
+      Object.prototype.hasOwnProperty.call(patch, "buffer_minutes")) {
+    settingsPatch.booking_policy = Object.assign({}, patch.booking_policy || {});
+    if (Object.prototype.hasOwnProperty.call(patch, "default_duration_minutes")) {
+      settingsPatch.booking_policy.default_duration_minutes = patch.default_duration_minutes;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "buffer_minutes")) {
+      settingsPatch.booking_policy.buffer_minutes = patch.buffer_minutes;
+    }
+  }
   const updated = updateAppointmentSettings(current.settings, settingsPatch, { expectedRevision, actor });
   const previous = current.onboarding;
   const answers = JSON.parse(JSON.stringify(previous.answers || {}));
@@ -18410,6 +18450,9 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     scheduling_rules: updated.scheduling_rules,
     schedule_exceptions: updated.schedule_exceptions,
     reminder_policy: updated.reminder_policy,
+    booking_policy: updated.booking_policy,
+    default_duration_minutes: updated.booking_policy.default_duration_minutes,
+    buffer_minutes: updated.booking_policy.buffer_minutes,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
     reminder_timing: updated.reminder_policy.offsets_minutes
@@ -18419,6 +18462,9 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     scheduling_rules: updated.scheduling_rules,
     schedule_exceptions: updated.schedule_exceptions,
     reminder_policy: updated.reminder_policy,
+    booking_policy: updated.booking_policy,
+    default_duration_minutes: updated.booking_policy.default_duration_minutes,
+    buffer_minutes: updated.booking_policy.buffer_minutes,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
     reminder_timing: updated.reminder_policy.offsets_minutes.map(function (minutes) { return Math.round(minutes / 60) + " h antes"; }).join(" y "),

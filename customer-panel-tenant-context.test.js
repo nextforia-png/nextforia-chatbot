@@ -95,6 +95,10 @@ assert(atlas.includes("Configuración"));
 assert(atlas.includes('id="mnav-appointment-reminders"'));
 assert(atlas.includes('id="mnav-appointment-settings"'));
 assert(atlas.includes("openAppointmentConversations()"));
+assert(atlas.includes('data-appt-nav="conversations"'), "conversaciones debe participar en el estado exclusivo del menú de citas");
+assert(atlas.includes('data-appt-mobile="conversations"'), "el menú móvil debe compartir el mismo estado exclusivo");
+assert(atlas.includes('document.body.classList.toggle("appointment-bot-view",appointments)'), "el estilo limpio debe activarse solo para el bot de citas");
+assert(atlas.includes('button.getAttribute("data-appt-nav")==="conversations"'), "abrir conversaciones debe retirar cualquier selección anterior");
 
 const tempoInbox = render({
   initialTab: "conversations",

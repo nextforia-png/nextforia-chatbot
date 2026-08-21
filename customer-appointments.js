@@ -68,15 +68,36 @@ function customerAppointmentSnapshot(snapshot, business) {
       alt_slots: row.alt_slots || []
     });
   });
+  const reminders = appointments.flatMap(function (appointment) {
+    const deliveries = appointment.reminder_deliveries && typeof appointment.reminder_deliveries === "object"
+      ? appointment.reminder_deliveries : {};
+    return Object.keys(deliveries).map(function (offset) {
+      const delivery = deliveries[offset] || {};
+      const dueAt = delivery.due_at || "";
+      return {
+        id: appointment.id + ":" + offset,
+        appointment_id: appointment.id,
+        customer_name: appointment.customer_name,
+        channel: "whatsapp",
+        offset,
+        status: delivery.status || "programmed",
+        timing: dueAt ? new Date(dueAt).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" }) : "",
+        due_at: dueAt,
+        sent_at: delivery.sent_at || "",
+        attempts: Number(delivery.attempts) || 0
+      };
+    });
+  }).sort(function (a, b) { return new Date(a.due_at || 0) - new Date(b.due_at || 0); });
+  const sentReminders = reminders.filter(function (reminder) { return reminder.status === "delivered"; }).length;
   return {
     ok: true,
     tenant_id: snapshot.tenant_id,
     business: business || null,
     source: snapshot.source || "memory",
     provider: { id: "google_calendar", label: "Google Calendar", status: "available" },
-    metrics: Object.assign({ confirmation_rate: 0, avoided_absences: 0, sent_reminders: 0 }, snapshot.metrics || {}),
+    metrics: Object.assign({ confirmation_rate: 0, avoided_absences: 0, sent_reminders: sentReminders }, snapshot.metrics || {}, { sent_reminders: sentReminders }),
     appointments: appointments,
-    reminders: snapshot.reminders || []
+    reminders
   };
 }
 
@@ -154,7 +175,7 @@ function closeAppointmentChat(){document.getElementById("apptChats").classList.r
 function renderAppointmentChats(){var rows=appointmentRows().filter(function(row){return ["needs_you","ai_confirming"].includes(apptStatus(row));}),list=document.getElementById("apptChatRows");if(!list)return;list.innerHTML=rows.map(appointmentChatRowMarkup).join("")||'<div class="apptEmpty">La IA está atendiendo todo.</div>';var selected=appointmentById(state.selectedAppointment)||rows[0],box=document.getElementById("apptChatDetail");if(!selected){box.innerHTML='<div class="apptEmpty">No hay conversaciones pendientes.</div>';return;}state.selectedAppointment=selected.id||selected.conversation_id;box.innerHTML='<button class="mobileBack" type="button" onclick="closeAppointmentChat()" style="display:inline-flex;margin-bottom:12px">← Chats</button><div class="apptDetailTop"><div><h3>'+esc(selected.customer_name||"Paciente")+'</h3><p class="apptDetailMeta">'+esc(apptChannel(selected)+' · '+(selected.customer_phone||""))+'</p></div><span class="remStatus '+apptStatus(selected)+'">'+esc(apptStatusLabel(apptStatus(selected)))+'</span></div><section class="apptPanelCard"><h4>Conversación</h4><div class="apptTranscript">'+((selected.transcript||[]).map(function(line){return '<div class="apptBubble '+(line.from==="bot"?'bot':'')+'">'+esc(line.text)+'</div>';}).join("")||'<p>'+esc(selected.transcript_summary||"La IA dejó el contexto listo.")+'</p>')+'</div></section>'+(apptStatus(selected)==="needs_you"?'<section class="apptActionBand"><strong>✦ La IA ya redactó la respuesta por ti</strong><p>Un mensaje tuyo cierra la cita 👌</p><textarea id="apptGuidedReply" style="width:100%;min-height:90px;margin-top:10px;border:1px solid #E7C77B;border-radius:12px;padding:11px">Hola '+esc(String(selected.customer_name||"").split(" ")[0])+', tenemos disponibilidad en el horario propuesto. ¿Te sirve para dejar tu cita confirmada?</textarea><button class="apptPrimary" type="button" data-id="'+attr(selected.id||selected.conversation_id)+'" onclick="confirmAppointmentChat(this.dataset.id)" style="margin-top:10px">Confirmar y enviar →</button></section>':'<div class="apptActionBand ai_confirming"><strong>La IA está confirmando esta cita.</strong><p>No tienes que hacer nada.</p></div>');}
 function confirmAppointmentChat(id){confirmAppointment(id);showAppointmentSection("agenda");}
 function renderAppointmentReminders(){if(!state.appointments)return;var reminders=state.appointments.reminders||[],metrics=state.appointments.metrics||{},upcoming=reminders.filter(function(row){return row.status==="programmed";}),sent=reminders.filter(function(row){return row.status!=="programmed";});["remRate","remRateCard"].forEach(function(id){text(id,(metrics.confirmation_rate||0)+"%");});["remAvoided","remAvoidedCard"].forEach(function(id){text(id,metrics.avoided_absences||0);});["remSent","remSentCard"].forEach(function(id){text(id,metrics.sent_reminders||0);});text("remScheduled",upcoming.length);document.getElementById("remUpcoming").innerHTML=upcoming.map(reminderRowMarkup).join("")||'<div class="empty">No hay recordatorios próximos.</div>';document.getElementById("remSentList").innerHTML=sent.map(reminderRowMarkup).join("")||'<div class="empty">Aún no hay envíos.</div>';}
-function reminderRowMarkup(row){var labels={programmed:"Programado",confirmed:"Confirmó",read:"Leído",delivered:"Entregado",retrying:"Reintentando",no_response:"Sin respuesta"},hint=row.status==="confirmed"?"Cita actualizada automáticamente ✓":row.status==="no_response"?"Te lo pasé a Conversaciones →":"Pide confirmar";return '<div class="remRow"><span class="apptAvatar">'+esc(String(row.customer_name||"C").split(/\s+/).slice(0,2).map(function(v){return v.charAt(0);}).join(""))+'</span><span><strong>'+esc(row.customer_name||"Paciente")+'</strong><p>'+esc(apptChannel(row)+' · '+row.offset+' · '+hint)+'</p></span><span><span class="remStatus '+attr(row.status)+'">'+esc(labels[row.status]||row.status)+'</span><p style="text-align:right">'+esc(row.timing||"")+'</p></span></div>';}
+function reminderRowMarkup(row){var labels={programmed:"Programado",confirmed:"Confirmó",read:"Leído",delivered:"Entregado",retrying:"Reintentando",blocked_configuration:"Pendiente de plantilla",missed:"Ventana vencida",no_response:"Sin respuesta"},hint=row.status==="delivered"?"Enviado por WhatsApp ✓":row.status==="retrying"?"Se reintentará automáticamente":row.status==="blocked_configuration"?"Falta aprobar la plantilla de WhatsApp":row.status==="missed"?"No se envió tarde para no confundir al cliente":row.status==="confirmed"?"Cita actualizada automáticamente ✓":row.status==="no_response"?"Te lo pasé a Conversaciones →":"Se enviará automáticamente";return '<div class="remRow"><span class="apptAvatar">'+esc(String(row.customer_name||"C").split(/\s+/).slice(0,2).map(function(v){return v.charAt(0);}).join(""))+'</span><span><strong>'+esc(row.customer_name||"Paciente")+'</strong><p>'+esc(apptChannel(row)+' · '+row.offset+' · '+hint)+'</p></span><span><span class="remStatus '+attr(row.status)+'">'+esc(labels[row.status]||row.status)+'</span><p style="text-align:right">'+esc(row.timing||"")+'</p></span></div>';}
 function openAppointmentReprogram(){var rows=appointmentRows(),box=document.getElementById("apptDayChoices");box.innerHTML=APPT_DAYS.slice(0,5).map(function(day,index){var count=rows.filter(function(row){return apptDayIndex(row)===index&&apptStatus(row)!=="cancelled";}).length;return '<button type="button" data-day="'+index+'" onclick="chooseReprogramDay('+index+')">'+day+'<br><small>'+count+(count===1?' cita':' citas')+'</small></button>';}).join("");state.reprogramDay=0;chooseReprogramDay(0);document.getElementById("apptReprogramModal").classList.add("open");}
 function chooseReprogramDay(day){state.reprogramDay=day;document.querySelectorAll("[data-day]").forEach(function(button){button.classList.toggle("active",Number(button.getAttribute("data-day"))===day);});var rows=appointmentRows().filter(function(row){return apptDayIndex(row)===day&&apptStatus(row)!=="cancelled";}),preview=document.getElementById("apptReprogramPreview"),button=document.getElementById("apptReprogramConfirm");preview.innerHTML=rows.length?'<strong>'+rows.length+(rows.length===1?' paciente':' pacientes')+'</strong><br>Se guardará una solicitud de reprogramación con disculpa y seguimiento pendiente.':'Este día está libre. No hay citas para reprogramar.';button.disabled=!rows.length;button.textContent='Reprogramar '+rows.length+(rows.length===1?' cita':' citas');}
 function closeAppointmentReprogram(){document.getElementById("apptReprogramModal").classList.remove("open");}

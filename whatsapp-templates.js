@@ -1,5 +1,17 @@
 module.exports = [
   {
+    name: "appointment_reminder_nextfor",
+    category: "UTILITY",
+    language: "es_CO",
+    useCase: "Recordar una cita próxima al cliente por WhatsApp.",
+    bodyVariables: [
+      { key: "customer_name", sample: "María" },
+      { key: "appointment_date", sample: "viernes 21 de agosto" },
+      { key: "appointment_time", sample: "04:00 p. m." },
+      { key: "business_name", sample: "NextforIA" }
+    ]
+  },
+  {
     name: "order_confirmation_rav",
     category: "UTILITY",
     language: "es_CO",

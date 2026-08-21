@@ -33,7 +33,7 @@ const {
   customerAppointmentSnapshot,
   demoAppointmentSnapshot
 } = require("./customer-appointments");
-const { createAppointmentReminderService } = require("./appointment-reminders");
+const { appointmentDateTime, createAppointmentReminderService } = require("./appointment-reminders");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
 const {
@@ -199,6 +199,7 @@ const {
 const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
 const { cleanShopifyShop, createPairingToken, verifyPairingToken } = require("./commerce/pairing-token");
 const { AppointmentRegistry, appointmentCustomerPhone } = require("./appointments");
+const { createAppointmentConfirmationService } = require("./appointment-confirmations");
 const { deliverAppointmentWhatsApp } = require("./appointment-whatsapp-delivery");
 const {
   AppointmentOperationsError,
@@ -481,13 +482,21 @@ const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.NODE_ENV === "production" ||
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENT_REMINDERS_TABLE = "appointment_reminders";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
-const APPOINTMENT_REMINDERS_ENABLED = SUPABASE_APPOINTMENTS_ENABLED && process.env.APPOINTMENT_REMINDERS_ENABLED !== "0";
+const APPOINTMENT_REMINDERS_V1_ENABLED = process.env.APPOINTMENT_REMINDERS_V1_ENABLED !== "0";
+const APPOINTMENT_REMINDERS_ENABLED = SUPABASE_APPOINTMENTS_ENABLED &&
+  process.env.APPOINTMENT_REMINDERS_ENABLED !== "0" && !APPOINTMENT_REMINDERS_V1_ENABLED;
+const APPOINTMENT_CONFIRMATIONS_ENABLED = SUPABASE_APPOINTMENTS_ENABLED && process.env.APPOINTMENT_CONFIRMATIONS_ENABLED !== "0";
+const APPOINTMENT_CONFIRMATION_BACKFILL_HOURS = boundedEnvInt("APPOINTMENT_CONFIRMATION_BACKFILL_HOURS", 72, 1, 168);
 const APPOINTMENT_REMINDER_INTERVAL_MS = boundedEnvInt("APPOINTMENT_REMINDER_INTERVAL_SECONDS", 60, 30, 300) * 1000;
 const APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE = String(process.env.APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE || "").trim();
 const APPOINTMENT_PANEL_V2_ENABLED = process.env.APPOINTMENT_PANEL_V2_ENABLED !== "0";
-const APPOINTMENT_REMINDERS_V1_ENABLED = process.env.APPOINTMENT_REMINDERS_V1_ENABLED !== "0";
-const APPOINTMENT_REMINDER_SENDS_ENABLED = process.env.APPOINTMENT_REMINDER_SENDS_ENABLED === "1";
-const APPOINTMENT_REMINDER_TEMPLATE_NAME = String(process.env.APPOINTMENT_REMINDER_TEMPLATE_NAME || "").trim();
+// Reminder sends are part of the appointment product. Keep an explicit kill
+// switch for rollback, but do not require a second production flag after the
+// appointment/reminder module itself has already been enabled.
+const APPOINTMENT_REMINDER_SENDS_ENABLED = process.env.APPOINTMENT_REMINDER_SENDS_ENABLED !== "0";
+const APPOINTMENT_REMINDER_TEMPLATE_NAME = String(
+  process.env.APPOINTMENT_REMINDER_TEMPLATE_NAME || APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE
+).trim();
 const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
   process.env.APPOINTMENT_STORAGE_TEST_READY === "1";
 const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };
@@ -3035,16 +3044,32 @@ async function deliverAppointmentReminder(row, appointment) {
     (row && row.channel === "whatsapp" ? cleanRuntimeText(appointment && appointment.customer_phone, 80) : "");
   if (!recipient) throw new Error("appointment_reminder_recipient_missing");
   const message = appointmentReminderMessage(row, appointment);
-  if (row.channel === "whatsapp" && APPOINTMENT_REMINDER_TEMPLATE_NAME) {
-    const result = await sendTemplate(recipient, APPOINTMENT_REMINDER_TEMPLATE_NAME, {
-      customer_name: cleanRuntimeText(row.customer_name || appointment && appointment.customer_name, 80) || "Cliente",
-      service: cleanRuntimeText(row.service || appointment && appointment.consultation_reason, 180) || "tu cita",
-      appointment_time: cleanRuntimeText(appointment && appointment.starts_at, 80)
-    }, { tenant_id: row.tenant_id });
-    if (!result || result.ok !== true) throw new Error("appointment_reminder_template_failed");
-    return result.meta && result.meta.messages && result.meta.messages[0] && result.meta.messages[0].id || "";
+  if (row.channel === "whatsapp") {
+    const configuration = await appointmentReminderConfiguration(row.tenant_id);
+    const when = appointmentDateTime(appointment && appointment.starts_at, configuration.timezone);
+    const result = await deliverAppointmentWhatsApp({
+      appointment: Object.assign({}, appointment, {
+        tenant_id: row.tenant_id,
+        customer_phone: recipient
+      }),
+      template: APPOINTMENT_REMINDER_TEMPLATE_NAME,
+      params: {
+        customer_name: cleanRuntimeText(row.customer_name || appointment && appointment.customer_name, 80) || "Cliente",
+        appointment_date: when.date,
+        appointment_time: when.time,
+        business_name: configuration.business_name || "Nextfor"
+      },
+      customerWindowOpen: whatsappCustomerServiceWindowOpen,
+      sendText,
+      sendTemplate
+    });
+    if (!result || result.ok !== true) {
+      throw new Error("appointment_reminder_whatsapp_failed:" + cleanRuntimeText(result && result.error && (result.error.code || result.error.message), 160));
+    }
+    return result.provider_id || "";
   }
-  await sendText(recipient, message, { tenant_id: row.tenant_id, human_agent: false });
+  const sent = await sendText(recipient, message, { tenant_id: row.tenant_id, human_agent: false });
+  if (!sent) throw new Error("appointment_reminder_text_failed");
   return "";
 }
 
@@ -5705,6 +5730,12 @@ async function sendText(to, text, options) {
       { messaging_product: "whatsapp", to: recipient.id, type: "text", text: { body: String(text || "").slice(0, 4096), preview_url: false } },
       { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, timeout: 10000 }
     );
+    if (options && options.delivery_result && typeof options.delivery_result === "object") {
+      options.delivery_result.ok = true;
+      options.delivery_result.provider_message_id = String(
+        response && response.data && response.data.messages && response.data.messages[0] && response.data.messages[0].id || ""
+      ).slice(0, 500);
+    }
     whatsappRuntimeState.outbound_messages++;
     whatsappRuntimeState.last_outbound_at = new Date().toISOString();
     whatsappRuntimeState.last_outbound_message_id_suffix = String(
@@ -5847,7 +5878,33 @@ const appointmentReminderService = createAppointmentReminderService({
     });
   }
 });
+
+const appointmentConfirmationService = createAppointmentConfirmationService({
+  backfillHours: APPOINTMENT_CONFIRMATION_BACKFILL_HOURS,
+  loadAppointments: loadUpcomingAppointmentsForReminderWorker,
+  loadConfiguration: appointmentReminderConfiguration,
+  persist: async function (row) {
+    await persistAppointment(row);
+    appointmentRegistry.hydrate([row]);
+  },
+  deliver: async function (appointment, message) {
+    const tenantId = cleanTenantId(appointment && appointment.tenant_id);
+    const phone = cleanRuntimeText(appointment && appointment.customer_phone, 80);
+    if (!await whatsappCustomerServiceWindowOpen(tenantId, phone)) {
+      return { ok: false, error: { message: "whatsapp_customer_window_closed" } };
+    }
+    const delivery = {};
+    const sent = await sendText(phone, message, { tenant_id: tenantId, delivery_result: delivery });
+    return {
+      ok: sent === true,
+      provider_id: delivery.provider_message_id || "customer_window_text",
+      mode: "text",
+      error: sent === true ? null : { message: delivery.message || "whatsapp_confirmation_failed" }
+    };
+  }
+});
 let appointmentRemindersProcessing = false;
+let appointmentConfirmationsProcessing = false;
 
 async function processAppointmentReminders() {
   if (!APPOINTMENT_REMINDERS_ENABLED || appointmentRemindersProcessing) return null;
@@ -5866,10 +5923,33 @@ async function processAppointmentReminders() {
   }
 }
 
+async function processAppointmentConfirmations() {
+  if (!APPOINTMENT_CONFIRMATIONS_ENABLED || appointmentConfirmationsProcessing) return null;
+  appointmentConfirmationsProcessing = true;
+  try {
+    const outcome = await appointmentConfirmationService.process();
+    if (outcome.delivered || outcome.retrying) {
+      log(outcome.retrying ? "warn" : "info", "appointment_confirmations_processed", outcome);
+    }
+    return outcome;
+  } catch (error) {
+    log("warn", "appointment_confirmations_failed", { error: cleanRuntimeText(error && error.message, 240) });
+    return null;
+  } finally {
+    appointmentConfirmationsProcessing = false;
+  }
+}
+
 if (APPOINTMENT_REMINDERS_ENABLED) {
   const appointmentReminderTimer = setInterval(processAppointmentReminders, APPOINTMENT_REMINDER_INTERVAL_MS);
   if (appointmentReminderTimer.unref) appointmentReminderTimer.unref();
   setTimeout(processAppointmentReminders, 5000);
+}
+
+if (APPOINTMENT_CONFIRMATIONS_ENABLED) {
+  const appointmentConfirmationTimer = setInterval(processAppointmentConfirmations, APPOINTMENT_REMINDER_INTERVAL_MS);
+  if (appointmentConfirmationTimer.unref) appointmentConfirmationTimer.unref();
+  setTimeout(processAppointmentConfirmations, 7000);
 }
 
 async function sendImage(to, imageUrl, caption, options) {
@@ -6955,8 +7035,23 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   await persistAppointment(row);
   await syncAppointmentReminderSchedule(tenantId, row);
   let notification = null;
+  let confirmation = null;
   if (row.status === "booked") {
-    notification = await queueCustomerAppointmentNotification(tenantId, row);
+    if (APPOINTMENT_CONFIRMATIONS_ENABLED) {
+      confirmation = await appointmentConfirmationService.send(row);
+      if (confirmation && confirmation.appointment) row = confirmation.appointment;
+      log(confirmation && confirmation.ok ? "info" : "warn", "appointment_customer_confirmation", {
+        tenant_id: cleanTenantId(tenantId),
+        appointment_id_suffix: String(row.conversation_id || "").slice(-12),
+        status: confirmation && confirmation.delivery && confirmation.delivery.status || confirmation && confirmation.reason || "not_sent"
+      });
+    }
+    try {
+      notification = await queueCustomerAppointmentNotification(tenantId, row);
+    } catch (error) {
+      // A panel/email alert is secondary. A stored and calendar-synced
+      // appointment must not be reported as failed when this alert is down.
+    }
   }
   return {
     ok: row.status === "booked" && row.calendar_sync_status === "synced",
@@ -6966,6 +7061,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     duration_minutes: row.duration_minutes,
     calendar_sync_status: row.calendar_sync_status || "pending",
     notification_id: notification && notification.id || null,
+    customer_confirmation_status: confirmation && confirmation.delivery && confirmation.delivery.status || confirmation && confirmation.reason || null,
     error: row.calendar_sync_status === "synced" ? undefined : row.calendar_last_error || "calendar_sync_pending"
   };
 }

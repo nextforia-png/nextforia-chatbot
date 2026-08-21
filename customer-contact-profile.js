@@ -132,13 +132,10 @@ function profilePatchFromOrder(order) {
 
 function profilePatchFromAppointment(appointment) {
   const value = appointment && typeof appointment === "object" ? appointment : {};
-  const booking = value.booking_fields && typeof value.booking_fields === "object" ? value.booking_fields : {};
   return {
     name: value.customer_name,
     phone: value.customer_phone,
-    email: value.customer_email,
-    id_number: booking.id || booking.id_number,
-    address: booking.address
+    email: value.customer_email
   };
 }
 

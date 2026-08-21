@@ -2,16 +2,8 @@
 
 const crypto = require("crypto");
 
-const APPOINTMENT_SETTINGS_VERSION = 2;
+const APPOINTMENT_SETTINGS_VERSION = 1;
 const APPOINTMENT_REMINDER_VERSION = 1;
-const BOOKING_REQUIREMENT_TYPES = new Set(["full_name", "phone", "email", "id", "address", "custom"]);
-const STANDARD_BOOKING_REQUIREMENTS = Object.freeze([
-  { id: "full_name", type: "full_name", label: "Nombre completo", question: "¿Cuál es tu nombre completo?", active: true, required: true },
-  { id: "phone", type: "phone", label: "Teléfono", question: "¿Cuál es tu número de teléfono?", active: true, required: true },
-  { id: "email", type: "email", label: "Correo electrónico", question: "¿Cuál es tu correo electrónico?", active: true, required: false },
-  { id: "id", type: "id", label: "Documento de identidad", question: "¿Cuál es tu número de documento?", active: false, required: false },
-  { id: "address", type: "address", label: "Dirección", question: "¿Cuál es tu dirección?", active: false, required: false }
-]);
 const REMINDER_CHANNELS = new Set(["whatsapp", "email", "sms"]);
 const REMINDER_STATUSES = new Set([
   "scheduled", "paused", "sending", "sent", "delivered", "read", "confirmed",
@@ -71,128 +63,6 @@ function stableId(prefix, parts) {
   return prefix + crypto.createHash("sha256").update(parts.map(function (part) {
     return String(part == null ? "" : part);
   }).join("\u0000"), "utf8").digest("hex").slice(0, 32);
-}
-
-function bookingRequirementId(value, fallback) {
-  const normalized = text(value, 120).toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  return (normalized || fallback || "field").slice(0, 80);
-}
-
-function normalizeBookingRequirement(input, index) {
-  const source = input && typeof input === "object" ? input : {};
-  const requestedType = text(source.type, 40).toLowerCase();
-  const type = BOOKING_REQUIREMENT_TYPES.has(requestedType) ? requestedType : "custom";
-  const standard = STANDARD_BOOKING_REQUIREMENTS.find(function (row) { return row.type === type; });
-  const label = text(source.label || standard && standard.label, 160);
-  if (!label) return null;
-  const fallbackId = type === "custom" ? "custom_" + String(index + 1) : type;
-  const id = type === "custom" ? bookingRequirementId(source.id || label, fallbackId) : type;
-  return {
-    id,
-    type,
-    label,
-    question: text(source.question || standard && standard.question || label, 300),
-    active: source.active !== false,
-    required: source.required === true,
-    order: integer(source.order, index, 0, 1000)
-  };
-}
-
-function legacyBookingRequirements(value) {
-  const raw = text(value, 4000);
-  if (!raw) return STANDARD_BOOKING_REQUIREMENTS.map(function (row, index) {
-    return normalizeBookingRequirement(row, index);
-  });
-  const lower = raw.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  const detected = [];
-  const aliases = [
-    ["full_name", /\b(nombre|nombre completo|paciente|cliente)\b/],
-    ["phone", /\b(telefono|celular|movil|whatsapp)\b/],
-    ["email", /\b(correo|email|e-mail)\b/],
-    ["id", /\b(documento|cedula|identificacion|nit|pasaporte)\b/],
-    ["address", /\b(direccion|domicilio|ubicacion)\b/]
-  ];
-  aliases.forEach(function (entry) {
-    if (!entry[1].test(lower)) return;
-    const standard = STANDARD_BOOKING_REQUIREMENTS.find(function (row) { return row.type === entry[0]; });
-    detected.push(Object.assign({}, standard, { active: true, required: true }));
-  });
-  raw.split(/[\n,;]+/).map(function (part) { return text(part, 160); }).filter(Boolean).forEach(function (part) {
-    const comparable = part.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-    if (/\b(servicio|motivo|fecha|hora|horario|consentimiento)\b/.test(comparable)) return;
-    if (aliases.some(function (entry) { return entry[1].test(comparable); })) return;
-    detected.push({ type: "custom", id: bookingRequirementId(part), label: part, question: part, active: true, required: true });
-  });
-  if (!detected.length) detected.push(Object.assign({}, STANDARD_BOOKING_REQUIREMENTS[0]));
-  STANDARD_BOOKING_REQUIREMENTS.forEach(function (standard) {
-    if (detected.some(function (row) { return row.type === standard.type; })) return;
-    detected.push(Object.assign({}, standard, { active: false, required: false }));
-  });
-  return detected.map(normalizeBookingRequirement).filter(Boolean);
-}
-
-function normalizeBookingRequirements(value, legacyValue) {
-  const input = Array.isArray(value) && value.length ? value : legacyBookingRequirements(legacyValue);
-  const seen = new Set();
-  return input.map(normalizeBookingRequirement).filter(Boolean).sort(function (a, b) {
-    return a.order - b.order;
-  }).filter(function (row) {
-    if (seen.has(row.id)) return false;
-    seen.add(row.id);
-    return true;
-  }).slice(0, 30).map(function (row, index) {
-    return Object.assign({}, row, { order: index });
-  });
-}
-
-function compileBookingRequirements(requirements) {
-  const active = normalizeBookingRequirements(requirements).filter(function (row) { return row.active; });
-  if (!active.length) return "No pedir datos personales adicionales. Servicio, fecha, hora y consentimiento siguen siendo necesarios para reservar.";
-  const lines = ["Datos que el negocio decidió recopilar antes de confirmar:"];
-  active.forEach(function (row) {
-    lines.push("- " + row.label + " [" + row.id + "]: " + (row.required ? "OBLIGATORIO" : "opcional") + ". Pregunta sugerida: " + row.question);
-  });
-  lines.push("Los campos opcionales nunca bloquean la reserva si el cliente no desea responder.");
-  return lines.join("\n").slice(0, 8000);
-}
-
-function bookingFieldValues(input, context) {
-  const source = input && typeof input === "object" ? input : {};
-  const profile = context && context.profile && typeof context.profile === "object" ? context.profile : {};
-  const custom = source.booking_fields && typeof source.booking_fields === "object" && !Array.isArray(source.booking_fields)
-    ? source.booking_fields
-    : {};
-  const result = {};
-  Object.keys(custom).slice(0, 60).forEach(function (key) {
-    const cleanKey = bookingRequirementId(key);
-    const value = text(custom[key], 2000);
-    if (cleanKey && value) result[cleanKey] = value;
-  });
-  const known = {
-    full_name: source.customer_name || profile.name,
-    phone: source.customer_phone || context && context.channelPhone || profile.phone,
-    email: source.customer_email || profile.email,
-    id: custom.id || custom.id_number || profile.id_number,
-    address: custom.address || profile.address
-  };
-  Object.keys(known).forEach(function (key) {
-    const value = text(known[key], key === "address" ? 1000 : 300);
-    if (value) result[key] = value;
-  });
-  return result;
-}
-
-function validateBookingRequirements(requirements, input, context) {
-  const normalized = normalizeBookingRequirements(requirements);
-  const values = bookingFieldValues(input, context);
-  const missing = normalized.filter(function (row) {
-    return row.active && row.required && !text(values[row.id] || values[row.type], 2000);
-  }).map(function (row) {
-    return { id: row.id, type: row.type, label: row.label, question: row.question };
-  });
-  return { ok: missing.length === 0, missing, values, requirements: normalized };
 }
 
 function normalizeRule(input, index, now) {
@@ -339,15 +209,12 @@ function normalizeAppointmentSettings(input, options) {
   const exceptions = uniqueById((Array.isArray(source.schedule_exceptions) ? source.schedule_exceptions : [])
     .map(function (row, index) { return normalizeException(row, index, now); }), 500);
   const reminderPolicy = normalizeReminderPolicy(source.reminder_policy, null, now);
-  const bookingRequirements = normalizeBookingRequirements(source.booking_requirements, source.required_booking_fields);
   return {
     version: APPOINTMENT_SETTINGS_VERSION,
     revision: integer(source.revision, 0, 0, Number.MAX_SAFE_INTEGER),
     scheduling_rules: rules,
     schedule_exceptions: exceptions,
     reminder_policy: reminderPolicy,
-    booking_requirements: bookingRequirements,
-    required_booking_fields: compileBookingRequirements(bookingRequirements),
     availability_rules: compileAvailabilityRules(rules, exceptions),
     updated_at: iso(source.updated_at, now),
     updated_by: text(source.updated_by, 160)
@@ -383,10 +250,6 @@ function appointmentSettingsFromOnboarding(onboarding, options) {
       handoff_on_no_response: true
     };
   }
-  if (!Array.isArray(source.booking_requirements) && Array.isArray(answerSetup.booking_requirements)) {
-    source.booking_requirements = answerSetup.booking_requirements;
-  }
-  if (!source.required_booking_fields) source.required_booking_fields = answerSetup.required_booking_fields;
   return normalizeAppointmentSettings(source, options);
 }
 
@@ -413,9 +276,6 @@ function updateAppointmentSettings(currentInput, patchInput, options) {
       ? patch.schedule_exceptions
       : current.schedule_exceptions,
     reminder_policy: normalizeReminderPolicy(patch.reminder_policy, current.reminder_policy, now),
-    booking_requirements: Object.prototype.hasOwnProperty.call(patch, "booking_requirements")
-      ? patch.booking_requirements
-      : current.booking_requirements,
     updated_at: now,
     updated_by: text(optionsValue.actor, 160)
   };
@@ -629,8 +489,6 @@ function applyReminderAction(recordInput, actionInput, options) {
 module.exports = {
   APPOINTMENT_REMINDER_VERSION,
   APPOINTMENT_SETTINGS_VERSION,
-  BOOKING_REQUIREMENT_TYPES,
-  STANDARD_BOOKING_REQUIREMENTS,
   REMINDER_ACTIONS,
   REMINDER_ACTIVE_STATUSES,
   REMINDER_STATUSES,
@@ -638,16 +496,13 @@ module.exports = {
   applyReminderAction,
   appointmentSettingsFromOnboarding,
   compileAvailabilityRules,
-  compileBookingRequirements,
   deriveAppointmentReminderStatus,
   materializeAppointmentReminders,
   normalizeAppointmentSettings,
-  normalizeBookingRequirements,
   normalizeReminder,
   normalizeReminderPolicy,
   reminderId,
   reminderSnapshot,
   timingOffsets,
-  updateAppointmentSettings,
-  validateBookingRequirements
+  updateAppointmentSettings
 };

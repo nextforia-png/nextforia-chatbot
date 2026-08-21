@@ -178,10 +178,6 @@ async function seedAppointment(base, secret, agentId, customerName) {
       body: JSON.stringify({
         revision: revisionA,
         settings: {
-          booking_requirements: [
-            { id: "full_name", type: "full_name", label: "Nombre completo", active: true, required: true },
-            { id: "primera_cita", type: "custom", label: "Primera cita", question: "¿Es tu primera cita?", active: true, required: true }
-          ],
           rules: [{ id: "rule-a", text: "Atender únicamente en horario de Clínica A.", active: true }],
           exceptions: [{ id: "closed-a", date: "2030-07-22", mode: "close", note: "Cierre Clínica A" }],
           reminder_policy: { enabled: true, channel: "whatsapp", offsets_minutes: [1440, 360] }
@@ -191,9 +187,6 @@ async function seedAppointment(base, secret, agentId, customerName) {
     assert.strictEqual(response.status, 200);
     payload = await response.json();
     assert.strictEqual(payload.settings.rules[0].id, "rule-a");
-    assert(payload.settings.booking_requirements.some(function (row) {
-      return row.id === "primera_cita" && row.required === true;
-    }), "tenant A must persist its custom appointment requirement");
     const revisionAfterFirstSave = payload.revision;
 
     response = await fetch(base + "/admin/panel/appointment-settings", {
@@ -207,8 +200,6 @@ async function seedAppointment(base, secret, agentId, customerName) {
     assert.strictEqual(response.status, 200);
     const settingsB = await response.json();
     assert(!settingsB.settings.rules.some(function (row) { return row.id === "rule-a"; }), "tenant B must not see tenant A rules");
-    assert(!settingsB.settings.booking_requirements.some(function (row) { return row.id === "primera_cita"; }),
-      "tenant B must not see tenant A appointment requirements");
 
     response = await fetch(base + "/admin/panel/appointments-data", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);

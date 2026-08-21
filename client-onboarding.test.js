@@ -209,10 +209,6 @@ dercoAppointmentAnswers.appointment_setup.staff_mode = "Por especialista asignad
 dercoAppointmentAnswers.appointment_setup.appointment_locations = "Virtual y presencial.";
 dercoAppointmentAnswers.appointment_setup.availability_rules = "Agenda según Google Calendar.";
 dercoAppointmentAnswers.appointment_setup.required_booking_fields = "Nombre, teléfono, correo, motivo.";
-dercoAppointmentAnswers.appointment_setup.booking_requirements = [
-  { id: "full_name", type: "full_name", label: "Nombre completo", active: true, required: true },
-  { id: "case_reference", type: "custom", label: "Número de caso", question: "¿Cuál es tu número de caso?", active: true, required: false }
-];
 dercoAppointmentAnswers.appointment_setup.booking_confirmation_mode = "Confirmar con el cliente antes de crear la cita.";
 dercoAppointmentAnswers.appointment_setup.cancellation_policy = "Reprogramar con 24 horas.";
 dercoAppointmentAnswers.appointment_setup.calendar_provider = "google";
@@ -237,11 +233,6 @@ assert.match(dercoAppointmentConfiguration.reminder_timing, /24 horas antes y 6 
 assert.match(dercoAppointmentConfiguration.rescheduling_policy, /reprogramar/i);
 assert.match(dercoAppointmentConfiguration.system_prompt, /CONFIGURACIÓN DE APPOINTMENT BOT/);
 assert.match(dercoAppointmentConfiguration.system_prompt, /Google Calendar|google/i);
-assert(dercoAppointmentConfiguration.booking_requirements.some(function (row) {
-  return row.id === "case_reference" && row.required === false;
-}));
-assert.match(dercoAppointmentConfiguration.system_prompt, /Número de caso \[case_reference\]: opcional/);
-assert.match(dercoAppointmentConfiguration.system_prompt, /Nunca vuelvas a pedir un dato conocido/);
 assert.match(dercoAppointmentConfiguration.deployment_instructions, /post-call/);
 assert.strictEqual(APPOINTMENT_DEPLOYMENT_INSTRUCTIONS, dercoAppointmentConfiguration.deployment_instructions);
 assert.doesNotMatch(JSON.stringify(dercoAppointmentConfiguration), /CUSTOMER-SERVICE-ONLY-MARKER/);

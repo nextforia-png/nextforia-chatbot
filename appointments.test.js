@@ -63,13 +63,6 @@ function sampleEvent(overrides) {
   assert.equal(parsed.starts_at, "2026-07-21T14:00:00.000Z");
   assert.equal(parsed.duration_minutes, 60);
   assert.equal(parsed.data_processing_consent, "authorized");
-  const withRequirements = normalizeAppointment(Object.assign({}, parsed, {
-    booking_fields: { id: "10203040", primera_cita: "Sí", "campo inválido": "se normaliza" },
-    booking_requirements_version: 2
-  }));
-  assert.strictEqual(withRequirements.booking_fields.primera_cita, "Sí");
-  assert.strictEqual(withRequirements.booking_fields.campoinvlido, "se normaliza");
-  assert.strictEqual(withRequirements.booking_requirements_version, 2);
 
   const persisted = [];
   const registry = new AppointmentRegistry({ onUpsert: async row => persisted.push(row) });

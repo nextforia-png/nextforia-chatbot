@@ -40,6 +40,29 @@ function cleanDurationMinutes(value) {
   return Number.isFinite(minutes) && minutes >= 5 && minutes <= 24 * 60 ? minutes : 60;
 }
 
+function cleanReminderDeliveries(input) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const result = {};
+  ["24h", "6h"].forEach(function (offset) {
+    const row = source[offset];
+    if (!row || typeof row !== "object" || Array.isArray(row)) return;
+    const status = cleanText(row.status, 60).toLowerCase().replace(/[\s-]+/g, "_");
+    if (!status) return;
+    result[offset] = {
+      status,
+      offset,
+      due_at: validIsoDate(row.due_at),
+      sent_at: validIsoDate(row.sent_at),
+      next_attempt_at: validIsoDate(row.next_attempt_at),
+      updated_at: validIsoDate(row.updated_at),
+      attempts: Math.max(0, Math.min(10, Math.round(Number(row.attempts) || 0))),
+      provider_id: cleanText(row.provider_id, 200),
+      error: cleanText(row.error, 240)
+    };
+  });
+  return result;
+}
+
 function analysisValue(collection, key) {
   const entry = collection && collection[key];
   if (entry == null) return "";
@@ -130,6 +153,8 @@ function normalizeAppointment(input) {
   if (calendarSyncedAt) normalized.calendar_synced_at = calendarSyncedAt;
   const calendarLastError = cleanText(input.calendar_last_error, 800);
   if (calendarLastError) normalized.calendar_last_error = calendarLastError;
+  const reminderDeliveries = cleanReminderDeliveries(input.reminder_deliveries);
+  if (Object.keys(reminderDeliveries).length) normalized.reminder_deliveries = reminderDeliveries;
   return normalized;
 }
 
@@ -229,5 +254,6 @@ module.exports = {
   AppointmentRegistry,
   appointmentFromElevenLabsEvent,
   normalizeAppointment,
-  validAppointmentAction
+  validAppointmentAction,
+  cleanReminderDeliveries
 };

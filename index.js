@@ -33,6 +33,7 @@ const {
   customerAppointmentSnapshot,
   demoAppointmentSnapshot
 } = require("./customer-appointments");
+const { createAppointmentReminderService } = require("./appointment-reminders");
 const renderCustomerPasswordSetup = require("./customer-access");
 const renderCustomerLogin = require("./customer-login");
 const {
@@ -469,6 +470,9 @@ const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.NODE_ENV === "production" ||
   process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const APPOINTMENT_REMINDERS_ENABLED = SUPABASE_APPOINTMENTS_ENABLED && process.env.APPOINTMENT_REMINDERS_ENABLED !== "0";
+const APPOINTMENT_REMINDER_INTERVAL_MS = boundedEnvInt("APPOINTMENT_REMINDER_INTERVAL_SECONDS", 60, 30, 300) * 1000;
+const APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE = String(process.env.APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE || "").trim();
 const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
   process.env.APPOINTMENT_STORAGE_TEST_READY === "1";
 const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };
@@ -2702,6 +2706,38 @@ async function hydrateAppointmentsForTenant(tenantId) {
     console.error("hydrateAppointmentsForTenant error:", error.message);
     return false;
   }
+}
+
+async function loadUpcomingAppointmentsForReminderWorker() {
+  if (!SUPABASE_APPOINTMENTS_ENABLED) return [];
+  const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE, {
+    params: {
+      select: "*",
+      starts_at: "gte." + new Date().toISOString(),
+      status: "in.(booked,rescheduled)",
+      order: "starts_at.asc",
+      limit: 1000
+    },
+    headers: SB_HEADERS,
+    timeout: 12000
+  });
+  return (response.data || []).map(function (stored) {
+    try { return JSON.parse(decryptStoredText(stored.payload, DATA_ENCRYPTION_KEY)); }
+    catch (_) { return null; }
+  }).filter(Boolean);
+}
+
+async function appointmentReminderConfiguration(tenantId) {
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const answers = onboarding && onboarding.answers || {};
+  const setup = answers.appointment_setup || {};
+  return {
+    channel: setup.reminder_channel,
+    timing: setup.reminder_timing,
+    template: APPOINTMENT_WHATSAPP_REMINDER_TEMPLATE,
+    timezone: setup.timezone || answers.operations && answers.operations.timezone || "America/Bogota",
+    business_name: setup.business_name || answers.business && (answers.business.brand_name || answers.business.name) || "Nextfor"
+  };
 }
 
 async function appointmentsStorageReady(force) {
@@ -5421,6 +5457,48 @@ async function sendTemplate(to, templateName, params, options) {
     console.error("WA template error:", error);
     return { ok: false, error };
   }
+}
+
+const appointmentReminderService = createAppointmentReminderService({
+  loadAppointments: loadUpcomingAppointmentsForReminderWorker,
+  loadConfiguration: appointmentReminderConfiguration,
+  persist: async function (row) {
+    await persistAppointment(row);
+    appointmentRegistry.hydrate([row]);
+  },
+  deliver: async function (appointment, template, params) {
+    const sent = await sendTemplate(appointment.customer_phone, template, params, { tenant_id: appointment.tenant_id });
+    const message = sent && sent.meta && sent.meta.messages && sent.meta.messages[0];
+    return {
+      ok: !!(sent && sent.ok),
+      provider_id: message && message.id || "",
+      error: sent && sent.error || null
+    };
+  }
+});
+let appointmentRemindersProcessing = false;
+
+async function processAppointmentReminders() {
+  if (!APPOINTMENT_REMINDERS_ENABLED || appointmentRemindersProcessing) return null;
+  appointmentRemindersProcessing = true;
+  try {
+    const outcome = await appointmentReminderService.process();
+    if (outcome.programmed || outcome.delivered || outcome.retrying || outcome.blocked) {
+      log(outcome.retrying || outcome.blocked ? "warn" : "info", "appointment_reminders_processed", outcome);
+    }
+    return outcome;
+  } catch (error) {
+    log("warn", "appointment_reminders_failed", { error: cleanRuntimeText(error && error.message, 240) });
+    return null;
+  } finally {
+    appointmentRemindersProcessing = false;
+  }
+}
+
+if (APPOINTMENT_REMINDERS_ENABLED) {
+  const appointmentReminderTimer = setInterval(processAppointmentReminders, APPOINTMENT_REMINDER_INTERVAL_MS);
+  if (appointmentReminderTimer.unref) appointmentReminderTimer.unref();
+  setTimeout(processAppointmentReminders, 5000);
 }
 
 async function sendImage(to, imageUrl, caption, options) {

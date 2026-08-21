@@ -73,6 +73,13 @@ function sampleEvent(overrides) {
   assert.equal(updated.panel_action, "cancel");
   assert.equal(updated.panel_action_status, "queued");
   assert.equal(updated.panel_action_by, "Admin DERCO");
+  const reminderRow = await registry.upsert(Object.assign({}, updated, {
+    reminder_deliveries: {
+      "6h": { status: "delivered", due_at: "2026-07-20T08:00:00Z", sent_at: "2026-07-20T08:01:00Z", attempts: 1, provider_id: "wamid.test" }
+    }
+  }), false);
+  assert.equal(reminderRow.reminder_deliveries["6h"].status, "delivered");
+  assert.equal(reminderRow.reminder_deliveries["6h"].provider_id, "wamid.test");
   const snapshot = registry.snapshot(DERCO_TENANT_ID, new Date("2026-07-18T12:00:00Z").getTime());
   assert.deepEqual(snapshot.metrics, {
     interactions: 2,

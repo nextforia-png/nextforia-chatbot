@@ -81,4 +81,3 @@ The v2 E2E test uses two tenants with the same appointment ID and proves isolate
 2. Set `APPOINTMENT_PANEL_V2_ENABLED=0` and `APPOINTMENT_REMINDERS_V1_ENABLED=0` to hide v2 data/actions while preserving records.
 3. Roll back the application commit.
 4. Run the down migration only if its duplicate-conversation safety check passes.
-

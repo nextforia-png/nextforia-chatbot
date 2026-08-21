@@ -229,6 +229,7 @@ function notificationTemplate(notification) {
   if (type === "shipping_pending_digest") return "shipping_pending";
   if (type === "sales_opportunity") return "sales_opportunity";
   if (type === "product_update") return "product_update";
+  if (type === "appointment_created") return "appointment_confirmed";
   return "";
 }
 
@@ -241,6 +242,8 @@ function notificationPayload(notification, baseUrl) {
     customer_label: notification && notification.customer_label,
     conversation_id: notification && notification.conversation_id,
     channel: notification && notification.channel,
+    appointment_id: notification && notification.appointment_id,
+    appointment_when: notification && notification.message,
     message: notification && notification.message
   };
   if (template === "payment_pending") {

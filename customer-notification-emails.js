@@ -6,7 +6,8 @@ const CUSTOMER_NOTIFICATION_EMAIL_TEMPLATES = Object.freeze([
   "shipping_pending",
   "sales_opportunity",
   "product_update",
-  "human_attention"
+  "human_attention",
+  "appointment_confirmed"
 ]);
 
 function text(value, limit) {
@@ -172,6 +173,17 @@ function buildHumanAttention(input, panelUrl) {
   return { subject: "Una conversación necesita de ti", preheader: "Tu IA atendió, pero este cliente necesita a tu equipo.", content, text: "Un cliente necesita de ti.\n\nResponder ahora: " + actionUrl };
 }
 
+function buildAppointmentConfirmed(input, panelUrl) {
+  const actionUrl = safePanelUrl(input.action_url, input.base_url, "/admin/panel?tab=appointments&appointment=" + encodeURIComponent(text(input.appointment_id || input.conversation_id, 160)));
+  const customer = text(input.customer_label || "Un cliente", 160);
+  const when = text(input.appointment_when || input.message || "La cita ya quedó confirmada en tu agenda.", 500);
+  const content = header("Agenda") + '<tr><td style="height:4px;background-color:#14A971;line-height:4px;font-size:0;">&nbsp;</td></tr>' +
+    bodyIntro("Cita confirmada · Agenda actualizada", "Tu IA confirmó una nueva cita", '<strong style="color:#0A1836;">' + escapeHtml(customer, 160) + '</strong> ya tiene su espacio reservado. ' + escapeHtml(when, 500), "#0E7A4F") +
+    '<tr><td class="px" style="background-color:#FFFFFF;padding:24px 40px 8px 40px;"><table role="presentation" width="100%" style="background-color:#E7F7F0;border:1px solid #BCE8D3;border-radius:14px;"><tr><td style="padding:18px 22px;"><p style="margin:0 0 5px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#0A1836;">' + escapeHtml(customer, 160) + '</p><p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:22px;color:#31654D;">Cita confirmada y sincronizada con tu agenda.</p></td><td align="right" style="padding:18px 22px;font-family:Arial,Helvetica,sans-serif;font-size:20px;color:#0E7A4F;">✓</td></tr></table></td></tr>' +
+    button("Ver cita", actionUrl) + reinforcement("Nexfor ya reservó el espacio y avisó al cliente —", "tú tienes la agenda al día.") + footer("Recibiste este correo porque administras una empresa con citas activas en Nexfor IA.", panelUrl);
+  return { subject: "Nueva cita confirmada en tu agenda", preheader: customer + " tiene una cita confirmada.", content, text: "Nueva cita confirmada: " + customer + ".\n\n" + when + "\n\nVer cita: " + actionUrl };
+}
+
 function buildCustomerNotificationEmail(template, input) {
   input = input || {};
   if (!CUSTOMER_NOTIFICATION_EMAIL_TEMPLATES.includes(template)) throw new Error("customer_notification_email_template_invalid");
@@ -180,7 +192,8 @@ function buildCustomerNotificationEmail(template, input) {
     : template === "shipping_pending" ? buildShippingPending(input, panelUrl)
       : template === "sales_opportunity" ? buildSalesOpportunity(input, panelUrl)
         : template === "product_update" ? buildProductUpdate(input, panelUrl)
-          : buildHumanAttention(input, panelUrl);
+          : template === "appointment_confirmed" ? buildAppointmentConfirmed(input, panelUrl)
+            : buildHumanAttention(input, panelUrl);
   return {
     template,
     from: CUSTOMER_NOTIFICATION_EMAIL_FROM,

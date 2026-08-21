@@ -339,13 +339,15 @@ function materializeAppointmentReminders(appointmentInput, settingsInput, existi
     return row.tenant_id === tenantId && row.appointment_id === appointmentId;
   });
   const existingById = new Map(existing.map(function (row) { return [row.id, row]; }));
+  const existingByKey = new Map(existing.map(function (row) { return [row.reminder_key, row]; }));
   const booked = ["booked", "rescheduled"].includes(text(appointment.status, 40));
   const policy = settings.reminder_policy;
   const expected = [];
   if (booked && startsAt && policy.enabled) {
     policy.offsets_minutes.forEach(function (offsetMinutes) {
       const id = reminderId(tenantId, appointmentId, startsAt, offsetMinutes);
-      const previous = existingById.get(id);
+      const key = [tenantId, appointmentId, startsAt, offsetMinutes].join(":");
+      const previous = existingByKey.get(key) || existingById.get(id);
       const scheduledFor = new Date(new Date(startsAt).getTime() - offsetMinutes * 60 * 1000).toISOString();
       expected.push(normalizeReminder(Object.assign({}, previous || {}, {
         id,
@@ -357,14 +359,17 @@ function materializeAppointmentReminders(appointmentInput, settingsInput, existi
         scheduled_for: scheduledFor,
         status: previous && previous.status || "scheduled",
         attempts: previous && previous.attempts || 0,
-        reminder_key: [tenantId, appointmentId, startsAt, offsetMinutes].join(":"),
+        reminder_key: key,
         created_at: previous && previous.created_at || now,
         updated_at: previous && previous.updated_at || now
       })));
     });
   }
   const expectedIds = new Set(expected.map(function (row) { return row.id; }));
-  const obsolete = existing.filter(function (row) { return !expectedIds.has(row.id); }).map(function (row) {
+  const expectedKeys = new Set(expected.map(function (row) { return row.reminder_key; }));
+  const obsolete = existing.filter(function (row) {
+    return !expectedIds.has(row.id) && !expectedKeys.has(row.reminder_key);
+  }).map(function (row) {
     if (!REMINDER_ACTIVE_STATUSES.has(row.status)) return row;
     return normalizeReminder(Object.assign({}, row, {
       status: "cancelled",

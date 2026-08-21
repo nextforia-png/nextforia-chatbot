@@ -54,6 +54,11 @@ const {
   assert.deepStrictEqual(profilePatchFromCheckoutField("direccion", "Calle 10"), { address: "Calle 10" });
   assert.strictEqual(profilePatchFromOrder({ name: "Lina", city: "Cali" }).city, "Cali");
   assert.strictEqual(profilePatchFromAppointment({ customer_email: "lina@example.com" }).email, "lina@example.com");
+  const appointmentPatch = profilePatchFromAppointment({
+    booking_fields: { id: "10203040", address: "Calle 10 # 20-30" }
+  });
+  assert.strictEqual(appointmentPatch.id_number, "10203040");
+  assert.strictEqual(appointmentPatch.address, "Calle 10 # 20-30");
 })();
 
 (function buildsNoRepeatAppointmentContext() {

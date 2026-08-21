@@ -54,6 +54,7 @@ function createAppointmentConfirmationService(options) {
   const deliver = options.deliver || (async function () { return { ok: false, error: "delivery_unavailable" }; });
   const backfillHours = Math.max(1, Math.min(Number(options.backfillHours) || 72, 168));
   const active = new Set();
+  let firstProcess = true;
 
   async function send(appointment, sendOptions) {
     const current = now();
@@ -68,7 +69,7 @@ function createAppointmentConfirmationService(options) {
     }
     const state = confirmationState(appointment);
     if (state.status === "delivered") return { ok: true, skipped: true, reason: "already_delivered", appointment };
-    if (state.next_attempt_at && Date.parse(state.next_attempt_at) > current.getTime()) {
+    if (state.next_attempt_at && Date.parse(state.next_attempt_at) > current.getTime() && !(sendOptions && sendOptions.forceRetry)) {
       return { ok: false, skipped: true, reason: "retry_not_due", appointment };
     }
     if (state.status === "sending" && current.getTime() - Date.parse(state.updated_at || "") < 2 * 60000) {
@@ -151,9 +152,11 @@ function createAppointmentConfirmationService(options) {
   async function process() {
     const appointments = await loadAppointments();
     const outcome = { inspected: 0, delivered: 0, retrying: 0, skipped: 0 };
+    const forceRetry = firstProcess;
+    firstProcess = false;
     for (const appointment of appointments || []) {
       outcome.inspected += 1;
-      const result = await send(appointment, { backfill: true });
+      const result = await send(appointment, { backfill: true, forceRetry });
       if (result.ok && !result.skipped) outcome.delivered += 1;
       else if (result.delivery && result.delivery.status === "retrying") outcome.retrying += 1;
       else outcome.skipped += 1;

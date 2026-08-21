@@ -76,6 +76,29 @@ const { appointmentConfirmationText, createAppointmentConfirmationService } = re
   assert.strictEqual(failed.delivery.attempts, 1);
   assert.match(failed.delivery.next_attempt_at, /^2026-08-21T15:02:00/);
 
+  let recoveredAppointment = Object.assign({}, tenantB, {
+    conversation_id: "appt-recover",
+    confirmation_delivery: {
+      status: "retrying",
+      attempts: 1,
+      next_attempt_at: "2026-08-21T15:30:00.000Z",
+      updated_at: "2026-08-21T14:59:00.000Z"
+    }
+  });
+  let recoveryDeliveries = 0;
+  const recoveryService = createAppointmentConfirmationService({
+    now: () => current,
+    loadAppointments: async () => [recoveredAppointment],
+    persist: async row => { recoveredAppointment = row; },
+    deliver: async () => {
+      recoveryDeliveries += 1;
+      return { ok: true, provider_id: "wamid.recovered", mode: "text" };
+    }
+  });
+  const recovered = await recoveryService.process();
+  assert.strictEqual(recovered.delivered, 1, "startup recovery must retry a pending confirmation immediately");
+  assert.strictEqual(recoveryDeliveries, 1);
+
   const throwingService = createAppointmentConfirmationService({
     now: () => current,
     persist: async function () {},

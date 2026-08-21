@@ -102,7 +102,6 @@ assert.throws(function () {
   assert.strictEqual(appointmentAgentConfigured(marked, "clinica-b", { agent_a: "clinica-a" }), false);
   let createdPayload = null;
   let toolCreates = 0;
-  const toolPayloads = [];
   const cloned = await createElevenLabsAppointmentAgentFromTemplate(record, "clinica-a", {
     apiKey: "el-key",
     templateAgentId: "agent_luciana_template",
@@ -136,7 +135,6 @@ assert.throws(function () {
         assert.strictEqual(options.headers["xi-api-key"], "el-key");
         if (/\/v1\/convai\/tools$/.test(url)) {
           toolCreates += 1;
-          toolPayloads.push(payload);
           assert.match(payload.tool_config.api_schema.url, /api\.nextforia\.com\/webhooks\/elevenlabs\/appointments\/clinica-a/);
           assert.strictEqual(payload.tool_config.api_schema.query_params_schema, undefined);
           return { status: 200, data: { id: "tool_nextfor_" + toolCreates } };
@@ -150,10 +148,6 @@ assert.throws(function () {
   assert.strictEqual(cloned.created, true);
   assert.strictEqual(cloned.agent_id, "agent_clinica_a");
   assert.strictEqual(toolCreates, 4);
-  const bookingTool = toolPayloads.find(function (payload) { return /nextfor_book_appointment_v2/.test(payload.tool_config.name); });
-  assert(bookingTool);
-  assert.strictEqual(bookingTool.tool_config.api_schema.request_body_schema.properties.booking_fields.type, "object");
-  assert.strictEqual(bookingTool.tool_config.api_schema.request_body_schema.required.includes("customer_name"), false);
   assert.strictEqual(createdPayload.conversation_config.tts.voice_id, "voice_luciana");
   assert.deepStrictEqual(createdPayload.conversation_config.agent.prompt.tool_ids, [
     "tool_nextfor_1",
@@ -180,7 +174,7 @@ assert.throws(function () {
               const suffix = require("crypto").createHash("sha256").update("clinica-a").digest("hex").slice(0, 10);
               const bases = [
                 "nextfor_check_appointment_availability",
-                "nextfor_book_appointment_v2",
+                "nextfor_book_appointment",
                 "nextfor_cancel_appointment",
                 "nextfor_reschedule_appointment"
               ];

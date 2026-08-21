@@ -1,10 +1,5 @@
 "use strict";
 
-const {
-  compileBookingRequirements,
-  normalizeBookingRequirements
-} = require("./appointment-operations");
-
 const DEFAULT_ONBOARDING = Object.freeze({
   setup_goal: "unknown",
   business: {
@@ -123,7 +118,6 @@ const DEFAULT_ONBOARDING = Object.freeze({
     appointment_locations: "",
     availability_rules: "",
     required_booking_fields: "",
-    booking_requirements: [],
     minimum_booking_notice: "",
     maximum_booking_window: "",
     booking_confirmation_mode: "",
@@ -227,7 +221,7 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
 const QUESTION_TYPES = Object.freeze(["text", "number", "email", "email_readonly", "tel", "textarea", "choice", "checkbox", "file"]);
 const SETUP_REVIEW_STATUSES = Object.freeze(["incomplete", "ready", "building", "testing", "live"]);
 const CUSTOMER_SERVICE_CONFIGURATION_VERSION = 1;
-const APPOINTMENT_CONFIGURATION_VERSION = 2;
+const APPOINTMENT_CONFIGURATION_VERSION = 1;
 const CUSTOMER_SERVICE_DEPLOYMENT_INSTRUCTIONS = [
   "14. Despliegue a Staging y Producción",
   "",
@@ -629,10 +623,6 @@ function normalizeOnboarding(input) {
         : null,
       revision: Math.max(0, Math.floor(Number(appointmentSetup.revision) || 0)),
       required_booking_fields: text(appointmentSetup.required_booking_fields, 2500),
-      booking_requirements: normalizeBookingRequirements(
-        appointmentSetup.booking_requirements,
-        appointmentSetup.required_booking_fields
-      ),
       minimum_booking_notice: text(appointmentSetup.minimum_booking_notice, 500),
       maximum_booking_window: text(appointmentSetup.maximum_booking_window, 500),
       booking_confirmation_mode: choice(appointmentSetup.booking_confirmation_mode, ["automatic", "manual_approval", "depends", ""], ""),
@@ -897,9 +887,6 @@ function buildAppointmentSystemPrompt(configuration) {
     "Esta configuración proviene del setup compartido aprobado por el cliente y Super Admin.",
     "No inventes disponibilidad, precios, sedes, políticas ni confirmaciones.",
     "No respondas temas de Customer Service fuera del alcance de agendamiento; deriva cuando aplique.",
-    "Durante la reserva conserva los datos ya entregados y pide únicamente los campos activos que todavía falten.",
-    "Nunca vuelvas a pedir un dato conocido. Los campos opcionales no bloquean la cita y los obligatorios sí.",
-    "Envía las respuestas de requisitos en booking_fields usando exactamente los IDs indicados en esta configuración.",
     "",
     "IDENTIDAD:",
     "- Empresa: " + (text(config.business_name, 120) || "No definida"),
@@ -921,7 +908,7 @@ function buildAppointmentSystemPrompt(configuration) {
     ["Quién atiende", config.staff_mode],
     ["Ubicaciones/modalidad", config.appointment_locations],
     ["Reglas de disponibilidad", config.availability_rules],
-    ["Datos antes de confirmar", compileBookingRequirements(config.booking_requirements)],
+    ["Datos obligatorios para reservar", config.required_booking_fields],
     ["Confirmación de reserva", config.booking_confirmation_mode],
     ["Cancelaciones y cambios", config.cancellation_policy],
     ["No-show", config.no_show_policy],
@@ -999,7 +986,6 @@ function normalizeAppointmentConfiguration(input, meta) {
     settings_synced_at: text(source.settings_synced_at, 40),
     settings_last_error: text(source.settings_last_error, 500),
     required_booking_fields: text(source.required_booking_fields, 4000),
-    booking_requirements: normalizeBookingRequirements(source.booking_requirements, source.required_booking_fields),
     minimum_booking_notice: text(source.minimum_booking_notice, 1200),
     maximum_booking_window: text(source.maximum_booking_window, 1200),
     booking_confirmation_mode: text(source.booking_confirmation_mode, 1200),
@@ -1084,7 +1070,6 @@ function generateAppointmentConfiguration(input, meta) {
     reminder_policy: appointment.reminder_policy,
     revision: appointment.revision,
     required_booking_fields: appointment.required_booking_fields,
-    booking_requirements: appointment.booking_requirements,
     minimum_booking_notice: appointment.minimum_booking_notice,
     maximum_booking_window: appointment.maximum_booking_window,
     booking_confirmation_mode: appointment.booking_confirmation_mode,

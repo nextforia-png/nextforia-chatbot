@@ -297,7 +297,6 @@ function appointmentToolPrompt() {
     "- Nunca vuelvas a pedir un dato ya entregado. Pregunta únicamente los campos obligatorios que todavía falten. Si el cliente corrige un dato, reemplaza el anterior.",
     "- Antes de reservar, resume los datos reunidos una sola vez para confirmación; no los solicites de nuevo.",
     "- Si una herramienta reporta un campo faltante, pide solamente ese campo.",
-    "- Envía los datos configurables a la herramienta de agendamiento dentro de booking_fields, usando exactamente el id indicado por la configuración del negocio.",
     "",
     "REGLAS OBLIGATORIAS DE HERRAMIENTAS:",
     "- Antes de ofrecer o confirmar un horario, usa la herramienta de disponibilidad.",
@@ -386,22 +385,17 @@ async function createElevenLabsAppointmentTools(tenantId, options) {
       ["starts_at", "duration_minutes"]
     ),
     appointmentWebhookToolConfig(
-      appointmentToolName("nextfor_book_appointment_v2", cleanTenant),
+      appointmentToolName("nextfor_book_appointment", cleanTenant),
       "Crea una cita confirmada en Nextfor y el calendario conectado después de comprobar disponibilidad y obtener consentimiento.",
       root + "/book?token=" + encodeURIComponent(token),
       Object.assign({}, dateProperties, {
         customer_name: { type: "string", description: "Nombre completo del cliente." },
         customer_phone: { type: "string", description: "Teléfono del cliente con código de país." },
         customer_email: { type: "string", description: "Correo del cliente si lo proporcionó." },
-        booking_fields: {
-          type: "object",
-          description: "Datos configurados por el negocio, indexados por su id exacto. Incluye campos estándar y preguntas personalizadas.",
-          additionalProperties: { type: "string" }
-        },
         consultation_reason: { type: "string", description: "Servicio o motivo de la cita." },
         data_processing_consent: { type: "boolean", description: "True solo si el cliente autorizó tratamiento de datos." }
       }),
-      ["starts_at", "duration_minutes", "consultation_reason", "data_processing_consent"]
+      ["starts_at", "duration_minutes", "customer_name", "consultation_reason", "data_processing_consent"]
     ),
     appointmentWebhookToolConfig(
       appointmentToolName("nextfor_cancel_appointment", cleanTenant),

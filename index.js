@@ -3168,6 +3168,28 @@ if (APPOINTMENT_REMINDERS_V1_ENABLED) {
   setTimeout(processDueAppointmentReminders, 2000);
 }
 
+async function recoverUpcomingAppointmentReminderSchedules() {
+  if (!APPOINTMENT_REMINDERS_V1_ENABLED || !SUPABASE_APPOINTMENTS_ENABLED) return;
+  try {
+    const appointments = await loadUpcomingAppointmentsForReminderWorker();
+    for (const appointment of appointments) {
+      await syncAppointmentReminderSchedule(appointment.tenant_id, appointment);
+    }
+    await processDueAppointmentReminders();
+    if (appointments.length) {
+      log("info", "appointment_reminder_schedules_recovered", { inspected: appointments.length });
+    }
+  } catch (error) {
+    log("warn", "appointment_reminder_schedule_recovery_failed", {
+      error: cleanRuntimeText(error && error.message, 240)
+    });
+  }
+}
+
+if (APPOINTMENT_REMINDERS_V1_ENABLED && SUPABASE_APPOINTMENTS_ENABLED) {
+  setTimeout(recoverUpcomingAppointmentReminderSchedules, 4000);
+}
+
 async function supabaseInsert(rec) {
   if (!SUPABASE_ENABLED) return;
   try {

@@ -9,6 +9,22 @@ const APPOINTMENT_STATUSES = new Set([
   "not_requested"
 ]);
 
+const APPOINTMENT_REMINDER_STATES = new Set([
+  "not_scheduled",
+  "programmed",
+  "sending",
+  "sent",
+  "delivered",
+  "read",
+  "confirmed",
+  "retrying",
+  "no_response",
+  "paused",
+  "failed",
+  "cancelled",
+  "blocked"
+]);
+
 function cleanText(value, max) {
   return String(value == null ? "" : value).trim().slice(0, max || 500);
 }
@@ -16,6 +32,62 @@ function cleanText(value, max) {
 function cleanStatus(value) {
   const status = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
   return APPOINTMENT_STATUSES.has(status) ? status : "not_requested";
+}
+
+function cleanReminderState(value) {
+  if (value && typeof value === "object") value = value.status || value.state || value.delivery_status;
+  const state = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  const aliases = {
+    scheduled: "programmed",
+    pending: "programmed",
+    queued: "programmed",
+    acknowledged: "confirmed",
+    canceled: "cancelled",
+    blocked_template: "blocked"
+  };
+  const normalized = aliases[state] || state;
+  return APPOINTMENT_REMINDER_STATES.has(normalized) ? normalized : "not_scheduled";
+}
+
+function cleanNonNegativeInteger(value, fallback) {
+  const number = Math.floor(Number(value));
+  return Number.isFinite(number) && number >= 0 ? number : (fallback == null ? 0 : fallback);
+}
+
+function normalizeReminderDelivery(input, index) {
+  input = input || {};
+  const status = cleanReminderState(input.status || input.delivery_status || input.state);
+  const normalized = {
+    id: cleanText(input.id || input.reminder_id, 160) || "delivery_" + String(index + 1),
+    channel: cleanText(input.channel, 40).toLowerCase(),
+    status,
+    attempt: cleanNonNegativeInteger(input.attempt != null ? input.attempt : input.attempts, 0)
+  };
+  const scheduledFor = validIsoDate(input.scheduled_for || input.scheduled_at);
+  if (scheduledFor) normalized.scheduled_for = scheduledFor;
+  const sentAt = validIsoDate(input.sent_at);
+  if (sentAt) normalized.sent_at = sentAt;
+  const deliveredAt = validIsoDate(input.delivered_at);
+  if (deliveredAt) normalized.delivered_at = deliveredAt;
+  const readAt = validIsoDate(input.read_at);
+  if (readAt) normalized.read_at = readAt;
+  const confirmedAt = validIsoDate(input.confirmed_at);
+  if (confirmedAt) normalized.confirmed_at = confirmedAt;
+  const providerMessageId = cleanText(input.provider_message_id, 300);
+  if (providerMessageId) normalized.provider_message_id = providerMessageId;
+  const lastError = cleanText(input.last_error || input.error, 800);
+  if (lastError) normalized.last_error = lastError;
+  return normalized;
+}
+
+function normalizeReminderDeliveries(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 50).map(normalizeReminderDelivery);
+}
+
+function appointmentIdFromInput(input) {
+  input = input || {};
+  return cleanText(input.appointment_id || input.id || input.conversation_id, 160);
 }
 
 function validIsoDate(value) {
@@ -65,8 +137,10 @@ function appointmentFromElevenLabsEvent(event, tenantId, now) {
   const collection = dataCollectionFromAnalysis(data.analysis);
   const createdAt = new Date((Number(event.event_timestamp) || Math.floor((now || Date.now()) / 1000)) * 1000).toISOString();
   const status = cleanStatus(analysisValue(collection, "appointment_status"));
+  const appointmentId = cleanText(analysisValue(collection, "appointment_id"), 160) || conversationId;
   return {
     tenant_id: cleanText(tenantId, 80),
+    appointment_id: appointmentId,
     conversation_id: conversationId,
     agent_id: agentId,
     status,
@@ -88,11 +162,16 @@ function appointmentFromElevenLabsEvent(event, tenantId, now) {
 function normalizeAppointment(input) {
   input = input || {};
   const conversationId = cleanText(input.conversation_id, 160);
+  const appointmentId = appointmentIdFromInput(input);
   const tenantId = cleanText(input.tenant_id, 80);
-  if (!conversationId || !tenantId) return null;
+  if (!appointmentId || !tenantId) return null;
   const normalized = {
     tenant_id: tenantId,
-    conversation_id: conversationId,
+    appointment_id: appointmentId,
+    // conversation_id is the historic appointment identifier. Keep it for
+    // persisted rows and callers that have not migrated yet, but never use it
+    // as the customer thread identifier.
+    conversation_id: conversationId || appointmentId,
     agent_id: cleanText(input.agent_id, 160),
     status: cleanStatus(input.status),
     starts_at: validIsoDate(input.starts_at),
@@ -108,6 +187,14 @@ function normalizeAppointment(input) {
     created_at: validIsoDate(input.created_at) || new Date().toISOString(),
     updated_at: validIsoDate(input.updated_at) || new Date().toISOString()
   };
+  const customerConversationId = cleanText(input.customer_conversation_id, 200);
+  if (customerConversationId) normalized.customer_conversation_id = customerConversationId;
+  if (Object.prototype.hasOwnProperty.call(input, "reminder_state")) {
+    normalized.reminder_state = cleanReminderState(input.reminder_state);
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "reminder_deliveries")) {
+    normalized.reminder_deliveries = normalizeReminderDeliveries(input.reminder_deliveries);
+  }
   const panelAction = validAppointmentAction(input.panel_action);
   if (panelAction) normalized.panel_action = panelAction;
   const panelActionStatus = cleanAppointmentActionStatus(input.panel_action_status);
@@ -140,7 +227,21 @@ class AppointmentRegistry {
   }
 
   key(row) {
-    return row.tenant_id + ":" + row.conversation_id;
+    return row.tenant_id + ":" + row.appointment_id;
+  }
+
+  get(tenantId, appointmentId) {
+    const cleanTenantId = cleanText(tenantId, 80);
+    const cleanAppointmentId = cleanText(appointmentId, 160);
+    if (!cleanTenantId || !cleanAppointmentId) return null;
+    const direct = this.rows.get(cleanTenantId + ":" + cleanAppointmentId);
+    if (direct) return direct;
+    // Compatibility for rows persisted before appointment_id existed. The
+    // fallback is tenant-scoped and only succeeds when it is unambiguous.
+    const legacy = this.list(cleanTenantId).filter(function (row) {
+      return row.conversation_id === cleanAppointmentId;
+    });
+    return legacy.length === 1 ? legacy[0] : null;
   }
 
   async upsert(input, persist) {
@@ -194,13 +295,12 @@ class AppointmentRegistry {
     return { tenant_id: tenantId, metrics, appointments: rows.slice(0, 200), upcoming: upcoming.slice(0, 50) };
   }
 
-  async applyPanelAction(tenantId, conversationId, action, options) {
+  async applyPanelAction(tenantId, appointmentId, action, options) {
     const cleanTenantId = cleanText(tenantId, 80);
-    const cleanConversationId = cleanText(conversationId, 160);
+    const cleanAppointmentId = cleanText(appointmentId, 160);
     const cleanAction = validAppointmentAction(action);
-    if (!cleanTenantId || !cleanConversationId || !cleanAction) throw new Error("invalid_appointment_action");
-    const key = cleanTenantId + ":" + cleanConversationId;
-    const existing = this.rows.get(key);
+    if (!cleanTenantId || !cleanAppointmentId || !cleanAction) throw new Error("invalid_appointment_action");
+    const existing = this.get(cleanTenantId, cleanAppointmentId);
     if (!existing) throw new Error("appointment_not_found");
     const now = new Date().toISOString();
     const statusByAction = { confirm: "booked", cancel: "cancelled", reprogram: "requested" };
@@ -226,8 +326,12 @@ class AppointmentRegistry {
 
 module.exports = {
   APPOINTMENT_STATUSES,
+  APPOINTMENT_REMINDER_STATES,
   AppointmentRegistry,
   appointmentFromElevenLabsEvent,
+  appointmentIdFromInput,
+  cleanReminderState,
   normalizeAppointment,
+  normalizeReminderDeliveries,
   validAppointmentAction
 };

@@ -99,5 +99,16 @@ module.exports = [
     bodyVariables: [
       { key: "customer_name", sample: "Camila" }
     ]
+  },
+  {
+    name: "appointment_reminder_nextfor",
+    category: "UTILITY",
+    language: "es_CO",
+    useCase: "Recordar una cita previamente solicitada y permitir que el cliente confirme o pida un cambio.",
+    bodyVariables: [
+      { key: "customer_name", sample: "María" },
+      { key: "service", sample: "consulta inicial" },
+      { key: "appointment_time", sample: "21 de agosto a las 10:00 a. m." }
+    ]
   }
 ];

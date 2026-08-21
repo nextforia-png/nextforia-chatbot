@@ -199,6 +199,15 @@ const { CommerceRegistry, createShopifyAdapter } = require("./commerce");
 const { cleanShopifyShop, createPairingToken, verifyPairingToken } = require("./commerce/pairing-token");
 const { AppointmentRegistry } = require("./appointments");
 const {
+  AppointmentOperationsError,
+  applyReminderAction,
+  appointmentSettingsFromOnboarding,
+  materializeAppointmentReminders,
+  normalizeReminder,
+  reminderSnapshot,
+  updateAppointmentSettings
+} = require("./appointment-operations");
+const {
   buildAppointmentIntegrations,
   parseAppointmentCalendarTenantMap
 } = require("./appointment-integrations");
@@ -401,7 +410,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v418-conversation-trash";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v419-appointment-module-enhancement";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -468,7 +477,12 @@ const SUPABASE_ENABLED = !!(SUPABASE_URL && SUPABASE_KEY);  // persistencia de c
 const SUPABASE_TENANT_COLUMNS_ENABLED = process.env.NODE_ENV === "production" ||
   process.env.SUPABASE_TENANT_COLUMNS_ENABLED === "1";
 const SUPABASE_APPOINTMENTS_TABLE = "appointments";
+const SUPABASE_APPOINTMENT_REMINDERS_TABLE = "appointment_reminders";
 const SUPABASE_APPOINTMENTS_ENABLED = SUPABASE_ENABLED && process.env.SUPABASE_APPOINTMENTS_ENABLED === "1";
+const APPOINTMENT_PANEL_V2_ENABLED = process.env.APPOINTMENT_PANEL_V2_ENABLED !== "0";
+const APPOINTMENT_REMINDERS_V1_ENABLED = process.env.APPOINTMENT_REMINDERS_V1_ENABLED !== "0";
+const APPOINTMENT_REMINDER_SENDS_ENABLED = process.env.APPOINTMENT_REMINDER_SENDS_ENABLED === "1";
+const APPOINTMENT_REMINDER_TEMPLATE_NAME = String(process.env.APPOINTMENT_REMINDER_TEMPLATE_NAME || "").trim();
 const APPOINTMENT_STORAGE_TEST_READY = process.env.NODE_ENV === "test" &&
   process.env.APPOINTMENT_STORAGE_TEST_READY === "1";
 const appointmentStorageHealth = { checked_at: 0, ready: false, error: "not_checked" };
@@ -623,6 +637,8 @@ const MICROSOFT_CALENDAR_CLIENT_ID = String(process.env.MICROSOFT_CALENDAR_CLIEN
 const MICROSOFT_CALENDAR_CLIENT_SECRET = String(process.env.MICROSOFT_CALENDAR_CLIENT_SECRET || "").trim();
 const APPOINTMENT_CALENDAR_TENANT_MAP = parseAppointmentCalendarTenantMap(process.env);
 const appointmentRegistry = new AppointmentRegistry();
+const appointmentReminderMemory = new Map();
+let appointmentReminderProcessing = false;
 const WA_TOKEN = process.env.WA_TOKEN;
 const TENANT_CONFIG = createTenantConfig(process.env);
 const DEFAULT_TENANT_ID = TENANT_CONFIG.id;
@@ -2668,7 +2684,9 @@ async function persistAppointment(row) {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
   const payload = {
     tenant_id: row.tenant_id,
+    appointment_id: row.appointment_id || row.conversation_id,
     conversation_id: row.conversation_id,
+    customer_conversation_id: row.customer_conversation_id || null,
     agent_id: row.agent_id || null,
     status: row.status,
     starts_at: row.starts_at,
@@ -2677,7 +2695,7 @@ async function persistAppointment(row) {
     updated_at: row.updated_at
   };
   await axios.post(
-    SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE + "?on_conflict=tenant_id,conversation_id",
+    SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE + "?on_conflict=tenant_id,appointment_id",
     payload,
     { headers: Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS), timeout: 8000 }
   );
@@ -2735,6 +2753,327 @@ async function appointmentsStorageReady(force) {
     ).slice(0, 240);
   }
   return appointmentStorageHealth.ready;
+}
+
+function appointmentReminderMemoryKey(row) {
+  return cleanTenantId(row && row.tenant_id) + ":" + String(row && (row.id || row.reminder_key) || "");
+}
+
+function appointmentReminderDbPayload(row) {
+  const normalized = normalizeReminder(row);
+  const metadata = Object.assign({}, row && row.metadata || {}, {
+    customer_name: cleanRuntimeText(row && row.customer_name, 160),
+    service: cleanRuntimeText(row && (row.service || row.consultation_reason), 500),
+    appointment_starts_at: row && row.appointment_starts_at || null
+  });
+  const payload = {
+    tenant_id: normalized.tenant_id,
+    appointment_id: normalized.appointment_id,
+    reminder_key: cleanRuntimeText(row && (row.dedupe_key || row.reminder_key || row.id), 500),
+    conversation_id: normalized.conversation_id || null,
+    channel: normalized.channel,
+    offset_minutes: normalized.offset_minutes,
+    scheduled_for: normalized.scheduled_for,
+    status: normalized.status,
+    attempts: normalized.attempts,
+    provider_message_id: cleanRuntimeText(row && row.provider_message_id, 500) || null,
+    sent_at: row && row.sent_at || null,
+    delivered_at: row && row.delivered_at || null,
+    read_at: row && row.read_at || null,
+    confirmed_at: row && row.confirmed_at || null,
+    last_action: cleanRuntimeText(row && row.last_action, 80) || null,
+    last_action_by: cleanRuntimeText(row && row.last_action_by, 200) || null,
+    last_action_at: row && row.last_action_at || null,
+    last_error: cleanRuntimeText(row && row.last_error, 1000) || null,
+    metadata,
+    updated_at: row && row.updated_at || new Date().toISOString()
+  };
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(String(row && row.id || ""))) payload.id = row.id;
+  return payload;
+}
+
+function appointmentReminderFromStored(row) {
+  const metadata = row && row.metadata || {};
+  return normalizeReminder(Object.assign({}, row, {
+    customer_name: metadata.customer_name || "",
+    service: metadata.service || "",
+    appointment_starts_at: metadata.appointment_starts_at || null,
+    dedupe_key: row && row.reminder_key
+  }));
+}
+
+async function loadAppointmentRemindersForTenant(tenantId) {
+  const cleanTenant = cleanTenantId(tenantId);
+  if (!cleanTenant || !APPOINTMENT_REMINDERS_V1_ENABLED) return [];
+  if (SUPABASE_APPOINTMENTS_ENABLED) {
+    try {
+      const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENT_REMINDERS_TABLE, {
+        params: { select: "*", tenant_id: "eq." + cleanTenant, order: "scheduled_for.asc", limit: 1000 },
+        headers: SB_HEADERS,
+        timeout: 8000
+      });
+      return (response.data || []).map(appointmentReminderFromStored);
+    } catch (error) {
+      log("warn", "appointment_reminders_load_failed", {
+        tenant_id: cleanTenant,
+        error: cleanRuntimeText(error && error.message, 240)
+      });
+    }
+  }
+  return Array.from(appointmentReminderMemory.values()).filter(function (row) {
+    return row.tenant_id === cleanTenant;
+  });
+}
+
+async function persistAppointmentReminders(rows) {
+  const records = (rows || []).map(function (row) {
+    const normalized = normalizeReminder(row);
+    appointmentReminderMemory.set(appointmentReminderMemoryKey(normalized), normalized);
+    return appointmentReminderDbPayload(Object.assign({}, row, normalized));
+  }).filter(function (row) { return row.tenant_id && row.appointment_id && row.reminder_key; });
+  if (!records.length || !SUPABASE_APPOINTMENTS_ENABLED) return records;
+  await axios.post(
+    SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENT_REMINDERS_TABLE + "?on_conflict=tenant_id,reminder_key",
+    records,
+    { headers: Object.assign({ Prefer: "resolution=merge-duplicates,return=minimal" }, SB_HEADERS), timeout: 8000 }
+  );
+  return records;
+}
+
+async function recordAppointmentReminderDeliveryStatus(tenantId, providerMessageId, status) {
+  const messageId = cleanRuntimeText(providerMessageId, 500);
+  const state = cleanRuntimeText(status, 40).toLowerCase();
+  if (!messageId || !["sent", "delivered", "read", "failed"].includes(state)) return false;
+  const rows = await loadAppointmentRemindersForTenant(tenantId);
+  const reminder = rows.find(function (row) { return row.provider_message_id === messageId; });
+  if (!reminder) return false;
+  const now = new Date().toISOString();
+  const update = Object.assign({}, reminder, {
+    status: state,
+    delivered_at: state === "delivered" || state === "read" ? (reminder.delivered_at || now) : reminder.delivered_at,
+    read_at: state === "read" ? now : reminder.read_at,
+    last_error: state === "failed" ? "provider_delivery_failed" : null,
+    updated_at: now
+  });
+  await persistAppointmentReminders([update]);
+  return true;
+}
+
+function appointmentReminderReplyConfirms(message) {
+  const normalized = String(message || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  return /^(si( confirmo)?|confirmo|confirmado|confirmada|de acuerdo|ok|okay|listo|claro|ahi estare|voy a asistir)$/.test(normalized);
+}
+
+async function recordAppointmentReminderCustomerReply(tenantId, conversationId, message) {
+  const cleanTenant = cleanTenantId(tenantId);
+  const cleanConversation = normalizeConversationUserId(conversationId);
+  if (!cleanTenant || !cleanConversation || !APPOINTMENT_REMINDERS_V1_ENABLED) return false;
+  const rows = await loadAppointmentRemindersForTenant(cleanTenant);
+  const candidates = rows.filter(function (row) {
+    return row.conversation_id === cleanConversation && ["sent", "delivered", "read"].includes(row.status);
+  }).sort(function (left, right) {
+    return String(right.sent_at || right.updated_at || "").localeCompare(String(left.sent_at || left.updated_at || ""));
+  });
+  if (!candidates.length) return false;
+  const now = new Date().toISOString();
+  const target = candidates[0];
+  const confirmed = appointmentReminderReplyConfirms(message);
+  const updates = rows.filter(function (row) {
+    return row.appointment_id === target.appointment_id &&
+      (row.id === target.id || confirmed && ["scheduled", "paused", "retrying", "failed"].includes(row.status));
+  }).map(function (row) {
+    if (row.id === target.id) {
+      return Object.assign({}, row, {
+        status: confirmed ? "confirmed" : "read",
+        read_at: row.read_at || now,
+        confirmed_at: confirmed ? now : row.confirmed_at,
+        last_action: confirmed ? "customer_confirmed" : "customer_replied",
+        last_action_by: "customer",
+        last_action_at: now,
+        updated_at: now
+      });
+    }
+    return Object.assign({}, row, {
+      status: "cancelled",
+      last_action: "appointment_confirmed",
+      last_action_by: "customer",
+      last_action_at: now,
+      updated_at: now
+    });
+  });
+  await persistAppointmentReminders(updates);
+  return confirmed ? "confirmed" : "replied";
+}
+
+async function refreshAppointmentRemindersForTenant(tenantId, settings, appointments) {
+  if (!APPOINTMENT_REMINDERS_V1_ENABLED) return [];
+  const existing = await loadAppointmentRemindersForTenant(tenantId);
+  const byAppointment = new Map();
+  existing.forEach(function (row) {
+    const key = String(row.appointment_id || "");
+    if (!byAppointment.has(key)) byAppointment.set(key, []);
+    byAppointment.get(key).push(row);
+  });
+  const materialized = [];
+  (appointments || []).forEach(function (appointment) {
+    const generated = materializeAppointmentReminders(
+      appointment,
+      settings,
+      byAppointment.get(String(appointment.appointment_id || appointment.conversation_id)) || [],
+      { now: new Date().toISOString() }
+    );
+    generated.forEach(function (row) {
+      materialized.push(Object.assign({}, row, {
+        customer_name: appointment.customer_name,
+        service: appointment.consultation_reason,
+        appointment_starts_at: appointment.starts_at
+      }));
+    });
+  });
+  await persistAppointmentReminders(materialized);
+  return loadAppointmentRemindersForTenant(tenantId);
+}
+
+async function syncAppointmentReminderSchedule(tenantId, appointment) {
+  if (!APPOINTMENT_REMINDERS_V1_ENABLED || !appointment) return [];
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const settings = appointmentSettingsFromOnboarding(onboarding);
+  const existing = await loadAppointmentRemindersForTenant(tenantId);
+  const generated = materializeAppointmentReminders(appointment, settings, existing, {
+    now: new Date().toISOString()
+  }).map(function (row) {
+    return Object.assign({}, row, {
+      customer_name: appointment.customer_name,
+      service: appointment.consultation_reason,
+      appointment_starts_at: appointment.starts_at
+    });
+  });
+  await persistAppointmentReminders(generated);
+  return generated;
+}
+
+function appointmentReminderMessage(row, appointment) {
+  const name = cleanRuntimeText(row && row.customer_name || appointment && appointment.customer_name, 80);
+  const service = cleanRuntimeText(row && row.service || appointment && appointment.consultation_reason || "tu cita", 180);
+  const startsAt = new Date(appointment && appointment.starts_at || row && row.appointment_starts_at);
+  const when = Number.isFinite(startsAt.getTime())
+    ? startsAt.toLocaleString("es-CO", { timeZone: "America/Bogota", weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" })
+    : "el horario acordado";
+  return "Hola" + (name ? " " + name.split(/\s+/)[0] : "") + " 👋 Te recordamos " + service + " para " + when + ". Responde a este mensaje para confirmar o pedir un cambio.";
+}
+
+async function deliverAppointmentReminder(row, appointment) {
+  const recipient = cleanRuntimeText(row && row.conversation_id || appointment && appointment.customer_conversation_id, 500) ||
+    (row && row.channel === "whatsapp" ? cleanRuntimeText(appointment && appointment.customer_phone, 80) : "");
+  if (!recipient) throw new Error("appointment_reminder_recipient_missing");
+  const message = appointmentReminderMessage(row, appointment);
+  if (row.channel === "whatsapp" && APPOINTMENT_REMINDER_TEMPLATE_NAME) {
+    const result = await sendTemplate(recipient, APPOINTMENT_REMINDER_TEMPLATE_NAME, {
+      customer_name: cleanRuntimeText(row.customer_name || appointment && appointment.customer_name, 80) || "Cliente",
+      service: cleanRuntimeText(row.service || appointment && appointment.consultation_reason, 180) || "tu cita",
+      appointment_time: cleanRuntimeText(appointment && appointment.starts_at, 80)
+    }, { tenant_id: row.tenant_id });
+    if (!result || result.ok !== true) throw new Error("appointment_reminder_template_failed");
+    return result.meta && result.meta.messages && result.meta.messages[0] && result.meta.messages[0].id || "";
+  }
+  await sendText(recipient, message, { tenant_id: row.tenant_id, human_agent: false });
+  return "";
+}
+
+async function sendAppointmentReminderRecord(row, actor) {
+  const tenantId = cleanTenantId(row && row.tenant_id);
+  await hydrateAppointmentsForTenant(tenantId);
+  const appointment = appointmentRegistry.get(tenantId, row && row.appointment_id);
+  if (!appointment) throw new AppointmentOperationsError("appointment_not_found", 404);
+  if (!APPOINTMENT_REMINDER_SENDS_ENABLED) {
+    throw new AppointmentOperationsError("appointment_reminder_sends_disabled", 503);
+  }
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const policy = appointmentSettingsFromOnboarding(onboarding).reminder_policy;
+  const attempts = row.status === "sending" ? Number(row.attempts) || 1 : (Number(row.attempts) || 0) + 1;
+  const sending = Object.assign({}, row, {
+    status: "sending",
+    attempts,
+    last_action: "sending",
+    last_action_by: actor,
+    last_action_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+  await persistAppointmentReminders([sending]);
+  try {
+    const providerMessageId = await deliverAppointmentReminder(sending, appointment);
+    const sent = Object.assign({}, sending, {
+      status: "sent",
+      provider_message_id: providerMessageId || null,
+      sent_at: new Date().toISOString(),
+      last_action: "sent",
+      last_action_by: actor,
+      last_action_at: new Date().toISOString(),
+      last_error: null,
+      updated_at: new Date().toISOString()
+    });
+    await persistAppointmentReminders([sent]);
+    return sent;
+  } catch (error) {
+    const exhausted = attempts >= (Number(policy.max_attempts) || 2);
+    const failed = Object.assign({}, sending, {
+      status: exhausted ? "no_response" : "retrying",
+      scheduled_for: exhausted ? sending.scheduled_for : new Date(Date.now() + (Number(policy.retry_after_minutes) || 120) * 60000).toISOString(),
+      last_error: cleanRuntimeText(error && error.message, 1000),
+      last_action: "send_failed",
+      last_action_by: actor,
+      last_action_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    await persistAppointmentReminders([failed]);
+    if (failed.status === "no_response" && policy.handoff_on_no_response !== false && failed.conversation_id) {
+      await customerNotificationService.createHandoff({
+        id: "appointment-reminder:" + failed.id,
+        tenant_id: tenantId,
+        conversation_id: failed.conversation_id,
+        channel: failed.channel === "whatsapp" ? "whatsapp" : conversationChannel(failed.conversation_id),
+        customer_label: failed.customer_name || appointment.customer_name || "Un cliente",
+        reason: "appointment_reminder_no_response",
+        title: "Una cita necesita tu ayuda",
+        message: "No pudimos confirmar esta cita automáticamente. Abre la conversación para continuar."
+      });
+    }
+    throw error;
+  }
+}
+
+async function processDueAppointmentReminders() {
+  if (!APPOINTMENT_REMINDER_SENDS_ENABLED || !SUPABASE_APPOINTMENTS_ENABLED || appointmentReminderProcessing) return;
+  appointmentReminderProcessing = true;
+  try {
+    const response = await axios.post(
+      SUPABASE_URL + "/rest/v1/rpc/claim_due_appointment_reminders",
+      { p_limit: 20, p_worker_id: "nextfor-" + process.pid },
+      { headers: SB_HEADERS, timeout: 8000 }
+    );
+    for (const stored of response.data || []) {
+      const row = appointmentReminderFromStored(stored);
+      try { await sendAppointmentReminderRecord(row, "appointment-reminder-worker"); }
+      catch (error) {
+        log("warn", "appointment_reminder_send_failed", {
+          tenant_id: row.tenant_id,
+          reminder_id: row.id,
+          error: cleanRuntimeText(error && error.message, 240)
+        });
+      }
+    }
+  } catch (error) {
+    log("warn", "appointment_reminder_worker_failed", { error: cleanRuntimeText(error && error.message, 240) });
+  } finally {
+    appointmentReminderProcessing = false;
+  }
+}
+
+if (APPOINTMENT_REMINDERS_V1_ENABLED) {
+  const appointmentReminderTimer = setInterval(processDueAppointmentReminders, 60000);
+  if (appointmentReminderTimer.unref) appointmentReminderTimer.unref();
+  setTimeout(processDueAppointmentReminders, 2000);
 }
 
 async function supabaseInsert(rec) {
@@ -6301,6 +6640,36 @@ async function executeCheckAppointmentAvailability(tenantId, input, actor) {
       date_context: { current_time_utc: new Date().toISOString() }
     };
   }
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const appointmentSettings = appointmentSettingsFromOnboarding(onboarding);
+  const configuredTimeZone = cleanRuntimeText(
+    onboarding && onboarding.appointment_configuration && onboarding.appointment_configuration.time_zone,
+    120
+  ) || "America/Bogota";
+  let requestedBusinessDate;
+  try {
+    requestedBusinessDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: configuredTimeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(parsed);
+  } catch (_) {
+    requestedBusinessDate = parsed.toISOString().slice(0, 10);
+  }
+  const blockingException = appointmentSettings.schedule_exceptions.find(function (row) {
+    return row.active !== false && row.date === requestedBusinessDate;
+  });
+  if (blockingException) {
+    return {
+      ok: false,
+      available: false,
+      error: "appointment_date_exception",
+      date: requestedBusinessDate,
+      mode: blockingException.mode,
+      reason: blockingException.note || "Este día no está disponible según las reglas del negocio."
+    };
+  }
   const result = await appointmentCalendarService.checkAvailability(tenantId, parsed.toISOString(), durationMinutes, actor);
   let timeZone = cleanRuntimeText(result && result.primary_time_zone, 120) || "America/Bogota";
   let requestedLabel;
@@ -6349,14 +6718,18 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     return { ok: false, error: "invalid_appointment_datetime" };
   }
   const durationMinutes = Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
-  const availability = await appointmentCalendarService.checkAvailability(
-    tenantId,
-    startsAt.toISOString(),
-    durationMinutes,
-    actor
-  );
-  if (!availability.available) {
-    return { ok: false, error: "appointment_slot_unavailable", busy: availability.busy };
+  const availability = await executeCheckAppointmentAvailability(tenantId, {
+    starts_at: startsAt.toISOString(),
+    duration_minutes: durationMinutes
+  }, actor);
+  if (!availability.ok || !availability.available) {
+    return {
+      ok: false,
+      error: availability.error || "appointment_slot_unavailable",
+      busy: availability.busy,
+      reason: availability.reason,
+      date: availability.date
+    };
   }
   const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
   const appointmentProfile = profilePatchFromAppointment({
@@ -6370,13 +6743,18 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
       source: "appointment_booking"
     });
   }
-  const conversationId = "chat_" + crypto.createHash("sha256")
+  const appointmentId = "appt_" + crypto.createHash("sha256")
     .update([tenantId, userId, startsAt.toISOString(), cleanRuntimeText(input && input.consultation_reason, 1000)].join("|"))
     .digest("hex")
     .slice(0, 32);
+  const customerConversationId = bookingChannel === "voice"
+    ? ""
+    : normalizeConversationUserId(userId);
   let row = await appointmentRegistry.upsert({
     tenant_id: tenantId,
-    conversation_id: conversationId,
+    appointment_id: appointmentId,
+    conversation_id: appointmentId,
+    customer_conversation_id: customerConversationId,
     agent_id: "nextfor-appointment-chat",
     status: "booked",
     starts_at: startsAt.toISOString(),
@@ -6401,9 +6779,10 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     }), false);
   }
   await persistAppointment(row);
+  await syncAppointmentReminderSchedule(tenantId, row);
   return {
     ok: row.status === "booked" && row.calendar_sync_status === "synced",
-    appointment_id: row.conversation_id,
+    appointment_id: row.appointment_id,
     status: row.status,
     starts_at: row.starts_at,
     duration_minutes: row.duration_minutes,
@@ -6541,6 +6920,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     return;
   }
   trackIncomingMessage(userId);
+  recordAppointmentReminderCustomerReply(tenantId, userId, userMessage).catch(function (error) {
+    log("warn", "appointment_reminder_reply_tracking_failed", {
+      tenant_id: tenantId,
+      error: cleanRuntimeText(error && error.message, 240)
+    });
+  });
   const previousActivityAt = conversationLastActiveAt.get(stateKey) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
   conversationLastActiveAt.set(stateKey, Date.now());
@@ -7358,6 +7743,7 @@ async function processWhatsAppStatusInboxEvent(value, status, inboxRow) {
     throw missingRecipient;
   }
   const state = cleanRuntimeText(status && status.status, 80).toLowerCase();
+  await recordAppointmentReminderDeliveryStatus(destination.tenantId, status && status.id, state);
   const eventId = cleanRuntimeText(inboxRow && inboxRow.event_id, 500);
   const errors = Array.isArray(status && status.errors) ? status.errors : [];
   const errorCodes = errors.reduce(function (codes, error) {
@@ -8159,7 +8545,7 @@ async function resolveAppointmentForTool(tenantId, input) {
     return ["booked", "requested", "rescheduled"].includes(row.status);
   });
   if (appointmentId) {
-    const exact = rows.find(function (row) { return row.conversation_id === appointmentId; });
+    const exact = appointmentRegistry.get(tenantId, appointmentId);
     if (!exact) {
       const error = new Error("appointment_not_found");
       error.status = 404;
@@ -8202,15 +8588,16 @@ async function receiveElevenLabsAppointmentCancellationTool(req, res) {
     const current = await resolveAppointmentForTool(context.tenantId, body);
     const cancelled = await appointmentRegistry.applyPanelAction(
       context.tenantId,
-      current.conversation_id,
+      current.appointment_id,
       "cancel",
       { actor: "elevenlabs_tool", reason: body.reason, persist: false }
     );
     const synced = await applyAppointmentCalendarEffect(cancelled, "cancel", "elevenlabs_tool");
     await persistAppointment(synced);
+    await syncAppointmentReminderSchedule(context.tenantId, synced);
     res.json({
       ok: synced.calendar_sync_status === "synced",
-      appointment_id: synced.conversation_id,
+      appointment_id: synced.appointment_id,
       status: synced.status,
       calendar_sync_status: synced.calendar_sync_status || "pending",
       error: synced.calendar_sync_status === "synced" ? undefined : synced.calendar_last_error || "calendar_sync_pending"
@@ -8239,14 +8626,18 @@ async function receiveElevenLabsAppointmentReschedulingTool(req, res) {
       res.status(422).json({ ok: false, error: "invalid_appointment_datetime" });
       return;
     }
-    const availability = await appointmentCalendarService.checkAvailability(
-      context.tenantId,
-      newStartsAt.toISOString(),
-      durationMinutes,
-      "elevenlabs_tool"
-    );
-    if (!availability.available) {
-      res.status(422).json({ ok: false, error: "appointment_slot_unavailable", busy: availability.busy });
+    const availability = await executeCheckAppointmentAvailability(context.tenantId, {
+      starts_at: newStartsAt.toISOString(),
+      duration_minutes: durationMinutes
+    }, "elevenlabs_tool");
+    if (!availability.ok || !availability.available) {
+      res.status(422).json({
+        ok: false,
+        error: availability.error || "appointment_slot_unavailable",
+        busy: availability.busy,
+        reason: availability.reason,
+        date: availability.date
+      });
       return;
     }
     const changed = await appointmentRegistry.upsert(Object.assign({}, current, {
@@ -8263,9 +8654,10 @@ async function receiveElevenLabsAppointmentReschedulingTool(req, res) {
     }), false);
     const synced = await applyAppointmentCalendarEffect(changed, "sync", "elevenlabs_tool");
     await persistAppointment(synced);
+    await syncAppointmentReminderSchedule(context.tenantId, synced);
     res.json({
       ok: synced.calendar_sync_status === "synced",
-      appointment_id: synced.conversation_id,
+      appointment_id: synced.appointment_id,
       status: synced.status,
       starts_at: synced.starts_at,
       duration_minutes: synced.duration_minutes,
@@ -8307,13 +8699,16 @@ async function receiveElevenLabsPostCallWebhook(req, res) {
     if (appointment && ["booked", "rescheduled"].includes(appointment.status) && appointment.starts_at) {
       appointment = await applyAppointmentCalendarEffect(appointment, "sync", "elevenlabs_post_call");
     }
-    if (appointment) await persistAppointment(appointment);
+    if (appointment) {
+      await persistAppointment(appointment);
+      await syncAppointmentReminderSchedule(tenantId, appointment);
+    }
     await recordBotOpsEvent({
       tenant_id: tenantId,
       bot_id: "appointments",
       channel: "voice",
       event_type: "appointment_result",
-      source_id: appointment && appointment.conversation_id || cleanRuntimeText(event.data && event.data.conversation_id, 500),
+      source_id: appointment && appointment.appointment_id || cleanRuntimeText(event.data && event.data.conversation_id, 500),
       occurred_at: new Date().toISOString(),
       payload: {
         ok: !!appointment,
@@ -8321,7 +8716,12 @@ async function receiveElevenLabsPostCallWebhook(req, res) {
         status: appointment && appointment.status || "no_appointment_created"
       }
     });
-    res.json({ ok: true, tenant_id: tenantId, conversation_id: appointment && appointment.conversation_id || null });
+    res.json({
+      ok: true,
+      tenant_id: tenantId,
+      appointment_id: appointment && appointment.appointment_id || null,
+      conversation_id: appointment && appointment.customer_conversation_id || null
+    });
   } catch (error) {
     if (verifiedEvent) {
       await recordBotOpsEvent({
@@ -17557,6 +17957,246 @@ app.post("/admin/panel/orders/action", async (req, res) => {
   }
 });
 
+function publicAppointmentSettings(settings, configuration) {
+  return {
+    version: settings.version,
+    revision: settings.revision,
+    rules: settings.scheduling_rules,
+    scheduling_rules: settings.scheduling_rules,
+    exceptions: settings.schedule_exceptions,
+    schedule_exceptions: settings.schedule_exceptions,
+    reminder_policy: settings.reminder_policy,
+    availability_rules: settings.availability_rules,
+    timezone: cleanRuntimeText(configuration && configuration.time_zone, 120) || "America/Bogota",
+    sync_status: cleanRuntimeText(configuration && configuration.settings_sync_status, 80) || "applied",
+    synced_at: configuration && configuration.settings_synced_at || null,
+    last_sync_error: cleanRuntimeText(configuration && configuration.settings_last_error, 500) || "",
+    updated_at: settings.updated_at,
+    updated_by: settings.updated_by
+  };
+}
+
+function appointmentReminderMetrics(snapshot) {
+  const items = snapshot && snapshot.items || [];
+  const byAppointment = new Map();
+  items.forEach(function (row) {
+    const appointmentId = cleanRuntimeText(row && row.appointment_id, 160);
+    if (!appointmentId) return;
+    if (!byAppointment.has(appointmentId)) byAppointment.set(appointmentId, []);
+    byAppointment.get(appointmentId).push(row);
+  });
+  const resolved = Array.from(byAppointment.values()).filter(function (rows) {
+    return rows.some(function (row) { return ["sent", "delivered", "read", "confirmed", "no_response"].includes(row.status); });
+  });
+  const confirmed = resolved.filter(function (rows) {
+    return rows.some(function (row) { return row.status === "confirmed"; });
+  }).length;
+  const avoided = Array.from(byAppointment.values()).filter(function (rows) {
+    return rows.some(function (row) { return row && row.metadata && row.metadata.avoided_absence === true; });
+  }).length;
+  return {
+    confirmation_rate: resolved.length ? Math.round(confirmed / resolved.length * 100) : 0,
+    avoided_absences: avoided,
+    sent_reminders: snapshot && snapshot.sent_count || 0
+  };
+}
+
+function appointmentDateInTimezone(value, timezone) {
+  const parsed = new Date(value || "");
+  if (!Number.isFinite(parsed.getTime())) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: cleanRuntimeText(timezone, 100) || "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(parsed).reduce(function (result, part) {
+      result[part.type] = part.value;
+      return result;
+    }, {});
+    return [parts.year, parts.month, parts.day].join("-");
+  } catch (_) {
+    return parsed.toISOString().slice(0, 10);
+  }
+}
+
+async function createAppointmentExceptionWorkflows(tenantId, settings, actor) {
+  const dates = new Set((settings.schedule_exceptions || []).filter(function (row) {
+    return row.active !== false && row.mode === "reschedule" && row.date;
+  }).map(function (row) { return row.date; }));
+  if (!dates.size) return [];
+  await hydrateAppointmentsForTenant(tenantId);
+  const affected = appointmentRegistry.list(tenantId).filter(function (appointment) {
+    return ["booked", "rescheduled"].includes(appointment.status) &&
+      dates.has(appointmentDateInTimezone(appointment.starts_at, settings.timezone));
+  });
+  const updated = [];
+  for (const appointment of affected) {
+    const row = await appointmentRegistry.applyPanelAction(tenantId, appointment.appointment_id, "reprogram", {
+      actor,
+      reason: "Excepción de agenda creada desde el Customer Panel",
+      message: "Esta cita requiere acordar una nueva fecha con el cliente.",
+      persist: false
+    });
+    await persistAppointment(row);
+    await syncAppointmentReminderSchedule(tenantId, row);
+    if (row.customer_conversation_id) {
+      try {
+        await customerNotificationService.createHandoff({
+          id: "appointment-exception:" + row.appointment_id + ":" + appointmentDateInTimezone(row.starts_at, settings.timezone),
+          tenant_id: tenantId,
+          conversation_id: row.customer_conversation_id,
+          channel: row.channel === "whatsapp" ? "whatsapp" : conversationChannel(row.customer_conversation_id),
+          customer_label: row.customer_name || "Un cliente",
+          reason: "appointment_schedule_exception",
+          title: "Una cita necesita nueva fecha",
+          message: "Cerraste este día en tu agenda. Abre la conversación para acordar una nueva fecha."
+        });
+      } catch (error) {
+        log("warn", "appointment_exception_notification_failed", {
+          tenant_id: tenantId,
+          appointment_id: row.appointment_id,
+          error: cleanRuntimeText(error && error.message, 240)
+        });
+      }
+    }
+    updated.push(row.appointment_id);
+  }
+  return updated;
+}
+
+async function appointmentSettingsRecordForTenant(tenantId) {
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const settings = appointmentSettingsFromOnboarding(onboarding);
+  return { onboarding, settings };
+}
+
+async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
+  const current = await appointmentSettingsRecordForTenant(tenantId);
+  const body = input && typeof input === "object" ? input : {};
+  const patch = body.settings && typeof body.settings === "object" ? body.settings : body;
+  const expectedRevision = body.revision != null ? body.revision : patch.revision;
+  const actor = auth && (auth.email || auth.username || auth.name) || "customer_panel";
+  const settingsPatch = {};
+  if (Object.prototype.hasOwnProperty.call(patch, "rules") || Object.prototype.hasOwnProperty.call(patch, "scheduling_rules")) {
+    settingsPatch.scheduling_rules = Object.prototype.hasOwnProperty.call(patch, "rules") ? patch.rules : patch.scheduling_rules;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "exceptions") || Object.prototype.hasOwnProperty.call(patch, "schedule_exceptions")) {
+    settingsPatch.schedule_exceptions = Object.prototype.hasOwnProperty.call(patch, "exceptions") ? patch.exceptions : patch.schedule_exceptions;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "reminder_policy")) settingsPatch.reminder_policy = patch.reminder_policy;
+  const updated = updateAppointmentSettings(current.settings, settingsPatch, { expectedRevision, actor });
+  const previous = current.onboarding;
+  const answers = JSON.parse(JSON.stringify(previous.answers || {}));
+  answers.appointment_setup = Object.assign({}, answers.appointment_setup || {}, {
+    availability_rules: updated.availability_rules,
+    scheduling_rules: updated.scheduling_rules,
+    schedule_exceptions: updated.schedule_exceptions,
+    reminder_policy: updated.reminder_policy,
+    revision: updated.revision,
+    reminder_channel: updated.reminder_policy.channel || "none",
+    reminder_timing: updated.reminder_policy.offsets_minutes
+  });
+  let configuration = normalizeAppointmentConfiguration(Object.assign({}, previous.appointment_configuration || {}, {
+    availability_rules: updated.availability_rules,
+    scheduling_rules: updated.scheduling_rules,
+    schedule_exceptions: updated.schedule_exceptions,
+    reminder_policy: updated.reminder_policy,
+    revision: updated.revision,
+    reminder_channel: updated.reminder_policy.channel || "none",
+    reminder_timing: updated.reminder_policy.offsets_minutes.map(function (minutes) { return Math.round(minutes / 60) + " h antes"; }).join(" y "),
+    settings_sync_status: "pending_external_apply",
+    settings_synced_at: "",
+    settings_last_error: ""
+  }), {
+    actor,
+    lifecycle: previous.appointment_configuration && previous.appointment_configuration.lifecycle || "draft"
+  });
+  if (configuration.external_agent_id && ELEVENLABS_APPOINTMENT_AGENT_WRITE_ENABLED) {
+    try {
+      const applied = await applyElevenLabsAppointmentAgent({
+        tenant_id: tenantId,
+        answers,
+        appointment_configuration: configuration
+      }, tenantId, {
+        apiKey: ELEVENLABS_API_KEY,
+        agentId: configuration.external_agent_id,
+        agentTenantMap: ELEVENLABS_AGENT_TENANT_MAP,
+        toolSecret: ELEVENLABS_APPOINTMENT_TOOL_SECRET,
+        toolBaseUrl: ELEVENLABS_APPOINTMENT_TOOL_BASE_URL,
+        writeEnabled: true,
+        httpClient: axios
+      });
+      configuration = normalizeAppointmentConfiguration(Object.assign(
+        {},
+        markAppointmentConfigurationElevenLabsApplied(configuration, applied, actor),
+        { settings_sync_status: "applied", settings_synced_at: new Date().toISOString(), settings_last_error: "" }
+      ), { actor, lifecycle: configuration.lifecycle });
+    } catch (error) {
+      configuration = normalizeAppointmentConfiguration(Object.assign({}, configuration, {
+        settings_sync_status: "failed",
+        settings_last_error: cleanRuntimeText(error && error.message, 500)
+      }), { actor, lifecycle: configuration.lifecycle });
+    }
+  }
+  const record = createOnboardingRecord(answers, {
+    tenant_id: tenantId,
+    status: previous.status || "completed",
+    updated_by: actor,
+    previous,
+    customer_service_configuration: previous.customer_service_configuration || null,
+    appointment_configuration: configuration,
+    configuration_lifecycle: previous.customer_service_configuration && previous.customer_service_configuration.lifecycle,
+    appointment_configuration_lifecycle: configuration.lifecycle,
+    review_status: setupReviewSummary(previous).status,
+    review_actor: actor,
+    review_note: setupReviewSummary(previous).note,
+    requested_changes: setupReviewSummary(previous).requested_changes,
+    review_event: { action: "appointment_settings_updated", note: "Reglas de agenda actualizadas desde Customer Panel." }
+  });
+  await appendClientOnboardingRecord(record, tenantId);
+  const savedSettings = appointmentSettingsFromOnboarding(record);
+  const affectedAppointments = await createAppointmentExceptionWorkflows(tenantId, Object.assign({}, savedSettings, {
+    timezone: cleanRuntimeText(record.appointment_configuration && record.appointment_configuration.time_zone, 120) || "America/Bogota"
+  }), actor);
+  return { record, settings: savedSettings, affectedAppointments };
+}
+
+app.get("/admin/panel/appointment-settings", async (req, res) => {
+  if (!customerPanelAuthOk(req, "viewer")) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  if (!customerBusinessHasAppointmentModule(business)) return res.status(403).json({ ok: false, error: "module_not_contracted" });
+  const current = await appointmentSettingsRecordForTenant(tenantId);
+  res.json({
+    ok: true,
+    settings: publicAppointmentSettings(current.settings, current.onboarding.appointment_configuration),
+    revision: current.settings.revision,
+    can_edit: customerPanelAuthOk(req, "admin")
+  });
+});
+
+app.put("/admin/panel/appointment-settings", async (req, res) => {
+  if (!customerPanelAuthOk(req, "admin")) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  if (!customerBusinessHasAppointmentModule(business)) return res.status(403).json({ ok: false, error: "module_not_contracted" });
+  try {
+    const saved = await saveAppointmentSettingsForTenant(tenantId, req.body || {}, auth);
+    res.json({
+      ok: true,
+      settings: publicAppointmentSettings(saved.settings, saved.record.appointment_configuration),
+      revision: saved.settings.revision,
+      affected_appointments: saved.affectedAppointments
+    });
+  } catch (error) {
+    const status = error instanceof AppointmentOperationsError ? error.status : 500;
+    res.status(status).json({ ok: false, error: error.code || "appointment_settings_save_failed", details: error.details || null });
+  }
+});
+
 app.get("/admin/panel/appointments-data", async (req, res) => {
   if (!customerPanelAuthOk(req, "viewer")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -17576,14 +18216,31 @@ app.get("/admin/panel/appointments-data", async (req, res) => {
   const snapshot = appointmentRegistry.snapshot(tenantId);
   snapshot.source = persistent ? "supabase" : "memory";
   const onboarding = await loadClientOnboarding(false, tenantId);
+  const settings = appointmentSettingsFromOnboarding(onboarding);
+  const reminders = APPOINTMENT_PANEL_V2_ENABLED
+    ? await refreshAppointmentRemindersForTenant(tenantId, settings, snapshot.appointments)
+    : [];
+  const reminderData = reminderSnapshot(reminders, { tenantId });
+  const capabilities = customerPanelCapabilities(auth.role);
   const channels = await setupReviewChannels(tenantId).catch(function () { return []; });
-  res.json(Object.assign(customerAppointmentSnapshot(snapshot, business), {
-    integrations: await appointmentIntegrationsForRecord(onboarding, tenantId, channels)
+  const responsePayload = customerAppointmentSnapshot(snapshot, business);
+  responsePayload.metrics = Object.assign({}, responsePayload.metrics, appointmentReminderMetrics(reminderData));
+  res.json(Object.assign(responsePayload, {
+    integrations: await appointmentIntegrationsForRecord(onboarding, tenantId, channels),
+    settings: publicAppointmentSettings(settings, onboarding.appointment_configuration),
+    reminders: reminderData.items,
+    reminder_metrics: reminderData,
+    capabilities: {
+      manage_appointments: capabilities.intervene,
+      manage_settings: capabilities.configure_bot,
+      manage_reminders: capabilities.intervene,
+      send_reminders: capabilities.intervene && APPOINTMENT_REMINDER_SENDS_ENABLED
+    }
   }));
 });
 
 app.post("/admin/panel/appointments/action", async (req, res) => {
-  if (!customerPanelAuthOk(req, "admin")) {
+  if (!customerPanelAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
@@ -17610,7 +18267,7 @@ app.post("/admin/panel/appointments/action", async (req, res) => {
     return;
   }
   await hydrateAppointmentsForTenant(tenantId);
-  const existingIds = new Set(appointmentRegistry.list(tenantId).map(function (row) { return row.conversation_id; }));
+  const existingIds = new Set(appointmentRegistry.list(tenantId).map(function (row) { return row.appointment_id; }));
   const missingId = appointmentIds.find(function (appointmentId) { return !existingIds.has(appointmentId); });
   if (missingId) {
     res.status(404).json({ ok: false, error: "appointment_not_found" });
@@ -17632,18 +18289,63 @@ app.post("/admin/panel/appointments/action", async (req, res) => {
           ? await applyAppointmentCalendarEffect(row, "cancel", actor)
           : row;
       await persistAppointment(calendarRow);
+      await syncAppointmentReminderSchedule(tenantId, calendarRow);
       updated.push(calendarRow);
     }
     const snapshot = appointmentRegistry.snapshot(tenantId);
-    res.json(Object.assign(customerAppointmentSnapshot(snapshot, business), {
+    const onboarding = await loadClientOnboarding(false, tenantId);
+    const settings = appointmentSettingsFromOnboarding(onboarding);
+    const reminders = await refreshAppointmentRemindersForTenant(tenantId, settings, snapshot.appointments);
+    const reminderData = reminderSnapshot(reminders, { tenantId });
+    const responsePayload = customerAppointmentSnapshot(snapshot, business);
+    responsePayload.metrics = Object.assign({}, responsePayload.metrics, appointmentReminderMetrics(reminderData));
+    res.json(Object.assign(responsePayload, {
       ok: true,
       action,
       updated_count: updated.length,
-      updated_appointments: updated.map(function (row) { return row.conversation_id; })
+      updated_appointments: updated.map(function (row) { return row.appointment_id; }),
+      settings: publicAppointmentSettings(settings, onboarding.appointment_configuration),
+      reminders: reminderData.items,
+      reminder_metrics: reminderData,
+      capabilities: {
+        manage_appointments: true,
+        manage_settings: customerPanelAuthOk(req, "admin"),
+        manage_reminders: true,
+        send_reminders: APPOINTMENT_REMINDER_SENDS_ENABLED
+      }
     }));
   } catch (error) {
     const status = error.message === "appointment_not_found" ? 404 : 400;
     res.status(status).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/admin/panel/appointment-reminders/:reminderId/action", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  if (!customerBusinessHasAppointmentModule(business)) return res.status(403).json({ ok: false, error: "module_not_contracted" });
+  try {
+    const rows = await loadAppointmentRemindersForTenant(tenantId);
+    const reminder = rows.find(function (row) { return String(row.id) === String(req.params.reminderId); });
+    if (!reminder) throw new AppointmentOperationsError("appointment_reminder_not_found", 404);
+    const actor = auth.email || auth.username || auth.name || "customer_panel";
+    let updated = applyReminderAction(reminder, req.body && req.body.action, { tenantId, actor });
+    updated = Object.assign({}, reminder, updated, { attempts: Number(reminder.attempts) || 0 });
+    await persistAppointmentReminders([updated]);
+    if (["send_now", "retry"].includes(String(req.body && req.body.action || ""))) {
+      updated = await sendAppointmentReminderRecord(updated, actor);
+    }
+    const current = await loadAppointmentRemindersForTenant(tenantId);
+    const snapshot = reminderSnapshot(current, { tenantId });
+    res.json({ ok: true, reminder: updated, reminders: snapshot.items, reminder_metrics: snapshot });
+  } catch (error) {
+    const status = error instanceof AppointmentOperationsError ? error.status : Number(error && error.status) || 502;
+    res.status(status).json({
+      ok: false,
+      error: error.code || cleanRuntimeText(error && error.message, 120) || "appointment_reminder_action_failed"
+    });
   }
 });
 
@@ -18597,6 +19299,11 @@ app.get("/admin/panel-demo", (req, res) => {
   const capabilities = customerPanelCapabilities("admin");
   capabilities.manage_notes_tags = false;
   const initialTab = ["summary", "conversations", "human", "orders", "appointments", "plan", "channels", "setup", "notifications", "retargeting"].includes(req.query.tab) ? req.query.tab : "summary";
+  const demoPlan = String(req.query.plan || "").trim().toLowerCase();
+  const appointmentDemo = demoPlan === "tempo" || demoPlan === "atlas";
+  const supportDemo = demoPlan !== "tempo";
+  const planId = demoPlan === "tempo" ? "nextfor-tempo" : demoPlan === "atlas" ? "nextfor-atlas" : "nextfor-aura";
+  const planName = demoPlan === "tempo" ? "Nextfor Tempo" : demoPlan === "atlas" ? "Nextfor Atlas" : "Nextfor Aura";
   renderCustomerPanel(res, {
     auth,
     capabilities,
@@ -18604,14 +19311,14 @@ app.get("/admin/panel-demo", (req, res) => {
     initialTab,
     initialOrder: String(req.query.order || "").trim().slice(0, 120),
     tenantContext: {
-      id: "nextfor-aura-demo",
+      id: "nextfor-" + (demoPlan || "aura") + "-demo",
       company_name: "Comercio piloto",
-      plan_id: "nextfor-aura",
-      plan_name: "Nextfor Aura",
-      assigned_bot_id: "customer-service",
-      assigned_bot_name: "Atención al cliente",
-      support: true,
-      appointments: false
+      plan_id: planId,
+      plan_name: planName,
+      assigned_bot_id: demoPlan === "atlas" ? "both" : appointmentDemo ? "agendamiento" : "customer-service",
+      assigned_bot_name: demoPlan === "atlas" ? "Atención al cliente + Agendamiento" : appointmentDemo ? "Agendamiento de citas" : "Atención al cliente",
+      support: supportDemo,
+      appointments: appointmentDemo
     },
     customerSetupCompleted: true,
     dataPath: "/admin/panel/demo-data",

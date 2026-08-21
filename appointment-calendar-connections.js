@@ -412,7 +412,8 @@ class GoogleCalendarProvider {
       extendedProperties: {
         private: {
           nextfor_tenant_id: cleanTenantId(appointment && appointment.tenant_id),
-          nextfor_conversation_id: cleanText(appointment && appointment.conversation_id, 160)
+          nextfor_appointment_id: cleanText(appointment && (appointment.appointment_id || appointment.conversation_id), 160),
+          nextfor_conversation_id: cleanText(appointment && appointment.customer_conversation_id, 200)
         }
       }
     };
@@ -683,7 +684,7 @@ class MicrosoftCalendarProvider {
     if (!response) {
       body.transactionId = crypto.createHash("sha256").update([
         cleanTenantId(appointment && appointment.tenant_id),
-        cleanText(appointment && appointment.conversation_id, 160),
+        cleanText(appointment && (appointment.appointment_id || appointment.conversation_id), 160),
         cleanText(appointment && appointment.starts_at, 80)
       ].join(":"), "utf8").digest("hex").slice(0, 64);
       response = await this.axios.post(base, body, this.requestOptions(token));

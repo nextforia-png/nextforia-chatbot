@@ -91,6 +91,18 @@ assert(atlas.includes('id="nav-orders"'));
 assert(atlas.includes("Oportunidades de venta"));
 assert(atlas.includes('<strong>Atención al cliente</strong><span>Chatbot 24/7</span>'));
 assert(atlas.includes('<strong>Agendamiento</strong><span>Citas y recordatorios</span>'));
+assert(atlas.includes("Cómo agendar"));
+assert(atlas.includes('id="mnav-appointment-reminders"'));
+assert(atlas.includes("openAppointmentConversations()"));
+
+const tempoInbox = render({
+  initialTab: "conversations",
+  tenantContext: { id: "tenant-tempo", company_name: "Empresa Tempo", plan_id: "nextfor-tempo", assigned_bot_id: "agendamiento", status: "live" }
+});
+assert(tempoInbox.includes('INITIAL_TAB="conversations"'), "un tenant de citas puede abrir el inbox compartido");
+assert(tempoInbox.includes('id="panel-inbox"'));
+assert(tempoInbox.includes('id="nav-appointment-conversations"'));
+assert(!tempoInbox.includes('id="nav-orders"'));
 
 const escaped = render({
   tenantContext: { id: "unsafe", company_name: "<script>alert(1)</script>", plan_id: "nextfor-aura", assigned_bot_id: "atencion-cliente" }

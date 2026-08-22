@@ -16,7 +16,10 @@ const {
 
 assert.strictEqual(detectAtlasIntent("Quiero agendar una cita para mañana").intent, ROUTES.APPOINTMENTS);
 assert.strictEqual(detectAtlasIntent("Necesito cambiar mi cita").intent, ROUTES.APPOINTMENTS);
+assert.strictEqual(detectAtlasIntent("Asesoría inicial").intent, ROUTES.APPOINTMENTS);
+assert.strictEqual(detectAtlasIntent("Quiero una reunión comercial").intent, ROUTES.APPOINTMENTS);
 assert.strictEqual(detectAtlasIntent("¿Dónde está mi pedido?").intent, ROUTES.CUSTOMER_SERVICE);
+assert.strictEqual(detectAtlasIntent("Quiero hablar con un asesor").intent, ROUTES.CUSTOMER_SERVICE);
 assert.strictEqual(detectAtlasIntent("Hola, necesito ayuda").intent, null);
 assert.strictEqual(
   detectAtlasIntent("Quiero cambiar mi cita y revisar el estado de mi pedido").intent,
@@ -35,6 +38,21 @@ assert.strictEqual(turn.reply, null);
 turn = coordinateAtlasTurn("Sí, mañana en la tarde", { active_route: ROUTES.APPOINTMENTS });
 assert.strictEqual(turn.route, ROUTES.APPOINTMENTS, "an ambiguous follow-up must remain with Appointment");
 assert.strictEqual(turn.reason, "continue_active_route");
+
+turn = coordinateAtlasTurn("Asesoría inicial", { active_route: ROUTES.APPOINTMENTS });
+assert.strictEqual(turn.route, ROUTES.APPOINTMENTS, "an appointment service name must not switch to Customer Service");
+
+let tempoState = {};
+[
+  "Hola, quiero programar una cita de prueba para Nextfor",
+  "Asesoría inicial",
+  "Santiago Consultorio Médico, lunes a las 8:00am",
+  "Videollamada"
+].forEach(function (message) {
+  const decision = coordinateAtlasTurn(message, tempoState);
+  assert.strictEqual(decision.route, ROUTES.APPOINTMENTS, "the real Tempo flow must stay in Appointment for: " + message);
+  tempoState = { active_route: decision.active_route };
+});
 
 turn = coordinateAtlasTurn("Ahora quiero saber dónde va mi pedido", { active_route: ROUTES.APPOINTMENTS });
 assert.strictEqual(turn.route, ROUTES.CUSTOMER_SERVICE, "an explicit new need must switch bots");

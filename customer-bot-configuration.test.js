@@ -40,6 +40,8 @@ assert(configurationUi.clientScript.includes('document.addEventListener("click",
 assert(configurationUi.clientScript.includes('Escribe la instrucción primero o activa el método'));
 assert(configurationUi.clientScript.includes('document.addEventListener("pointerdown",function(event){var control='));
 assert(configurationUi.clientScript.includes('appointment_business_rule_'));
+assert(configurationUi.clientScript.includes('nxServiceDepositCheckbox'));
+assert(configurationUi.clientScript.includes('nxUpgradeAppointmentDepositControls'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));

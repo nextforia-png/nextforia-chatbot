@@ -43,6 +43,7 @@ assert(configurationUi.clientScript.includes('appointment_business_rule_'));
 assert(configurationUi.clientScript.includes('nxServiceDepositCheckbox'));
 assert(configurationUi.clientScript.includes('nxUpgradeAppointmentDepositControls'));
 assert(configurationUi.clientScript.includes('nxSetAppointmentServiceDepositFromCheckbox'));
+assert(configurationUi.clientScript.includes('data-nx-service-id'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));

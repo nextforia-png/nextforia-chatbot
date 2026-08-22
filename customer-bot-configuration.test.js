@@ -36,6 +36,8 @@ assert(configurationUi.clientScript.includes("result.applied!==true"));
 assert(configurationUi.clientScript.includes("Cambios aplicados al bot"));
 assert(configurationUi.clientScript.includes('typeof payload.can_edit==="boolean"'));
 assert(configurationUi.clientScript.includes('payload&&typeof payload.can_edit==="boolean"?payload.can_edit:state.personalityCanEdit===true'));
+assert(configurationUi.clientScript.includes('document.addEventListener("click",function(event){var target=event.target'));
+assert(configurationUi.clientScript.includes('Escribe la instrucción primero o activa el método'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));

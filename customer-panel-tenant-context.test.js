@@ -92,6 +92,8 @@ assert(atlas.includes("Oportunidades de venta"));
 assert(atlas.includes('<strong>Atención al cliente</strong><span>Chatbot 24/7</span>'));
 assert(atlas.includes('<strong>Agendamiento</strong><span>Citas y recordatorios</span>'));
 assert(atlas.includes("Configuración"));
+assert(atlas.includes("Cómo agendar"));
+assert(!atlas.includes('<span>Config.</span>'));
 assert(atlas.includes('id="mnav-appointment-reminders"'));
 assert(atlas.includes('id="mnav-appointment-settings"'));
 assert(atlas.includes("openAppointmentConversations()"));

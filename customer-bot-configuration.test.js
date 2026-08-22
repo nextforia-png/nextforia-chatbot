@@ -12,6 +12,15 @@ assert(configurationUi.markup.includes("siguiente respuesta del bot"));
 assert(configurationUi.styles.includes("@media(max-width:860px)"));
 assert(configurationUi.clientScript.includes('["shipping","Datos para un envío","Con Aura o Atlas"]'));
 assert(configurationUi.clientScript.includes('["reminders","Recordatorio de cita o reserva","Con Tempo o Atlas"]'));
+assert(configurationUi.clientScript.includes('["appointment_requirements","Datos para confirmar una cita","Con Tempo o Atlas"]'));
+assert(configurationUi.clientScript.includes('/admin/panel/appointment-settings'));
+assert(configurationUi.clientScript.includes('settings:{booking_requirements:state.nxAppointmentRequirements}'));
+assert(configurationUi.clientScript.includes('PANEL_CONTEXT.appointments'));
+assert(configurationUi.clientScript.includes('Nombre completo'));
+assert(configurationUi.clientScript.includes('Documento de identidad'));
+assert(configurationUi.clientScript.includes('Pregunta personalizada'));
+assert(configurationUi.clientScript.includes('Obligatorio'));
+assert(configurationUi.clientScript.includes('Opcional'));
 assert(configurationUi.clientScript.includes("¿Cómo cobras el envío?"));
 assert(configurationUi.clientScript.includes("shipping.flat_fee_cop"));
 assert(configurationUi.clientScript.includes("shipping.free_over_cop"));
@@ -72,6 +81,15 @@ assert(auraHtml.includes("Bot aplicado · WhatsApp no actualizado"));
 assert(auraHtml.includes("loadBotSetup();loadBotPersonality(false)"));
 assert(auraHtml.includes("Versión v-config-test"));
 assert(!auraHtml.includes(">RAV Toys<"));
+
+const tempoHtml = render("admin", {
+  id: "tenant-tempo",
+  company_name: "Empresa Tempo",
+  plan_id: "nextfor-tempo",
+  assigned_bot_id: "agendamiento"
+});
+assert(tempoHtml.includes("Datos para confirmar una cita"));
+assert(tempoHtml.includes('/admin/panel/appointment-settings'));
 
 const viewerHtml = render("viewer", {
   id: "tenant-b",

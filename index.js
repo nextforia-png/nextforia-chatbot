@@ -162,6 +162,10 @@ const {
   normalizeTimeZone: normalizeAppointmentTimeZone
 } = require("./appointment-runtime-context");
 const {
+  appointmentReplyRepairMessage,
+  validateAppointmentReply
+} = require("./appointment-response-policy");
+const {
   buildBotPersonalityPrompt,
   maxTokensForPersonality,
   normalizeBotPersonality,
@@ -190,6 +194,7 @@ const {
   routeStateFromTurns: atlasRouteStateFromTurns
 } = require("./atlas-coordinator");
 const conversationTurnContext = require("./conversation-turn-context");
+const { conversationHistoryFromTurns } = require("./conversation-history");
 const {
   RetargetingEngine,
   REAL_SENDS_ENABLED: RETARGETING_REAL_SENDS_ENABLED,
@@ -5163,6 +5168,9 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "REGLAS OPERATIVAS DEL CANAL DE CITAS:",
   "- Trata la conversación como un formulario acumulativo: conserva cada dato que el cliente ya entregó.",
   "- Nunca vuelvas a pedir nombre, teléfono, correo, servicio, fecha, hora o consentimiento si ya están confirmados. Pregunta solo el campo obligatorio que falte.",
+  "- Responde de forma breve y natural. Haz como máximo una pregunta clara por mensaje y no descargues listas largas de servicios o requisitos salvo que el cliente las pida.",
+  "- Si el cliente entrega varios datos en un mensaje, reconócelos y avanza; no los conviertas en un cuestionario repetido.",
+  "- Si el cliente corrige la fecha, conserva la hora, servicio y demás datos ya entregados, excepto lo que corrigió explícitamente.",
   "- Sigue la lista de requisitos del negocio: los obligatorios bloquean la reserva y los opcionales no. Guarda sus respuestas en booking_fields usando el ID configurado.",
   "- En WhatsApp usa el número del canal como teléfono de contacto; no lo preguntes de nuevo salvo que el cliente quiera usar otro.",
   "- Antes de reservar resume una sola vez los datos reunidos y pide confirmación; no los solicites nuevamente.",
@@ -7200,6 +7208,45 @@ function rememberAtlasRoutingDecision(stateKey, decision) {
   return state;
 }
 
+async function restoreConversationHistoryFromPersistence(userId, tenantId, stateKey, sourceEventId) {
+  if (conversations.has(stateKey) || !SUPABASE_ENABLED) return { restored: false, messages: 0, lastActivityAt: 0 };
+  try {
+    const rows = await supabaseFetchUserRecent(
+      userId,
+      Math.max(24, MAX_CONVERSATION_HISTORY * 3),
+      tenantId
+    );
+    const turns = (Array.isArray(rows) ? rows : []).map(function (row) {
+      return normalizeTurnRow(row);
+    });
+    const restored = conversationHistoryFromTurns(turns, {
+      now: Date.now(),
+      ttlMs: CONVERSATION_SESSION_TIMEOUT_MS,
+      maxMessages: MAX_CONVERSATION_HISTORY,
+      clearTool: CUSTOMER_CONVERSATION_CLEAR_TOOL,
+      excludeSourceEventId: sourceEventId,
+      isInternalTurn: isInternalAdminTurn
+    });
+    if (!restored.messages.length) return { restored: false, messages: 0, lastActivityAt: 0 };
+    conversations.set(stateKey, restored.messages);
+    conversationLastActiveAt.set(stateKey, restored.lastActivityAt);
+    log("info", "conversation_history_restored", {
+      tenant_id: cleanTenantId(tenantId),
+      channel: conversationChannel(userId),
+      messages: restored.messages.length,
+      age_seconds: Math.max(0, Math.round((Date.now() - restored.lastActivityAt) / 1000))
+    });
+    return { restored: true, messages: restored.messages.length, lastActivityAt: restored.lastActivityAt };
+  } catch (error) {
+    log("warn", "conversation_history_restore_failed", {
+      tenant_id: cleanTenantId(tenantId),
+      channel: conversationChannel(userId),
+      error: cleanRuntimeText(error && error.message, 160)
+    });
+    return { restored: false, messages: 0, lastActivityAt: 0 };
+  }
+}
+
 // ─── MAIN CONVERSATION LOOP ──────────────────────────────────────────────────
 
 function acceptInboundMessageRate(userId, now) {
@@ -7289,6 +7336,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       error: cleanRuntimeText(error && error.message, 240)
     });
   });
+  await restoreConversationHistoryFromPersistence(
+    userId,
+    tenantId,
+    stateKey,
+    conversationRuntime.sourceEventId || conversationRuntime.source_event_id
+  );
   const previousActivityAt = conversationLastActiveAt.get(stateKey) || 0;
   const newSession = !previousActivityAt || Date.now() - previousActivityAt >= CONVERSATION_SESSION_TIMEOUT_MS;
   conversationLastActiveAt.set(stateKey, Date.now());
@@ -7564,6 +7617,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
 
   let searchedThisTurn = false;
   let lastSearchResultsThisTurn = null;
+  const successfulAppointmentTools = new Set();
   for (let iteration = 0; iteration < 8; iteration++) {
     try {
       const cachedPrompt = applyAnthropicCachePolicy({
@@ -7725,6 +7779,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
             console.error(`Tool ${toolUse.name} error:`, e.message);
             result = { error: e.message };
           }
+          if (toolUse.name === "check_appointment_availability" && result && (result.ok === true || typeof result.available === "boolean")) {
+            successfulAppointmentTools.add("check_appointment_availability");
+          }
+          if (toolUse.name === "book_appointment" && result && result.ok === true && result.status === "booked" && result.calendar_sync_status === "synced") {
+            successfulAppointmentTools.add("book_appointment");
+          }
           customerMemory = evolveAndPersistCustomerMemory(userId, customerMemory, {
             userMessage,
             toolName: toolUse.name,
@@ -7774,7 +7834,24 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       }
 
       const textBlock = content.find(c => c.type === "text");
-      const reply = textBlock ? textBlock.text.trim() : "";
+      let reply = textBlock ? textBlock.text.trim() : "";
+      const appointmentReplyPolicy = routeUsesAppointmentBot
+        ? validateAppointmentReply(reply, Array.from(successfulAppointmentTools), { now: Date.now() })
+        : { ok: true };
+      if (!appointmentReplyPolicy.ok && iteration < 7) {
+        log("warn", "appointment_reply_blocked", {
+          tenant_id: tenantId,
+          channel: conversationRuntime.channel,
+          reason: appointmentReplyPolicy.reason,
+          required_tool: appointmentReplyPolicy.requiredTool
+        });
+        workingHistory.push({ role: "assistant", content: reply || "(sin texto)" });
+        workingHistory.push({ role: "user", content: appointmentReplyRepairMessage(appointmentReplyPolicy) });
+        continue;
+      }
+      if (!appointmentReplyPolicy.ok) {
+        reply = "Aún no he confirmado la cita porque debo validar el horario en el calendario. Conservé los datos que ya me diste; responde “continúa” y lo intentaré de nuevo sin pedirlos otra vez.";
+      }
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
       const replySent = await sendBotReply(reply);

@@ -20,7 +20,8 @@ const APPOINTMENT_PATTERNS = [
   /\b(?:agend(?:a|ar|amiento|o|é)|program(?:ar|ación)|reprogram(?:ar|ación)|calendarizar)\b/i,
   /\b(?:cancelar|cambiar|mover|confirmar)\b.{0,36}\b(?:cita|reserva|turno)\b/i,
   /\b(?:disponibilidad|horarios? disponibles?|cupos?)\b.{0,48}\b(?:consulta|servicio|cita|reserva|turno)?\b/i,
-  /\b(?:consulta|valoración|sesión)\b.{0,32}\b(?:médica|médico|clínica|terapia|servicio)\b/i
+  /\b(?:consulta|valoración|sesión)\b.{0,32}\b(?:médica|médico|clínica|terapia|servicio)\b/i,
+  /\b(?:demostración|demostracion|asesoría inicial|asesoria inicial|reunión comercial|reunion comercial|sesión de configuración|sesion de configuracion|reunión de seguimiento|reunion de seguimiento)\b/i
 ];
 
 const CUSTOMER_SERVICE_PATTERNS = [
@@ -28,7 +29,8 @@ const CUSTOMER_SERVICE_PATTERNS = [
   /\b(?:pedido|pedidos|orden|órdenes|envío|envios|entrega|despacho|rastreo|guía|guia)\b/i,
   /\b(?:pago|pagos|factura|garantía|garantia|devolución|devolucion|reclamo)\b/i,
   /\b(?:cambio|cambiar)\b.{0,24}\b(?:producto|talla|pedido|compra)\b/i,
-  /\b(?:soporte|servicio al cliente|atención al cliente|atencion al cliente|asesor|asesora|humano)\b/i,
+  /\b(?:soporte|servicio al cliente|atención al cliente|atencion al cliente|humano)\b/i,
+  /\b(?:hablar|comunicarme|contactar|pasar|comunicar)\b.{0,24}\b(?:con\s+)?(?:un\s+|una\s+)?asesor(?:a)?\b/i,
   /\b(?:stock|inventario|tienda|sucursal|local)\b/i
 ];
 

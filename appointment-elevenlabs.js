@@ -295,6 +295,8 @@ function appointmentToolPrompt() {
     "- Nunca adivines el mes, la fecha ni el día de la semana. Para cualquier horario solicitado, usa la herramienta de disponibilidad y repite exactamente la fecha normalizada que devuelve.",
     "- Trata toda la conversación como un solo formulario acumulativo: conserva cada dato que el cliente ya entregó, incluso si dio varios en un mismo mensaje.",
     "- Nunca vuelvas a pedir un dato ya entregado. Pregunta únicamente los campos obligatorios que todavía falten. Si el cliente corrige un dato, reemplaza el anterior.",
+    "- Responde de forma breve y natural. Haz como máximo una pregunta clara por turno y evita listas largas salvo que el cliente las solicite.",
+    "- Si el cliente corrige la fecha, conserva la hora, el servicio y los demás datos ya entregados, excepto el dato corregido.",
     "- Antes de reservar, resume los datos reunidos una sola vez para confirmación; no los solicites de nuevo.",
     "- Si una herramienta reporta un campo faltante, pide solamente ese campo.",
     "- Envía los datos configurables a la herramienta de agendamiento dentro de booking_fields, usando exactamente el id indicado por la configuración del negocio.",

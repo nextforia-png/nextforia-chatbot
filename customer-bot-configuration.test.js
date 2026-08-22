@@ -35,6 +35,7 @@ assert(configurationUi.clientScript.includes("nxConfigSaveSequence+=1"));
 assert(configurationUi.clientScript.includes("result.applied!==true"));
 assert(configurationUi.clientScript.includes("Cambios aplicados al bot"));
 assert(configurationUi.clientScript.includes('typeof payload.can_edit==="boolean"'));
+assert(configurationUi.clientScript.includes('payload&&typeof payload.can_edit==="boolean"?payload.can_edit:state.personalityCanEdit===true'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));

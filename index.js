@@ -210,13 +210,13 @@ const {
   AppointmentOperationsError,
   applyReminderAction,
   appointmentSettingsFromOnboarding,
-  compileDepositPolicy,
+  compileAppointmentServices,
   evaluateScheduleException,
   materializeAppointmentReminders,
   normalizeReminder,
   reminderSnapshot,
   updateAppointmentSettings,
-  validateDepositPolicy,
+  findAppointmentService,
   validateBookingRequirements
 } = require("./appointment-operations");
 const {
@@ -422,7 +422,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v428-appointment-deposits";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v429-appointment-service-rules";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5127,6 +5127,9 @@ const APPOINTMENT_TOOLS = [
           description: "Respuestas de los requisitos configurados por el negocio, usando exactamente el ID de cada campo.",
           additionalProperties: { type: "string" }
         },
+        service_id: { type: "string", description: "ID exacto del servicio configurado por este tenant." },
+        appointment_modality: { type: "string", enum: ["in_person", "virtual"], description: "Modalidad elegida por el cliente cuando el servicio ofrece ambas." },
+        deposit_payment_method_id: { type: "string", description: "ID del método de anticipo elegido, cuando ese servicio exige anticipo." },
         deposit_status: {
           type: "string",
           enum: ["not_required", "pending", "customer_reported_paid", "verified"],
@@ -5183,7 +5186,7 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "- Antes de reservar resume una sola vez los datos reunidos y pide confirmación; no los solicites nuevamente.",
   "- Para consultar un horario usa check_appointment_availability.",
   "- Antes de reservar confirma fecha/hora, consentimiento de datos y todos los requisitos obligatorios configurados.",
-  "- Si este tenant exige anticipo, comunica primero el monto y los métodos configurados. Nunca inventes datos de pago ni confirmes la cita solo porque el cliente dice que pagó.",
+  "- Sigue las reglas del servicio elegido: duración, precio, modalidad y, si aplica, anticipo y sus instrucciones de pago. Nunca inventes datos de pago ni confirmes la cita solo porque el cliente dice que pagó.",
   "- Usa book_appointment únicamente después de que el cliente confirme explícitamente.",
   "- Si el calendario no está conectado o una herramienta falla, no inventes disponibilidad: ofrece apoyo humano.",
   "- Informa que la cita quedó confirmada solo cuando book_appointment responda status=booked y calendar_sync_status=synced."
@@ -5194,14 +5197,14 @@ function buildAppointmentRequirementsContext(onboarding) {
   const requirements = (settings.booking_requirements || []).filter(function (row) {
     return row && row.active !== false;
   });
-  const depositContext = compileDepositPolicy(settings.deposit_policy);
+  const servicesContext = compileAppointmentServices(settings.appointment_services);
   if (!requirements.length) {
     return [
       "REQUISITOS ACTIVOS PARA RESERVAR:",
       "- Este tenant no configuró campos personales adicionales. Fecha, hora y consentimiento siguen siendo necesarios.",
       "- Si faltan fecha, hora o consentimiento, pregunta solo el dato faltante.",
       "",
-      depositContext
+      servicesContext
     ].join("\n");
   }
   const lines = [
@@ -5214,7 +5217,7 @@ function buildAppointmentRequirementsContext(onboarding) {
   requirements.forEach(function (row) {
     lines.push("- " + row.id + " (" + row.label + "): " + (row.required ? "OBLIGATORIO" : "opcional") + ". Pregunta: " + row.question);
   });
-  lines.push("", depositContext);
+  lines.push("", servicesContext);
   return lines.join("\n").slice(0, 6000);
 }
 
@@ -7072,28 +7075,48 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   const onboarding = await loadClientOnboarding(false, tenantId);
   const appointmentSettings = appointmentSettingsFromOnboarding(onboarding);
   const bookingRequirements = appointmentSettings.booking_requirements;
-  const depositCheck = validateDepositPolicy(appointmentSettings.deposit_policy);
-  if (!depositCheck.ok) {
+  const serviceMatch = findAppointmentService(appointmentSettings.appointment_services, input && input.service_id, input && input.consultation_reason);
+  if (!serviceMatch.ok) {
     return {
       ok: false,
-      error: "deposit_policy_invalid",
-      message: "El negocio debe completar la configuración de anticipo antes de confirmar citas.",
-      deposit_policy: depositCheck.policy
+      error: "appointment_service_required",
+      message: "Elige primero uno de los servicios configurados antes de confirmar.",
+      available_services: serviceMatch.services.map(function (service) { return { id: service.id, name: service.name }; })
     };
   }
-  if (depositCheck.policy.required && String(input && input.deposit_status || "").toLowerCase() !== "verified") {
+  const selectedService = serviceMatch.service;
+  const requestedModality = String(input && input.appointment_modality || "").toLowerCase();
+  const selectedModality = selectedService && (selectedService.modality === "both"
+    ? requestedModality
+    : selectedService.modality);
+  if (selectedService && selectedService.modality === "both" && !["in_person", "virtual"].includes(selectedModality)) {
+    return {
+      ok: false,
+      error: "appointment_modality_required",
+      message: "El cliente debe elegir si desea la cita presencial o virtual.",
+      available_modalities: ["in_person", "virtual"]
+    };
+  }
+  if (selectedService && selectedService.modality !== "both" && requestedModality && requestedModality !== selectedService.modality) {
+    return { ok: false, error: "appointment_modality_not_available", message: "La modalidad elegida no está disponible para este servicio." };
+  }
+  const selectedPaymentMethod = selectedService && (selectedService.payment_methods || []).find(function (method) {
+    return method.active && method.id === String(input && input.deposit_payment_method_id || "");
+  });
+  if (selectedService && selectedService.deposit.required && String(input && input.deposit_status || "").toLowerCase() !== "verified") {
     return {
       ok: false,
       error: "deposit_required",
       message: "Se requiere verificar el anticipo antes de confirmar la cita.",
       deposit: {
-        appointment_value_cop: depositCheck.policy.appointment_value_cop,
-        deposit_amount_cop: depositCheck.policy.deposit_amount_cop,
-        payment_methods: depositCheck.policy.payment_methods.filter(function (method) { return method.active; }).map(function (method) { return method.label; })
+        mode: selectedService.deposit.mode,
+        amount: selectedService.deposit.amount,
+        payment_methods: selectedService.payment_methods.filter(function (method) { return method.active; }).map(function (method) { return { id: method.id, label: method.label, instructions: method.instructions }; })
       },
       next_bot_instruction: "Informa el anticipo y los métodos configurados. No confirmes la cita hasta que el flujo autorizado verifique el pago."
     };
   }
+  if (selectedService && selectedService.deposit.required && !selectedPaymentMethod) return { ok: false, error: "deposit_payment_method_required", message: "Selecciona el método de pago configurado para este anticipo." };
   let knownProfile = normalizeCustomerMeta({});
   if (normalizeConversationUserId(userId)) {
     try { knownProfile = await loadCustomerMeta(userId, tenantId); }
@@ -7127,7 +7150,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   });
   const availability = await executeCheckAppointmentAvailability(tenantId, {
     starts_at: startsAt.toISOString(),
-    duration_minutes: Number(input && input.duration_minutes) || undefined
+    duration_minutes: selectedService ? selectedService.duration_minutes : (Number(input && input.duration_minutes) || undefined)
   }, actor);
   if (!availability.ok || !availability.available) {
     return {
@@ -7138,7 +7161,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
       date: availability.date
     };
   }
-  const durationMinutes = availability.duration_minutes || Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
+  const durationMinutes = availability.duration_minutes || (selectedService ? selectedService.duration_minutes : Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60)));
   const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
   const appointmentProfile = profilePatchFromAppointment({
     customer_name: input && input.customer_name,
@@ -7176,9 +7199,13 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     ),
     customer_email: cleanRuntimeText(input && input.customer_email, 200).toLowerCase(),
     consultation_reason: cleanRuntimeText(input && input.consultation_reason, 1000),
+    appointment_service_id: selectedService && selectedService.id || "",
+    appointment_service_name: selectedService && selectedService.name || "",
+    appointment_price_cop: selectedService && selectedService.price_cop || 0,
+    appointment_modality: selectedModality || "",
     booking_fields: input.booking_fields,
     booking_requirements_version: 2,
-    deposit_status: depositCheck.policy.required ? "verified" : "not_required",
+    deposit_status: selectedService && selectedService.deposit.required ? "verified" : "not_required",
     data_processing_consent: "authorized",
     transcript_summary: "Cita creada desde el bot Appointment por " + bookingChannel + ".",
     source: "nextfor_appointment_bot",
@@ -18482,7 +18509,7 @@ function publicAppointmentSettings(settings, configuration) {
     default_duration_minutes: settings.booking_policy.default_duration_minutes,
     buffer_minutes: settings.booking_policy.buffer_minutes,
     booking_requirements: settings.booking_requirements,
-    deposit_policy: settings.deposit_policy,
+    appointment_services: settings.appointment_services,
     availability_rules: settings.availability_rules,
     timezone: cleanRuntimeText(configuration && configuration.time_zone, 120) || "America/Bogota",
     sync_status: cleanRuntimeText(configuration && configuration.settings_sync_status, 80) || "applied",
@@ -18619,7 +18646,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, "reminder_policy")) settingsPatch.reminder_policy = patch.reminder_policy;
   if (Object.prototype.hasOwnProperty.call(patch, "booking_requirements")) settingsPatch.booking_requirements = patch.booking_requirements;
-  if (Object.prototype.hasOwnProperty.call(patch, "deposit_policy")) settingsPatch.deposit_policy = patch.deposit_policy;
+  if (Object.prototype.hasOwnProperty.call(patch, "appointment_services")) settingsPatch.appointment_services = patch.appointment_services;
   if (Object.prototype.hasOwnProperty.call(patch, "booking_policy") ||
       Object.prototype.hasOwnProperty.call(patch, "default_duration_minutes") ||
       Object.prototype.hasOwnProperty.call(patch, "buffer_minutes")) {
@@ -18643,7 +18670,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     default_duration_minutes: updated.booking_policy.default_duration_minutes,
     buffer_minutes: updated.booking_policy.buffer_minutes,
     booking_requirements: updated.booking_requirements,
-    deposit_policy: updated.deposit_policy,
+    appointment_services: updated.appointment_services,
     required_booking_fields: updated.required_booking_fields,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
@@ -18658,7 +18685,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     default_duration_minutes: updated.booking_policy.default_duration_minutes,
     buffer_minutes: updated.booking_policy.buffer_minutes,
     booking_requirements: updated.booking_requirements,
-    deposit_policy: updated.deposit_policy,
+    appointment_services: updated.appointment_services,
     required_booking_fields: updated.required_booking_fields,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",

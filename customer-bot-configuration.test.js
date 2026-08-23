@@ -58,6 +58,9 @@ assert(configurationUi.clientScript.includes('nxAppointmentRequirementsSaveQueue
 assert(configurationUi.clientScript.includes('Guardaremos el último cambio en seguida…'));
 assert(configurationUi.clientScript.includes('Aún no hay servicios guardados.'));
 assert(configurationUi.clientScript.includes('indica una duración de al menos 5 minutos'));
+assert(configurationUi.clientScript.includes('Pregunta personalizada'));
+assert(configurationUi.clientScript.includes('+ Añadir otra pregunta'));
+assert(configurationUi.clientScript.includes('nxAddAppointmentRequirement()'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));

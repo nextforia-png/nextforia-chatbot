@@ -19524,6 +19524,33 @@ function metaMessageHubServiceAuthOk(req) {
   return !!META_CONNECTION_HUB_SERVICE_SECRET && safeEqualText(supplied, META_CONNECTION_HUB_SERVICE_SECRET);
 }
 
+app.post("/internal/meta-message-hub/templates/sync", async (req, res) => {
+  if (!metaMessageHubServiceAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const tenantId = cleanRuntimeText(req.body && req.body.tenant_id, 160);
+  if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_id_required" });
+  try {
+    const result = await metaMessageHub.syncTemplates({ tenant_id: tenantId, channel: "whatsapp" });
+    res.json(Object.assign({ ok: true, tenant_id: tenantId, channel: "whatsapp" }, result));
+  } catch (error) {
+    metaMessageHubErrorResponse(res, error);
+  }
+});
+
+app.post("/internal/meta-message-hub/templates/ensure", async (req, res) => {
+  if (!metaMessageHubServiceAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const tenantId = cleanRuntimeText(req.body && req.body.tenant_id, 160);
+  if (!tenantId) return res.status(400).json({ ok: false, error: "tenant_id_required" });
+  try {
+    const result = await metaMessageHub.ensureTemplates({
+      tenant_id: tenantId,
+      use_cases: req.body && req.body.use_cases
+    });
+    res.status(result.created.length ? 202 : 200).json(Object.assign({ ok: true }, result));
+  } catch (error) {
+    metaMessageHubErrorResponse(res, error);
+  }
+});
+
 app.post("/internal/meta-message-hub/send", async (req, res) => {
   if (!metaMessageHubServiceAuthOk(req)) return res.status(401).json({ ok: false, error: "unauthorized" });
   try {

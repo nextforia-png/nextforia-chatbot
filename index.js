@@ -7898,9 +7898,10 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     });
   }
   conversationConfigurationFingerprints.set(stateKey, liveBotConfiguration.fingerprint);
-  const appointmentRecallIntent = usesAppointmentBot
-    ? classifyAppointmentRecallIntent(userMessage)
-    : "";
+  // Durable appointment recall must not depend on a conversational bot-mode
+  // flag. A saved appointment remains authoritative even if onboarding or a
+  // panel release temporarily drifts from the active Appointment setting.
+  const appointmentRecallIntent = classifyAppointmentRecallIntent(userMessage);
   if (appointmentRecallIntent) {
     const appointmentsHydrated = await hydrateAppointmentsForConversation(tenantId, userId);
     const persistentCustomerAppointments = appointmentsForConversation(

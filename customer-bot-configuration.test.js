@@ -53,6 +53,11 @@ assert(configurationUi.clientScript.includes('serviceField.getAttribute("data-nx
 assert(configurationUi.clientScript.includes('fieldName+"_instructions"'));
 assert(configurationUi.clientScript.includes('method.type==="cash"'));
 assert(configurationUi.clientScript.includes('data-nx-service-id'));
+assert(configurationUi.clientScript.includes('function nxAppointmentServiceError()'));
+assert(configurationUi.clientScript.includes('nxAppointmentRequirementsSaveQueued'));
+assert(configurationUi.clientScript.includes('Guardaremos el último cambio en seguida…'));
+assert(configurationUi.clientScript.includes('Aún no hay servicios guardados.'));
+assert(configurationUi.clientScript.includes('indica una duración de al menos 5 minutos'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));
 assert(configurationUi.clientScript.includes("Descripción pública en WhatsApp"));

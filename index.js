@@ -421,7 +421,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v445-customer-panel-autofill-guard";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v446-questionnaire-navigation";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -11620,7 +11620,7 @@ function buildNextforNotifications(onboarding, questionnaire) {
       title: "Nextfor tiene una mejora para tu bot",
       message: "Agregamos " + pendingQuestions.length + " dato" + (pendingQuestions.length === 1 ? "" : "s") + " para entrenarlo mejor. Puedes completarlo sin repetir todo el setup.",
       action_label: "Completar información",
-      action_url: "/admin/client-onboarding?edit=1&focus=pending",
+      action_url: "/admin/client-onboarding/edit?focus=pending",
       count: pendingQuestions.length,
       pending_questions: pendingQuestions.slice(0, 12),
       created_at: questionnaire && questionnaire.updated_at || onboarding && (onboarding.last_updated_at || onboarding.updated_at) || null
@@ -13974,6 +13974,7 @@ function customerLoginTarget(value) {
   const target = String(value || "");
   const allowedPrefixes = [
     "/admin/panel",
+    "/admin/client-onboarding/edit",
     "/admin/client-onboarding",
     "/admin/integrations/shopify/connect",
     "/admin/integrations/woocommerce/connect"
@@ -15197,19 +15198,28 @@ app.get("/admin/create-account-demo", (req, res) => {
   });
 });
 
-app.get("/admin/client-onboarding", async (req, res) => {
+async function serveCustomerOnboarding(req, res, options) {
+  options = options || {};
+  // Editing a completed setup has its own stable URL. Do not rely on a query
+  // parameter here: browsers/PWA history can restore a cached non-edit route.
+  const editMode = !!options.editMode || req.query.edit === "1";
+  const targetPath = editMode ? "/admin/client-onboarding/edit" : "/admin/client-onboarding";
   const auth = dashboardAuth(req);
   if (!auth.ok || !customerPanelAuthOk(req, "admin")) {
-    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/client-onboarding" });
-    else renderAdminLogin(res, "/admin/client-onboarding");
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath });
+    else renderAdminLogin(res, targetPath);
     return;
   }
+  // The form contains tenant data. Never permit an authenticated browser or
+  // installed web app to reuse an older document from a previous navigation.
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
   const tenantId = customerTenantForAuth(auth);
   const record = await loadClientOnboarding(false, tenantId);
   const questionnaire = await loadCustomerSetupQuestionnaire(true);
   const reviewStatus = record.setup_review && record.setup_review.status || "";
-  if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
+  if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && !editMode) {
     res.redirect(await customerPanelNextPathAfterSetup(auth, record, "onboarding"));
     return;
   }
@@ -15249,10 +15259,21 @@ app.get("/admin/client-onboarding", async (req, res) => {
     shopifyConnectPath: "/admin/integrations/shopify/connect",
     chatbotOnlyRelease: !appointmentSetupVisible,
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
-    returnPath: req.query.edit === "1" ? "/admin/panel?tab=notifications" : "",
+    returnPath: editMode ? "/admin/panel?tab=setup" : "",
     questionnaire,
     focusPending: req.query.focus === "pending"
   });
+}
+
+app.get("/admin/client-onboarding", async (req, res) => {
+  await serveCustomerOnboarding(req, res);
+});
+
+// Explicit route used by Customer Panel's "El cuestionario" link. It is
+// intentionally query-free so reopening it is reliable on desktop, mobile and
+// installed PWA sessions.
+app.get("/admin/client-onboarding/edit", async (req, res) => {
+  await serveCustomerOnboarding(req, res, { editMode: true });
 });
 
 function shopifySessionRecordId(id) {
@@ -15658,10 +15679,10 @@ app.get("/admin/integrations/shopify/connect", async (req, res) => {
   const shop = cleanShopifyShop(commerce.store_url);
   const card = function (status, title, body, href, label) {
     res.status(status).setHeader("content-type", "text/html; charset=utf-8");
-    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Nextfor IA</title><style>body{margin:0;background:#F6F8FB;color:#313C50;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:680px;margin:0 auto;padding:48px 22px}.card{background:#fff;border:1px solid #DFE6F0;border-radius:22px;padding:28px;box-shadow:0 18px 46px rgba(10,24,54,.1)}h1{margin:0;color:#0A1836;font-size:28px;line-height:1.12}p{line-height:1.6;color:#66758D;font-size:15px}a{display:inline-flex;margin-top:10px;height:44px;align-items:center;padding:0 16px;border-radius:13px;background:#00A0F0;color:#fff;text-decoration:none;font-weight:800}</style></head><body><main class="wrap"><section class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p><a href="${escapeHtml(href || "/admin/client-onboarding?edit=1")}">${escapeHtml(label || "Volver al setup")}</a></section></main></body></html>`);
+    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Nextfor IA</title><style>body{margin:0;background:#F6F8FB;color:#313C50;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:680px;margin:0 auto;padding:48px 22px}.card{background:#fff;border:1px solid #DFE6F0;border-radius:22px;padding:28px;box-shadow:0 18px 46px rgba(10,24,54,.1)}h1{margin:0;color:#0A1836;font-size:28px;line-height:1.12}p{line-height:1.6;color:#66758D;font-size:15px}a{display:inline-flex;margin-top:10px;height:44px;align-items:center;padding:0 16px;border-radius:13px;background:#00A0F0;color:#fff;text-decoration:none;font-weight:800}</style></head><body><main class="wrap"><section class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p><a href="${escapeHtml(href || "/admin/client-onboarding/edit")}">${escapeHtml(label || "Volver al setup")}</a></section></main></body></html>`);
   };
   if (commerce.platform !== "shopify") {
-    card(409, "Primero elige Shopify", "Para conectar la app, selecciona Shopify como plataforma de comercio en el setup de " + (tenant.name || "tu negocio") + ".", "/admin/client-onboarding?edit=1", "Volver al setup");
+    card(409, "Primero elige Shopify", "Para conectar la app, selecciona Shopify como plataforma de comercio en el setup de " + (tenant.name || "tu negocio") + ".", "/admin/client-onboarding/edit", "Volver al setup");
     return;
   }
   if (!SHOPIFY_APP_INSTALL_URL) {
@@ -15676,7 +15697,7 @@ app.get("/admin/integrations/shopify/connect", async (req, res) => {
       shop
     });
   } catch (error) {
-    card(503, "Falta configurar seguridad", "Para producción falta configurar NEXFORIA_PAIRING_SECRET con al menos 32 caracteres. Sin eso no generamos conexiones Shopify reales.", "/admin/client-onboarding?edit=1", "Volver al setup");
+    card(503, "Falta configurar seguridad", "Para producción falta configurar NEXFORIA_PAIRING_SECRET con al menos 32 caracteres. Sin eso no generamos conexiones Shopify reales.", "/admin/client-onboarding/edit", "Volver al setup");
     return;
   }
 

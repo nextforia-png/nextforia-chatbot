@@ -113,7 +113,7 @@ const markup = `
   <section class="nxQuestionnaireCard">
     <span class="nxQuestionnaireIcon">▤</span>
     <div><strong>El cuestionario que llenaste en el setup</strong><p>Consulta y edita los datos base de tu negocio, productos, tono y reglas. Esta pantalla usa ese mismo registro.</p></div>
-    <a class="ghostBtn" href="/admin/client-onboarding?edit=1">Ver cuestionario completo ↗</a>
+    <a class="ghostBtn" href="/admin/client-onboarding/edit">Ver cuestionario completo ↗</a>
   </section>
   <footer class="nxConfigFooter"><span>¿Algo no responde como esperabas? <a href="mailto:soporte@nextforia.com">Cuéntanos y lo ajustamos contigo</a></span><span>BOT · ATENCIÓN AL CLIENTE</span></footer>
 </section>

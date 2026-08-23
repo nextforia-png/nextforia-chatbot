@@ -5,7 +5,7 @@ const configurationUi = require("./customer-bot-configuration");
 const renderCustomerPanel = require("./customer-panel");
 
 assert(configurationUi.markup.includes("Tu bot ya está atendiendo. Ahora afínalo."));
-assert(configurationUi.markup.includes('href="/admin/client-onboarding?edit=1"'));
+assert(configurationUi.markup.includes('href="/admin/client-onboarding/edit"'));
 assert(configurationUi.markup.includes("El cuestionario que llenaste en el setup"));
 assert(configurationUi.markup.includes("Guardar y aplicar cambios"));
 assert(configurationUi.markup.includes("siguiente respuesta del bot"));

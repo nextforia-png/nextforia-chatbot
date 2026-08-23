@@ -66,6 +66,7 @@ module.exports = function renderClientOnboarding(res, options) {
   const demoPaymentPath = options.demoPaymentPath || "/admin/client-onboarding-demo/payment";
   const completionPath = options.completionPath || (demo ? "/admin/panel-demo?tab=channels&from=onboarding" : "/admin/panel?tab=setup&from=onboarding");
   const returnPath = String(options.returnPath || "");
+  const editMode = !!options.editMode;
   const returnLink = returnPath
     ? '<a class="returnLink" href="' + escapeHtml(returnPath) + '">← Volver al Panel de Control</a>'
     : "";
@@ -234,7 +235,7 @@ module.exports = function renderClientOnboarding(res, options) {
 <body>
 <header class="top"><div class="brand"><img src="/admin/assets/nexfor-mark-light.png" alt=""><div><strong>Nextfor IA</strong><span>Configuración segura</span></div></div><div class="topActions">${returnLink}<div class="secure"><i></i>Acceso privado de ${escapeHtml(tenant.name || tenant.company_name || "tu empresa")}</div><a class="setupLogout" id="setupLogout" href="/admin/logout">Cerrar sesión</a></div></header>
 
-<section class="welcome${record.setup_completed ? " hidden" : ""}" id="welcome">
+<section class="welcome${record.setup_completed || editMode ? " hidden" : ""}" id="welcome">
   <div class="welcomeInner">
     <div class="lumenWrap"><img src="/admin/assets/lumen-entrenando.png" alt="Lumen entrenando, la mascota de Nextfor IA"><span class="hello">¡Listo para entrenar!</span><span class="online">aprendiendo · 24/7</span></div>
     <div class="overline">✧ TU NUEVO INTEGRANTE ESTÁ LISTO PARA APRENDER</div>
@@ -247,7 +248,7 @@ module.exports = function renderClientOnboarding(res, options) {
   </div>
 </section>
 
-<main class="setupPage hidden" id="setupPage">
+<main class="setupPage${editMode ? "" : " hidden"}" id="setupPage">
   <header class="setupHead"><div><h1>Entrenamiento de Nextfor</h1><p>Completa las etapas para que tu nuevo integrante atienda, agende y escale con criterio.</p></div><span class="saveStatus" id="saveStatus">Avance listo para guardar</span></header>
   <div class="layout">
     <section class="formCard">

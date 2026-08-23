@@ -422,7 +422,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v439-appointment-custom-questions";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v440-onboarding-edit-mode";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -15170,7 +15170,8 @@ app.get("/admin/client-onboarding", async (req, res) => {
     shopifyConnectPath: "/admin/integrations/shopify/connect",
     chatbotOnlyRelease: !appointmentSetupVisible,
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
-    returnPath: req.query.edit === "1" ? "/admin/panel?tab=notifications" : "",
+    returnPath: req.query.edit === "1" ? "/admin/panel?tab=setup" : "",
+    editMode: req.query.edit === "1",
     questionnaire,
     focusPending: req.query.focus === "pending"
   });

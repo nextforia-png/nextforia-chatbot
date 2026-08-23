@@ -178,6 +178,12 @@ async function seedAppointment(base, secret, agentId, customerName) {
       body: JSON.stringify({
         revision: revisionA,
         settings: {
+          services: "Valoración inicial · 45 minutos · Clínica A",
+          minimum_booking_notice: "Reservar mínimo con 12 horas de anticipación.",
+          maximum_booking_window: "Hasta 90 días adelante.",
+          cancellation_policy: "Reprogramar con mínimo 6 horas de anticipación.",
+          no_show_policy: "Después de dos inasistencias se requiere anticipo.",
+          booking_payment_details: "La valoración inicial no requiere anticipo.",
           booking_requirements: [
             { id: "full_name", type: "full_name", label: "Nombre completo", active: true, required: true },
             { id: "primera_cita", type: "custom", label: "Primera cita", question: "¿Es tu primera cita?", active: true, required: true }
@@ -194,6 +200,8 @@ async function seedAppointment(base, secret, agentId, customerName) {
     assert(payload.settings.booking_requirements.some(function (row) {
       return row.id === "primera_cita" && row.required === true;
     }), "tenant A must persist its custom appointment requirement");
+    assert.strictEqual(payload.settings.services, "Valoración inicial · 45 minutos · Clínica A");
+    assert.strictEqual(payload.settings.cancellation_policy, "Reprogramar con mínimo 6 horas de anticipación.");
     const revisionAfterFirstSave = payload.revision;
 
     response = await fetch(base + "/admin/panel/appointment-settings", {
@@ -209,6 +217,10 @@ async function seedAppointment(base, secret, agentId, customerName) {
     assert(!settingsB.settings.rules.some(function (row) { return row.id === "rule-a"; }), "tenant B must not see tenant A rules");
     assert(!settingsB.settings.booking_requirements.some(function (row) { return row.id === "primera_cita"; }),
       "tenant B must not see tenant A appointment requirements");
+    assert.notStrictEqual(settingsB.settings.services, "Valoración inicial · 45 minutos · Clínica A",
+      "tenant B must not see tenant A appointment services");
+    assert.notStrictEqual(settingsB.settings.cancellation_policy, "Reprogramar con mínimo 6 horas de anticipación.",
+      "tenant B must not see tenant A appointment rules");
 
     response = await fetch(base + "/admin/panel/appointments-data", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);

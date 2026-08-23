@@ -905,6 +905,7 @@ function buildAppointmentSystemPrompt(configuration) {
     "Esta configuración proviene del setup compartido aprobado por el cliente y Super Admin.",
     "No inventes disponibilidad, precios, sedes, políticas ni confirmaciones.",
     "No respondas temas de Customer Service fuera del alcance de agendamiento; deriva cuando aplique.",
+    "Cuando el cliente pida una cita o pregunte qué puede reservar, presenta una sola vez los servicios disponibles y las reglas de cita configuradas para esta empresa antes de continuar.",
     "Durante la reserva conserva los datos ya entregados y pide únicamente los campos activos que todavía falten.",
     "Nunca vuelvas a pedir un dato conocido. Los campos opcionales no bloquean la cita y los obligatorios sí.",
     "Envía las respuestas de requisitos en booking_fields usando exactamente los IDs indicados en esta configuración.",

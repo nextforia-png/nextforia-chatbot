@@ -13,8 +13,12 @@ assert(configurationUi.styles.includes("@media(max-width:860px)"));
 assert(configurationUi.clientScript.includes('["shipping","Datos para un envío","Con Aura o Atlas"]'));
 assert(configurationUi.clientScript.includes('["reminders","Recordatorio de cita o reserva","Con Tempo o Atlas"]'));
 assert(configurationUi.clientScript.includes('["appointment_requirements","Datos para confirmar una cita","Con Tempo o Atlas"]'));
+assert(configurationUi.clientScript.includes('["appointment_services_rules","Servicios y reglas de las citas","Con Tempo o Atlas"]'));
 assert(configurationUi.clientScript.includes('/admin/panel/appointment-settings'));
-assert(configurationUi.clientScript.includes('settings:{booking_requirements:state.nxAppointmentRequirements}'));
+assert(configurationUi.clientScript.includes('data-nx-appt-content="services"'));
+assert(configurationUi.clientScript.includes('minimum_booking_notice'));
+assert(configurationUi.clientScript.includes('cancellation_policy'));
+assert(configurationUi.clientScript.includes('Servicios y reglas guardados y aplicados al bot.'));
 assert(configurationUi.clientScript.includes('PANEL_CONTEXT.appointments'));
 assert(configurationUi.clientScript.includes('Nombre completo'));
 assert(configurationUi.clientScript.includes('Documento de identidad'));
@@ -89,6 +93,7 @@ const tempoHtml = render("admin", {
   assigned_bot_id: "agendamiento"
 });
 assert(tempoHtml.includes("Datos para confirmar una cita"));
+assert(tempoHtml.includes("Servicios y reglas de las citas"));
 assert(tempoHtml.includes('/admin/panel/appointment-settings'));
 
 const viewerHtml = render("viewer", {

@@ -420,7 +420,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v427-appointment-requirements-stability";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v428-appointment-services-rules";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5168,6 +5168,7 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "REGLAS OPERATIVAS DEL CANAL DE CITAS:",
   "- Trata la conversación como un formulario acumulativo: conserva cada dato que el cliente ya entregó.",
   "- Nunca vuelvas a pedir nombre, teléfono, correo, servicio, fecha, hora o consentimiento si ya están confirmados. Pregunta solo el campo obligatorio que falte.",
+  "- Cuando el cliente pida una cita o pregunte qué puede reservar, el sistema mostrará una sola vez los Servicios disponibles y las Reglas de la cita configuradas para su tenant. Continúa desde allí sin repetirlos ni mezclar datos de otras empresas.",
   "- Responde de forma breve y natural. Haz como máximo una pregunta clara por mensaje y no descargues listas largas de servicios o requisitos salvo que el cliente las pida.",
   "- Si el cliente entrega varios datos en un mensaje, reconócelos y avanza; no los conviertas en un cuestionario repetido.",
   "- Si el cliente corrige la fecha, conserva la hora, servicio y demás datos ya entregados, excepto lo que corrigió explícitamente.",
@@ -5204,6 +5205,107 @@ function buildAppointmentRequirementsContext(onboarding) {
     lines.push("- " + row.id + " (" + row.label + "): " + (row.required ? "OBLIGATORIO" : "opcional") + ". Pregunta: " + row.question);
   });
   return lines.join("\n").slice(0, 6000);
+}
+
+function compactAppointmentPresentationText(value, max) {
+  const normalized = String(value || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(function (line) { return line.replace(/^\s*[-•*]+\s*/, "").trim(); })
+    .filter(Boolean)
+    .join(" · ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || normalized.length <= max) return normalized;
+  const clipped = normalized.slice(0, Math.max(0, max - 1));
+  const boundary = clipped.lastIndexOf(" ");
+  return (boundary > max * 0.7 ? clipped.slice(0, boundary) : clipped).trim() + "…";
+}
+
+function buildAppointmentServicesRulesOverview(onboarding) {
+  const record = onboarding && typeof onboarding === "object" ? onboarding : {};
+  const answers = record.answers && typeof record.answers === "object" ? record.answers : {};
+  const setup = answers.appointment_setup && typeof answers.appointment_setup === "object"
+    ? answers.appointment_setup
+    : {};
+  const configuration = record.appointment_configuration && typeof record.appointment_configuration === "object"
+    ? record.appointment_configuration
+    : {};
+  const settings = appointmentSettingsFromOnboarding(record);
+  const services = compactAppointmentPresentationText(configuration.services || setup.services, 1500);
+  const rules = [];
+  (settings.scheduling_rules || []).filter(function (row) {
+    return row && row.active !== false && row.text;
+  }).slice(0, 8).forEach(function (row) {
+    rules.push(compactAppointmentPresentationText(row.text, 320));
+  });
+  [
+    ["Anticipación mínima", configuration.minimum_booking_notice || setup.minimum_booking_notice],
+    ["Hasta cuándo puedes reservar", configuration.maximum_booking_window || setup.maximum_booking_window],
+    ["Confirmación", configuration.booking_confirmation_mode || setup.booking_confirmation_mode],
+    ["Cancelación o reprogramación", configuration.cancellation_policy || setup.cancellation_policy],
+    ["Inasistencia", configuration.no_show_policy || setup.no_show_policy],
+    ["Pago o anticipo", configuration.booking_payment_details || setup.booking_payment_details]
+  ].forEach(function (entry) {
+    const value = compactAppointmentPresentationText(entry[1], 420);
+    if (value) rules.push(entry[0] + ": " + value);
+  });
+  const uniqueRules = rules.filter(Boolean).filter(function (rule, index, values) {
+    return values.indexOf(rule) === index;
+  }).slice(0, 10);
+  if (!services && !uniqueRules.length) return "";
+  const lines = [];
+  if (services) lines.push("*Servicios disponibles*", services);
+  if (uniqueRules.length) {
+    if (lines.length) lines.push("");
+    lines.push("*Reglas de la cita*");
+    uniqueRules.forEach(function (rule) { lines.push("• " + rule); });
+  }
+  return lines.join("\n").slice(0, 3000).trim();
+}
+
+function appointmentServicesRulesRequested(message) {
+  const normalized = String(message || "").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(cita|citas|agend(?:a|ar|amiento|e|emos)|reserv(?:a|ar|acion|e)|turno|disponibilidad|horario|servicio|servicios|appointment|booking|schedule)\b/.test(normalized);
+}
+
+function appointmentServicesRulesAlreadyPresented(history, overview) {
+  const expectedHeadings = ["*Servicios disponibles*", "*Reglas de la cita*"].filter(function (heading) {
+    return String(overview || "").indexOf(heading) >= 0;
+  });
+  if (!expectedHeadings.length) return true;
+  const assistantText = (history || []).filter(function (message) {
+    return message && message.role === "assistant";
+  }).map(function (message) {
+    if (!message || message.role !== "assistant") return false;
+    return typeof message.content === "string"
+      ? message.content
+      : (Array.isArray(message.content) ? message.content.map(function (block) { return block && block.text || ""; }).join(" ") : "");
+  }).join("\n");
+  return expectedHeadings.every(function (heading) { return assistantText.indexOf(heading) >= 0; });
+}
+
+function buildAppointmentServicesRulesContext(overview) {
+  if (!overview) return "";
+  return [
+    "PRESENTACIÓN OBLIGATORIA PARA ESTA SOLICITUD:",
+    "- El sistema insertará antes de tu respuesta el siguiente resumen exacto del tenant.",
+    "- No lo repitas, no lo parafrasees y no inventes servicios o reglas adicionales.",
+    "- Continúa naturalmente después del resumen y pregunta solo el siguiente dato que falte.",
+    "",
+    overview
+  ].join("\n");
+}
+
+function ensureAppointmentServicesRulesPresentation(reply, overview) {
+  const answer = String(reply || "").trim();
+  if (!overview || answer.indexOf(overview) >= 0) return answer;
+  const remaining = Math.max(0, 4080 - overview.length - 2);
+  const shortenedAnswer = answer.length <= remaining
+    ? answer
+    : answer.slice(0, Math.max(0, remaining - 1)).replace(/\s+\S*$/, "").trim() + "…";
+  return overview + (shortenedAnswer && remaining ? "\n\n" + shortenedAnswer : "");
 }
 
 async function searchShopifyStorefront(query, options = {}) {
@@ -7643,6 +7745,18 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   const appointmentRequirementsContext = routeUsesAppointmentBot
     ? buildAppointmentRequirementsContext(activeClientOnboarding)
     : "";
+  const appointmentServicesRulesOverview = routeUsesAppointmentBot
+    ? buildAppointmentServicesRulesOverview(activeClientOnboarding)
+    : "";
+  const shouldPresentAppointmentServicesRules = !!(
+    routeUsesAppointmentBot &&
+    appointmentServicesRulesOverview &&
+    appointmentServicesRulesRequested(userMessage) &&
+    !appointmentServicesRulesAlreadyPresented(history, appointmentServicesRulesOverview)
+  );
+  const appointmentServicesRulesContext = shouldPresentAppointmentServicesRules
+    ? buildAppointmentServicesRulesContext(appointmentServicesRulesOverview)
+    : "";
   let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
   console.log(`[AI budget ${maskedIdentifier(userId)}] tier=${adaptiveBudget.tier} max_tokens=${adaptiveBudget.maxTokens} history=${adaptiveBudget.historyMessages} reasons=${adaptiveBudget.reasons.join(",") || "none"}`);
@@ -7664,6 +7778,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
           ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
           ...(appointmentDateContext ? [{ type: "text", text: appointmentDateContext }] : []),
           ...(appointmentRequirementsContext ? [{ type: "text", text: appointmentRequirementsContext }] : []),
+          ...(appointmentServicesRulesContext ? [{ type: "text", text: appointmentServicesRulesContext }] : []),
           ...(pendingRatings.has(stateKey) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
           ...(cartContextFor(userId, stateKey) ? [{ type: "text", text: cartContextFor(userId, stateKey) }] : []),
           ...(memoryContext ? [{ type: "text", text: memoryContext }] : []),
@@ -7884,6 +7999,9 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       }
       if (!appointmentReplyPolicy.ok) {
         reply = "Aún no he confirmado la cita porque debo validar el horario en el calendario. Conservé los datos que ya me diste; responde “continúa” y lo intentaré de nuevo sin pedirlos otra vez.";
+      }
+      if (shouldPresentAppointmentServicesRules) {
+        reply = ensureAppointmentServicesRulesPresentation(reply, appointmentServicesRulesOverview);
       }
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
@@ -18447,6 +18565,13 @@ function publicAppointmentSettings(settings, configuration) {
     buffer_minutes: settings.booking_policy.buffer_minutes,
     booking_requirements: settings.booking_requirements,
     availability_rules: settings.availability_rules,
+    services: cleanRuntimeText(configuration && configuration.services, 8000),
+    minimum_booking_notice: cleanRuntimeText(configuration && configuration.minimum_booking_notice, 1200),
+    maximum_booking_window: cleanRuntimeText(configuration && configuration.maximum_booking_window, 1200),
+    booking_confirmation_mode: cleanRuntimeText(configuration && configuration.booking_confirmation_mode, 1200),
+    cancellation_policy: cleanRuntimeText(configuration && configuration.cancellation_policy, 5000),
+    no_show_policy: cleanRuntimeText(configuration && configuration.no_show_policy, 3000),
+    booking_payment_details: cleanRuntimeText(configuration && configuration.booking_payment_details, 3000),
     timezone: cleanRuntimeText(configuration && configuration.time_zone, 120) || "America/Bogota",
     sync_status: cleanRuntimeText(configuration && configuration.settings_sync_status, 80) || "applied",
     synced_at: configuration && configuration.settings_synced_at || null,
@@ -18595,6 +18720,21 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
   }
   const updated = updateAppointmentSettings(current.settings, settingsPatch, { expectedRevision, actor });
   const previous = current.onboarding;
+  const previousAppointmentSetup = previous.answers && previous.answers.appointment_setup || {};
+  const previousConfiguration = previous.appointment_configuration || {};
+  function appointmentContentValue(field, max) {
+    if (Object.prototype.hasOwnProperty.call(patch, field)) return cleanRuntimeText(patch[field], max);
+    return cleanRuntimeText(previousConfiguration[field] || previousAppointmentSetup[field], max);
+  }
+  const appointmentContent = {
+    services: appointmentContentValue("services", 8000),
+    minimum_booking_notice: appointmentContentValue("minimum_booking_notice", 1200),
+    maximum_booking_window: appointmentContentValue("maximum_booking_window", 1200),
+    booking_confirmation_mode: appointmentContentValue("booking_confirmation_mode", 1200),
+    cancellation_policy: appointmentContentValue("cancellation_policy", 5000),
+    no_show_policy: appointmentContentValue("no_show_policy", 3000),
+    booking_payment_details: appointmentContentValue("booking_payment_details", 3000)
+  };
   const answers = JSON.parse(JSON.stringify(previous.answers || {}));
   answers.appointment_setup = Object.assign({}, answers.appointment_setup || {}, {
     availability_rules: updated.availability_rules,
@@ -18609,7 +18749,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
     reminder_timing: updated.reminder_policy.offsets_minutes
-  });
+  }, appointmentContent);
   let configuration = normalizeAppointmentConfiguration(Object.assign({}, previous.appointment_configuration || {}, {
     availability_rules: updated.availability_rules,
     scheduling_rules: updated.scheduling_rules,
@@ -18626,7 +18766,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     settings_sync_status: "pending_external_apply",
     settings_synced_at: "",
     settings_last_error: ""
-  }), {
+  }, appointmentContent), {
     actor,
     lifecycle: previous.appointment_configuration && previous.appointment_configuration.lifecycle || "draft"
   });
@@ -18670,7 +18810,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     review_actor: actor,
     review_note: setupReviewSummary(previous).note,
     requested_changes: setupReviewSummary(previous).requested_changes,
-    review_event: { action: "appointment_settings_updated", note: "Reglas de agenda actualizadas desde Customer Panel." }
+    review_event: { action: "appointment_settings_updated", note: "Servicios y reglas de citas actualizados desde Customer Panel." }
   });
   await appendClientOnboardingRecord(record, tenantId);
   const savedSettings = appointmentSettingsFromOnboarding(record);

@@ -22,6 +22,14 @@ const { appointmentConfirmationText, createAppointmentConfirmationService } = re
     timezone: "America/Bogota",
     business_name: "NextforIA"
   }), /Tu cita con NextforIA quedó confirmada/);
+  const virtualWithMeet = Object.assign({}, appointment, {
+    appointment_modality: "virtual",
+    virtual_meeting_link: "https://meet.google.com/test-link",
+    virtual_link_source: "google_meet"
+  });
+  assert.match(appointmentConfirmationText(virtualWithMeet, { timezone: "America/Bogota", business_name: "NextforIA" }), /https:\/\/meet\.google\.com\/test-link/);
+  const virtualNeedsAttention = Object.assign({}, appointment, { appointment_modality: "virtual", appointment_readiness: "requires_attention" });
+  assert.match(appointmentConfirmationText(virtualNeedsAttention, { timezone: "America/Bogota", business_name: "NextforIA" }), /enlace de acceso por separado/);
 
   const service = createAppointmentConfirmationService({
     now: () => current,

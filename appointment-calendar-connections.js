@@ -400,11 +400,14 @@ class GoogleCalendarProvider {
     const reason = cleanText(appointment && appointment.consultation_reason, 1000) || "Cita";
     const description = [
       "Cita gestionada por Nextfor IA.",
+      appointment && appointment.appointment_modality === "in_person" && appointment.physical_directions ? "Indicaciones: " + cleanText(appointment.physical_directions, 2000) : "",
+      appointment && appointment.appointment_modality === "in_person" && appointment.physical_maps_link ? "Mapa: " + cleanText(appointment.physical_maps_link, 1000) : "",
+      appointment && appointment.appointment_modality === "virtual" && (appointment.virtual_meeting_link || appointment.virtual_fallback_link) ? "Acceso virtual: " + cleanText(appointment.virtual_meeting_link || appointment.virtual_fallback_link, 1000) : "",
       appointment && appointment.customer_phone ? "Teléfono: " + cleanText(appointment.customer_phone, 80) : "",
       appointment && appointment.customer_email ? "Correo: " + cleanText(appointment.customer_email, 200) : "",
       appointment && appointment.transcript_summary ? "Contexto: " + cleanText(appointment.transcript_summary, 2000) : ""
     ].filter(Boolean).join("\n");
-    return {
+    const body = {
       summary: reason + " · " + customerName,
       description,
       start: { dateTime: start.toISOString() },
@@ -417,6 +420,23 @@ class GoogleCalendarProvider {
         }
       }
     };
+    if (appointment && appointment.appointment_modality === "in_person" && appointment.physical_address) {
+      body.location = cleanText(appointment.physical_address, 1000);
+    }
+    // Request a unique Meet only for the first virtual Google event. A manual
+    // replacement is authoritative and must never be overwritten by Meet.
+    if (appointment && appointment.appointment_modality === "virtual" && appointment.virtual_link_source !== "manual") {
+      body.conferenceData = {
+        createRequest: {
+          requestId: crypto.createHash("sha256").update([
+            cleanTenantId(appointment.tenant_id),
+            cleanText(appointment.appointment_id || appointment.conversation_id, 160)
+          ].join(":"), "utf8").digest("hex").slice(0, 48),
+          conferenceSolutionKey: { type: "hangoutsMeet" }
+        }
+      };
+    }
+    return body;
   }
 
   async upsertAppointment(token, calendarId, appointment) {
@@ -425,15 +445,20 @@ class GoogleCalendarProvider {
     const body = this.appointmentEventBody(appointment);
     const options = {
       headers: { Authorization: "Bearer " + token.access_token },
-      params: { sendUpdates: "none" },
+      params: { sendUpdates: "none", conferenceDataVersion: 1 },
       timeout: 10000
     };
     const response = eventId
       ? await this.axios.patch(base + "/" + encodeURIComponent(eventId), body, options)
       : await this.axios.post(base, body, options);
+    const entryPoints = response.data && response.data.conferenceData && response.data.conferenceData.entryPoints;
+    const videoEntry = (Array.isArray(entryPoints) ? entryPoints : []).find(function (entry) {
+      return entry && entry.entryPointType === "video" && cleanText(entry.uri, 1000);
+    });
     return {
       event_id: cleanText(response.data && response.data.id, 500) || eventId,
       event_link: cleanText(response.data && response.data.htmlLink, 1000),
+      virtual_meeting_link: cleanText(response.data && response.data.hangoutLink || videoEntry && videoEntry.uri, 1000),
       status: cleanText(response.data && response.data.status, 80) || "confirmed"
     };
   }
@@ -655,18 +680,25 @@ class MicrosoftCalendarProvider {
     const reason = cleanText(appointment && appointment.consultation_reason, 1000) || "Cita";
     const description = [
       "Cita gestionada por Nextfor IA.",
+      appointment && appointment.appointment_modality === "in_person" && appointment.physical_directions ? "Indicaciones: " + cleanText(appointment.physical_directions, 2000) : "",
+      appointment && appointment.appointment_modality === "in_person" && appointment.physical_maps_link ? "Mapa: " + cleanText(appointment.physical_maps_link, 1000) : "",
+      appointment && appointment.appointment_modality === "virtual" && (appointment.virtual_meeting_link || appointment.virtual_fallback_link) ? "Acceso virtual: " + cleanText(appointment.virtual_meeting_link || appointment.virtual_fallback_link, 1000) : "",
       appointment && appointment.customer_phone ? "Teléfono: " + cleanText(appointment.customer_phone, 80) : "",
       appointment && appointment.customer_email ? "Correo: " + cleanText(appointment.customer_email, 200) : "",
       appointment && appointment.transcript_summary ? "Contexto: " + cleanText(appointment.transcript_summary, 2000) : ""
     ].filter(Boolean).join("\n");
     function graphDateTime(date) { return date.toISOString().replace(/Z$/, ""); }
-    return {
+    const body = {
       subject: reason + " · " + customerName,
       body: { contentType: "Text", content: description },
       start: { dateTime: graphDateTime(start), timeZone: "UTC" },
       end: { dateTime: graphDateTime(end), timeZone: "UTC" },
       showAs: "busy"
     };
+    if (appointment && appointment.appointment_modality === "in_person" && appointment.physical_address) {
+      body.location = { displayName: cleanText(appointment.physical_address, 1000) };
+    }
+    return body;
   }
 
   async upsertAppointment(token, calendarId, appointment) {
@@ -1014,6 +1046,7 @@ function createAppointmentCalendarConnectionService(options) {
           calendar_sync_status: "synced",
           calendar_event_id: event.event_id,
           calendar_event_link: event.event_link,
+          virtual_meeting_link: cleanText(event.virtual_meeting_link, 1000),
           calendar_synced_at: iso(now()),
           calendar_last_error: ""
         };

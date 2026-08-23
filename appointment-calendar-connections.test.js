@@ -44,6 +44,13 @@ const axiosClient = {
     }
     if (/\/calendar\/v3\/calendars\//.test(url)) {
       assert.match(options.headers.Authorization, /^Bearer access-/);
+      if (body && body.conferenceData) {
+        assert.strictEqual(options.params.conferenceDataVersion, 1);
+        return { data: {
+          id: "event-derco-1", htmlLink: "https://calendar.google.com/event?eid=derco", status: "confirmed",
+          conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.com/derco-test" }] }
+        } };
+      }
       return { data: { id: "event-derco-1", htmlLink: "https://calendar.google.com/event?eid=derco", status: "confirmed" } };
     }
     assert.strictEqual(options.headers["content-type"], "application/x-www-form-urlencoded");
@@ -124,11 +131,13 @@ assert.match(authUrl, /access_type=offline/);
     duration_minutes: 45,
     customer_name: "Cliente DERCO",
     customer_phone: "+573001112233",
-    consultation_reason: "Prueba de manejo"
+    consultation_reason: "Prueba de manejo",
+    appointment_modality: "virtual"
   }, "super_admin");
   assert.strictEqual(synced.calendar_sync_status, "synced");
   assert.strictEqual(synced.calendar_event_id, "event-derco-1");
   assert.match(synced.calendar_event_link, /calendar\.google\.com/);
+  assert.strictEqual(synced.virtual_meeting_link, "https://meet.google.com/derco-test");
   const updated = await service.syncAppointment("grupo-derco", Object.assign({
     tenant_id: "grupo-derco",
     conversation_id: "conv-derco-1",

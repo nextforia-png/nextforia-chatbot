@@ -29,10 +29,22 @@ function appointmentConfirmationText(appointment, configuration) {
   const business = text(configuration && configuration.business_name, 160) || "Nextfor";
   const service = text(appointment && appointment.consultation_reason, 240);
   const action = appointment && appointment.status === "rescheduled" ? "fue reprogramada" : "quedó confirmada";
+  const modality = appointment && appointment.appointment_modality;
+  const access = modality === "in_person"
+    ? (text(appointment && appointment.physical_address, 1000)
+      ? " Lugar: " + text(appointment.physical_address, 1000) +
+        (text(appointment && appointment.physical_directions, 2000) ? ". Indicaciones: " + text(appointment.physical_directions, 2000) : "") +
+        (text(appointment && appointment.physical_maps_link, 1000) ? ". Mapa: " + text(appointment.physical_maps_link, 1000) : "")
+      : "")
+    : modality === "virtual"
+      ? (text(appointment && appointment.virtual_meeting_link, 1000)
+        ? " Enlace de acceso: " + text(appointment.virtual_meeting_link, 1000)
+        : " Te enviaremos el enlace de acceso por separado.")
+      : "";
   return "Hola " + firstName + " 👋 Tu cita con " + business + " " + action +
     " para el " + when.date + " a las " + when.time +
     (service ? " (" + service + ")" : "") +
-    ". También te enviaremos los recordatorios configurados. Responde aquí si necesitas hacer un cambio.";
+    "." + access + " También te enviaremos los recordatorios configurados. Responde aquí si necesitas hacer un cambio.";
 }
 
 function confirmationState(appointment) {

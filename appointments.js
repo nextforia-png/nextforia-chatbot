@@ -30,6 +30,17 @@ function cleanText(value, max) {
   return String(value == null ? "" : value).trim().slice(0, max || 500);
 }
 
+function cleanHttpsUrl(value, max) {
+  const candidate = cleanText(value, max || 1000);
+  if (!candidate) return "";
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "https:" ? parsed.toString().slice(0, max || 1000) : "";
+  } catch (_) {
+    return "";
+  }
+}
+
 function cleanStatus(value) {
   const status = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
   return APPOINTMENT_STATUSES.has(status) ? status : "not_requested";
@@ -217,6 +228,9 @@ function appointmentFromElevenLabsEvent(event, tenantId, now) {
     customer_phone: cleanText(analysisValue(collection, "client_phone"), 80),
     customer_email: cleanText(analysisValue(collection, "client_email"), 200).toLowerCase(),
     consultation_reason: cleanText(analysisValue(collection, "consultation_reason"), 1000),
+    appointment_service_id: cleanText(analysisValue(collection, "service_id"), 80),
+    appointment_service_name: cleanText(analysisValue(collection, "appointment_service_name"), 160),
+    appointment_modality: cleanText(analysisValue(collection, "appointment_modality"), 40).toLowerCase(),
     data_processing_consent: cleanText(analysisValue(collection, "data_processing_consent"), 40).toLowerCase() || "unclear",
     transcript_summary: transcriptSummary(data.analysis),
     source: "elevenlabs",
@@ -271,6 +285,22 @@ function normalizeAppointment(input) {
   }
   const appointmentModality = cleanText(input.appointment_modality, 40).toLowerCase();
   if (["in_person", "virtual"].includes(appointmentModality)) normalized.appointment_modality = appointmentModality;
+  const appointmentReadiness = cleanText(input.appointment_readiness, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  if (["ready", "requires_attention"].includes(appointmentReadiness)) normalized.appointment_readiness = appointmentReadiness;
+  const physicalAddress = cleanText(input.physical_address, 1000);
+  if (physicalAddress) normalized.physical_address = physicalAddress;
+  const physicalDirections = cleanText(input.physical_directions, 2000);
+  if (physicalDirections) normalized.physical_directions = physicalDirections;
+  const physicalMapsLink = cleanHttpsUrl(input.physical_maps_link, 1000);
+  if (physicalMapsLink) normalized.physical_maps_link = physicalMapsLink;
+  const virtualFallbackLink = cleanHttpsUrl(input.virtual_fallback_link, 1000);
+  if (virtualFallbackLink) normalized.virtual_fallback_link = virtualFallbackLink;
+  const virtualMeetingLink = cleanHttpsUrl(input.virtual_meeting_link, 1000);
+  if (virtualMeetingLink) normalized.virtual_meeting_link = virtualMeetingLink;
+  const virtualLinkSource = cleanText(input.virtual_link_source, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  if (["google_meet", "fallback", "manual"].includes(virtualLinkSource)) normalized.virtual_link_source = virtualLinkSource;
+  const virtualLinkUpdatedAt = validIsoDate(input.virtual_link_updated_at);
+  if (virtualLinkUpdatedAt) normalized.virtual_link_updated_at = virtualLinkUpdatedAt;
   const customerConversationId = cleanText(input.customer_conversation_id, 200);
   if (customerConversationId) normalized.customer_conversation_id = customerConversationId;
   if (Object.prototype.hasOwnProperty.call(input, "reminder_state")) {

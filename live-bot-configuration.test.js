@@ -81,7 +81,7 @@ recordA.bot_personality = normalizeBotPersonality({
   greeting: { tone: "formal" },
   business: { hours: "HORARIO-ACTUAL-PANEL", returns_policy: "POLITICA-ACTUAL-PANEL" },
   shipping: { fields: [{ id: "city", label: "CIUDAD-ACTUAL-PANEL", required: true }] },
-  payments: { methods: ["card"], confirmation_message: "PAGO-ACTUAL-PANEL" },
+  payments: { methods: [{ label: "Pago privado A", instructions: "INSTRUCCION-PRIVADA-A", active: true }], confirmation_message: "PAGO-ACTUAL-PANEL" },
   faqs: [{ question: "FAQ-ACTUAL-PANEL", answer: "RESPUESTA-ACTUAL-PANEL" }],
   escalation: { triggers: ["unknown_answer"], notify_contact: "CONTACTO-ACTUAL-PANEL" }
 }, {
@@ -99,6 +99,8 @@ const precedencePrompt = precedenceA.prompts.join("\n");
   "POLITICA-ACTUAL-PANEL",
   "CIUDAD-ACTUAL-PANEL",
   "PAGO-ACTUAL-PANEL",
+  "Pago privado A",
+  "INSTRUCCION-PRIVADA-A",
   "FAQ-ACTUAL-PANEL",
   "CONTACTO-ACTUAL-PANEL"
 ].forEach(function (fragment) {

@@ -68,8 +68,8 @@ renderClientOnboarding({
   returnPath: "/admin/panel?tab=setup",
   questionnaire: { version: 1, questions: [] }
 });
-assert.match(editHtml, /<main class="setupPage" id="setupPage">/, "completed setup opens the editor when edit=1");
-assert.doesNotMatch(editHtml, /<main class="setupPage hidden" id="setupPage">/);
+assert.match(editHtml, /<main class="setupPage goalStepMode" id="setupPage">/, "completed setup opens the editor when edit=1");
+assert.doesNotMatch(editHtml, /<main class="setupPage goalStepMode hidden" id="setupPage">/);
 assert.match(editHtml, /href="\/admin\/panel\?tab=setup"/);
 
 let partialCatalogHtml = "";

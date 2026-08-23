@@ -39,7 +39,10 @@ assert(configurationUi.clientScript.includes('payload&&typeof payload.can_edit==
 assert(configurationUi.clientScript.includes('document.addEventListener("click",function(event){var target=event.target'));
 assert(configurationUi.clientScript.includes('Escribe la instrucción primero o activa el método'));
 assert(configurationUi.clientScript.includes('document.addEventListener("pointerdown",function(event){var control='));
-assert(configurationUi.clientScript.includes('appointment_business_rule_'));
+assert(configurationUi.clientScript.includes('function nxAppointmentBusinessAttrs(name,kind)'));
+assert(configurationUi.clientScript.includes('transaction-amount'));
+assert(configurationUi.clientScript.includes('nextfor_appointment_service_'));
+assert(configurationUi.clientScript.includes('data-protonpass-ignore'));
 assert(configurationUi.clientScript.includes('nxServiceDepositCheckbox'));
 assert(configurationUi.clientScript.includes('nxUpgradeAppointmentDepositControls'));
 assert(configurationUi.clientScript.includes('nxSetAppointmentServiceDepositFromCheckbox'));
@@ -47,7 +50,7 @@ assert(configurationUi.clientScript.includes('nxSyncAppointmentServiceDepositFie
 assert(configurationUi.clientScript.includes('amountTitle.textContent=percentage?"Anticipo (%)":"Anticipo (COP)"'));
 assert(configurationUi.clientScript.includes('row.insertAdjacentElement("afterend",modeLabel)'));
 assert(configurationUi.clientScript.includes('serviceField.getAttribute("data-nx-service-field")'));
-assert(configurationUi.clientScript.includes('<textarea name="nx_service_payment_instruction_'));
+assert(configurationUi.clientScript.includes('fieldName+"_instructions"'));
 assert(configurationUi.clientScript.includes('method.type==="cash"'));
 assert(configurationUi.clientScript.includes('data-nx-service-id'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));

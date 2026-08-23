@@ -60,16 +60,13 @@ function joinConfigurationValues(values) {
 }
 
 function paymentMethodsText(methods) {
-  const labels = {
-    nequi_daviplata: "Nequi o Daviplata",
-    transfer: "transferencia",
-    cash_on_delivery: "contraentrega",
-    payment_link: "link de pago",
-    card: "tarjeta"
-  };
   return (methods || []).map(function (method) {
-    return labels[method] || method;
-  }).join(", ");
+    if (method && typeof method === "object") {
+      if (method.active === false) return "";
+      return String(method.label || "").trim() + (method.instructions ? ": " + String(method.instructions).trim() : "");
+    }
+    return String(method || "").trim();
+  }).filter(Boolean).join("\n");
 }
 
 function escalationTriggersText(triggers) {

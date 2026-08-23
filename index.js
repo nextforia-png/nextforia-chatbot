@@ -169,6 +169,7 @@ const {
   buildBotPersonalityPrompt,
   maxTokensForPersonality,
   normalizeBotPersonality,
+  paymentInstructionsMessage,
   personalityForOnboarding,
   planFeatures
 } = require("./bot-personality");
@@ -213,11 +214,13 @@ const {
   AppointmentOperationsError,
   applyReminderAction,
   appointmentSettingsFromOnboarding,
+  compileAppointmentServices,
   evaluateScheduleException,
   materializeAppointmentReminders,
   normalizeReminder,
   reminderSnapshot,
   updateAppointmentSettings,
+  findAppointmentService,
   validateBookingRequirements
 } = require("./appointment-operations");
 const {
@@ -423,7 +426,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v428-meta-out-of-window-hub";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v448-meta-out-of-window-hub";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -5244,6 +5247,14 @@ const APPOINTMENT_TOOLS = [
           description: "Respuestas de los requisitos configurados por el negocio, usando exactamente el ID de cada campo.",
           additionalProperties: { type: "string" }
         },
+        service_id: { type: "string", description: "ID exacto del servicio configurado por este tenant." },
+        appointment_modality: { type: "string", enum: ["in_person", "virtual"], description: "Modalidad elegida por el cliente cuando el servicio ofrece ambas." },
+        deposit_payment_method_id: { type: "string", description: "ID del método de anticipo elegido, cuando ese servicio exige anticipo." },
+        deposit_status: {
+          type: "string",
+          enum: ["not_required", "pending", "customer_reported_paid", "verified"],
+          description: "Usa verified solamente si el flujo autorizado del negocio verificó el anticipo. Nunca lo marques verified solo porque el cliente dice que pagó."
+        },
         data_processing_consent: { type: "boolean", description: "Debe ser true solo cuando el cliente autorizó el tratamiento de datos." }
       },
       required: ["starts_at", "duration_minutes", "data_processing_consent"]
@@ -5287,6 +5298,7 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "REGLAS OPERATIVAS DEL CANAL DE CITAS:",
   "- Trata la conversación como un formulario acumulativo: conserva cada dato que el cliente ya entregó.",
   "- Nunca vuelvas a pedir nombre, teléfono, correo, servicio, fecha, hora o consentimiento si ya están confirmados. Pregunta solo el campo obligatorio que falte.",
+  "- Cuando el cliente pida una cita o pregunte qué puede reservar, el sistema mostrará una sola vez los Servicios disponibles y las Reglas de la cita configuradas para su tenant. Continúa desde allí sin repetirlos ni mezclar datos de otras empresas.",
   "- Responde de forma breve y natural. Haz como máximo una pregunta clara por mensaje y no descargues listas largas de servicios o requisitos salvo que el cliente las pida.",
   "- Si el cliente entrega varios datos en un mensaje, reconócelos y avanza; no los conviertas en un cuestionario repetido.",
   "- Si el cliente corrige la fecha, conserva la hora, servicio y demás datos ya entregados, excepto lo que corrigió explícitamente.",
@@ -5295,6 +5307,7 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "- Antes de reservar resume una sola vez los datos reunidos y pide confirmación; no los solicites nuevamente.",
   "- Para consultar un horario usa check_appointment_availability.",
   "- Antes de reservar confirma fecha/hora, consentimiento de datos y todos los requisitos obligatorios configurados.",
+  "- Sigue las reglas del servicio elegido: duración, precio, modalidad y, si aplica, anticipo y sus instrucciones de pago. Nunca inventes datos de pago ni confirmes la cita solo porque el cliente dice que pagó.",
   "- Usa book_appointment únicamente después de que el cliente confirme explícitamente.",
   "- Si el calendario no está conectado o una herramienta falla, no inventes disponibilidad: ofrece apoyo humano.",
   "- Informa que la cita quedó confirmada solo cuando book_appointment responda status=booked y calendar_sync_status=synced."
@@ -5305,11 +5318,14 @@ function buildAppointmentRequirementsContext(onboarding) {
   const requirements = (settings.booking_requirements || []).filter(function (row) {
     return row && row.active !== false;
   });
+  const servicesContext = compileAppointmentServices(settings.appointment_services);
   if (!requirements.length) {
     return [
       "REQUISITOS ACTIVOS PARA RESERVAR:",
       "- Este tenant no configuró campos personales adicionales. Fecha, hora y consentimiento siguen siendo necesarios.",
-      "- Si faltan fecha, hora o consentimiento, pregunta solo el dato faltante."
+      "- Si faltan fecha, hora o consentimiento, pregunta solo el dato faltante.",
+      "",
+      servicesContext
     ].join("\n");
   }
   const lines = [
@@ -5322,7 +5338,109 @@ function buildAppointmentRequirementsContext(onboarding) {
   requirements.forEach(function (row) {
     lines.push("- " + row.id + " (" + row.label + "): " + (row.required ? "OBLIGATORIO" : "opcional") + ". Pregunta: " + row.question);
   });
+  lines.push("", servicesContext);
   return lines.join("\n").slice(0, 6000);
+}
+
+function compactAppointmentPresentationText(value, max) {
+  const normalized = String(value || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(function (line) { return line.replace(/^\s*[-•*]+\s*/, "").trim(); })
+    .filter(Boolean)
+    .join(" · ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || normalized.length <= max) return normalized;
+  const clipped = normalized.slice(0, Math.max(0, max - 1));
+  const boundary = clipped.lastIndexOf(" ");
+  return (boundary > max * 0.7 ? clipped.slice(0, boundary) : clipped).trim() + "…";
+}
+
+function buildAppointmentServicesRulesOverview(onboarding) {
+  const record = onboarding && typeof onboarding === "object" ? onboarding : {};
+  const answers = record.answers && typeof record.answers === "object" ? record.answers : {};
+  const setup = answers.appointment_setup && typeof answers.appointment_setup === "object"
+    ? answers.appointment_setup
+    : {};
+  const configuration = record.appointment_configuration && typeof record.appointment_configuration === "object"
+    ? record.appointment_configuration
+    : {};
+  const settings = appointmentSettingsFromOnboarding(record);
+  const services = compactAppointmentPresentationText(configuration.services || setup.services, 1500);
+  const rules = [];
+  (settings.scheduling_rules || []).filter(function (row) {
+    return row && row.active !== false && row.text;
+  }).slice(0, 8).forEach(function (row) {
+    rules.push(compactAppointmentPresentationText(row.text, 320));
+  });
+  [
+    ["Anticipación mínima", configuration.minimum_booking_notice || setup.minimum_booking_notice],
+    ["Hasta cuándo puedes reservar", configuration.maximum_booking_window || setup.maximum_booking_window],
+    ["Confirmación", configuration.booking_confirmation_mode || setup.booking_confirmation_mode],
+    ["Cancelación o reprogramación", configuration.cancellation_policy || setup.cancellation_policy],
+    ["Inasistencia", configuration.no_show_policy || setup.no_show_policy],
+    ["Pago o anticipo", configuration.booking_payment_details || setup.booking_payment_details]
+  ].forEach(function (entry) {
+    const value = compactAppointmentPresentationText(entry[1], 420);
+    if (value) rules.push(entry[0] + ": " + value);
+  });
+  const uniqueRules = rules.filter(Boolean).filter(function (rule, index, values) {
+    return values.indexOf(rule) === index;
+  }).slice(0, 10);
+  if (!services && !uniqueRules.length) return "";
+  const lines = [];
+  if (services) lines.push("*Servicios disponibles*", services);
+  if (uniqueRules.length) {
+    if (lines.length) lines.push("");
+    lines.push("*Reglas de la cita*");
+    uniqueRules.forEach(function (rule) { lines.push("• " + rule); });
+  }
+  return lines.join("\n").slice(0, 3000).trim();
+}
+
+function appointmentServicesRulesRequested(message) {
+  const normalized = String(message || "").toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return /\b(cita|citas|agend(?:a|ar|amiento|e|emos)|reserv(?:a|ar|acion|e)|turno|disponibilidad|horario|servicio|servicios|appointment|booking|schedule)\b/.test(normalized);
+}
+
+function appointmentServicesRulesAlreadyPresented(history, overview) {
+  const expectedHeadings = ["*Servicios disponibles*", "*Reglas de la cita*"].filter(function (heading) {
+    return String(overview || "").indexOf(heading) >= 0;
+  });
+  if (!expectedHeadings.length) return true;
+  const assistantText = (history || []).filter(function (message) {
+    return message && message.role === "assistant";
+  }).map(function (message) {
+    if (!message || message.role !== "assistant") return false;
+    return typeof message.content === "string"
+      ? message.content
+      : (Array.isArray(message.content) ? message.content.map(function (block) { return block && block.text || ""; }).join(" ") : "");
+  }).join("\n");
+  return expectedHeadings.every(function (heading) { return assistantText.indexOf(heading) >= 0; });
+}
+
+function buildAppointmentServicesRulesContext(overview) {
+  if (!overview) return "";
+  return [
+    "PRESENTACIÓN OBLIGATORIA PARA ESTA SOLICITUD:",
+    "- El sistema insertará antes de tu respuesta el siguiente resumen exacto del tenant.",
+    "- No lo repitas, no lo parafrasees y no inventes servicios o reglas adicionales.",
+    "- Continúa naturalmente después del resumen y pregunta solo el siguiente dato que falte.",
+    "",
+    overview
+  ].join("\n");
+}
+
+function ensureAppointmentServicesRulesPresentation(reply, overview) {
+  const answer = String(reply || "").trim();
+  if (!overview || answer.indexOf(overview) >= 0) return answer;
+  const remaining = Math.max(0, 4080 - overview.length - 2);
+  const shortenedAnswer = answer.length <= remaining
+    ? answer
+    : answer.slice(0, Math.max(0, remaining - 1)).replace(/\s+\S*$/, "").trim() + "…";
+  return overview + (shortenedAnswer && remaining ? "\n\n" + shortenedAnswer : "");
 }
 
 async function searchShopifyStorefront(query, options = {}) {
@@ -6635,9 +6753,12 @@ async function executeSendStoreLocation(to) {
   return { sent: true, store: "Planet Selva" };
 }
 
-async function executeSendPaymentInfo(to) {
-  await sendText(to, PAYMENT_INFO);
-  return { sent: true };
+async function executeSendPaymentInfo(to, personality, useTenantPaymentConfiguration, runtime) {
+  const configuredMessage = useTenantPaymentConfiguration
+    ? paymentInstructionsMessage(personality)
+    : "";
+  await sendText(to, configuredMessage || PAYMENT_INFO, runtime);
+  return { sent: true, source: configuredMessage ? "tenant_configuration" : "legacy_rav" };
 }
 
 async function executeSendWarrantyInfo(to) {
@@ -7328,7 +7449,50 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     return { ok: false, error: "invalid_appointment_datetime" };
   }
   const onboarding = await loadClientOnboarding(false, tenantId);
-  const bookingRequirements = appointmentSettingsFromOnboarding(onboarding).booking_requirements;
+  const appointmentSettings = appointmentSettingsFromOnboarding(onboarding);
+  const bookingRequirements = appointmentSettings.booking_requirements;
+  const serviceMatch = findAppointmentService(appointmentSettings.appointment_services, input && input.service_id, input && input.consultation_reason);
+  if (!serviceMatch.ok) {
+    return {
+      ok: false,
+      error: "appointment_service_required",
+      message: "Elige primero uno de los servicios configurados antes de confirmar.",
+      available_services: serviceMatch.services.map(function (service) { return { id: service.id, name: service.name }; })
+    };
+  }
+  const selectedService = serviceMatch.service;
+  const requestedModality = String(input && input.appointment_modality || "").toLowerCase();
+  const selectedModality = selectedService && (selectedService.modality === "both"
+    ? requestedModality
+    : selectedService.modality);
+  if (selectedService && selectedService.modality === "both" && !["in_person", "virtual"].includes(selectedModality)) {
+    return {
+      ok: false,
+      error: "appointment_modality_required",
+      message: "El cliente debe elegir si desea la cita presencial o virtual.",
+      available_modalities: ["in_person", "virtual"]
+    };
+  }
+  if (selectedService && selectedService.modality !== "both" && requestedModality && requestedModality !== selectedService.modality) {
+    return { ok: false, error: "appointment_modality_not_available", message: "La modalidad elegida no está disponible para este servicio." };
+  }
+  const selectedPaymentMethod = selectedService && (selectedService.payment_methods || []).find(function (method) {
+    return method.active && method.id === String(input && input.deposit_payment_method_id || "");
+  });
+  if (selectedService && selectedService.deposit.required && String(input && input.deposit_status || "").toLowerCase() !== "verified") {
+    return {
+      ok: false,
+      error: "deposit_required",
+      message: "Se requiere verificar el anticipo antes de confirmar la cita.",
+      deposit: {
+        mode: selectedService.deposit.mode,
+        amount: selectedService.deposit.amount,
+        payment_methods: selectedService.payment_methods.filter(function (method) { return method.active; }).map(function (method) { return { id: method.id, label: method.label, instructions: method.instructions }; })
+      },
+      next_bot_instruction: "Informa el anticipo y los métodos configurados. No confirmes la cita hasta que el flujo autorizado verifique el pago."
+    };
+  }
+  if (selectedService && selectedService.deposit.required && !selectedPaymentMethod) return { ok: false, error: "deposit_payment_method_required", message: "Selecciona el método de pago configurado para este anticipo." };
   let knownProfile = normalizeCustomerMeta({});
   if (normalizeConversationUserId(userId)) {
     try { knownProfile = await loadCustomerMeta(userId, tenantId); }
@@ -7362,7 +7526,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   });
   const availability = await executeCheckAppointmentAvailability(tenantId, {
     starts_at: startsAt.toISOString(),
-    duration_minutes: Number(input && input.duration_minutes) || undefined
+    duration_minutes: selectedService ? selectedService.duration_minutes : (Number(input && input.duration_minutes) || undefined)
   }, actor);
   if (!availability.ok || !availability.available) {
     return {
@@ -7373,7 +7537,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
       date: availability.date
     };
   }
-  const durationMinutes = availability.duration_minutes || Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60));
+  const durationMinutes = availability.duration_minutes || (selectedService ? selectedService.duration_minutes : Math.max(5, Math.min(Number(input && input.duration_minutes) || 60, 24 * 60)));
   const bookingChannel = String(userId || "").startsWith("voice:") ? "voice" : conversationChannel(userId);
   const appointmentProfile = profilePatchFromAppointment({
     customer_name: input && input.customer_name,
@@ -7411,8 +7575,13 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     ),
     customer_email: cleanRuntimeText(input && input.customer_email, 200).toLowerCase(),
     consultation_reason: cleanRuntimeText(input && input.consultation_reason, 1000),
+    appointment_service_id: selectedService && selectedService.id || "",
+    appointment_service_name: selectedService && selectedService.name || "",
+    appointment_price_cop: selectedService && selectedService.price_cop || 0,
+    appointment_modality: selectedModality || "",
     booking_fields: input.booking_fields,
     booking_requirements_version: 2,
+    deposit_status: selectedService && selectedService.deposit.required ? "verified" : "not_required",
     data_processing_consent: "authorized",
     transcript_summary: "Cita creada desde el bot Appointment por " + bookingChannel + ".",
     source: "nextfor_appointment_bot",
@@ -7799,9 +7968,24 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   }
   const conversationSystemPrompt = "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad.";
   const ravOperationalToolsAllowed = runtimePolicy.business_tools_profile === "rav";
+  // Once a tenant saves payment settings from its Customer Panel, those are
+  // authoritative. RAV's legacy checkout tools enumerate a fixed catalogue,
+  // so they must not be available for a tenant-specific payment conversation.
+  const tenantPaymentConfigurationActive = !!(
+    routeUsesCustomerServiceBot &&
+    activeClientOnboarding && activeClientOnboarding.bot_personality &&
+    liveBotConfiguration.personality && liveBotConfiguration.personality.payments &&
+    Array.isArray(liveBotConfiguration.personality.payments.methods) &&
+    liveBotConfiguration.personality.payments.methods.some(function (method) { return method && method.active; })
+  );
   let conversationTools = ravOperationalToolsAllowed
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
+  if (tenantPaymentConfigurationActive) {
+    conversationTools = conversationTools.filter(function (tool) {
+      return tool.name !== "send_payment_info" && tool.name !== "send_payment_link";
+    });
+  }
   if (!conversationTools.some(function (tool) { return tool.name === CUSTOMER_PROFILE_TOOL.name; })) {
     conversationTools.push(CUSTOMER_PROFILE_TOOL);
   }
@@ -7913,6 +8097,18 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   const appointmentRequirementsContext = routeUsesAppointmentBot
     ? buildAppointmentRequirementsContext(activeClientOnboarding)
     : "";
+  const appointmentServicesRulesOverview = routeUsesAppointmentBot
+    ? buildAppointmentServicesRulesOverview(activeClientOnboarding)
+    : "";
+  const shouldPresentAppointmentServicesRules = !!(
+    routeUsesAppointmentBot &&
+    appointmentServicesRulesOverview &&
+    appointmentServicesRulesRequested(userMessage) &&
+    !appointmentServicesRulesAlreadyPresented(history, appointmentServicesRulesOverview)
+  );
+  const appointmentServicesRulesContext = shouldPresentAppointmentServicesRules
+    ? buildAppointmentServicesRulesContext(appointmentServicesRulesOverview)
+    : "";
   let onboardingConversationContext = buildCoverageConversationContext(activeClientOnboarding);
   let workingHistory = history.slice(-adaptiveBudget.historyMessages);
   console.log(`[AI budget ${maskedIdentifier(userId)}] tier=${adaptiveBudget.tier} max_tokens=${adaptiveBudget.maxTokens} history=${adaptiveBudget.historyMessages} reasons=${adaptiveBudget.reasons.join(",") || "none"}`);
@@ -7934,6 +8130,7 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
           ...(serviceAreaContext ? [{ type: "text", text: serviceAreaContext }] : []),
           ...(appointmentDateContext ? [{ type: "text", text: appointmentDateContext }] : []),
           ...(appointmentRequirementsContext ? [{ type: "text", text: appointmentRequirementsContext }] : []),
+          ...(appointmentServicesRulesContext ? [{ type: "text", text: appointmentServicesRulesContext }] : []),
           ...(pendingRatings.has(stateKey) ? [{ type: "text", text: "⚠️ NOTA DEL SISTEMA: Cliente acaba de salir de handoff con humano. Pide calificación con send_rating_request ANTES de responder a otra cosa que diga." }] : []),
           ...(cartContextFor(userId, stateKey) ? [{ type: "text", text: cartContextFor(userId, stateKey) }] : []),
           ...(memoryContext ? [{ type: "text", text: memoryContext }] : []),
@@ -8000,7 +8197,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeSendStoreLocation(userId);
                 break;
               case "send_payment_info":
-                result = await executeSendPaymentInfo(userId);
+                result = await executeSendPaymentInfo(
+                  userId,
+                  liveBotConfiguration.personality,
+                  tenantPaymentConfigurationActive,
+                  conversationRuntime
+                );
                 break;
               case "send_warranty_info":
                 result = await executeSendWarrantyInfo(userId);
@@ -8154,6 +8356,9 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       }
       if (!appointmentReplyPolicy.ok) {
         reply = "Aún no he confirmado la cita porque debo validar el horario en el calendario. Conservé los datos que ya me diste; responde “continúa” y lo intentaré de nuevo sin pedirlos otra vez.";
+      }
+      if (shouldPresentAppointmentServicesRules) {
+        reply = ensureAppointmentServicesRulesPresentation(reply, appointmentServicesRulesOverview);
       }
       history.push({ role: "assistant", content: reply || "(sin texto)" });
       conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
@@ -11748,7 +11953,7 @@ function buildNextforNotifications(onboarding, questionnaire) {
       title: "Nextfor tiene una mejora para tu bot",
       message: "Agregamos " + pendingQuestions.length + " dato" + (pendingQuestions.length === 1 ? "" : "s") + " para entrenarlo mejor. Puedes completarlo sin repetir todo el setup.",
       action_label: "Completar información",
-      action_url: "/admin/client-onboarding?edit=1&focus=pending",
+      action_url: "/admin/client-onboarding/edit?focus=pending",
       count: pendingQuestions.length,
       pending_questions: pendingQuestions.slice(0, 12),
       created_at: questionnaire && questionnaire.updated_at || onboarding && (onboarding.last_updated_at || onboarding.updated_at) || null
@@ -14102,6 +14307,7 @@ function customerLoginTarget(value) {
   const target = String(value || "");
   const allowedPrefixes = [
     "/admin/panel",
+    "/admin/client-onboarding/edit",
     "/admin/client-onboarding",
     "/admin/integrations/shopify/connect",
     "/admin/integrations/woocommerce/connect"
@@ -15325,19 +15531,28 @@ app.get("/admin/create-account-demo", (req, res) => {
   });
 });
 
-app.get("/admin/client-onboarding", async (req, res) => {
+async function serveCustomerOnboarding(req, res, options) {
+  options = options || {};
+  // Editing a completed setup has its own stable URL. Do not rely on a query
+  // parameter here: browsers/PWA history can restore a cached non-edit route.
+  const editMode = !!options.editMode || req.query.edit === "1";
+  const targetPath = editMode ? "/admin/client-onboarding/edit" : "/admin/client-onboarding";
   const auth = dashboardAuth(req);
   if (!auth.ok || !customerPanelAuthOk(req, "admin")) {
-    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath: "/admin/client-onboarding" });
-    else renderAdminLogin(res, "/admin/client-onboarding");
+    if (CUSTOMER_ACCESS_V2_ENABLED) renderCustomerLogin(res, { targetPath });
+    else renderAdminLogin(res, targetPath);
     return;
   }
+  // The form contains tenant data. Never permit an authenticated browser or
+  // installed web app to reuse an older document from a previous navigation.
+  res.setHeader("Cache-Control", "private, no-store, max-age=0");
+  res.setHeader("Pragma", "no-cache");
   if (auth.method === "key") setDashboardSessionCookie(req, res, auth);
   const tenantId = customerTenantForAuth(auth);
   const record = await loadClientOnboarding(false, tenantId);
   const questionnaire = await loadCustomerSetupQuestionnaire(true);
   const reviewStatus = record.setup_review && record.setup_review.status || "";
-  if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && req.query.edit !== "1") {
+  if (auth.version === 2 && record.setup_completed && reviewStatus !== "incomplete" && !editMode) {
     res.redirect(await customerPanelNextPathAfterSetup(auth, record, "onboarding"));
     return;
   }
@@ -15377,10 +15592,21 @@ app.get("/admin/client-onboarding", async (req, res) => {
     shopifyConnectPath: "/admin/integrations/shopify/connect",
     chatbotOnlyRelease: !appointmentSetupVisible,
     completionPath: customerSetupCompletionPath(auth, "onboarding"),
-    returnPath: req.query.edit === "1" ? "/admin/panel?tab=notifications" : "",
+    returnPath: editMode ? "/admin/panel?tab=setup" : "",
     questionnaire,
     focusPending: req.query.focus === "pending"
   });
+}
+
+app.get("/admin/client-onboarding", async (req, res) => {
+  await serveCustomerOnboarding(req, res);
+});
+
+// Explicit route used by Customer Panel's "El cuestionario" link. It is
+// intentionally query-free so reopening it is reliable on desktop, mobile and
+// installed PWA sessions.
+app.get("/admin/client-onboarding/edit", async (req, res) => {
+  await serveCustomerOnboarding(req, res, { editMode: true });
 });
 
 function shopifySessionRecordId(id) {
@@ -15786,10 +16012,10 @@ app.get("/admin/integrations/shopify/connect", async (req, res) => {
   const shop = cleanShopifyShop(commerce.store_url);
   const card = function (status, title, body, href, label) {
     res.status(status).setHeader("content-type", "text/html; charset=utf-8");
-    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Nextfor IA</title><style>body{margin:0;background:#F6F8FB;color:#313C50;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:680px;margin:0 auto;padding:48px 22px}.card{background:#fff;border:1px solid #DFE6F0;border-radius:22px;padding:28px;box-shadow:0 18px 46px rgba(10,24,54,.1)}h1{margin:0;color:#0A1836;font-size:28px;line-height:1.12}p{line-height:1.6;color:#66758D;font-size:15px}a{display:inline-flex;margin-top:10px;height:44px;align-items:center;padding:0 16px;border-radius:13px;background:#00A0F0;color:#fff;text-decoration:none;font-weight:800}</style></head><body><main class="wrap"><section class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p><a href="${escapeHtml(href || "/admin/client-onboarding?edit=1")}">${escapeHtml(label || "Volver al setup")}</a></section></main></body></html>`);
+    res.send(`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Nextfor IA</title><style>body{margin:0;background:#F6F8FB;color:#313C50;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:680px;margin:0 auto;padding:48px 22px}.card{background:#fff;border:1px solid #DFE6F0;border-radius:22px;padding:28px;box-shadow:0 18px 46px rgba(10,24,54,.1)}h1{margin:0;color:#0A1836;font-size:28px;line-height:1.12}p{line-height:1.6;color:#66758D;font-size:15px}a{display:inline-flex;margin-top:10px;height:44px;align-items:center;padding:0 16px;border-radius:13px;background:#00A0F0;color:#fff;text-decoration:none;font-weight:800}</style></head><body><main class="wrap"><section class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(body)}</p><a href="${escapeHtml(href || "/admin/client-onboarding/edit")}">${escapeHtml(label || "Volver al setup")}</a></section></main></body></html>`);
   };
   if (commerce.platform !== "shopify") {
-    card(409, "Primero elige Shopify", "Para conectar la app, selecciona Shopify como plataforma de comercio en el setup de " + (tenant.name || "tu negocio") + ".", "/admin/client-onboarding?edit=1", "Volver al setup");
+    card(409, "Primero elige Shopify", "Para conectar la app, selecciona Shopify como plataforma de comercio en el setup de " + (tenant.name || "tu negocio") + ".", "/admin/client-onboarding/edit", "Volver al setup");
     return;
   }
   if (!SHOPIFY_APP_INSTALL_URL) {
@@ -15804,7 +16030,7 @@ app.get("/admin/integrations/shopify/connect", async (req, res) => {
       shop
     });
   } catch (error) {
-    card(503, "Falta configurar seguridad", "Para producción falta configurar NEXFORIA_PAIRING_SECRET con al menos 32 caracteres. Sin eso no generamos conexiones Shopify reales.", "/admin/client-onboarding?edit=1", "Volver al setup");
+    card(503, "Falta configurar seguridad", "Para producción falta configurar NEXFORIA_PAIRING_SECRET con al menos 32 caracteres. Sin eso no generamos conexiones Shopify reales.", "/admin/client-onboarding/edit", "Volver al setup");
     return;
   }
 
@@ -18716,7 +18942,15 @@ function publicAppointmentSettings(settings, configuration) {
     default_duration_minutes: settings.booking_policy.default_duration_minutes,
     buffer_minutes: settings.booking_policy.buffer_minutes,
     booking_requirements: settings.booking_requirements,
+    appointment_services: settings.appointment_services,
     availability_rules: settings.availability_rules,
+    services: cleanRuntimeText(configuration && configuration.services, 8000),
+    minimum_booking_notice: cleanRuntimeText(configuration && configuration.minimum_booking_notice, 1200),
+    maximum_booking_window: cleanRuntimeText(configuration && configuration.maximum_booking_window, 1200),
+    booking_confirmation_mode: cleanRuntimeText(configuration && configuration.booking_confirmation_mode, 1200),
+    cancellation_policy: cleanRuntimeText(configuration && configuration.cancellation_policy, 5000),
+    no_show_policy: cleanRuntimeText(configuration && configuration.no_show_policy, 3000),
+    booking_payment_details: cleanRuntimeText(configuration && configuration.booking_payment_details, 3000),
     timezone: cleanRuntimeText(configuration && configuration.time_zone, 120) || "America/Bogota",
     sync_status: cleanRuntimeText(configuration && configuration.settings_sync_status, 80) || "applied",
     synced_at: configuration && configuration.settings_synced_at || null,
@@ -18852,6 +19086,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, "reminder_policy")) settingsPatch.reminder_policy = patch.reminder_policy;
   if (Object.prototype.hasOwnProperty.call(patch, "booking_requirements")) settingsPatch.booking_requirements = patch.booking_requirements;
+  if (Object.prototype.hasOwnProperty.call(patch, "appointment_services")) settingsPatch.appointment_services = patch.appointment_services;
   if (Object.prototype.hasOwnProperty.call(patch, "booking_policy") ||
       Object.prototype.hasOwnProperty.call(patch, "default_duration_minutes") ||
       Object.prototype.hasOwnProperty.call(patch, "buffer_minutes")) {
@@ -18865,6 +19100,21 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
   }
   const updated = updateAppointmentSettings(current.settings, settingsPatch, { expectedRevision, actor });
   const previous = current.onboarding;
+  const previousAppointmentSetup = previous.answers && previous.answers.appointment_setup || {};
+  const previousConfiguration = previous.appointment_configuration || {};
+  function appointmentContentValue(field, max) {
+    if (Object.prototype.hasOwnProperty.call(patch, field)) return cleanRuntimeText(patch[field], max);
+    return cleanRuntimeText(previousConfiguration[field] || previousAppointmentSetup[field], max);
+  }
+  const appointmentContent = {
+    services: appointmentContentValue("services", 8000),
+    minimum_booking_notice: appointmentContentValue("minimum_booking_notice", 1200),
+    maximum_booking_window: appointmentContentValue("maximum_booking_window", 1200),
+    booking_confirmation_mode: appointmentContentValue("booking_confirmation_mode", 1200),
+    cancellation_policy: appointmentContentValue("cancellation_policy", 5000),
+    no_show_policy: appointmentContentValue("no_show_policy", 3000),
+    booking_payment_details: appointmentContentValue("booking_payment_details", 3000)
+  };
   const answers = JSON.parse(JSON.stringify(previous.answers || {}));
   answers.appointment_setup = Object.assign({}, answers.appointment_setup || {}, {
     availability_rules: updated.availability_rules,
@@ -18875,11 +19125,12 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     default_duration_minutes: updated.booking_policy.default_duration_minutes,
     buffer_minutes: updated.booking_policy.buffer_minutes,
     booking_requirements: updated.booking_requirements,
+    appointment_services: updated.appointment_services,
     required_booking_fields: updated.required_booking_fields,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
     reminder_timing: updated.reminder_policy.offsets_minutes
-  });
+  }, appointmentContent);
   let configuration = normalizeAppointmentConfiguration(Object.assign({}, previous.appointment_configuration || {}, {
     availability_rules: updated.availability_rules,
     scheduling_rules: updated.scheduling_rules,
@@ -18889,6 +19140,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     default_duration_minutes: updated.booking_policy.default_duration_minutes,
     buffer_minutes: updated.booking_policy.buffer_minutes,
     booking_requirements: updated.booking_requirements,
+    appointment_services: updated.appointment_services,
     required_booking_fields: updated.required_booking_fields,
     revision: updated.revision,
     reminder_channel: updated.reminder_policy.channel || "none",
@@ -18896,7 +19148,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     settings_sync_status: "pending_external_apply",
     settings_synced_at: "",
     settings_last_error: ""
-  }), {
+  }, appointmentContent), {
     actor,
     lifecycle: previous.appointment_configuration && previous.appointment_configuration.lifecycle || "draft"
   });
@@ -18940,7 +19192,7 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     review_actor: actor,
     review_note: setupReviewSummary(previous).note,
     requested_changes: setupReviewSummary(previous).requested_changes,
-    review_event: { action: "appointment_settings_updated", note: "Reglas de agenda actualizadas desde Customer Panel." }
+    review_event: { action: "appointment_settings_updated", note: "Servicios y reglas de citas actualizados desde Customer Panel." }
   });
   await appendClientOnboardingRecord(record, tenantId);
   const savedSettings = appointmentSettingsFromOnboarding(record);

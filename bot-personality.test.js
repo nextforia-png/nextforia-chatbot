@@ -7,6 +7,7 @@ const {
   configurationForOnboarding,
   defaultsFromOnboarding,
   normalizeBotConfiguration,
+  paymentInstructionsMessage,
   planFeatures
 } = require("./bot-personality");
 
@@ -66,7 +67,11 @@ const normalized = normalizeBotConfiguration({
     policy: "Aplica a cobertura nacional."
   },
   catalog: { price_mode: "human" },
-  payments: { methods: ["card", "invalid", "card"] },
+  payments: { methods: [
+    { label: "Pago móvil", instructions: "Envía el comprobante por este chat.", active: true },
+    { label: "Caja física", instructions: "Paga al recoger tu pedido.", active: false },
+    { label: "Pago móvil", instructions: "Duplicado", active: true }
+  ] },
   faqs: [{ q: "¿Horario?", a: "De 9 a 6" }],
   extra_context: "x".repeat(6000)
 }, { fallback: defaults, plan_id: "nextfor-aura", updated_by: "admin@example.com" });
@@ -75,10 +80,17 @@ assert.strictEqual(normalized.profile.display_name, "Aura");
 assert.deepStrictEqual(normalized.shipping.fields.map(function (row) { return row.id; }), ["city"]);
 assert.strictEqual(normalized.shipping.pricing_mode, "flat");
 assert.strictEqual(normalized.shipping.flat_fee_cop, 12900);
-assert.deepStrictEqual(normalized.payments.methods, ["card"]);
+assert.deepStrictEqual(normalized.payments.methods, [
+  { id: "pago_movil", label: "Pago móvil", instructions: "Envía el comprobante por este chat.", active: true },
+  { id: "caja_fisica", label: "Caja física", instructions: "Paga al recoger tu pedido.", active: false }
+]);
 assert.strictEqual(normalized.faqs[0].question, "¿Horario?");
 assert.strictEqual(normalized.extra_context.length, 5000);
 assert.strictEqual(normalized.updated_by, "admin@example.com");
+const paymentMessage = paymentInstructionsMessage(normalized, { plan_id: "nextfor-aura" });
+assert(paymentMessage.includes("Pago móvil"));
+assert(paymentMessage.includes("Envía el comprobante por este chat."));
+assert(!paymentMessage.includes("Caja física"), "un método inactivo no se puede ofrecer");
 const structuralPaths = configurationLeafPaths(normalizeBotConfiguration({}, {
   fallback: defaults,
   plan_id: "nextfor-atlas",
@@ -116,6 +128,7 @@ assert.ok(!unoPrompt.includes("Métodos de pago autorizados"));
 const auraPrompt = buildBotConfigurationPrompt(normalized, { plan_id: "nextfor-aura" });
 assert.ok(auraPrompt.includes("DATOS DE ENVÍO"));
 assert.ok(auraPrompt.includes("Métodos de pago autorizados"));
+assert.ok(auraPrompt.includes("reemplaza cualquier flujo heredado de pagos"));
 assert.ok(auraPrompt.includes("RESPUESTAS EXACTAS"));
 assert.ok(auraPrompt.includes("No prometas inventario"));
 
@@ -144,7 +157,7 @@ const contractPrompt = buildBotConfigurationPrompt({
     allow_confirm_cancel: false
   },
   catalog: { price_mode: "human", out_of_stock_message: "AGOTADO-CONTRATO" },
-  payments: { methods: ["card"], confirmation_message: "PAGO-CONTRATO" },
+  payments: { methods: [{ label: "Método contrato", instructions: "INSTRUCCION-PAGO-CONTRATO", active: true }], confirmation_message: "PAGO-CONTRATO" },
   faqs: [{ question: "PREGUNTA-CONTRATO", answer: "RESPUESTA-CONTRATO" }],
   escalation: { triggers: ["unknown_answer"], notify_contact: "CONTACTO-CONTRATO" },
   farewell: { text: "DESPEDIDA-CONTRATO" },
@@ -175,7 +188,8 @@ assert(contractPrompt.includes("reemplaza cualquier dato diferente o anterior de
   "No ofrezcas confirmación o cancelación automática",
   "no da precios",
   "AGOTADO-CONTRATO",
-  "tarjeta",
+  "Método contrato",
+  "INSTRUCCION-PAGO-CONTRATO",
   "PAGO-CONTRATO",
   "PREGUNTA-CONTRATO",
   "RESPUESTA-CONTRATO",

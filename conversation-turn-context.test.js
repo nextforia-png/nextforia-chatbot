@@ -80,6 +80,9 @@ function deferred() {
   assert(applicationSource.includes("function buildAppointmentRequirementsContext(onboarding)"), "appointment runtime must build a live tenant requirements context");
   assert(applicationSource.includes("REQUISITOS ACTIVOS PARA RESERVAR"), "appointment runtime must name the active booking requirements in the prompt");
   assert(applicationSource.includes("...(appointmentRequirementsContext ? [{ type: \"text\", text: appointmentRequirementsContext }] : [])"), "appointment requirements must be injected into dynamic system context");
+  assert(applicationSource.includes("function buildAppointmentServicesRulesOverview(onboarding)"), "appointment runtime must build the tenant services and rules overview from live onboarding");
+  assert(applicationSource.includes("PRESENTACIÓN OBLIGATORIA PARA ESTA SOLICITUD"), "appointment runtime must instruct a one-time services and rules presentation");
+  assert(applicationSource.includes("ensureAppointmentServicesRulesPresentation(reply, appointmentServicesRulesOverview)"), "appointment replies must deterministically include the configured overview");
   assert(applicationSource.includes("next_bot_instruction: nextMissing.question"), "missing configured appointment fields must guide the next bot reply");
   assert(!/\blet\s+turn(?:Tools|ZeroQueries|Handoff|Rating|ZeroSearchActive)\b/.test(applicationSource), "process-global turn state must not return");
   console.log("conversation-turn-context.test.js ok");

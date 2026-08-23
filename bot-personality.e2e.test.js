@@ -124,7 +124,10 @@ async function requestJson(base, pathName, cookie, options) {
           shipping: { fields: [{ id: "city", label: "Ciudad de entrega", required: true }] },
           reminders: { text: "Recordatorio adulterado" },
           catalog: { price_mode: "exact" },
-          payments: { methods: ["card"] },
+          payments: { methods: [
+            { label: "Pago QR Empresa A", instructions: "Escanea el QR oficial de Empresa A y envía comprobante.", active: true },
+            { label: "Caja A", instructions: "Pago al recoger en la sede A.", active: false }
+          ] },
           faqs: [{ question: "¿Pregunta A?", answer: "Respuesta privada A" }]
         }
       })
@@ -137,6 +140,8 @@ async function requestJson(base, pathName, cookie, options) {
     assert.strictEqual(result.body.personality.plan_id, "aura");
     assert.strictEqual(result.body.features.reminders, false);
     assert.strictEqual(result.body.personality.greeting.text, "Hola desde Empresa A");
+    assert.strictEqual(result.body.personality.payments.methods[0].label, "Pago QR Empresa A");
+    assert.strictEqual(result.body.personality.payments.methods[0].instructions, "Escanea el QR oficial de Empresa A y envía comprobante.");
 
     result = await requestJson(base, "/admin/panel/bot-personality", cookieB);
     assert.strictEqual(result.response.status, 200);
@@ -147,11 +152,13 @@ async function requestJson(base, pathName, cookie, options) {
     assert.strictEqual(result.body.features.payments, false);
     assert(!result.body.personality.greeting.text.includes("Empresa A"), "el tenant B no puede leer la configuración de A");
     assert(!JSON.stringify(result.body).includes("Respuesta privada A"));
+    assert(!JSON.stringify(result.body).includes("Pago QR Empresa A"));
 
     result = await requestJson(base, "/admin/panel/bot-personality", cookieA);
     assert.strictEqual(result.response.status, 200);
     assert.strictEqual(result.body.personality.greeting.text, "Hola desde Empresa A");
     assert.strictEqual(result.body.personality.faqs[0].answer, "Respuesta privada A");
+    assert.strictEqual(result.body.personality.payments.methods[0].label, "Pago QR Empresa A");
 
     result = await requestJson(base, "/admin/panel/bot-personality", cookieViewer);
     assert.strictEqual(result.response.status, 200);

@@ -7,7 +7,15 @@ const GREETING_TONES = Object.freeze(["cercano", "formal", "directo"]);
 const EMOJI_LEVELS = Object.freeze(["ninguno", "pocos", "moderados"]);
 const PRICE_MODES = Object.freeze(["exact", "range", "human"]);
 const REMINDER_TYPES = Object.freeze(["reservation", "virtual", "home"]);
-const PAYMENT_METHODS = Object.freeze(["nequi_daviplata", "transfer", "cash_on_delivery", "payment_link", "card"]);
+// Legacy labels are only used to migrate configurations saved before payment
+// methods became tenant-defined. New methods are never limited to this list.
+const LEGACY_PAYMENT_LABELS = Object.freeze({
+  nequi_daviplata: "Nequi o Daviplata",
+  transfer: "Transferencia bancaria",
+  cash_on_delivery: "Pago contraentrega",
+  payment_link: "Link de pago",
+  card: "Tarjeta"
+});
 const ESCALATION_TRIGGERS = Object.freeze([
   "customer_requests",
   "customer_upset",
@@ -105,6 +113,52 @@ function uniqueChoices(value, allowed, fallback) {
   }).filter(function (item) {
     return allowed.includes(item);
   })));
+}
+
+function paymentMethodId(value, index) {
+  const clean = cleanText(value, 100).toLowerCase().normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "").slice(0, 60);
+  return clean || "payment_method_" + (index + 1);
+}
+
+function normalizePaymentMethods(value, fallback) {
+  const source = Array.isArray(value) ? value : (Array.isArray(fallback) ? fallback : []);
+  const rows = [];
+  source.slice(0, 12).forEach(function (item, index) {
+    const legacy = typeof item === "string" ? cleanText(item, 100).toLowerCase() : "";
+    const sourceItem = item && typeof item === "object" ? item : {};
+    const label = cleanText(sourceItem.label != null ? sourceItem.label : (LEGACY_PAYMENT_LABELS[legacy] || item), 100);
+    if (!label) return;
+    const id = paymentMethodId(sourceItem.id || label, index);
+    if (rows.some(function (row) { return row.id === id || row.label.toLowerCase() === label.toLowerCase(); })) return;
+    rows.push({
+      id,
+      label,
+      instructions: cleanText(sourceItem.instructions, 1600),
+      active: sourceItem.active !== false
+    });
+  });
+  return rows;
+}
+
+function paymentMethodsFromSetup(value) {
+  return cleanText(value, 1200).split(/[\n,;]+/).map(function (label, index) {
+    label = cleanText(label, 100);
+    return label ? { id: paymentMethodId(label, index), label, instructions: "", active: true } : null;
+  }).filter(Boolean);
+}
+
+function paymentInstructionsMessage(configuration, meta) {
+  const config = normalizeBotConfiguration(configuration, {
+    plan_id: meta && meta.plan_id || configuration && configuration.plan_id
+  });
+  const activeMethods = config.payments.methods.filter(function (method) { return method.active; });
+  if (!activeMethods.length) return "";
+  return "💳 *Medios de pago*\n\n" + activeMethods.map(function (method, index) {
+    return "*" + (index + 1) + ". " + method.label + "*\n" +
+      (method.instructions || "No hay instrucciones configuradas para este método. Te conecto con una persona del equipo antes de indicarte cómo pagar.");
+  }).join("\n\n") + "\n\n¿Cuál prefieres?";
 }
 
 function planSlug(planId) {
@@ -275,9 +329,7 @@ function defaultsFromOnboarding(record, planId) {
       out_of_stock_message: "En este momento ese producto está agotado. Puedo mostrarte alternativas similares disponibles."
     },
     payments: {
-      methods: cleanText(operations.payments, 100)
-        ? ["nequi_daviplata", "transfer", "cash_on_delivery"]
-        : [],
+      methods: paymentMethodsFromSetup(operations.payments),
       confirmation_message: "¡Listo! Recibimos los datos de tu pedido. Una persona del equipo confirmará el pago y la entrega."
     },
     faqs: parseFaqText(operations.frequent_questions),
@@ -408,7 +460,7 @@ function normalizeBotConfiguration(input, meta) {
       )
     },
     payments: {
-      methods: uniqueChoices(payments.methods, PAYMENT_METHODS, paymentsFallback.methods || []),
+      methods: normalizePaymentMethods(payments.methods, paymentsFallback.methods || []),
       confirmation_message: cleanText(
         payments.confirmation_message != null ? payments.confirmation_message : paymentsFallback.confirmation_message,
         1200
@@ -524,18 +576,19 @@ function buildBotConfigurationPrompt(configuration, meta) {
     if (config.catalog.out_of_stock_message) lines.push("- Si algo está agotado: " + config.catalog.out_of_stock_message);
   }
   if (features.payments) {
-    const paymentLabels = {
-      nequi_daviplata: "Nequi o Daviplata",
-      transfer: "transferencia",
-      cash_on_delivery: "contraentrega",
-      payment_link: "link de pago",
-      card: "tarjeta"
-    };
+    const activePaymentMethods = config.payments.methods.filter(function (method) { return method.active; });
     lines.push("- Métodos de pago autorizados: " + (
-      config.payments.methods.length
-        ? config.payments.methods.map(function (method) { return paymentLabels[method]; }).join(", ")
+      activePaymentMethods.length
+        ? activePaymentMethods.map(function (method) { return method.label; }).join(", ")
         : "ninguno; escala a una persona"
     ) + ".");
+    if (activePaymentMethods.length) {
+      lines.push("- Ofrece únicamente los métodos autorizados de esta empresa. No inventes cuentas, links, números ni instrucciones. Para cada método, usa exactamente estas instrucciones:");
+      activePaymentMethods.forEach(function (method) {
+        lines.push("  · " + method.label + ": " + (method.instructions || "No hay instrucciones configuradas; pide apoyo a una persona antes de indicar cómo pagar."));
+      });
+      lines.push("- Esta lista reemplaza cualquier flujo heredado de pagos. No uses herramientas ni menciones que enumeren métodos distintos a los autorizados aquí.");
+    }
     if (config.payments.confirmation_message) lines.push("- Al confirmar el pedido: " + config.payments.confirmation_message);
   }
   if (features.reminders && config.reminders.text) {
@@ -600,7 +653,7 @@ module.exports = {
   EMOJI_LEVELS,
   ESCALATION_TRIGGERS,
   GREETING_TONES,
-  PAYMENT_METHODS,
+  LEGACY_PAYMENT_LABELS,
   RESPONSE_LENGTHS,
   SHIPPING_SUGGESTIONS,
   buildBotConfigurationPrompt,
@@ -614,6 +667,7 @@ module.exports = {
   normalizeBotConfiguration,
   normalizeBotPersonality: normalizeBotConfiguration,
   parseFaqText,
+  paymentInstructionsMessage,
   personalityForOnboarding: configurationForOnboarding,
   planFeatures,
   planSlug

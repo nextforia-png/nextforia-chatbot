@@ -388,14 +388,20 @@ function signedSessionCookie(secret, user) {
     assert(!shellA.includes(">RAV Toys<"));
     assert(!shellA.includes(">Empresa B<"));
 
-    response = await fetch(base + "/admin/client-onboarding?edit=1&focus=pending&return_to=%2Fadmin%2Fpanel%3Ftab%3Dnotifications", {
+    response = await fetch(base + "/admin/client-onboarding/edit?focus=pending", {
       headers: { cookie: userA.cookie }
     });
     assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.headers.get("cache-control"), "private, no-store, max-age=0");
     const onboardingEditA = await response.text();
-    assert(onboardingEditA.includes('class="returnLink" href="/admin/panel?tab=notifications"'));
+    assert(onboardingEditA.includes('class="returnLink" href="/admin/panel?tab=setup"'));
     assert(onboardingEditA.includes("← Volver al Panel de Control"));
     assert(!onboardingEditA.includes("Empresa B"));
+
+    // The older deep link remains supported, but the Panel itself always uses
+    // the stable edit route above.
+    response = await fetch(base + "/admin/client-onboarding?edit=1", { headers: { cookie: userA.cookie } });
+    assert.strictEqual(response.status, 200);
 
     response = await fetch(base + "/admin/logout", {
       method: "POST",

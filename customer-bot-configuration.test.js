@@ -46,6 +46,9 @@ assert(configurationUi.clientScript.includes('nxSetAppointmentServiceDepositFrom
 assert(configurationUi.clientScript.includes('nxSyncAppointmentServiceDepositFields'));
 assert(configurationUi.clientScript.includes('amountTitle.textContent=percentage?"Anticipo (%)":"Anticipo (COP)"'));
 assert(configurationUi.clientScript.includes('row.insertAdjacentElement("afterend",modeLabel)'));
+assert(configurationUi.clientScript.includes('serviceField.getAttribute("data-nx-service-field")'));
+assert(configurationUi.clientScript.includes('<textarea name="nx_service_payment_instruction_'));
+assert(configurationUi.clientScript.includes('method.type==="cash"'));
 assert(configurationUi.clientScript.includes('data-nx-service-id'));
 assert(configurationUi.clientScript.includes("nxSelectLogoFile"));
 assert(configurationUi.clientScript.includes("preparePanelImage(file)"));

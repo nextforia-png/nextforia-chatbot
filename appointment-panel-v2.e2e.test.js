@@ -188,6 +188,19 @@ async function seedAppointment(base, secret, agentId, customerName) {
             { id: "full_name", type: "full_name", label: "Nombre completo", active: true, required: true },
             { id: "primera_cita", type: "custom", label: "Primera cita", question: "¿Es tu primera cita?", active: true, required: true }
           ],
+          appointment_services: [{
+            id: "consulta_inicial",
+            name: "Consulta inicial",
+            duration_minutes: 45,
+            price_cop: 250000,
+            modality: "virtual",
+            virtual_link: "https://meet.example/consulta",
+            deposit: { required: true, mode: "fixed", amount: 50000 },
+            payment_methods: [
+              { type: "bank_transfer", active: true, instructions: "Transferir a la cuenta indicada por Clínica A." },
+              { type: "payment_link", active: true, instructions: "Usar el enlace seguro enviado por Clínica A." }
+            ]
+          }],
           rules: [{ id: "rule-a", text: "Atender únicamente en horario de Clínica A.", active: true }],
           exceptions: [{ id: "closed-a", date: "2030-07-22", mode: "close", note: "Cierre Clínica A" }],
           reminder_policy: { enabled: true, channel: "whatsapp", offsets_minutes: [1440, 360] }
@@ -202,6 +215,8 @@ async function seedAppointment(base, secret, agentId, customerName) {
     }), "tenant A must persist its custom appointment requirement");
     assert.strictEqual(payload.settings.services, "Valoración inicial · 45 minutos · Clínica A");
     assert.strictEqual(payload.settings.cancellation_policy, "Reprogramar con mínimo 6 horas de anticipación.");
+    assert.strictEqual(payload.settings.appointment_services[0].deposit.amount, 50000);
+    assert.strictEqual(payload.settings.appointment_services[0].payment_methods.filter(function (row) { return row.active; }).length, 2);
     const revisionAfterFirstSave = payload.revision;
 
     response = await fetch(base + "/admin/panel/appointment-settings", {
@@ -221,6 +236,8 @@ async function seedAppointment(base, secret, agentId, customerName) {
       "tenant B must not see tenant A appointment services");
     assert.notStrictEqual(settingsB.settings.cancellation_policy, "Reprogramar con mínimo 6 horas de anticipación.",
       "tenant B must not see tenant A appointment rules");
+    assert.strictEqual(settingsB.settings.appointment_services.length, 0,
+      "tenant B must not inherit tenant A service rules");
 
     response = await fetch(base + "/admin/panel/appointments-data", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);

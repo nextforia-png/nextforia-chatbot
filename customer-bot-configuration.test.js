@@ -33,6 +33,20 @@ assert(!configurationUi.clientScript.includes("NX_PAYMENT_LABELS"));
 assert(configurationUi.clientScript.includes("nxApplyCredentialAutocompleteGuards"));
 assert(configurationUi.clientScript.includes('data-bwignore="true"'));
 assert(configurationUi.clientScript.includes("nxConfigInputAttributes"));
+assert(configurationUi.styles.includes(".nxAccordionIcon svg{width:1em;height:1em;display:block}"));
+for (const iconPath of [
+  "M5 3.5h14A1.5 1.5 0 0 1 20.5 5v14",
+  "M20.5 14.5a2 2 0 0 1-2 2H8l-4 3.5V5",
+  "M3.2 9.5 5.2 4.5h13.6l2 5",
+  "M12 2.8 20.4 7v10L12 21.2 3.6 17V7",
+  "M6.2 10a5.8 5.8 0 0 1 11.6 0",
+  "M12.6 2.6A2 2 0 0 0 11.2 2H4.4",
+  "M13.2 17.5H4.5a2 2 0 0 1-2-2v-7",
+  "M9.7 7.9a2.6 2.6 0 0 1 5 .9c0 1.7-2.4 2-2.4 3.4",
+  "M8.6 11.6a3.6 3.6 0 1 0 0-7.2",
+  "M9.2 11.5V6.3a1.6 1.6 0 0 1 3.2 0v5.2",
+  "M15 14c.2-1 .7-1.8 1.5-2.5"
+]) assert(configurationUi.clientScript.includes(iconPath));
 assert(configurationUi.clientScript.includes("shipping.flat_fee_cop"));
 assert(configurationUi.clientScript.includes("shipping.free_over_cop"));
 assert(configurationUi.clientScript.includes("shipping.policy"));

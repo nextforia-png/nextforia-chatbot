@@ -7,6 +7,7 @@ const {
   configurationForOnboarding,
   defaultsFromOnboarding,
   normalizeBotConfiguration,
+  paymentInstructionsMessage,
   planFeatures
 } = require("./bot-personality");
 
@@ -86,6 +87,10 @@ assert.deepStrictEqual(normalized.payments.methods, [
 assert.strictEqual(normalized.faqs[0].question, "¿Horario?");
 assert.strictEqual(normalized.extra_context.length, 5000);
 assert.strictEqual(normalized.updated_by, "admin@example.com");
+const paymentMessage = paymentInstructionsMessage(normalized, { plan_id: "nextfor-aura" });
+assert(paymentMessage.includes("Pago móvil"));
+assert(paymentMessage.includes("Envía el comprobante por este chat."));
+assert(!paymentMessage.includes("Caja física"), "un método inactivo no se puede ofrecer");
 const structuralPaths = configurationLeafPaths(normalizeBotConfiguration({}, {
   fallback: defaults,
   plan_id: "nextfor-atlas",
@@ -123,6 +128,7 @@ assert.ok(!unoPrompt.includes("Métodos de pago autorizados"));
 const auraPrompt = buildBotConfigurationPrompt(normalized, { plan_id: "nextfor-aura" });
 assert.ok(auraPrompt.includes("DATOS DE ENVÍO"));
 assert.ok(auraPrompt.includes("Métodos de pago autorizados"));
+assert.ok(auraPrompt.includes("reemplaza cualquier flujo heredado de pagos"));
 assert.ok(auraPrompt.includes("RESPUESTAS EXACTAS"));
 assert.ok(auraPrompt.includes("No prometas inventario"));
 

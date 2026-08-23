@@ -169,6 +169,7 @@ const {
   buildBotPersonalityPrompt,
   maxTokensForPersonality,
   normalizeBotPersonality,
+  paymentInstructionsMessage,
   personalityForOnboarding,
   planFeatures
 } = require("./bot-personality");
@@ -420,7 +421,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v443-chatbot-payment-methods";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v444-chatbot-payment-runtime";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -6467,9 +6468,12 @@ async function executeSendStoreLocation(to) {
   return { sent: true, store: "Planet Selva" };
 }
 
-async function executeSendPaymentInfo(to) {
-  await sendText(to, PAYMENT_INFO);
-  return { sent: true };
+async function executeSendPaymentInfo(to, personality, useTenantPaymentConfiguration, runtime) {
+  const configuredMessage = useTenantPaymentConfiguration
+    ? paymentInstructionsMessage(personality)
+    : "";
+  await sendText(to, configuredMessage || PAYMENT_INFO, runtime);
+  return { sent: true, source: configuredMessage ? "tenant_configuration" : "legacy_rav" };
 }
 
 async function executeSendWarrantyInfo(to) {
@@ -7631,9 +7635,24 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   }
   const conversationSystemPrompt = "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad.";
   const ravOperationalToolsAllowed = runtimePolicy.business_tools_profile === "rav";
+  // Once a tenant saves payment settings from its Customer Panel, those are
+  // authoritative. RAV's legacy checkout tools enumerate a fixed catalogue,
+  // so they must not be available for a tenant-specific payment conversation.
+  const tenantPaymentConfigurationActive = !!(
+    routeUsesCustomerServiceBot &&
+    activeClientOnboarding && activeClientOnboarding.bot_personality &&
+    liveBotConfiguration.personality && liveBotConfiguration.personality.payments &&
+    Array.isArray(liveBotConfiguration.personality.payments.methods) &&
+    liveBotConfiguration.personality.payments.methods.some(function (method) { return method && method.active; })
+  );
   let conversationTools = ravOperationalToolsAllowed
     ? TOOLS.slice()
     : TOOLS.filter(function (tool) { return tool.name === "request_human_handoff"; });
+  if (tenantPaymentConfigurationActive) {
+    conversationTools = conversationTools.filter(function (tool) {
+      return tool.name !== "send_payment_info" && tool.name !== "send_payment_link";
+    });
+  }
   if (!conversationTools.some(function (tool) { return tool.name === CUSTOMER_PROFILE_TOOL.name; })) {
     conversationTools.push(CUSTOMER_PROFILE_TOOL);
   }
@@ -7845,7 +7864,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
                 result = await executeSendStoreLocation(userId);
                 break;
               case "send_payment_info":
-                result = await executeSendPaymentInfo(userId);
+                result = await executeSendPaymentInfo(
+                  userId,
+                  liveBotConfiguration.personality,
+                  tenantPaymentConfigurationActive,
+                  conversationRuntime
+                );
                 break;
               case "send_warranty_info":
                 result = await executeSendWarrantyInfo(userId);

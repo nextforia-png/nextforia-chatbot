@@ -149,6 +149,18 @@ function paymentMethodsFromSetup(value) {
   }).filter(Boolean);
 }
 
+function paymentInstructionsMessage(configuration, meta) {
+  const config = normalizeBotConfiguration(configuration, {
+    plan_id: meta && meta.plan_id || configuration && configuration.plan_id
+  });
+  const activeMethods = config.payments.methods.filter(function (method) { return method.active; });
+  if (!activeMethods.length) return "";
+  return "💳 *Medios de pago*\n\n" + activeMethods.map(function (method, index) {
+    return "*" + (index + 1) + ". " + method.label + "*\n" +
+      (method.instructions || "No hay instrucciones configuradas para este método. Te conecto con una persona del equipo antes de indicarte cómo pagar.");
+  }).join("\n\n") + "\n\n¿Cuál prefieres?";
+}
+
 function planSlug(planId) {
   const value = cleanText(planId, 80).toLowerCase().replace(/^nextfor[-_]/, "");
   return ["uno", "aura", "tempo", "atlas"].includes(value) ? value : "uno";
@@ -575,6 +587,7 @@ function buildBotConfigurationPrompt(configuration, meta) {
       activePaymentMethods.forEach(function (method) {
         lines.push("  · " + method.label + ": " + (method.instructions || "No hay instrucciones configuradas; pide apoyo a una persona antes de indicar cómo pagar."));
       });
+      lines.push("- Esta lista reemplaza cualquier flujo heredado de pagos. No uses herramientas ni menciones que enumeren métodos distintos a los autorizados aquí.");
     }
     if (config.payments.confirmation_message) lines.push("- Al confirmar el pedido: " + config.payments.confirmation_message);
   }
@@ -654,6 +667,7 @@ module.exports = {
   normalizeBotConfiguration,
   normalizeBotPersonality: normalizeBotConfiguration,
   parseFaqText,
+  paymentInstructionsMessage,
   personalityForOnboarding: configurationForOnboarding,
   planFeatures,
   planSlug

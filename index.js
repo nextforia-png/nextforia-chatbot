@@ -166,6 +166,11 @@ const {
   validateAppointmentReply
 } = require("./appointment-response-policy");
 const {
+  appointmentsForConversation,
+  buildAppointmentRecallReply,
+  classifyAppointmentRecallIntent
+} = require("./appointment-recall");
+const {
   buildBotPersonalityPrompt,
   maxTokensForPersonality,
   normalizeBotPersonality,
@@ -2746,6 +2751,39 @@ async function hydrateAppointmentsForTenant(tenantId) {
   }
 }
 
+async function hydrateAppointmentsForConversation(tenantId, conversationIdentity) {
+  if (!SUPABASE_APPOINTMENTS_ENABLED) return false;
+  const customerConversationId = normalizeConversationUserId(conversationIdentity);
+  if (!customerConversationId) return false;
+  try {
+    const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE, {
+      params: {
+        select: "*",
+        tenant_id: "eq." + tenantId,
+        customer_conversation_id: "eq." + customerConversationId,
+        order: "updated_at.desc",
+        limit: 100
+      },
+      headers: SB_HEADERS,
+      timeout: 8000
+    });
+    const rows = (response.data || []).map(function (stored) {
+      try { return JSON.parse(decryptStoredText(stored.payload, DATA_ENCRYPTION_KEY)); }
+      catch (_) { return null; }
+    }).filter(Boolean);
+    if (rows.length) {
+      appointmentRegistry.hydrate(rows);
+      return true;
+    }
+    // Compatibility with bookings created before customer_conversation_id was
+    // persisted as an indexed column. This fallback remains tenant-scoped.
+    return hydrateAppointmentsForTenant(tenantId);
+  } catch (error) {
+    console.error("hydrateAppointmentsForConversation error:", error.message);
+    return false;
+  }
+}
+
 async function loadUpcomingAppointmentsForReminderWorker() {
   if (!SUPABASE_APPOINTMENTS_ENABLED) return [];
   const response = await axios.get(SUPABASE_URL + "/rest/v1/" + SUPABASE_APPOINTMENTS_TABLE, {
@@ -5310,7 +5348,8 @@ const APPOINTMENT_OPERATIONAL_PROMPT = [
   "- Sigue las reglas del servicio elegido: duración, precio, modalidad y, si aplica, anticipo y sus instrucciones de pago. Nunca inventes datos de pago ni confirmes la cita solo porque el cliente dice que pagó.",
   "- Usa book_appointment únicamente después de que el cliente confirme explícitamente.",
   "- Si el calendario no está conectado o una herramienta falla, no inventes disponibilidad: ofrece apoyo humano.",
-  "- Informa que la cita quedó confirmada solo cuando book_appointment responda status=booked y calendar_sync_status=synced."
+  "- Informa que la cita quedó confirmada solo cuando book_appointment responda status=booked y calendar_sync_status=synced.",
+  "- Cuando el cliente pregunte por una cita ya creada o por su enlace, usa siempre CITAS PERSISTENTES DEL CLIENTE como fuente autoritativa. Nunca respondas desde memoria solamente."
 ].join("\n");
 
 function buildAppointmentRequirementsContext(onboarding) {
@@ -7859,6 +7898,48 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     });
   }
   conversationConfigurationFingerprints.set(stateKey, liveBotConfiguration.fingerprint);
+  const appointmentRecallIntent = usesAppointmentBot
+    ? classifyAppointmentRecallIntent(userMessage)
+    : "";
+  if (appointmentRecallIntent) {
+    const appointmentsHydrated = await hydrateAppointmentsForConversation(tenantId, userId);
+    const persistentCustomerAppointments = appointmentsForConversation(
+      appointmentRegistry.list(tenantId),
+      userId,
+      { now: Date.now(), tenantId }
+    );
+    if (persistentCustomerAppointments.length) {
+      const recallReply = buildAppointmentRecallReply(
+        appointmentRecallIntent,
+        persistentCustomerAppointments,
+        { timeZone: normalizeAppointmentTimeZone(appointmentConfiguration.time_zone) }
+      );
+      conversationTurnContext.push("tools", "appointment_persistent_recall");
+      history.push({ role: "user", content: userMessage });
+      history.push({ role: "assistant", content: recallReply });
+      conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
+      const recallSent = await sendBotReply(recallReply);
+      await recordTurn(userId, userMessage, recallReply, recallSent ? "ok" : "error", conversationRuntime);
+      log("info", "appointment_persistent_recall_answered", {
+        tenant_id: tenantId,
+        channel: conversationRuntime.channel,
+        intent: appointmentRecallIntent,
+        appointment_id: persistentCustomerAppointments[0].appointment_id,
+        status: persistentCustomerAppointments[0].status
+      });
+      return;
+    }
+    if (!appointmentsHydrated && SUPABASE_APPOINTMENTS_ENABLED) {
+      const unavailableReply = "No pude consultar la agenda permanente en este momento. No voy a asumir que tu cita no existe; inténtalo de nuevo en unos minutos o pide apoyo del equipo.";
+      conversationTurnContext.push("tools", "appointment_persistent_recall_unavailable");
+      history.push({ role: "user", content: userMessage });
+      history.push({ role: "assistant", content: unavailableReply });
+      conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
+      const unavailableSent = await sendBotReply(unavailableReply);
+      await recordTurn(userId, userMessage, unavailableReply, unavailableSent ? "ok" : "error", conversationRuntime);
+      return;
+    }
+  }
   const checkoutAwaitingPayment = checkouts.get(stateKey);
   if (usesCustomerServiceBot && checkoutAwaitingPayment && checkoutAwaitingPayment.payment_sent_at &&
       ["wompi", "transferencia"].includes(checkoutAwaitingPayment.payment_method) &&

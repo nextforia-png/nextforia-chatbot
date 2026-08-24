@@ -14,6 +14,8 @@ assert(source.includes("buildAppointmentRecallReply("));
 assert(source.includes('appointmentRecallIntent === "link" && !validMeetingLink(persistentCustomerAppointments[0])'));
 assert(source.includes('"appointment_link_recall:" + conversationChannel(userId)'));
 assert(source.includes('"appointment_virtual_link_self_healed"'));
+assert(source.includes('if (!repairedAppointment.appointment_modality)'));
+assert(source.includes('"appointment_legacy_virtual_modality_inferred"'));
 
 const recallPosition = source.indexOf("const appointmentRecallIntent = classifyAppointmentRecallIntent(userMessage)");
 const greetingPosition = source.indexOf("const configuredGreeting = configuredGreetingForTurn", recallPosition);

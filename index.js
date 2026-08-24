@@ -432,7 +432,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v449-appointment-google-meet";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v450-legacy-appointment-meet-repair";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -7954,6 +7954,22 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
             await enrichAppointmentModalityFromTenant(persistentCustomerAppointments[0], tenantId),
             false
           );
+          // Appointments created before structured Services and Rules did not
+          // persist a modality. An explicit access-link request is the only
+          // safe signal needed to migrate that one tenant-scoped appointment
+          // to virtual without changing or duplicating the booking.
+          if (!repairedAppointment.appointment_modality) {
+            repairedAppointment = await appointmentRegistry.upsert(Object.assign({}, repairedAppointment, {
+              appointment_modality: "virtual",
+              appointment_readiness: "requires_attention",
+              updated_at: new Date().toISOString()
+            }), false);
+            log("info", "appointment_legacy_virtual_modality_inferred", {
+              tenant_id: tenantId,
+              appointment_id: repairedAppointment.appointment_id,
+              signal: "customer_link_request"
+            });
+          }
           if (repairedAppointment.appointment_modality === "virtual") {
             repairedAppointment = await applyAppointmentCalendarEffect(
               repairedAppointment,

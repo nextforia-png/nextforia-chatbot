@@ -168,7 +168,8 @@ const {
 const {
   appointmentsForConversation,
   buildAppointmentRecallReply,
-  classifyAppointmentRecallIntent
+  classifyAppointmentRecallIntent,
+  validMeetingLink
 } = require("./appointment-recall");
 const {
   buildBotPersonalityPrompt,
@@ -431,7 +432,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v448-meta-out-of-window-hub";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v449-appointment-google-meet";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -3083,7 +3084,14 @@ function appointmentReminderMessage(row, appointment) {
   const when = Number.isFinite(startsAt.getTime())
     ? startsAt.toLocaleString("es-CO", { timeZone: "America/Bogota", weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" })
     : "el horario acordado";
-  return "Hola" + (name ? " " + name.split(/\s+/)[0] : "") + " 👋 Te recordamos " + service + " para " + when + ". Responde a este mensaje para confirmar o pedir un cambio.";
+  const access = appointment && appointment.appointment_modality === "virtual"
+    ? (safeExternalHttpsUrl(appointment.virtual_meeting_link)
+      ? " Enlace de acceso: " + safeExternalHttpsUrl(appointment.virtual_meeting_link)
+      : " El enlace de acceso te llegará por separado.")
+    : appointment && appointment.appointment_modality === "in_person" && cleanRuntimeText(appointment.physical_address, 1000)
+      ? " Lugar: " + cleanRuntimeText(appointment.physical_address, 1000)
+      : "";
+  return "Hola" + (name ? " " + name.split(/\s+/)[0] : "") + " 👋 Te recordamos " + service + " para " + when + "." + access + " Responde a este mensaje para confirmar o pedir un cambio.";
 }
 
 async function deliverAppointmentReminder(row, appointment) {
@@ -7103,8 +7111,12 @@ async function queueCustomerAppointmentNotification(tenantId, appointment) {
       conversation_id: appointmentId,
       channel: cleanChannel(appointment && appointment.channel) || "whatsapp",
       customer_label: customerName,
-      title: appointment && appointment.status === "rescheduled" ? "Cita reprogramada" : "Nueva cita confirmada",
-      message: customerName + " tiene una cita para " + appointmentNotificationWhen(appointment && appointment.starts_at) + ".",
+      title: appointment && appointment.appointment_readiness === "requires_attention"
+        ? "Cita requiere atención"
+        : appointment && appointment.status === "rescheduled" ? "Cita reprogramada" : "Nueva cita confirmada",
+      message: appointment && appointment.appointment_readiness === "requires_attention"
+        ? customerName + " tiene una cita virtual sin enlace válido. Agrega o reemplaza el enlace antes de la atención."
+        : customerName + " tiene una cita para " + appointmentNotificationWhen(appointment && appointment.starts_at) + ".",
       created_at: appointment && appointment.updated_at
     });
     log("info", "appointment_notification_created", {
@@ -7479,6 +7491,31 @@ async function executeCheckAppointmentAvailability(tenantId, input, actor) {
   });
 }
 
+async function enrichAppointmentModalityFromTenant(row, tenantId) {
+  if (!row) return row;
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const settings = appointmentSettingsFromOnboarding(onboarding);
+  const matched = findAppointmentService(settings.appointment_services, row.appointment_service_id, row.appointment_service_name || row.consultation_reason);
+  if (!matched.ok || !matched.service) return row;
+  const service = matched.service;
+  const requested = String(row.appointment_modality || "").toLowerCase();
+  const modality = service.modality === "both" ? requested : service.modality;
+  if (!["in_person", "virtual"].includes(modality)) {
+    return Object.assign({}, row, { appointment_readiness: "requires_attention" });
+  }
+  return Object.assign({}, row, {
+    appointment_service_id: service.id,
+    appointment_service_name: service.name,
+    appointment_price_cop: service.price_cop,
+    appointment_modality: modality,
+    physical_address: modality === "in_person" ? service.address : "",
+    physical_directions: modality === "in_person" ? service.directions : "",
+    physical_maps_link: modality === "in_person" ? safeExternalHttpsUrl(service.maps_link) : "",
+    virtual_fallback_link: modality === "virtual" ? safeExternalHttpsUrl(service.virtual_link) : "",
+    appointment_readiness: modality === "virtual" ? "requires_attention" : "ready"
+  });
+}
+
 async function executeBookAppointment(userId, tenantId, input, actor) {
   if (input && input.data_processing_consent !== true) {
     return { ok: false, error: "data_processing_consent_required" };
@@ -7618,6 +7655,11 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     appointment_service_name: selectedService && selectedService.name || "",
     appointment_price_cop: selectedService && selectedService.price_cop || 0,
     appointment_modality: selectedModality || "",
+    physical_address: selectedModality === "in_person" && selectedService ? selectedService.address : "",
+    physical_directions: selectedModality === "in_person" && selectedService ? selectedService.directions : "",
+    physical_maps_link: selectedModality === "in_person" && selectedService ? safeExternalHttpsUrl(selectedService.maps_link) : "",
+    virtual_fallback_link: selectedModality === "virtual" && selectedService ? safeExternalHttpsUrl(selectedService.virtual_link) : "",
+    appointment_readiness: selectedModality === "virtual" ? "requires_attention" : "ready",
     booking_fields: input.booking_fields,
     booking_requirements_version: 2,
     deposit_status: selectedService && selectedService.deposit.required ? "verified" : "not_required",
@@ -7629,12 +7671,6 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     updated_at: new Date().toISOString()
   }, false);
   row = await applyAppointmentCalendarEffect(row, "sync", actor);
-  if (row.calendar_sync_status !== "synced") {
-    row = await appointmentRegistry.upsert(Object.assign({}, row, {
-      status: "requested",
-      updated_at: new Date().toISOString()
-    }), false);
-  }
   await persistAppointment(row);
   await syncAppointmentReminderSchedule(tenantId, row);
   let notification = null;
@@ -7657,15 +7693,17 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     }
   }
   return {
-    ok: row.status === "booked" && row.calendar_sync_status === "synced",
+    ok: row.status === "booked",
     appointment_id: row.appointment_id,
     status: row.status,
     starts_at: row.starts_at,
     duration_minutes: row.duration_minutes,
     calendar_sync_status: row.calendar_sync_status || "pending",
+    appointment_readiness: row.appointment_readiness || "ready",
+    virtual_meeting_link: row.virtual_meeting_link || "",
     notification_id: notification && notification.id || null,
     customer_confirmation_status: confirmation && confirmation.delivery && confirmation.delivery.status || confirmation && confirmation.reason || null,
-    error: row.calendar_sync_status === "synced" ? undefined : row.calendar_last_error || "calendar_sync_pending"
+    error: row.appointment_readiness === "requires_attention" ? "virtual_link_requires_attention" : undefined
   };
 }
 
@@ -7904,12 +7942,43 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
   const appointmentRecallIntent = classifyAppointmentRecallIntent(userMessage);
   if (appointmentRecallIntent) {
     const appointmentsHydrated = await hydrateAppointmentsForConversation(tenantId, userId);
-    const persistentCustomerAppointments = appointmentsForConversation(
+    let persistentCustomerAppointments = appointmentsForConversation(
       appointmentRegistry.list(tenantId),
       userId,
       { now: Date.now(), tenantId }
     );
     if (persistentCustomerAppointments.length) {
+      if (appointmentRecallIntent === "link" && !validMeetingLink(persistentCustomerAppointments[0])) {
+        try {
+          let repairedAppointment = await appointmentRegistry.upsert(
+            await enrichAppointmentModalityFromTenant(persistentCustomerAppointments[0], tenantId),
+            false
+          );
+          if (repairedAppointment.appointment_modality === "virtual") {
+            repairedAppointment = await applyAppointmentCalendarEffect(
+              repairedAppointment,
+              "sync",
+              "appointment_link_recall:" + conversationChannel(userId)
+            );
+            await persistAppointment(repairedAppointment);
+            await syncAppointmentReminderSchedule(tenantId, repairedAppointment);
+            persistentCustomerAppointments = [repairedAppointment].concat(persistentCustomerAppointments.slice(1));
+            log(validMeetingLink(repairedAppointment) ? "info" : "warn", "appointment_virtual_link_self_healed", {
+              tenant_id: tenantId,
+              appointment_id: repairedAppointment.appointment_id,
+              ready: Boolean(validMeetingLink(repairedAppointment)),
+              source: repairedAppointment.virtual_link_source || "none",
+              calendar_sync_status: repairedAppointment.calendar_sync_status || "pending"
+            });
+          }
+        } catch (error) {
+          log("warn", "appointment_virtual_link_self_heal_failed", {
+            tenant_id: tenantId,
+            appointment_id: persistentCustomerAppointments[0].appointment_id,
+            error: cleanRuntimeText(error && error.message, 240)
+          });
+        }
+      }
       const recallReply = buildAppointmentRecallReply(
         appointmentRecallIntent,
         persistentCustomerAppointments,
@@ -9727,6 +9796,15 @@ async function receiveElevenLabsPostCallWebhook(req, res) {
     }
     let appointment = await appointmentRegistry.ingestElevenLabs(event, tenantId);
     if (appointment && ["booked", "rescheduled"].includes(appointment.status) && appointment.starts_at) {
+      try {
+        appointment = await appointmentRegistry.upsert(await enrichAppointmentModalityFromTenant(appointment, tenantId), false);
+      } catch (enrichmentError) {
+        log("warn", "appointment_modality_enrichment_failed", {
+          tenant_id: cleanTenantId(tenantId),
+          appointment_id_suffix: String(appointment.appointment_id || "").slice(-12),
+          error: cleanRuntimeText(enrichmentError && enrichmentError.message, 180)
+        });
+      }
       appointment = await applyAppointmentCalendarEffect(appointment, "sync", "elevenlabs_post_call");
     }
     if (appointment) {
@@ -11030,6 +11108,34 @@ async function appointmentCalendarConnectionForTenant(tenantId) {
   }
 }
 
+function appointmentLocationState(row, calendarMeetingLink) {
+  const current = row || {};
+  const modality = String(current.appointment_modality || "").toLowerCase();
+  if (modality === "in_person") {
+    return {
+      appointment_readiness: current.physical_address ? "ready" : "requires_attention",
+      physical_address: cleanRuntimeText(current.physical_address, 1000),
+      physical_directions: cleanRuntimeText(current.physical_directions, 2000),
+      physical_maps_link: safeExternalHttpsUrl(current.physical_maps_link)
+    };
+  }
+  if (modality !== "virtual") return {};
+  const manual = current.virtual_link_source === "manual" && safeExternalHttpsUrl(current.virtual_meeting_link);
+  const generatedCandidate = safeExternalHttpsUrl(calendarMeetingLink);
+  let generated = "";
+  try {
+    const generatedUrl = new URL(generatedCandidate);
+    if (generatedUrl.hostname === "meet.google.com") generated = generatedCandidate;
+  } catch (_) {}
+  const existingMeet = current.virtual_link_source === "google_meet" && safeExternalHttpsUrl(current.virtual_meeting_link);
+  const fallback = safeExternalHttpsUrl(current.virtual_fallback_link);
+  if (manual) return { appointment_readiness: "ready", virtual_meeting_link: manual, virtual_link_source: "manual" };
+  if (generated) return { appointment_readiness: "ready", virtual_meeting_link: generated, virtual_link_source: "google_meet" };
+  if (existingMeet) return { appointment_readiness: "ready", virtual_meeting_link: existingMeet, virtual_link_source: "google_meet" };
+  if (fallback) return { appointment_readiness: "ready", virtual_meeting_link: fallback, virtual_link_source: "fallback" };
+  return { appointment_readiness: "requires_attention", virtual_meeting_link: "", virtual_link_source: "" };
+}
+
 async function applyAppointmentCalendarEffect(row, action, actor) {
   if (!row || !appointmentCalendarService) return row;
   const tenantId = cleanTenantId(row.tenant_id);
@@ -11038,13 +11144,19 @@ async function applyAppointmentCalendarEffect(row, action, actor) {
     const result = action === "cancel"
       ? await appointmentCalendarService.cancelAppointment(tenantId, row, actor)
       : await appointmentCalendarService.syncAppointment(tenantId, row, actor);
-    return appointmentRegistry.upsert(Object.assign({}, row, result, {
+    const location = appointmentLocationState(row, result && result.virtual_meeting_link);
+    if (location.virtual_meeting_link && (
+      location.virtual_meeting_link !== row.virtual_meeting_link ||
+      location.virtual_link_source !== row.virtual_link_source
+    )) location.virtual_link_updated_at = new Date().toISOString();
+    return appointmentRegistry.upsert(Object.assign({}, row, result, location, {
       panel_action_status: row.panel_action ? "synced" : row.panel_action_status,
       updated_at: new Date().toISOString()
     }), false);
   } catch (error) {
     const code = String(error && (error.code || error.message) || "calendar_sync_failed");
-    return appointmentRegistry.upsert(Object.assign({}, row, {
+    const location = appointmentLocationState(row, "");
+    return appointmentRegistry.upsert(Object.assign({}, row, location, {
       calendar_sync_status: code === "calendar_connection_not_found" ? "pending" : "failed",
       calendar_last_error: code,
       panel_action_status: row.panel_action ? "pending" : row.panel_action_status,
@@ -19359,6 +19471,35 @@ app.get("/admin/panel/appointments-data", async (req, res) => {
       send_reminders: capabilities.intervene && APPOINTMENT_REMINDER_SENDS_ENABLED
     }
   }));
+});
+
+app.put("/admin/panel/appointments/:appointmentId/virtual-link", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const appointmentId = cleanRuntimeText(req.params && req.params.appointmentId, 160);
+  const link = safeExternalHttpsUrl(req.body && (req.body.virtual_meeting_link || req.body.link));
+  if (!appointmentId || !link) return res.status(422).json({ ok: false, error: "valid_https_virtual_link_required" });
+  await hydrateAppointmentsForTenant(tenantId);
+  const current = appointmentRegistry.get(tenantId, appointmentId);
+  if (!current) return res.status(404).json({ ok: false, error: "appointment_not_found" });
+  if (current.appointment_modality !== "virtual") return res.status(422).json({ ok: false, error: "appointment_is_not_virtual" });
+  const actor = auth.name || auth.email || auth.username || "customer_panel";
+  try {
+    let updated = await appointmentRegistry.upsert(Object.assign({}, current, {
+      virtual_meeting_link: link,
+      virtual_link_source: "manual",
+      virtual_link_updated_at: new Date().toISOString(),
+      appointment_readiness: "ready",
+      updated_at: new Date().toISOString()
+    }), false);
+    updated = await applyAppointmentCalendarEffect(updated, "sync", actor);
+    await persistAppointment(updated);
+    await syncAppointmentReminderSchedule(tenantId, updated);
+    res.json({ ok: true, appointment: updated });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: String(error && (error.code || error.message) || "virtual_link_update_failed") });
+  }
 });
 
 app.post("/admin/panel/appointments/action", async (req, res) => {

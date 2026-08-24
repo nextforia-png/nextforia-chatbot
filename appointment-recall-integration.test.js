@@ -11,6 +11,9 @@ assert(source.includes("appointmentRegistry.list(tenantId)"));
 assert(source.includes('{ now: Date.now(), tenantId }'));
 assert(source.includes('conversationTurnContext.push("tools", "appointment_persistent_recall")'));
 assert(source.includes("buildAppointmentRecallReply("));
+assert(source.includes('appointmentRecallIntent === "link" && !validMeetingLink(persistentCustomerAppointments[0])'));
+assert(source.includes('"appointment_link_recall:" + conversationChannel(userId)'));
+assert(source.includes('"appointment_virtual_link_self_healed"'));
 
 const recallPosition = source.indexOf("const appointmentRecallIntent = classifyAppointmentRecallIntent(userMessage)");
 const greetingPosition = source.indexOf("const configuredGreeting = configuredGreetingForTurn", recallPosition);

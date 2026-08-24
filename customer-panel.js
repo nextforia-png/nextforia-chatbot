@@ -2624,7 +2624,7 @@ body.panel-redesign .orderMobileOpenChat{display:none}
     ${ordersMobileNav}
     ${salesMobileNav}
     ${mobileAppointmentTabs}
-    <button id="mnav-mobile-profile" data-mobile-primary="profile" type="button" onclick="openProfile()"><span class="mobileNavIcon">${PANEL_ICONS.user}</span><span>Mi perfil</span></button>
+    <button id="mnav-mobile-profile" data-mobile-primary="profile" type="button" onclick="openProfile()"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Mi perfil</span></button>
   </nav>
   <div class="profileModal" id="profileModal" role="dialog" aria-modal="true" aria-label="Perfil de la cuenta">
     <div class="profileScrim" onclick="closeProfile()"></div>

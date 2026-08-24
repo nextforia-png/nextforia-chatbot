@@ -101,6 +101,14 @@ assert(atlas.includes('data-appt-nav="conversations"'), "conversaciones debe par
 assert(atlas.includes('data-appt-mobile="conversations"'), "el menú móvil debe compartir el mismo estado exclusivo");
 assert(atlas.includes('document.body.classList.toggle("appointment-bot-view",appointments)'), "el estilo limpio debe activarse solo para el bot de citas");
 assert(atlas.includes('button.getAttribute("data-appt-nav")==="conversations"'), "abrir conversaciones debe retirar cualquier selección anterior");
+assert(atlas.includes('function selectBot(bot){var next=bot==="appointments"?"appointments":"support"'),
+  "el cambio de bot debe sincronizar el estado antes de pintar el módulo");
+assert(atlas.includes('showAppointmentSection(window.innerWidth<=760?"panel":"agenda")'),
+  "cambiar a Agendamiento debe dejar una sola sección interna seleccionada");
+assert(atlas.includes('id="navApptChatCount" style="display:none"'),
+  "el badge de conversaciones de citas debe iniciar oculto si aún no hay casos");
+assert(atlas.includes('id="mnavApptChatCount" style="display:none"'),
+  "el badge móvil de conversaciones de citas debe iniciar oculto si aún no hay casos");
 
 const tempoInbox = render({
   initialTab: "conversations",

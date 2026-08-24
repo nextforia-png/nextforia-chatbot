@@ -221,7 +221,9 @@ function validateAppointmentService(serviceInput) {
 }
 
 function compileAppointmentServices(servicesInput) {
-  const services = normalizeAppointmentServices(servicesInput).filter(function (service) { return service.active; });
+  const services = normalizeAppointmentServices(servicesInput).filter(function (service) {
+    return service.active && validateAppointmentService(service).ok;
+  });
   if (!services.length) return "No hay servicios estructurados todavía. No inventes precio, duración, modalidad ni reglas de pago.";
   const lines = ["SERVICIOS Y REGLAS ACTIVAS DEL TENANT:", "- Pide al cliente elegir un servicio antes de consultar o confirmar una cita. Usa su ID exacto en service_id."];
   services.forEach(function (service) {
@@ -238,7 +240,9 @@ function compileAppointmentServices(servicesInput) {
 }
 
 function findAppointmentService(servicesInput, requestedId, requestedName) {
-  const services = normalizeAppointmentServices(servicesInput).filter(function (service) { return service.active; });
+  const services = normalizeAppointmentServices(servicesInput).filter(function (service) {
+    return service.active && validateAppointmentService(service).ok;
+  });
   if (!services.length) return { ok: true, service: null, services };
   const requested = serviceId(requestedId || requestedName, "");
   const service = services.find(function (row) { return row.id === requested || serviceId(row.name, "") === requested; });
@@ -873,8 +877,10 @@ function updateAppointmentSettings(currentInput, patchInput, options) {
     updated_by: text(optionsValue.actor, 160)
   };
   const updated = normalizeAppointmentSettings(merged, { now });
-  const invalidService = updated.appointment_services.map(validateAppointmentService).find(function (result) { return !result.ok; });
-  if (invalidService) throw new AppointmentOperationsError(invalidService.error, 422, { appointment_service: invalidService.service || null });
+  // Incomplete services are valid persisted drafts. The Customer Panel must
+  // never lose what a tenant already typed just because one operational rule
+  // is still missing. compileAppointmentServices/findAppointmentService keep
+  // drafts away from Tempo/Atlas until validateAppointmentService is green.
   const invalidAftercare = validateAftercarePolicy(updated.reminder_policy.aftercare);
   if (!invalidAftercare.ok) throw new AppointmentOperationsError(invalidAftercare.error, 422, { variable: invalidAftercare.variable });
   return updated;

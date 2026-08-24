@@ -173,6 +173,19 @@ assert.strictEqual(updated.reminder_policy.max_attempts, 3);
 assert.deepStrictEqual(updated.booking_policy, { default_duration_minutes: 60, buffer_minutes: 20 });
 assert.strictEqual(updated.appointment_services[0].deposit.amount, 50000);
 assert.strictEqual(updated.booking_requirements.some(function (row) { return row.id === "primera_cita" && row.required; }), true);
+const withDraftService = updateAppointmentSettings(updated, {
+  appointment_services: updated.appointment_services.concat([{
+    id: "servicio_en_borrador",
+    name: "Servicio todavía incompleto",
+    duration_minutes: 0,
+    modality: "in_person",
+    address: ""
+  }])
+}, { expectedRevision: 4, actor: "admin@tenant-a.test", now: "2026-08-20T12:06:00.000Z" });
+assert.strictEqual(withDraftService.appointment_services.length, 2,
+  "incomplete tenant input must persist as a draft instead of being discarded");
+assert(!compileAppointmentServices(withDraftService.appointment_services).includes("Servicio todavía incompleto"),
+  "Tempo/Atlas must not consume a draft until its operational rules are complete");
 assert.throws(function () {
   updateAppointmentSettings(updated, {
     reminder_policy: {

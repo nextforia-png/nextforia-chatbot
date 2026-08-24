@@ -227,6 +227,7 @@ const {
   reminderSnapshot,
   updateAppointmentSettings,
   findAppointmentService,
+  validateAppointmentService,
   validateBookingRequirements
 } = require("./appointment-operations");
 const {
@@ -432,7 +433,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v460-appointment-aftercare-desktop";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v461-appointment-services-persistence";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -19200,6 +19201,14 @@ function publicAppointmentSettings(settings, configuration) {
     buffer_minutes: settings.booking_policy.buffer_minutes,
     booking_requirements: settings.booking_requirements,
     appointment_services: settings.appointment_services,
+    appointment_service_statuses: (settings.appointment_services || []).map(function (service) {
+      const result = validateAppointmentService(service);
+      return {
+        id: cleanRuntimeText(service && service.id, 100),
+        status: result.ok ? "ready" : "draft",
+        error: result.ok ? null : result.error
+      };
+    }),
     availability_rules: settings.availability_rules,
     services: cleanRuntimeText(configuration && configuration.services, 8000),
     minimum_booking_notice: cleanRuntimeText(configuration && configuration.minimum_booking_notice, 1200),
@@ -19230,8 +19239,12 @@ function appointmentConfigurationVerification(tenantId, onboarding) {
   const receipt = {
     tenant_id: cleanTenant,
     revision: Number(settings.revision) || 0,
-    updated_at: settings.updated_at || onboarding && (onboarding.last_updated_at || onboarding.updated_at) || null,
-    updated_by: cleanRuntimeText(settings.updated_by || onboarding && onboarding.updated_by, 160) || null,
+    // The onboarding record timestamp is persisted. normalizeAppointmentSettings
+    // may synthesize a timestamp for legacy records, so it must not lead the
+    // receipt or the same database row would produce a different fingerprint
+    // on every read.
+    updated_at: onboarding && (onboarding.last_updated_at || onboarding.updated_at) || settings.updated_at || null,
+    updated_by: cleanRuntimeText(onboarding && onboarding.updated_by || settings.updated_by, 160) || null,
     persistence: SUPABASE_ENABLED ? "supabase" : "memory_test_only",
     source: "client_onboarding_record",
     sync_status: cleanRuntimeText(configuration.settings_sync_status, 80) || "applied",
@@ -19272,6 +19285,39 @@ function appointmentConfigurationVerification(tenantId, onboarding) {
   })).digest("hex").slice(0, 16);
   receipt.verified_at = new Date().toISOString();
   return receipt;
+}
+
+async function verifyPersistedAppointmentSettings(tenantId, expectedRecord) {
+  const expected = appointmentConfigurationVerification(tenantId, expectedRecord);
+  if (!SUPABASE_ENABLED) {
+    return { record: expectedRecord, verification: expected };
+  }
+  const rows = await supabaseFetchUserToolRecent(
+    clientOnboardingRecordId(tenantId),
+    CLIENT_ONBOARDING_TOOL,
+    10,
+    { tenantId, strict: true }
+  );
+  const persisted = (rows || []).map(normalizeTurnRow).map(function (turn) {
+    return parseClientOnboardingTurn(turn, tenantId);
+  }).filter(Boolean).find(function (record) {
+    const receipt = appointmentConfigurationVerification(tenantId, record);
+    return receipt.revision === expected.revision && receipt.fingerprint === expected.fingerprint;
+  });
+  if (!persisted) {
+    throw new AppointmentOperationsError("appointment_settings_persistence_unverified", 503, {
+      expected_revision: expected.revision,
+      expected_fingerprint: expected.fingerprint
+    });
+  }
+  clientOnboardingCacheByTenant.set(tenantId, {
+    loaded_at: Date.now(),
+    record: persisted
+  });
+  return {
+    record: persisted,
+    verification: appointmentConfigurationVerification(tenantId, persisted)
+  };
 }
 
 function appointmentReminderMetrics(snapshot) {
@@ -19509,11 +19555,19 @@ async function saveAppointmentSettingsForTenant(tenantId, input, auth) {
     review_event: { action: "appointment_settings_updated", note: "Servicios y reglas de citas actualizados desde Customer Panel." }
   });
   await appendClientOnboardingRecord(record, tenantId);
-  const savedSettings = appointmentSettingsFromOnboarding(record);
+  const persisted = await verifyPersistedAppointmentSettings(tenantId, record);
+  const savedRecord = persisted.record;
+  const savedSettings = appointmentSettingsFromOnboarding(savedRecord);
   const affectedAppointments = await createAppointmentExceptionWorkflows(tenantId, Object.assign({}, savedSettings, {
-    timezone: cleanRuntimeText(record.appointment_configuration && record.appointment_configuration.time_zone, 120) || "America/Bogota"
+    timezone: cleanRuntimeText(savedRecord.appointment_configuration && savedRecord.appointment_configuration.time_zone, 120) || "America/Bogota"
   }), actor);
-  return { record, settings: savedSettings, affectedAppointments };
+  return {
+    record: savedRecord,
+    settings: savedSettings,
+    affectedAppointments,
+    verification: persisted.verification,
+    persistenceVerified: true
+  };
 }
 
 app.get("/admin/panel/appointment-settings", async (req, res) => {
@@ -19543,7 +19597,9 @@ app.put("/admin/panel/appointment-settings", async (req, res) => {
       ok: true,
       settings: publicAppointmentSettings(saved.settings, saved.record.appointment_configuration),
       revision: saved.settings.revision,
-      affected_appointments: saved.affectedAppointments
+      affected_appointments: saved.affectedAppointments,
+      persistence_verified: saved.persistenceVerified === true,
+      verification: saved.verification
     });
   } catch (error) {
     const status = error instanceof AppointmentOperationsError ? error.status : 500;

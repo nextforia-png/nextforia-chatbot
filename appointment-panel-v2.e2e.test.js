@@ -211,6 +211,8 @@ async function seedAppointment(base, secret, agentId, customerName) {
     });
     assert.strictEqual(response.status, 200);
     payload = await response.json();
+    assert.strictEqual(payload.persistence_verified, true,
+      "the API must confirm the canonical backend read-after-write before the UI reports success");
     assert.strictEqual(payload.settings.rules[0].id, "rule-a");
     assert(payload.settings.booking_requirements.some(function (row) {
       return row.id === "primera_cita" && row.required === true;
@@ -236,6 +238,14 @@ async function seedAppointment(base, secret, agentId, customerName) {
     assert(verification.verification.fingerprint, "verification must include a backend receipt fingerprint");
 
     response = await fetch(base + "/admin/customer-setups/appointment-tenant-a/configuration-verification", {
+      headers: { "x-dashboard-key": "appointment-panel-v2-super-admin-key" }
+    });
+    assert.strictEqual(response.status, 200);
+    const repeatedVerification = await response.json();
+    assert.strictEqual(repeatedVerification.verification.fingerprint, verification.verification.fingerprint,
+      "the same persisted tenant record must always produce the same backend receipt");
+
+    response = await fetch(base + "/admin/customer-setups/appointment-tenant-a/configuration-verification", {
       headers: { cookie: cookieA }
     });
     assert.strictEqual(response.status, 401, "tenant sessions must not access platform verification");
@@ -259,6 +269,34 @@ async function seedAppointment(base, secret, agentId, customerName) {
       "tenant B must not see tenant A appointment rules");
     assert.strictEqual(settingsB.settings.appointment_services.length, 0,
       "tenant B must not inherit tenant A service rules");
+
+    response = await fetch(base + "/admin/panel/appointment-settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: cookieB, origin: base },
+      body: JSON.stringify({
+        revision: settingsB.revision,
+        settings: {
+          appointment_services: [{
+            id: "draft-b",
+            name: "Servicio en construcción",
+            duration_minutes: 0,
+            modality: "in_person",
+            address: ""
+          }]
+        }
+      })
+    });
+    assert.strictEqual(response.status, 200, "incomplete services must be saved as tenant drafts");
+    const draftB = await response.json();
+    assert.strictEqual(draftB.persistence_verified, true);
+    assert.strictEqual(draftB.settings.appointment_services[0].name, "Servicio en construcción");
+    assert.strictEqual(draftB.settings.appointment_service_statuses[0].status, "draft");
+
+    response = await fetch(base + "/admin/panel/appointment-settings", { headers: { cookie: cookieB } });
+    assert.strictEqual(response.status, 200);
+    const reloadedDraftB = await response.json();
+    assert.strictEqual(reloadedDraftB.settings.appointment_services[0].name, "Servicio en construcción",
+      "the draft must reload from the same tenant backend record");
 
     response = await fetch(base + "/admin/panel/appointments-data", { headers: { cookie: cookieA } });
     assert.strictEqual(response.status, 200);

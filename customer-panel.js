@@ -81,7 +81,8 @@ const PANEL_ICONS = {
   settings: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.5 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88L4.2 6.56a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.5 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.38.37.72.68 1 .3.26.7.4 1.1.4H21a2 2 0 1 1 0 4h-.09c-.4 0-.8.14-1.1.4-.2.18-.34.38-.41.6Z"></path></svg>',
   clock: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>',
   instagram: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"></rect><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"></line></svg>',
-  bell: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 21a2 2 0 0 0 3.4 0"></path><path d="M18 8A6 6 0 0 0 6 8c0 7-3 7-3 9h18c0-2-3-2-3-9"></path></svg>'
+  bell: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 21a2 2 0 0 0 3.4 0"></path><path d="M18 8A6 6 0 0 0 6 8c0 7-3 7-3 9h18c0-2-3-2-3-9"></path></svg>',
+  user: '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg>'
 };
 
 module.exports = function renderCustomerPanel(res, options) {
@@ -172,7 +173,7 @@ module.exports = function renderCustomerPanel(res, options) {
   const mobileSupportBotButton = !paymentGateRequired && panelContext.support ? '<button class="active" id="mobile-bot-support" type="button" onclick="selectBot(\'support\')"><span class="botDot"></span><span>' + escapeHtml(supportBotName) + '</span></button>' : "";
   const mobileAppointmentBotButton = !paymentGateRequired && panelContext.appointments ? '<button' + (panelContext.v2 ? ' class="active"' : "") + ' id="mobile-bot-appointments" type="button" onclick="selectBot(\'appointments\')"><span class="botDot"></span><span>' + escapeHtml(appointmentBotName) + '</span></button>' : "";
   const mobileAppointmentTabs = panelContext.appointments && !paymentGateRequired
-    ? '<button id="mnav-appointment-panel" data-bot="appointments" data-appt-mobile="panel" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'panel\')"><span class="mobileNavIcon">' + PANEL_ICONS.bot + '</span><span>Panel</span></button><button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'agenda\')"><span class="mobileNavIcon">' + PANEL_ICONS.calendar + '</span><span>Agenda</span></button><button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="conversations" type="button" onclick="openAppointmentConversations()"><span class="mobileNavIcon">' + PANEL_ICONS.conversaciones + '</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button><button id="mnav-appointment-reminders" data-bot="appointments" data-appt-mobile="reminders" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'reminders\')"><span class="mobileNavIcon">' + PANEL_ICONS.clock + '</span><span>Recordatorios</span></button><button id="mnav-appointment-settings" data-bot="appointments" data-appt-mobile="rules" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'rules\')"><span class="mobileNavIcon">' + PANEL_ICONS.settings + '</span><span>Agendar</span></button>'
+    ? '<button id="mnav-appointment-panel" data-bot="appointments" data-appt-mobile="panel" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'panel\')"><span class="mobileNavIcon">' + PANEL_ICONS.resumen + '</span><span>Panel</span></button><button id="mnav-appointments" data-bot="appointments" data-appt-mobile="agenda" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'agenda\')"><span class="mobileNavIcon">' + PANEL_ICONS.calendar + '</span><span>Agenda</span></button><button id="mnav-appointment-chats" data-bot="appointments" data-appt-mobile="conversations" type="button" onclick="openAppointmentConversations()"><span class="mobileNavIcon">' + PANEL_ICONS.conversaciones + '</span><span>Chats</span><span class="navBadge hot" id="mnavApptChatCount"></span></button><button id="mnav-appointment-reminders" data-bot="appointments" data-appt-mobile="reminders" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'reminders\')"><span class="mobileNavIcon">' + PANEL_ICONS.bell + '</span><span>Recordatorios</span></button>'
     : "";
   const appointmentNav = panelContext.appointments && !paymentGateRequired
     ? '<nav class="nav" id="navAppointments" style="display:' + (initialTab === "appointments" ? "grid" : "none") + '" aria-label="Secciones de Agendamiento"><button class="navItem active" id="nav-appointments" data-appt-nav="agenda" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'agenda\')"><span class="navIcon">' + PANEL_ICONS.calendar + '</span><span>Citas</span></button><button class="navItem" id="nav-appointment-conversations" data-appt-nav="conversations" type="button" onclick="openAppointmentConversations()"><span class="navIcon">' + PANEL_ICONS.conversaciones + '</span><span>Conversaciones</span><span class="navBadge hot" id="navApptChatCount"></span></button><button class="navItem" data-appt-nav="reminders" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'reminders\')"><span class="navIcon">' + PANEL_ICONS.clock + '</span><span>Recordatorios</span></button><button class="navItem" data-appt-nav="rules" type="button" onclick="showTab(\'appointments\');showAppointmentSection(\'rules\')"><span class="navIcon">' + PANEL_ICONS.settings + '</span><span>Cómo agendar</span></button></nav>'
@@ -787,6 +788,7 @@ input:focus,textarea:focus{outline:3px solid rgba(18,168,244,.16);border-color:v
 .mobileTopActions{display:flex;align-items:center;gap:10px}
 .mobileLogout{height:34px;border:1px solid rgba(255,255,255,.16);border-radius:999px;background:rgba(255,255,255,.08);color:#fff;padding:0 12px;font-size:12px;font-weight:900;display:inline-flex;align-items:center;text-decoration:none}
 .mobileBrand{display:flex;align-items:center;gap:10px;min-width:0}
+.mobileBrandAppointment{display:none;align-items:center;gap:10px;min-width:0}
   .mobileBrand .ravLogo{width:42px;height:42px;border-radius:13px;font-size:17px}
   .mobileBrand h1{font-family:var(--font-display);font-size:18px;line-height:1.08;font-weight:800;letter-spacing:-.03em;color:#fff}
   .mobileBrand p{font-size:11px;color:#9FB0CA;font-weight:700;margin-top:3px}
@@ -1852,6 +1854,19 @@ ${panelRedesignEnabled ? `
   .customer-panel-mobile-v389 .mobileBotSwitch[data-bot-count="1"]{grid-template-columns:1fr}
   .customer-panel-mobile-v389 .mobileBotSwitch[data-bot-count="1"] button{justify-content:flex-start;padding-inline:14px}
   .customer-panel-mobile-v389 .mobileBotSwitch button{min-height:44px;border-radius:13px}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileTop{position:relative;min-height:70px;padding:12px 14px;background:#06132C}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBrand{display:none}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBrandAppointment{display:flex}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBrandAppointment .nextforMark{width:42px;height:42px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(135deg,#25BFFF,#078DCE);color:#fff;font-family:var(--font-display);font-size:19px;font-weight:900;box-shadow:0 7px 18px rgba(0,160,240,.25)}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBrandAppointment h1{color:#fff;font-family:var(--font-display);font-size:18px;font-weight:800;letter-spacing:-.02em}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBrandAppointment p{display:flex;align-items:center;gap:6px;margin-top:3px;color:#7FE3BD;font-size:11px;font-weight:700}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBrandAppointment p i{width:7px;height:7px;border-radius:50%;background:#14A971;box-shadow:0 0 7px rgba(20,169,113,.7)}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileAvatar{display:none}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileNotificationButton{border-radius:12px;background:rgba(255,255,255,.07)}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBotSwitch{position:relative;top:auto;gap:5px;padding:4px 14px 13px;background:#06132C;border-bottom:0;backdrop-filter:none}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBotSwitch button{min-height:42px;border:0;border-radius:12px;background:rgba(255,255,255,.06);color:#A6B1C6;box-shadow:none}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBotSwitch button.active{border:0;background:#fff;color:#06132C;box-shadow:inset 0 0 0 2px #057BB6,0 5px 14px rgba(0,0,0,.16)}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileBotSwitch .botDot{display:none}
   .customer-panel-mobile-v389 .content{padding:14px 12px calc(82px + env(safe-area-inset-bottom))}
   .customer-panel-mobile-v389 #panel-summary>.mobilePeriodShell,
   .customer-panel-mobile-v389 #panel-summary>.summary{display:none}
@@ -1894,6 +1909,10 @@ ${panelRedesignEnabled ? `
   .customer-panel-mobile-v389 .mobileTabbar{z-index:72;grid-template-columns:repeat(var(--mobile-tabs,5),minmax(0,1fr))!important;height:auto;min-height:66px;padding:6px 5px calc(6px + env(safe-area-inset-bottom));gap:1px;background:rgba(255,255,255,.98)}
   .customer-panel-mobile-v389 .mobileTabbar button{display:none;min-width:0;min-height:54px;height:54px!important;padding:4px 2px;border-radius:13px!important;font-size:9px;line-height:1.05}
   .customer-panel-mobile-v389 .mobileTabbar button.active{background:#E9F8FF;box-shadow:none!important;color:#057BB6}
+  .customer-panel-mobile-v389.appointment-bot-view .mobileTabbar button.active{background:#fff;box-shadow:inset 0 3px 0 #057BB6!important;color:#057BB6}
+  .customer-panel-mobile-v389.appointment-bot-view.panel-redesign .mobileTabbar button[data-bot="support"]{display:none!important}
+  .customer-panel-mobile-v389.appointment-bot-view.panel-redesign .mobileTabbar button[data-bot="appointments"],
+  .customer-panel-mobile-v389.appointment-bot-view.panel-redesign .mobileTabbar #mnav-mobile-profile{display:grid!important}
   .customer-panel-mobile-v389 .mobileTabbar .mobileNavIcon svg{width:19px;height:19px}
   .customer-panel-mobile-v389 .mobileTabbar .navBadge{position:absolute;top:3px;right:calc(50% - 23px);min-width:18px;height:18px;padding:0 4px;font-size:9px}
   .customer-panel-mobile-v389 .mobileDetailHeader[hidden]{display:none!important}
@@ -2059,6 +2078,7 @@ body.panel-redesign .orderMobileOpenChat{display:none}
 <div class="app">
   <header class="mobileTop">
     <div class="mobileBrand" onclick="openProfile()" style="cursor:pointer"><div class="ravLogo">${escapeHtml(panelContext.initials)}</div><div><h1><span id="mobileBrandBusinessName">${escapeHtml(panelContext.businessName)}</span></h1><p>con <span>Nextfor IA</span></p></div></div>
+    <div class="mobileBrandAppointment" aria-label="Nextfor en línea"><span class="nextforMark">N</span><div><h1>Nextfor</h1><p><i></i> en línea</p></div></div>
     <div class="mobileTopActions"><button class="mobileNotificationButton" type="button" onclick="showTab('notifications')" aria-label="Abrir notificaciones">${PANEL_ICONS.bell}<span class="navBadge hot" id="mobileHeaderNotificationCount" style="display:none"></span></button><button class="mobileAvatar" type="button" onclick="openProfile()" aria-label="Abrir perfil">${escapeHtml(panelContext.avatarInitials)}</button></div>
   </header>
   <div class="mobileBotSwitch" data-bot-count="${activeBotCount}" aria-label="Tus bots">
@@ -2604,7 +2624,7 @@ body.panel-redesign .orderMobileOpenChat{display:none}
     ${ordersMobileNav}
     ${salesMobileNav}
     ${mobileAppointmentTabs}
-    <button id="mnav-mobile-profile" data-mobile-primary="profile" type="button" onclick="openProfile()"><span class="mobileNavIcon">${PANEL_ICONS.settings}</span><span>Mi perfil</span></button>
+    <button id="mnav-mobile-profile" data-mobile-primary="profile" type="button" onclick="openProfile()"><span class="mobileNavIcon">${PANEL_ICONS.user}</span><span>Mi perfil</span></button>
   </nav>
   <div class="profileModal" id="profileModal" role="dialog" aria-modal="true" aria-label="Perfil de la cuenta">
     <div class="profileScrim" onclick="closeProfile()"></div>

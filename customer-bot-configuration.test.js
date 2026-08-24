@@ -163,4 +163,23 @@ const viewerHtml = render("viewer", {
 assert(viewerHtml.includes("Empresa B"));
 assert(viewerHtml.includes("nxApplyEditPermissions"));
 
+let demoHtml = "";
+renderCustomerPanel({
+  status() { return this; },
+  setHeader() {},
+  send(value) { demoHtml = String(value); }
+}, {
+  auth: { name: "Demo", role: "admin" },
+  capabilities: {},
+  demoMode: true,
+  personalityPath: "/admin/panel/demo-bot-personality",
+  tenantContext: {
+    id: "tenant-demo",
+    company_name: "Comercio piloto",
+    plan_id: "nextfor-tempo",
+    assigned_bot_id: "agendamiento"
+  }
+});
+assert(demoHtml.includes('PANEL_PERSONALITY_PATH="/admin/panel/demo-bot-personality"'));
+
 console.log("customer-bot-configuration.test.js ok");

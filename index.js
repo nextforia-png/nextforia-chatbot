@@ -19796,6 +19796,32 @@ app.get("/admin/panel/demo-setup", (req, res) => {
   });
 });
 
+app.get("/admin/panel/demo-bot-personality", (req, res) => {
+  const planId = "nextfor-tempo";
+  const personality = personalityForOnboarding({
+    answers: {
+      business: { brand_name: "Comercio piloto" },
+      customer_service_setup: {
+        business_name: "Comercio piloto",
+        bot_display_name: "Nextfor"
+      }
+    }
+  }, planId);
+  res.json({
+    ok: true,
+    tenant_id: "nextfor-tempo-demo",
+    can_edit: true,
+    active: true,
+    applied: true,
+    configuration_version: "demo",
+    applied_at: null,
+    plan_id: planId,
+    features: planFeatures(planId),
+    personality,
+    whatsapp_profile_sync: null
+  });
+});
+
 app.get("/admin/panel/demo-retargeting", (req, res) => {
   res.json({
     ok: true,
@@ -20865,6 +20891,7 @@ app.get("/admin/panel-demo", (req, res) => {
     dataPath: "/admin/panel/demo-data",
     appointmentsPath: "/admin/panel/demo-appointments-data",
     setupPath: "/admin/panel/demo-setup",
+    personalityPath: "/admin/panel/demo-bot-personality",
     retargetingPath: "/admin/panel/demo-retargeting",
     healthPath: null,
     loginPath: null,

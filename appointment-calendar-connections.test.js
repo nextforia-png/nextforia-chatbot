@@ -44,6 +44,13 @@ const axiosClient = {
     }
     if (/\/calendar\/v3\/calendars\//.test(url)) {
       assert.match(options.headers.Authorization, /^Bearer access-/);
+      if (body && body.conferenceData) {
+        assert.strictEqual(options.params.conferenceDataVersion, 1);
+        return { data: {
+          id: "event-derco-1", htmlLink: "https://calendar.google.com/event?eid=derco", status: "confirmed",
+          conferenceData: { entryPoints: [{ entryPointType: "video", uri: "https://meet.google.com/derco-test" }] }
+        } };
+      }
       return { data: { id: "event-derco-1", htmlLink: "https://calendar.google.com/event?eid=derco", status: "confirmed" } };
     }
     assert.strictEqual(options.headers["content-type"], "application/x-www-form-urlencoded");
@@ -85,6 +92,45 @@ assert.doesNotMatch(authUrl, /include_granted_scopes/);
 assert.match(authUrl, /access_type=offline/);
 
 (async function run() {
+  let pendingMeetReads = 0;
+  const pendingMeetProvider = new GoogleCalendarProvider({
+    clientId: "google-client",
+    clientSecret: "google-secret",
+    redirectUri: "https://nextforia.com/admin/appointment-calendar/google/callback",
+    axiosClient: {
+      async post(url, body, options) {
+        assert.match(url, /\/events$/);
+        assert(body.conferenceData, "virtual appointments must request Meet");
+        assert.strictEqual(options.params.conferenceDataVersion, 1);
+        return { data: {
+          id: "event-pending-meet",
+          htmlLink: "https://calendar.google.com/event?eid=pending",
+          status: "confirmed",
+          conferenceData: { createRequest: { status: { statusCode: "pending" } } }
+        } };
+      },
+      async get(url, options) {
+        pendingMeetReads += 1;
+        assert.match(url, /\/events\/event-pending-meet$/);
+        assert.strictEqual(options.params.conferenceDataVersion, 1);
+        return { data: {
+          id: "event-pending-meet",
+          htmlLink: "https://calendar.google.com/event?eid=pending",
+          status: "confirmed",
+          hangoutLink: "https://meet.google.com/pending-ready"
+        } };
+      }
+    }
+  });
+  const pendingMeet = await pendingMeetProvider.upsertAppointment({ access_token: "access-pending" }, "calendar-pending", {
+    tenant_id: "tenant-pending",
+    appointment_id: "appointment-pending",
+    starts_at: "2026-08-24T13:00:00.000Z",
+    appointment_modality: "virtual"
+  });
+  assert.strictEqual(pendingMeet.virtual_meeting_link, "https://meet.google.com/pending-ready");
+  assert.strictEqual(pendingMeetReads, 1, "pending Meet generation must read the same event, not create another one");
+
   const store = new InMemoryAppointmentCalendarStore();
   const service = createAppointmentCalendarConnectionService({
     store,
@@ -124,11 +170,13 @@ assert.match(authUrl, /access_type=offline/);
     duration_minutes: 45,
     customer_name: "Cliente DERCO",
     customer_phone: "+573001112233",
-    consultation_reason: "Prueba de manejo"
+    consultation_reason: "Prueba de manejo",
+    appointment_modality: "virtual"
   }, "super_admin");
   assert.strictEqual(synced.calendar_sync_status, "synced");
   assert.strictEqual(synced.calendar_event_id, "event-derco-1");
   assert.match(synced.calendar_event_link, /calendar\.google\.com/);
+  assert.strictEqual(synced.virtual_meeting_link, "https://meet.google.com/derco-test");
   const updated = await service.syncAppointment("grupo-derco", Object.assign({
     tenant_id: "grupo-derco",
     conversation_id: "conv-derco-1",

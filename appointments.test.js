@@ -189,6 +189,19 @@ function sampleEvent(overrides) {
   }), false);
   assert.equal(reminderRow.reminder_deliveries["6h"].status, "delivered");
   assert.equal(reminderRow.reminder_deliveries["6h"].provider_id, "wamid.test");
+  const virtualReady = normalizeAppointment({
+    tenant_id: DERCO_TENANT_ID,
+    appointment_id: "virtual-ready",
+    status: "booked",
+    appointment_modality: "virtual",
+    appointment_readiness: "ready",
+    virtual_meeting_link: "https://meet.google.com/nextfor-test",
+    virtual_link_source: "google_meet",
+    physical_maps_link: "javascript:alert(1)"
+  });
+  assert.strictEqual(virtualReady.virtual_meeting_link, "https://meet.google.com/nextfor-test");
+  assert.strictEqual(virtualReady.virtual_link_source, "google_meet");
+  assert.strictEqual(virtualReady.physical_maps_link, undefined, "only safe HTTPS location links persist");
   const snapshot = registry.snapshot(DERCO_TENANT_ID, new Date("2026-07-18T12:00:00Z").getTime());
   assert.deepEqual(snapshot.metrics, {
     interactions: 2,

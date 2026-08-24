@@ -164,6 +164,8 @@ function normalizeAppointmentService(input, index) {
     deposit: normalizeServiceDeposit(source.deposit),
     modality,
     address: text(source.address, 1000),
+    directions: text(source.directions, 2000),
+    maps_link: text(source.maps_link, 1000),
     virtual_link: text(source.virtual_link, 1000),
     active: source.active !== false,
     order: integer(source.order, index, 0, 1000)
@@ -197,8 +199,10 @@ function validateAppointmentService(serviceInput) {
   if (!service) return { ok: false, error: "appointment_service_name_required" };
   if (service.duration_minutes < 5) return { ok: false, error: "appointment_service_duration_required", service };
   if (service.modality === "in_person" && !service.address) return { ok: false, error: "appointment_service_address_required", service };
-  if (service.modality === "virtual" && !service.virtual_link) return { ok: false, error: "appointment_service_virtual_link_required", service };
-  if (service.modality === "both" && (!service.address || !service.virtual_link)) return { ok: false, error: "appointment_service_both_locations_required", service };
+  // A virtual link is a fallback, never a prerequisite: Google Meet is
+  // generated per appointment when Calendar is connected. A missing fallback
+  // remains a safe, actionable appointment rather than blocking booking.
+  if (service.modality === "both" && !service.address) return { ok: false, error: "appointment_service_both_address_required", service };
   const methods = service.payment_methods.filter(function (method) { return method.active; });
   if (service.price_cop > 0 && !methods.length) return { ok: false, error: "appointment_service_payment_method_required", service };
   if (methods.some(function (method) { return !method.instructions; })) {
@@ -218,7 +222,8 @@ function compileAppointmentServices(servicesInput) {
   if (!services.length) return "No hay servicios estructurados todavía. No inventes precio, duración, modalidad ni reglas de pago.";
   const lines = ["SERVICIOS Y REGLAS ACTIVAS DEL TENANT:", "- Pide al cliente elegir un servicio antes de consultar o confirmar una cita. Usa su ID exacto en service_id."];
   services.forEach(function (service) {
-    const modality = service.modality === "in_person" ? "Presencial: " + service.address : service.modality === "virtual" ? "Virtual: " + service.virtual_link : "Presencial: " + service.address + " · Virtual: " + service.virtual_link + " (el cliente elige)";
+    const fallback = service.virtual_link ? " · Respaldo virtual: configurado" : " · Sin respaldo virtual";
+    const modality = service.modality === "in_person" ? "Presencial: " + service.address : service.modality === "virtual" ? "Virtual" + fallback : "Presencial: " + service.address + " · Virtual" + fallback + " (el cliente elige)";
     lines.push("- " + service.name + " [" + service.id + "]: " + service.duration_minutes + " minutos · " + formatCop(service.price_cop) + " · " + modality + ".");
     if (service.deposit.required) {
       const deposit = service.deposit.mode === "percentage" ? service.deposit.amount + "% del valor de la cita" : formatCop(service.deposit.amount);

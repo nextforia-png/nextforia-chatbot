@@ -65,6 +65,7 @@ async function seedAppointment(base, secret, agentId, customerName) {
           appointment_id: { value: "shared-appointment-id" },
           appointment_status: { value: "booked" },
           appointment_datetime: { value: "2030-07-21T09:00:00-05:00" },
+          appointment_modality: { value: "virtual" },
           client_name: { value: customerName },
           consultation_reason: { value: "Consulta de prueba" },
           data_processing_consent: { value: "authorized" }
@@ -253,6 +254,28 @@ async function seedAppointment(base, secret, agentId, customerName) {
     assert.strictEqual(appointmentsB.appointments.length, 1);
     assert.strictEqual(appointmentsB.appointments[0].customer_name, "Cliente B");
     assert.strictEqual(appointmentsB.reminders.length, 0, "tenant B must keep its independent reminder policy");
+
+    response = await fetch(base + "/admin/panel/appointments/shared-appointment-id/virtual-link", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: cookieA, origin: base },
+      body: JSON.stringify({ virtual_meeting_link: "https://meet.google.com/abc-defg-hij" })
+    });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.strictEqual(payload.appointment.virtual_link_source, "manual");
+    assert.strictEqual(payload.appointment.virtual_meeting_link, "https://meet.google.com/abc-defg-hij");
+
+    response = await fetch(base + "/admin/panel/appointments/shared-appointment-id/virtual-link", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: cookieA, origin: base },
+      body: JSON.stringify({ virtual_meeting_link: "http://user:pass@example.test/room" })
+    });
+    assert.strictEqual(response.status, 422, "unsafe meeting links must be rejected");
+
+    response = await fetch(base + "/admin/panel/appointments-data", { headers: { cookie: cookieB } });
+    assert.strictEqual(response.status, 200);
+    payload = await response.json();
+    assert.notStrictEqual(payload.appointments[0].virtual_meeting_link, "https://meet.google.com/abc-defg-hij", "tenant B must not see tenant A meeting link");
 
     response = await fetch(base + "/admin/panel/appointment-reminders/" + encodeURIComponent(reminderA.id) + "/action", {
       method: "POST",

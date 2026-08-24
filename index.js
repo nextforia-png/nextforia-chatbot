@@ -432,7 +432,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v449-appointment-google-meet";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v451-appointment-detail-drawer";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -19581,6 +19581,157 @@ app.post("/admin/panel/appointments/action", async (req, res) => {
     const status = error.message === "appointment_not_found" ? 404 : 400;
     res.status(status).json({ ok: false, error: error.message });
   }
+});
+
+async function customerPanelAppointmentMutationContext(req, res) {
+  if (!customerPanelAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return null;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try {
+    business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  } catch (_) {}
+  if (!customerBusinessHasAppointmentModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return null;
+  }
+  const appointmentId = cleanRuntimeText(req.params && req.params.appointmentId, 160);
+  if (!appointmentId) {
+    res.status(400).json({ ok: false, error: "appointment_id_required" });
+    return null;
+  }
+  await hydrateAppointmentsForTenant(tenantId);
+  const appointment = appointmentRegistry.get(tenantId, appointmentId);
+  if (!appointment) {
+    res.status(404).json({ ok: false, error: "appointment_not_found" });
+    return null;
+  }
+  return {
+    auth,
+    tenantId,
+    business,
+    appointment,
+    actor: auth.name || auth.email || auth.username || "customer_panel"
+  };
+}
+
+function customerPanelMeetingProvider(url) {
+  const hostname = new URL(url).hostname.toLowerCase();
+  if (/meet\.google\.com$/.test(hostname)) return "google_meet";
+  if (/(^|\.)zoom\.us$/.test(hostname)) return "zoom";
+  if (/(^|\.)teams\.microsoft\.com$/.test(hostname)) return "microsoft_teams";
+  if (/(^|\.)whereby\.com$/.test(hostname)) return "whereby";
+  return "custom";
+}
+
+function cleanMeetingUrl(value) {
+  return safeExternalHttpsUrl(value);
+}
+
+function customerPanelAppointmentPayload(row, business) {
+  return customerAppointmentSnapshot({ tenant_id: row.tenant_id, appointments: [row] }, business).appointments[0];
+}
+
+app.put("/admin/panel/appointments/:appointmentId/meeting", async (req, res) => {
+  const context = await customerPanelAppointmentMutationContext(req, res);
+  if (!context) return;
+  const url = cleanMeetingUrl(req.body && req.body.url);
+  if (!url) {
+    res.status(422).json({ ok: false, error: "invalid_meeting_url", message: "Usa un enlace seguro que empiece por https://" });
+    return;
+  }
+  const now = new Date().toISOString();
+  try {
+    let updated = await appointmentRegistry.upsert(Object.assign({}, context.appointment, {
+      appointment_modality: "virtual",
+      virtual_meeting_link: url,
+      virtual_link_source: "manual",
+      virtual_link_updated_at: now,
+      appointment_readiness: "ready",
+      meeting: {
+        state: "ready",
+        url,
+        provider: customerPanelMeetingProvider(url),
+        source: "customer_panel",
+        verified_at: now,
+        issue_note: ""
+      },
+      updated_at: now
+    }));
+    updated = await applyAppointmentCalendarEffect(updated, "sync", context.actor);
+    await persistAppointment(updated);
+    res.json({ ok: true, appointment: customerPanelAppointmentPayload(updated, context.business) });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: "meeting_save_failed" });
+  }
+});
+
+app.patch("/admin/panel/appointments/:appointmentId/modality", async (req, res) => {
+  const context = await customerPanelAppointmentMutationContext(req, res);
+  if (!context) return;
+  const modality = cleanRuntimeText(req.body && req.body.modality, 40).toLowerCase();
+  if (!["virtual", "in_person"].includes(modality)) {
+    res.status(422).json({ ok: false, error: "invalid_appointment_modality" });
+    return;
+  }
+  const updated = await appointmentRegistry.upsert(Object.assign({}, context.appointment, {
+    appointment_modality: modality,
+    updated_at: new Date().toISOString()
+  }));
+  await persistAppointment(updated);
+  res.json({ ok: true, appointment: customerPanelAppointmentPayload(updated, context.business) });
+});
+
+app.post("/admin/panel/appointments/:appointmentId/meeting/issue", async (req, res) => {
+  const context = await customerPanelAppointmentMutationContext(req, res);
+  if (!context) return;
+  const existingUrl = cleanMeetingUrl(context.appointment.virtual_meeting_link || context.appointment.meeting && context.appointment.meeting.url);
+  const now = new Date().toISOString();
+  const updated = await appointmentRegistry.upsert(Object.assign({}, context.appointment, {
+    appointment_readiness: "requires_attention",
+    virtual_link_issue_note: cleanRuntimeText(req.body && req.body.note, 800) || "El cliente reportó un problema con el enlace.",
+    virtual_link_issue_at: now,
+    meeting: Object.assign({}, context.appointment.meeting || {}, {
+      state: "reported_issue",
+      url: existingUrl,
+      issue_note: cleanRuntimeText(req.body && req.body.note, 800) || "El cliente reportó un problema con el enlace.",
+      reported_at: now
+    }),
+    updated_at: now
+  }));
+  await persistAppointment(updated);
+  res.json({ ok: true, appointment: customerPanelAppointmentPayload(updated, context.business) });
+});
+
+app.post("/admin/panel/appointments/:appointmentId/meeting/resend", async (req, res) => {
+  const context = await customerPanelAppointmentMutationContext(req, res);
+  if (!context) return;
+  const url = cleanMeetingUrl(context.appointment.virtual_meeting_link || context.appointment.meeting && context.appointment.meeting.url);
+  if (!url) return res.status(409).json({ ok: false, error: "meeting_link_missing" });
+  if (String(context.appointment.channel || "").toLowerCase() !== "whatsapp" || !context.appointment.customer_phone) {
+    return res.status(409).json({ ok: false, error: "meeting_resend_channel_unavailable", message: "El reenvío directo está disponible por WhatsApp." });
+  }
+  if (!await whatsappCustomerServiceWindowOpen(context.tenantId, context.appointment.customer_phone)) {
+    return res.status(409).json({ ok: false, error: "whatsapp_customer_window_closed", message: "No podemos reenviar por WhatsApp fuera de la ventana activa del cliente." });
+  }
+  const firstName = cleanRuntimeText(context.appointment.customer_name, 160).split(/\s+/)[0] || "Hola";
+  const service = cleanRuntimeText(context.appointment.consultation_reason, 240) || "tu reunión";
+  const sent = await sendText(context.appointment.customer_phone, "Hola " + firstName + ". Aquí tienes el enlace de " + service + ": " + url, {
+    tenant_id: context.tenantId,
+    delivery_result: "meeting_link_resend"
+  });
+  if (!sent) return res.status(502).json({ ok: false, error: "meeting_resend_failed" });
+  const updated = await appointmentRegistry.upsert(Object.assign({}, context.appointment, {
+    appointment_readiness: "ready",
+    virtual_link_sent_at: new Date().toISOString(),
+    meeting: Object.assign({}, context.appointment.meeting || {}, { state: "ready", url, sent_at: new Date().toISOString() }),
+    updated_at: new Date().toISOString()
+  }));
+  await persistAppointment(updated);
+  res.json({ ok: true, appointment: customerPanelAppointmentPayload(updated, context.business) });
 });
 
 app.post("/admin/panel/appointment-reminders/:reminderId/action", async (req, res) => {

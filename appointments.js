@@ -301,6 +301,12 @@ function normalizeAppointment(input) {
   if (["google_meet", "fallback", "manual"].includes(virtualLinkSource)) normalized.virtual_link_source = virtualLinkSource;
   const virtualLinkUpdatedAt = validIsoDate(input.virtual_link_updated_at);
   if (virtualLinkUpdatedAt) normalized.virtual_link_updated_at = virtualLinkUpdatedAt;
+  const virtualLinkIssueNote = cleanText(input.virtual_link_issue_note, 800);
+  if (virtualLinkIssueNote) normalized.virtual_link_issue_note = virtualLinkIssueNote;
+  const virtualLinkIssueAt = validIsoDate(input.virtual_link_issue_at);
+  if (virtualLinkIssueAt) normalized.virtual_link_issue_at = virtualLinkIssueAt;
+  const virtualLinkSentAt = validIsoDate(input.virtual_link_sent_at);
+  if (virtualLinkSentAt) normalized.virtual_link_sent_at = virtualLinkSentAt;
   const customerConversationId = cleanText(input.customer_conversation_id, 200);
   if (customerConversationId) normalized.customer_conversation_id = customerConversationId;
   if (Object.prototype.hasOwnProperty.call(input, "reminder_state")) {

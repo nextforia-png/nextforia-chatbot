@@ -21,6 +21,7 @@ assert.strictEqual(demo.settings.rules.length, 3);
 assert.strictEqual(demo.settings.exceptions[0].mode, "partial");
 assert.deepStrictEqual(demo.settings.booking_policy, { default_duration_minutes: 60, buffer_minutes: 15 });
 assert.strictEqual(demo.settings.reminder_policy.channel, "whatsapp");
+assert.strictEqual(demo.appointments.some(function (row) { return row.meeting && row.meeting.state === "ready"; }), true);
 
 const shaped = customerAppointmentSnapshot({
   tenant_id: "tenant-a",
@@ -86,6 +87,11 @@ assert(clientScript.includes('reminder_policy'));
 assert(clientScript.includes('booking_policy'));
 assert(clientScript.includes('updateAppointmentBookingPolicy'));
 assert(clientScript.includes('booking_requirements'));
+assert(clientScript.includes('appointmentMeetingMarkup'));
+assert(clientScript.includes('meeting/resend'));
+assert(clientScript.includes('autocomplete="off"'));
+assert(styles.includes('apptMeetingCard'));
+assert(styles.includes('apptDetailHeader'));
 assert(!markup.includes('id="apptRequirementList"'));
 assert(!markup.includes('Datos para confirmar la cita'));
 

@@ -131,9 +131,12 @@ module.exports = function renderCustomerPanel(res, options) {
     ? options.initialTab
     : "summary";
   const requestedInitialTab = paymentGateRequired ? "plan" : (requestedTab === "human" ? "conversations" : requestedTab);
-  const initialTab = panelContext.v2 && panelContext.appointments && ["summary", "orders", "retargeting"].includes(requestedInitialTab)
+  const initialTab = panelContext.v2 && panelContext.appointments && !panelContext.support && ["summary", "orders", "retargeting"].includes(requestedInitialTab)
     ? "appointments"
-    : (panelContext.v2 && panelContext.support && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
+    // Atlas has two independent workspaces.  An explicit appointment URL must
+    // open Agendamiento; only a tenant without that entitlement falls back to
+    // its Customer Service home.
+    : (panelContext.v2 && panelContext.support && !panelContext.appointments && requestedInitialTab === "appointments" ? "summary" : requestedInitialTab);
   // El primer pintado del servidor debe coincidir con lo que showTab(INITIAL_TAB)
   // dejaría: si no, el header y el módulo saltan al cargar (el "parpadeo").
   // Estos mapas son un espejo exacto de los del script de cliente (showTab).

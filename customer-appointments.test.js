@@ -92,6 +92,8 @@ assert(clientScript.includes('meeting/resend'));
 assert(clientScript.includes('autocomplete="off"'));
 assert(styles.includes('apptMeetingCard'));
 assert(styles.includes('apptDetailHeader'));
+assert(styles.includes('position:fixed;right:0;bottom:0;width:min(620px,100vw)'));
+assert(styles.includes('Cambies lo que cambies, yo se lo cuento al cliente al instante.'));
 assert(!markup.includes('id="apptRequirementList"'));
 assert(!markup.includes('Datos para confirmar la cita'));
 

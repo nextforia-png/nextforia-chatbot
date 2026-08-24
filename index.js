@@ -432,7 +432,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v450-legacy-appointment-meet-repair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v453-appointment-meeting-panel";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";

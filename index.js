@@ -432,7 +432,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v459-tenant-configuration-receipt";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v460-appointment-aftercare-desktop";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -2889,7 +2889,10 @@ function appointmentReminderDbPayload(row) {
   const metadata = Object.assign({}, row && row.metadata || {}, {
     customer_name: cleanRuntimeText(row && row.customer_name, 160),
     service: cleanRuntimeText(row && (row.service || row.consultation_reason), 500),
-    appointment_starts_at: row && row.appointment_starts_at || null
+    appointment_starts_at: row && row.appointment_starts_at || null,
+    reminder_kind: cleanRuntimeText(row && row.reminder_kind, 80),
+    aftercare_outcome: cleanRuntimeText(row && row.aftercare_outcome, 40),
+    aftercare_message: cleanRuntimeText(row && row.aftercare_message, 2000)
   });
   const payload = {
     tenant_id: normalized.tenant_id,
@@ -2922,6 +2925,9 @@ function appointmentReminderFromStored(row) {
     customer_name: metadata.customer_name || "",
     service: metadata.service || "",
     appointment_starts_at: metadata.appointment_starts_at || null,
+    reminder_kind: metadata.reminder_kind || "",
+    aftercare_outcome: metadata.aftercare_outcome || "",
+    aftercare_message: metadata.aftercare_message || "",
     dedupe_key: row && row.reminder_key
   }));
 }
@@ -3077,9 +3083,16 @@ async function syncAppointmentReminderSchedule(tenantId, appointment) {
   return generated;
 }
 
-function appointmentReminderMessage(row, appointment) {
+function appointmentReminderMessage(row, appointment, configuration) {
   const name = cleanRuntimeText(row && row.customer_name || appointment && appointment.customer_name, 80);
   const service = cleanRuntimeText(row && row.service || appointment && appointment.consultation_reason || "tu cita", 180);
+  if (String(row && row.reminder_kind || "").indexOf("appointment_aftercare") === 0) {
+    const business = cleanRuntimeText(configuration && configuration.business_name, 160) || "tu negocio";
+    return cleanRuntimeText(row && row.aftercare_message, 2000)
+      .replace(/\{nombre\}/gi, name || "Cliente")
+      .replace(/\{servicio\}/gi, service || "tu cita")
+      .replace(/\{negocio\}/gi, business);
+  }
   const startsAt = new Date(appointment && appointment.starts_at || row && row.appointment_starts_at);
   const when = Number.isFinite(startsAt.getTime())
     ? startsAt.toLocaleString("es-CO", { timeZone: "America/Bogota", weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" })
@@ -3098,9 +3111,10 @@ async function deliverAppointmentReminder(row, appointment) {
   const recipient = cleanRuntimeText(row && row.conversation_id || appointment && appointment.customer_conversation_id, 500) ||
     (row && row.channel === "whatsapp" ? cleanRuntimeText(appointment && appointment.customer_phone, 80) : "");
   if (!recipient) throw new Error("appointment_reminder_recipient_missing");
-  const message = appointmentReminderMessage(row, appointment);
+  const isAftercare = String(row && row.reminder_kind || "").indexOf("appointment_aftercare") === 0;
+  const configuration = row.channel === "whatsapp" ? await appointmentReminderConfiguration(row.tenant_id) : null;
+  const message = appointmentReminderMessage(row, appointment, configuration);
   if (row.channel === "whatsapp") {
-    const configuration = await appointmentReminderConfiguration(row.tenant_id);
     if (await whatsappCustomerServiceWindowOpen(row.tenant_id, recipient)) {
       const deliveryResult = {};
       const sent = await sendText(recipient, message, {
@@ -3110,6 +3124,13 @@ async function deliverAppointmentReminder(row, appointment) {
       });
       if (!sent) throw new Error("appointment_reminder_whatsapp_text_failed");
       return deliveryResult.provider_message_id || "";
+    }
+    if (isAftercare) {
+      // A tenant-authored free-form follow-up cannot be substituted into the
+      // approved appointment template without changing its meaning. Fail
+      // closed and surface the existing handoff instead of sending misleading
+      // content outside Meta's customer-service window.
+      throw new Error("appointment_aftercare_outside_customer_service_window");
     }
     const when = appointmentDateTime(appointment && appointment.starts_at, configuration.timezone);
     const result = await metaMessageHub.request({
@@ -19598,6 +19619,49 @@ app.put("/admin/panel/appointments/:appointmentId/virtual-link", async (req, res
     res.json({ ok: true, appointment: updated });
   } catch (error) {
     res.status(422).json({ ok: false, error: String(error && (error.code || error.message) || "virtual_link_update_failed") });
+  }
+});
+
+app.put("/admin/panel/appointments/:appointmentId/outcome", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  let business = customerBusinessForAuth(auth);
+  try {
+    business = customerBusinessForAuthAndOnboarding(auth, await loadClientOnboarding(false, tenantId));
+  } catch (_) {}
+  if (!customerBusinessHasAppointmentModule(business)) {
+    res.status(403).json({ ok: false, error: "module_not_contracted" });
+    return;
+  }
+  const appointmentId = cleanRuntimeText(req.params.appointmentId, 160);
+  const outcome = cleanRuntimeText(req.body && req.body.outcome, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  if (!["attended", "no_show", "cancelled"].includes(outcome)) {
+    res.status(400).json({ ok: false, error: "invalid_appointment_outcome" });
+    return;
+  }
+  try {
+    await hydrateAppointmentsForTenant(tenantId);
+    const current = appointmentRegistry.get(tenantId, appointmentId);
+    if (!current) {
+      res.status(404).json({ ok: false, error: "appointment_not_found" });
+      return;
+    }
+    const actor = auth.name || auth.email || auth.username || "customer_panel";
+    const updated = await appointmentRegistry.upsert(Object.assign({}, current, {
+      appointment_outcome: outcome,
+      appointment_outcome_at: new Date().toISOString(),
+      appointment_outcome_by: actor,
+      updated_at: new Date().toISOString()
+    }), false);
+    await persistAppointment(updated);
+    await syncAppointmentReminderSchedule(tenantId, updated);
+    res.json({ ok: true, appointment: updated });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: String(error && (error.code || error.message) || "appointment_outcome_update_failed") });
   }
 });
 

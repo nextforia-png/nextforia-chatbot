@@ -12,6 +12,7 @@ const {
   compileAppointmentServices,
   deriveAppointmentReminderStatus,
   evaluateScheduleException,
+  materializeAppointmentAftercare,
   materializeAppointmentReminders,
   normalizeAppointmentSettings,
   normalizeBookingRequirements,
@@ -125,13 +126,29 @@ const normalized = normalizeAppointmentSettings({
     offsets_minutes: [360, 1440, 360],
     retry_after_minutes: 90,
     max_attempts: 2,
-    handoff_on_no_response: true
+    handoff_on_no_response: true,
+    aftercare: {
+      global: {
+        attended: { enabled: true, delay: 2, unit: "hours", message: "Gracias {nombre}." },
+        no_show: { enabled: true, delay: 1, unit: "hours", message: "¿Reprogramamos {servicio}?" },
+        cancelled: { enabled: false, delay: 30, unit: "minutes" }
+      },
+      service_overrides: [{
+        service_id: "consulta_inicial",
+        attended: { enabled: true, delay: 1, unit: "days", invite_enabled: true, invite_delay: 4, invite_unit: "weeks" },
+        no_show: { enabled: true, delay: 1, unit: "hours", message: "¿Buscamos una nueva hora para {servicio}?" }
+      }]
+    }
   }
 }, { now: NOW });
 assert.strictEqual(normalized.revision, 3);
 assert.strictEqual(normalized.schedule_exceptions.length, 2);
 assert.deepStrictEqual(normalized.booking_policy, { default_duration_minutes: 45, buffer_minutes: 15 });
 assert.deepStrictEqual(normalized.reminder_policy.offsets_minutes, [1440, 360]);
+assert.strictEqual(normalized.reminder_policy.aftercare.global.attended.enabled, true);
+assert.strictEqual(normalized.reminder_policy.aftercare.global.no_show.message, "¿Reprogramamos {servicio}?");
+assert.strictEqual(normalized.reminder_policy.aftercare.service_overrides[0].service_id, "consulta_inicial");
+assert.strictEqual(normalized.reminder_policy.aftercare.service_overrides[0].attended.invite_enabled, true);
 assert.match(normalized.availability_rules, /Excepciones/);
 assert.doesNotMatch(normalized.availability_rules, /almuerzo/);
 assert.match(compileAvailabilityRules(normalized.scheduling_rules, normalized.schedule_exceptions), /Festivo/);
@@ -157,6 +174,17 @@ assert.deepStrictEqual(updated.booking_policy, { default_duration_minutes: 60, b
 assert.strictEqual(updated.appointment_services[0].deposit.amount, 50000);
 assert.strictEqual(updated.booking_requirements.some(function (row) { return row.id === "primera_cita" && row.required; }), true);
 assert.throws(function () {
+  updateAppointmentSettings(updated, {
+    reminder_policy: {
+      aftercare: {
+        global: { attended: { enabled: true, message: "Hola {password}." } }
+      }
+    }
+  }, { expectedRevision: 4, now: NOW });
+}, function (error) {
+  return error instanceof AppointmentOperationsError && error.code === "appointment_aftercare_variable_not_allowed";
+});
+assert.throws(function () {
   updateAppointmentSettings(updated, {}, { expectedRevision: 3, now: NOW });
 }, function (error) {
   return error instanceof AppointmentOperationsError &&
@@ -170,7 +198,34 @@ const appointment = {
   status: "booked",
   starts_at: "2026-08-22T15:00:00.000Z"
 };
-let reminders = materializeAppointmentReminders(appointment, updated, [], { now: NOW });
+const aftercareRows = materializeAppointmentAftercare(Object.assign({}, appointment, {
+  starts_at: "2026-08-19T15:00:00.000Z",
+  duration_minutes: 60,
+  appointment_service_id: "consulta_inicial",
+  appointment_outcome: "attended"
+}), updated, [], { now: NOW });
+assert.strictEqual(aftercareRows.length, 2, "attended service override schedules its message and return invitation");
+assert.strictEqual(aftercareRows[0].reminder_kind, "appointment_aftercare");
+assert.strictEqual(aftercareRows[0].aftercare_outcome, "attended");
+assert.strictEqual(aftercareRows[0].scheduled_for, "2026-08-20T16:00:00.000Z");
+assert.strictEqual(aftercareRows[1].reminder_kind, "appointment_aftercare_invite");
+assert.strictEqual(aftercareRows[1].scheduled_for, "2026-09-16T16:00:00.000Z");
+const correctedAftercare = materializeAppointmentReminders(Object.assign({}, appointment, {
+  starts_at: "2026-08-19T15:00:00.000Z",
+  duration_minutes: 60,
+  appointment_service_id: "consulta_inicial",
+  appointment_outcome: "no_show",
+  appointment_outcome_at: "2026-08-20T12:00:00.000Z"
+}), updated, aftercareRows, { now: NOW });
+assert(correctedAftercare.some(function (row) {
+  return row.reminder_kind === "appointment_aftercare" && row.aftercare_outcome === "no_show";
+}), "correcting the outcome schedules only the matching tenant rule");
+assert(correctedAftercare.filter(function (row) {
+  return row.aftercare_outcome === "attended";
+}).every(function (row) { return row.status === "cancelled"; }), "previous aftercare jobs are cancelled after outcome correction");
+let reminders = materializeAppointmentReminders(appointment, updated, [], { now: NOW }).filter(function (row) {
+  return !row.reminder_kind;
+});
 assert.strictEqual(reminders.length, 2);
 assert(reminders.every(function (row) { return row.tenant_id === "tenant-a"; }));
 assert(reminders.every(function (row) { return row.conversation_id === "wa:573001112233"; }));
@@ -183,7 +238,9 @@ const storedWithDatabaseIds = reminders.map(function (row, index) {
     status: "sent"
   });
 });
-const rematerialized = materializeAppointmentReminders(appointment, updated, storedWithDatabaseIds, { now: NOW });
+const rematerialized = materializeAppointmentReminders(appointment, updated, storedWithDatabaseIds, { now: NOW }).filter(function (row) {
+  return !row.reminder_kind;
+});
 assert.strictEqual(rematerialized.length, 2, "database UUIDs must match existing reminders by reminder_key");
 assert(rematerialized.every(function (row) { return row.status === "sent"; }));
 
@@ -229,7 +286,7 @@ const rescheduled = materializeAppointmentReminders(Object.assign({}, appointmen
   status: "rescheduled"
 }), updated, [oldReminder], { now: NOW });
 assert(rescheduled.some(function (row) { return row.id === oldReminder.id && row.status === "cancelled"; }));
-assert.strictEqual(rescheduled.filter(function (row) { return row.status === "scheduled"; }).length, 2);
+assert.strictEqual(rescheduled.filter(function (row) { return row.status === "scheduled" && !row.reminder_kind; }).length, 2);
 
 const cancelled = materializeAppointmentReminders(Object.assign({}, appointment, { status: "cancelled" }), updated, reminders, { now: NOW });
 assert(cancelled.every(function (row) { return row.status === "cancelled"; }));

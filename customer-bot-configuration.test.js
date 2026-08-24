@@ -17,6 +17,8 @@ assert(configurationUi.clientScript.includes('["appointment_services","Servicios
 assert(configurationUi.clientScript.includes("Descripción del servicio"));
 assert(configurationUi.clientScript.includes("nxAttachAppointmentServiceDescriptions"));
 assert(configurationUi.clientScript.includes('/admin/panel/appointment-settings'));
+assert(configurationUi.clientScript.includes('nxToggleAppointmentServiceCard'));
+assert(configurationUi.styles.includes('.nxAppointmentService.is-collapsed'));
 assert(configurationUi.clientScript.includes('booking_requirements:state.nxAppointmentRequirements,appointment_services:state.nxAppointmentServices'));
 assert(configurationUi.clientScript.includes('nxAppointmentServicesBody'));
 assert(configurationUi.clientScript.includes('data-nx-service-field'));

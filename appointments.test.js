@@ -65,11 +65,17 @@ function sampleEvent(overrides) {
   assert.equal(parsed.data_processing_consent, "authorized");
   const withRequirements = normalizeAppointment(Object.assign({}, parsed, {
     booking_fields: { id: "10203040", primera_cita: "Sí", "campo inválido": "se normaliza" },
-    booking_requirements_version: 2
+    booking_requirements_version: 2,
+    appointment_outcome: "no_show",
+    appointment_outcome_at: "2026-07-21T15:30:00.000Z",
+    appointment_outcome_by: "admin@tenant-a.test"
   }));
   assert.strictEqual(withRequirements.booking_fields.primera_cita, "Sí");
   assert.strictEqual(withRequirements.booking_fields.campoinvlido, "se normaliza");
   assert.strictEqual(withRequirements.booking_requirements_version, 2);
+  assert.strictEqual(withRequirements.appointment_outcome, "no_show");
+  assert.strictEqual(withRequirements.appointment_outcome_at, "2026-07-21T15:30:00.000Z");
+  assert.strictEqual(withRequirements.appointment_outcome_by, "admin@tenant-a.test");
 
   const persisted = [];
   const registry = new AppointmentRegistry({ onUpsert: async row => persisted.push(row) });

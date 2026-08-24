@@ -510,6 +510,120 @@ function timingOffsets(value) {
   }).filter(Boolean))).sort(function (a, b) { return b - a; }).slice(0, 8);
 }
 
+function aftercareMessage(kind) {
+  if (kind === "attended") {
+    return "¡Hola {nombre}! Gracias por venir hoy 🙌 ¿Quedó todo bien? Si necesitas algo, escríbeme por aquí.";
+  }
+  if (kind === "no_show") {
+    return "¡Hola {nombre}! Hoy no pudimos verte — no pasa nada. ¿Quieres que busquemos otro horario?";
+  }
+  return "¡Hola {nombre}! Cancelamos tu cita como pediste. Cuando quieras retomar, dime y te paso los horarios disponibles.";
+}
+
+function normalizeAftercareAction(input, previous, kind) {
+  const source = input && typeof input === "object" ? input : {};
+  const fallback = previous && typeof previous === "object" ? previous : {};
+  const unitOptions = kind === "cancelled"
+    ? new Set(["minutes", "hours", "days"])
+    : new Set(["hours", "days"]);
+  const requestedUnit = text(
+    Object.prototype.hasOwnProperty.call(source, "unit") ? source.unit : fallback.unit,
+    20
+  ).toLowerCase();
+  const unit = unitOptions.has(requestedUnit)
+    ? requestedUnit
+    : (kind === "cancelled" ? "minutes" : "hours");
+  const defaultDelay = kind === "cancelled" ? 30 : (kind === "no_show" ? 1 : 2);
+  const action = {
+    enabled: Object.prototype.hasOwnProperty.call(source, "enabled")
+      ? source.enabled === true
+      : fallback.enabled === true,
+    delay: integer(
+      Object.prototype.hasOwnProperty.call(source, "delay") ? source.delay : fallback.delay,
+      defaultDelay,
+      1,
+      60
+    ),
+    unit,
+    message: text(
+      Object.prototype.hasOwnProperty.call(source, "message") ? source.message : fallback.message,
+      2000
+    ) || aftercareMessage(kind)
+  };
+  if (kind === "attended") {
+    const inviteUnitValue = text(
+      Object.prototype.hasOwnProperty.call(source, "invite_unit") ? source.invite_unit : fallback.invite_unit,
+      20
+    ).toLowerCase();
+    action.invite_enabled = Object.prototype.hasOwnProperty.call(source, "invite_enabled")
+      ? source.invite_enabled === true
+      : fallback.invite_enabled === true;
+    action.invite_delay = integer(
+      Object.prototype.hasOwnProperty.call(source, "invite_delay") ? source.invite_delay : fallback.invite_delay,
+      4,
+      1,
+      52
+    );
+    action.invite_unit = ["days", "weeks", "months"].includes(inviteUnitValue)
+      ? inviteUnitValue
+      : "weeks";
+  }
+  return action;
+}
+
+function normalizeAftercareRule(input, previous) {
+  const source = input && typeof input === "object" ? input : {};
+  const fallback = previous && typeof previous === "object" ? previous : {};
+  return {
+    attended: normalizeAftercareAction(source.attended, fallback.attended, "attended"),
+    no_show: normalizeAftercareAction(source.no_show, fallback.no_show, "no_show"),
+    cancelled: normalizeAftercareAction(source.cancelled, fallback.cancelled, "cancelled")
+  };
+}
+
+function normalizeAftercarePolicy(input, previous) {
+  const source = input && typeof input === "object" ? input : {};
+  const fallback = previous && typeof previous === "object" ? previous : {};
+  const globalRule = normalizeAftercareRule(source.global, fallback.global);
+  const previousOverrides = new Map((Array.isArray(fallback.service_overrides) ? fallback.service_overrides : [])
+    .map(function (row) { return [text(row && row.service_id, 100), row]; }));
+  const overrides = (Array.isArray(source.service_overrides)
+    ? source.service_overrides
+    : (Array.isArray(fallback.service_overrides) ? fallback.service_overrides : []))
+    .map(function (row) {
+      const serviceId = text(row && row.service_id, 100);
+      if (!serviceId) return null;
+      return Object.assign({ service_id: serviceId }, normalizeAftercareRule(row, previousOverrides.get(serviceId)));
+    })
+    .filter(Boolean);
+  return {
+    global: globalRule,
+    service_overrides: uniqueById(overrides.map(function (row) {
+      return Object.assign({ id: row.service_id }, row);
+    }), 100).map(function (row) {
+      const clean = Object.assign({}, row);
+      delete clean.id;
+      return clean;
+    })
+  };
+}
+
+function validateAftercarePolicy(input) {
+  const policy = normalizeAftercarePolicy(input);
+  const allowed = new Set(["nombre", "servicio", "negocio"]);
+  const rules = [policy.global].concat(policy.service_overrides || []);
+  for (const rule of rules) {
+    for (const kind of ["attended", "no_show", "cancelled"]) {
+      const message = text(rule && rule[kind] && rule[kind].message, 2000);
+      const variables = message.match(/\{[^{}]+\}/g) || [];
+      const invalid = variables.map(function (value) { return value.slice(1, -1).trim().toLowerCase(); })
+        .find(function (value) { return !allowed.has(value); });
+      if (invalid) return { ok: false, error: "appointment_aftercare_variable_not_allowed", variable: invalid };
+    }
+  }
+  return { ok: true, policy };
+}
+
 function normalizeReminderPolicy(input, fallback, now) {
   const source = input && typeof input === "object" ? input : {};
   const previous = fallback && typeof fallback === "object" ? fallback : {};
@@ -544,6 +658,7 @@ function normalizeReminderPolicy(input, fallback, now) {
     handoff_on_no_response: Object.prototype.hasOwnProperty.call(source, "handoff_on_no_response")
       ? source.handoff_on_no_response !== false
       : previous.handoff_on_no_response !== false,
+    aftercare: normalizeAftercarePolicy(source.aftercare, previous.aftercare),
     updated_at: iso(source.updated_at || previous.updated_at, now)
   };
 }
@@ -760,6 +875,8 @@ function updateAppointmentSettings(currentInput, patchInput, options) {
   const updated = normalizeAppointmentSettings(merged, { now });
   const invalidService = updated.appointment_services.map(validateAppointmentService).find(function (result) { return !result.ok; });
   if (invalidService) throw new AppointmentOperationsError(invalidService.error, 422, { appointment_service: invalidService.service || null });
+  const invalidAftercare = validateAftercarePolicy(updated.reminder_policy.aftercare);
+  if (!invalidAftercare.ok) throw new AppointmentOperationsError(invalidAftercare.error, 422, { variable: invalidAftercare.variable });
   return updated;
 }
 
@@ -780,6 +897,80 @@ function customerConversationIdentity(appointment) {
 
 function reminderId(tenantId, appointmentId, startsAt, offsetMinutes) {
   return stableId("rem_", [tenantId, appointmentId, startsAt, offsetMinutes]);
+}
+
+function aftercareDelayMinutes(value, unit) {
+  const amount = integer(value, 1, 1, 60);
+  if (unit === "days") return amount * 24 * 60;
+  if (unit === "weeks") return amount * 7 * 24 * 60;
+  if (unit === "months") return amount * 30 * 24 * 60;
+  if (unit === "hours") return amount * 60;
+  return amount;
+}
+
+function appointmentAftercareRule(settings, appointment) {
+  const policy = settings && settings.reminder_policy && settings.reminder_policy.aftercare || normalizeAftercarePolicy();
+  const serviceId = text(appointment && appointment.appointment_service_id, 100);
+  const override = (policy.service_overrides || []).find(function (row) {
+    return serviceId && text(row && row.service_id, 100) === serviceId;
+  });
+  return normalizeAftercareRule(override || policy.global);
+}
+
+function appointmentAftercareOutcome(appointment) {
+  const explicit = text(appointment && (appointment.appointment_outcome || appointment.attendance_status), 40).toLowerCase();
+  if (["attended", "no_show", "cancelled"].includes(explicit)) return explicit;
+  return text(appointment && appointment.status, 40).toLowerCase() === "cancelled" ? "cancelled" : "attended";
+}
+
+function materializeAppointmentAftercare(appointment, settings, existing, options) {
+  const tenantId = tenant(appointment && appointment.tenant_id);
+  const appointmentId = appointmentIdentity(appointment);
+  const startsAt = optionalIso(appointment && appointment.starts_at);
+  if (!tenantId || !appointmentId || !startsAt) return [];
+  const now = iso(options && options.now) || new Date().toISOString();
+  const outcome = appointmentAftercareOutcome(appointment);
+  const rule = appointmentAftercareRule(settings, appointment);
+  const action = rule[outcome];
+  if (!action || action.enabled !== true) return [];
+  const durationMinutes = integer(appointment && appointment.duration_minutes, 60, 5, 24 * 60);
+  const endAt = optionalIso(appointment && appointment.ends_at) || new Date(new Date(startsAt).getTime() + durationMinutes * 60000).toISOString();
+  const cancelledAnchor = optionalIso(appointment && (appointment.cancelled_at || appointment.appointment_outcome_at || appointment.updated_at));
+  const anchor = outcome === "cancelled" ? (cancelledAnchor || endAt) : endAt;
+  const conversationId = customerConversationIdentity(appointment);
+  const channel = REMINDER_CHANNELS.has(text(appointment && appointment.channel, 40).toLowerCase())
+    ? text(appointment.channel, 40).toLowerCase()
+    : (settings.reminder_policy.channel || "whatsapp");
+  const rows = [];
+  function add(kind, delay, unit, message) {
+    const delayMinutes = aftercareDelayMinutes(delay, unit);
+    const scheduledFor = new Date(new Date(anchor).getTime() + delayMinutes * 60000).toISOString();
+    const key = [tenantId, appointmentId, "aftercare", outcome, kind, anchor, delay, unit].join(":");
+    const previous = existing.find(function (row) { return text(row && row.reminder_key, 500) === key; });
+    rows.push(normalizeReminder(Object.assign({}, previous || {}, {
+      id: stableId("rem_", [key]),
+      tenant_id: tenantId,
+      appointment_id: appointmentId,
+      conversation_id: conversationId,
+      channel,
+      offset_minutes: 0,
+      scheduled_for: scheduledFor,
+      status: previous && previous.status || "scheduled",
+      attempts: previous && previous.attempts || 0,
+      reminder_key: key,
+      reminder_kind: kind,
+      aftercare_outcome: outcome,
+      aftercare_message: text(message, 2000),
+      created_at: previous && previous.created_at || now,
+      updated_at: previous && previous.updated_at || now
+    })));
+  }
+  add("appointment_aftercare", action.delay, action.unit, action.message);
+  if (outcome === "attended" && action.invite_enabled === true) {
+    add("appointment_aftercare_invite", action.invite_delay, action.invite_unit,
+      "¡Hola {nombre}! Cuando quieras volver para {servicio}, puedo ayudarte a encontrar un nuevo horario.");
+  }
+  return rows;
 }
 
 function normalizeReminder(input) {
@@ -846,6 +1037,9 @@ function materializeAppointmentReminders(appointmentInput, settingsInput, existi
       })));
     });
   }
+  materializeAppointmentAftercare(appointment, settings, existing, options).forEach(function (row) {
+    expected.push(row);
+  });
   const expectedIds = new Set(expected.map(function (row) { return row.id; }));
   const expectedKeys = new Set(expected.map(function (row) { return row.reminder_key; }));
   const obsolete = existing.filter(function (row) {
@@ -984,6 +1178,7 @@ module.exports = {
   compileAppointmentServices,
   deriveAppointmentReminderStatus,
   evaluateScheduleException,
+  materializeAppointmentAftercare,
   materializeAppointmentReminders,
   normalizeAppointmentSettings,
   normalizeAppointmentServices,
@@ -998,6 +1193,7 @@ module.exports = {
   updateAppointmentSettings,
   findAppointmentService,
   validateAppointmentService,
+  validateAftercarePolicy,
   validateDepositPolicy,
   validateBookingRequirements
 };

@@ -51,6 +51,11 @@ function cleanDepositStatus(value) {
   return DEPOSIT_STATUSES.has(status) ? status : "not_required";
 }
 
+function cleanAppointmentOutcome(value) {
+  const outcome = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  return ["attended", "no_show", "cancelled"].includes(outcome) ? outcome : "";
+}
+
 function cleanReminderState(value) {
   if (value && typeof value === "object") value = value.status || value.state || value.delivery_status;
   const state = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
@@ -335,6 +340,12 @@ function normalizeAppointment(input) {
   if (Object.keys(reminderDeliveries).length) normalized.reminder_deliveries = reminderDeliveries;
   const confirmationDelivery = cleanConfirmationDelivery(input.confirmation_delivery);
   if (confirmationDelivery) normalized.confirmation_delivery = confirmationDelivery;
+  const appointmentOutcome = cleanAppointmentOutcome(input.appointment_outcome || input.attendance_status);
+  if (appointmentOutcome) normalized.appointment_outcome = appointmentOutcome;
+  const appointmentOutcomeAt = validIsoDate(input.appointment_outcome_at);
+  if (appointmentOutcomeAt) normalized.appointment_outcome_at = appointmentOutcomeAt;
+  const appointmentOutcomeBy = cleanText(input.appointment_outcome_by, 160);
+  if (appointmentOutcomeBy) normalized.appointment_outcome_by = appointmentOutcomeBy;
   return normalized;
 }
 

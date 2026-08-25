@@ -412,6 +412,7 @@ function mergeCustomerSetupQuestionnaireHistory(snapshots, actor, now) {
 function questionAppliesToAnswers(question, answers) {
   const goal = answers && answers.setup_goal || "unknown";
   if (question.path === "setup_goal") return true;
+  if (question.path === "appointment_setup.business_category") return goal === "customer_service" || goal === "appointments" || goal === "both";
   if (question.path === "operations.monthly_customer_volume") return goal === "customer_service" || goal === "appointments" || goal === "both";
   if (question.section === "business") return goal === "customer_service" || goal === "both";
   const appointmentQuestion = String(question.section || "").indexOf("appointments_") === 0 || String(question.path || "").indexOf("appointment_setup.") === 0;
@@ -596,10 +597,7 @@ function normalizeOnboarding(input) {
     },
     appointment_setup: {
       business_name: text(appointmentSetup.business_name, 120),
-      business_category: choice(appointmentSetup.business_category, [
-        "salud_bienestar", "belleza_estetica", "servicios_profesionales", "legal",
-        "inmobiliaria", "restaurantes", "educacion", "automotriz", "otro"
-      ], ""),
+      business_category: text(appointmentSetup.business_category, 300),
       business_category_other: text(appointmentSetup.business_category_other, 160),
       target_customer: text(appointmentSetup.target_customer, 1200),
       business_description: text(appointmentSetup.business_description, 1800),
@@ -856,7 +854,7 @@ function generateCustomerServiceConfiguration(input, meta) {
     business_name: answers.business.brand_name,
     assistant_name: service.bot_display_name,
     objective: "Atender consultas, orientar al cliente y apoyar procesos de compra exitosos.",
-    business_summary: service.business_offer_description,
+    business_summary: [answers.appointment_setup.business_category, service.business_offer_description].filter(Boolean).join(". "),
     ideal_customer: service.ideal_customer,
     value_proposition: service.value_proposition,
     products_services: answers.operations.services_products,
@@ -1141,6 +1139,7 @@ function generateAppointmentConfiguration(input, meta) {
 const CUSTOMER_SERVICE_REQUIRED_PATHS = [
   "setup_goal",
   "business.brand_name",
+  "appointment_setup.business_category",
   "operations.primary_country",
   "operations.primary_city",
   "operations.monthly_customer_volume",

@@ -40,10 +40,11 @@ renderClientOnboarding(res, {
 assert.match(html, /function renderDynamicQuestions\(\)/);
 assert.match(html, /createQuestionField\(question\)/);
 assert.match(html, /question\.path!=="setup_goal"&&questionApplies\(question\)/);
-assert.match(html, /grid\.querySelector\(fieldSelector\(question\.path\)\)/);
+assert.match(html, /panelNode\.querySelector\(fieldSelector\(question\.path\)\)/);
 assert.match(html, /customer_service_setup\.new_training_rule/);
 assert.match(html, /data-field="appointment_setup\.calls_enabled"/);
-assert.match(html, /<input data-field="appointment_setup\.business_category" maxlength="160" placeholder="Ej\. Peluquería para mascotas, clínica veterinaria, tienda de ropa\.\.\.">/);
+assert.match(html, /<input data-field="appointment_setup\.business_category" maxlength="300" placeholder="Ej\. Peluquería para mascotas, clínica veterinaria, tienda de ropa\.\.\.">/);
+assert.strictEqual((html.match(/data-field="appointment_setup\.business_category"/g) || []).length, 1, "the shared business-purpose question is rendered once for both bots");
 assert.doesNotMatch(html, /<select data-field="appointment_setup\.business_category">/);
 assert.doesNotMatch(html, /data-field="appointment_setup\.business_category_other"/);
 assert.match(html, /Sí, activar llamadas/);

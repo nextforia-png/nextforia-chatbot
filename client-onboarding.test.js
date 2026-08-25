@@ -30,6 +30,21 @@ assert.deepStrictEqual(
 );
 assert.strictEqual(new Set(CUSTOMER_SETUP_QUESTIONS.map(function (question) { return question.id; })).size, CUSTOMER_SETUP_QUESTIONS.length);
 assert(CUSTOMER_SETUP_QUESTIONS.every(function (question) { return question.path && question.type; }));
+const appointmentBusinessCategoryQuestion = CUSTOMER_SETUP_QUESTIONS.find(function (question) { return question.id === "appointment_business_category"; });
+assert.strictEqual(appointmentBusinessCategoryQuestion.type, "text");
+assert.strictEqual(appointmentBusinessCategoryQuestion.label, "¿A qué se dedica tu negocio?");
+assert.match(appointmentBusinessCategoryQuestion.placeholder, /Peluquería para mascotas/);
+const legacyBusinessCategoryQuestionnaire = normalizeCustomerSetupQuestionnaire({
+  questions: [{
+    id: "appointment_business_category",
+    type: "choice",
+    label: "¿A qué se dedica tu negocio?",
+    placeholder: ""
+  }]
+}, "Root", "2026-08-25T00:00:00.000Z");
+const normalizedBusinessCategoryQuestion = legacyBusinessCategoryQuestionnaire.questions.find(function (question) { return question.id === "appointment_business_category"; });
+assert.strictEqual(normalizedBusinessCategoryQuestion.type, "text", "legacy Sí/No configuration must be upgraded to open text");
+assert.match(normalizedBusinessCategoryQuestion.placeholder, /clínica veterinaria/);
 assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) { return question.id === "whatsapp_integration_intent" && question.active === false && question.required === false; }));
 assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) {
   return question.id === "appointment_calls_enabled" &&

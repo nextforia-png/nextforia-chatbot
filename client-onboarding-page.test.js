@@ -47,6 +47,12 @@ assert.match(html, /<input data-field="appointment_setup\.business_category" max
 assert.strictEqual((html.match(/data-field="appointment_setup\.business_category"/g) || []).length, 1, "the shared business-purpose question is rendered once for both bots");
 assert.doesNotMatch(html, /<select data-field="appointment_setup\.business_category">/);
 assert.doesNotMatch(html, /data-field="appointment_setup\.business_category_other"/);
+assert.doesNotMatch(html, /data-field="voice\.formality"/);
+assert.match(html, /data-customer-service-only/);
+assert.match(html, /data-both-redundant/);
+assert.match(html, /<input data-field="operations\.services_products" type="hidden">/);
+assert.match(html, /function syncSharedSetupAnswers\(answers\)/);
+assert.match(html, /block\.hidden=type==="service"\?[^:]+:goal!=="appointments"/);
 assert.match(html, /Sí, activar llamadas/);
 assert.match(html, /El número aparecerá en tu Customer Panel listo para compartir/);
 assert.match(html, /Nextfor asignará el número automáticamente/);

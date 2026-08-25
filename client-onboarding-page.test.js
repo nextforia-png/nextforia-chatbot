@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const vm = require("vm");
 const renderClientOnboarding = require("./client-onboarding-page");
 
 let html = "";
@@ -55,6 +56,9 @@ assert.match(html, /class="setupPage goalStepMode hidden" id="setupPage"/);
 assert.match(html, /repeat\(auto-fit,minmax\(min\(100%,220px\),1fr\)\)/);
 assert.match(html, /@media\(max-width:1020px\) and \(min-width:861px\)/);
 assert.match(html, /startSetup"\)\.onclick=function\(\)\{[^}]*render\(\)/);
+const inlineScripts = Array.from(html.matchAll(/<script>([\s\S]*?)<\/script>/g)).map(function (match) { return match[1]; });
+assert.strictEqual(inlineScripts.length, 1);
+assert.doesNotThrow(function () { new vm.Script(inlineScripts[0], { filename: "client-onboarding-inline.js" }); });
 
 let partialCatalogHtml = "";
 renderClientOnboarding({

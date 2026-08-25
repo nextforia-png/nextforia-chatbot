@@ -71,6 +71,30 @@ async function rejectsCode(promise, code) {
   }, "agent@example.com");
   assert.strictEqual(paid.stage, "pagado");
   await rejectsCode(service.action("tenant-a", "ord-a", "confirm_payment", {}, "agent@example.com"), "invalid_transition");
+
+  const notifications = [];
+  const notificationService = createCustomerOrderService({
+    store: new InMemoryCustomerOrderStore(),
+    notifyTenantOrder: async function (order) {
+      notifications.push(order);
+      return { id: "tenant-order:" + order.id, status: "sent", delivery_mode: "template", delivered_at: "2026-08-25T12:00:00.000Z" };
+    }
+  });
+  await notificationService.create(Object.assign({}, base, { id: "ord-notify" }));
+  const notified = await notificationService.action("tenant-a", "ord-notify", "confirm_payment", {}, "agent@example.com");
+  assert.strictEqual(notified.stage, "pagado");
+  assert.strictEqual(notifications.length, 1, "only an actual payment confirmation notifies the tenant");
+  assert.strictEqual(notifications[0].tenant_id, "tenant-a", "notification never loses its tenant scope");
+  assert.strictEqual(notified.tenant_order_notification.status, "sent");
+
+  const failedNotificationService = createCustomerOrderService({
+    store: new InMemoryCustomerOrderStore(),
+    notifyTenantOrder: async function () { throw new Error("meta_delivery_failed"); }
+  });
+  await failedNotificationService.create(Object.assign({}, base, { id: "ord-notify-failure" }));
+  const confirmedDespiteFailure = await failedNotificationService.action("tenant-a", "ord-notify-failure", "confirm_payment", {}, "agent@example.com");
+  assert.strictEqual(confirmedDespiteFailure.stage, "pagado", "a notification failure cannot reverse the order");
+  assert.strictEqual(confirmedDespiteFailure.tenant_order_notification.status, "failed");
   const preparing = await service.action("tenant-a", "ord-a", "start_preparation", {}, "agent@example.com");
   assert.strictEqual(preparing.stage, "preparacion");
   await rejectsCode(service.action("tenant-a", "ord-a", "mark_sent", {}, "agent@example.com"), "tracking_required");

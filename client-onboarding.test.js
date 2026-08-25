@@ -19,7 +19,8 @@ const {
   normalizeCustomerSetupQuestionnaire,
   normalizeOnboarding,
   onboardingCompletion,
-  pendingQuestionnaireItems
+  pendingQuestionnaireItems,
+  reconcileOnboardingAppointmentState
 } = require("./client-onboarding");
 
 assert.strictEqual(onboardingCompletion(cloneDefaults()), 0);
@@ -37,6 +38,38 @@ assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) {
     question.required === false;
 }));
 assert.deepStrictEqual(SETUP_REVIEW_STATUSES, ["incomplete", "ready", "building", "testing", "live"]);
+
+const reconciledAppointmentState = reconcileOnboardingAppointmentState([
+  {
+    tenant_id: "tenant-reconcile",
+    updated_at: "2026-08-25T10:00:02.000Z",
+    answers: {
+      business: { brand_name: "Nombre más reciente" },
+      appointment_setup: { revision: 2, appointment_services: [] }
+    },
+    appointment_configuration: { revision: 2, appointment_services: [] }
+  },
+  {
+    tenant_id: "tenant-reconcile",
+    updated_at: "2026-08-25T10:00:01.000Z",
+    answers: {
+      business: { brand_name: "Nombre anterior" },
+      appointment_setup: {
+        revision: 4,
+        appointment_services: [{ id: "service-real", name: "Servicio persistido" }]
+      }
+    },
+    appointment_configuration: {
+      revision: 4,
+      appointment_services: [{ id: "service-real", name: "Servicio persistido" }]
+    }
+  }
+]);
+assert.strictEqual(reconciledAppointmentState.answers.business.brand_name, "Nombre más reciente",
+  "an unrelated newer onboarding edit must remain the base record");
+assert.strictEqual(reconciledAppointmentState.appointment_configuration.revision, 4,
+  "the highest appointment revision must survive a stale newer snapshot");
+assert.strictEqual(reconciledAppointmentState.answers.appointment_setup.appointment_services[0].name, "Servicio persistido");
 
 const normalized = normalizeOnboarding({
   setup_goal: "customer_service",

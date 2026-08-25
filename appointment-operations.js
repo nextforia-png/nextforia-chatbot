@@ -150,13 +150,19 @@ function normalizeServiceDeposit(input) {
 function normalizeAppointmentService(input, index) {
   const source = input && typeof input === "object" ? input : {};
   const name = text(source.name, 160);
-  if (!name) return null;
+  // The panel creates a stable id before the tenant starts typing. Keep that
+  // row as a draft even while the name is still empty; operational consumers
+  // already call validateAppointmentService and therefore never offer an
+  // incomplete service to a customer. Dropping it here made the first
+  // autosave remove the card from both the panel and the canonical record.
+  const draftId = text(source.id, 120);
+  if (!name && !draftId) return null;
   const modality = APPOINTMENT_SERVICE_MODALITIES.has(source.modality) ? source.modality : "in_person";
   const methods = (Array.isArray(source.payment_methods) ? source.payment_methods : [])
     .map(normalizeDepositPaymentMethod).filter(Boolean).slice(0, 8)
     .map(function (method, methodIndex) { return Object.assign({}, method, { order: methodIndex }); });
   return {
-    id: serviceId(source.id || name, "service_" + (index + 1)),
+    id: serviceId(draftId || name, "service_" + (index + 1)),
     name,
     // Customer-facing benefit copy. This stays with the tenant service so
     // Tempo/Atlas can explain the service without inventing its value.
@@ -199,7 +205,7 @@ function normalizeAppointmentServices(value) {
 
 function validateAppointmentService(serviceInput) {
   const service = normalizeAppointmentService(serviceInput, 0);
-  if (!service) return { ok: false, error: "appointment_service_name_required" };
+  if (!service || !service.name) return { ok: false, error: "appointment_service_name_required", service: service || null };
   if (service.duration_minutes < 5) return { ok: false, error: "appointment_service_duration_required", service };
   if (service.modality === "in_person" && !service.address) return { ok: false, error: "appointment_service_address_required", service };
   // A virtual link is a fallback, never a prerequisite: Google Meet is

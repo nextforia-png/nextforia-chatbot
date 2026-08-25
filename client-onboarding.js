@@ -1391,6 +1391,77 @@ function createOnboardingRecord(input, meta) {
   };
 }
 
+const APPOINTMENT_SETTINGS_FIELDS = Object.freeze([
+  "availability_rules",
+  "scheduling_rules",
+  "schedule_exceptions",
+  "reminder_policy",
+  "booking_policy",
+  "default_duration_minutes",
+  "buffer_minutes",
+  "booking_requirements",
+  "appointment_services",
+  "required_booking_fields",
+  "revision",
+  "reminder_channel",
+  "reminder_timing",
+  "services",
+  "minimum_booking_notice",
+  "maximum_booking_window",
+  "booking_confirmation_mode",
+  "cancellation_policy",
+  "no_show_policy",
+  "booking_payment_details"
+]);
+
+function appointmentRecordRevision(record) {
+  const configuration = record && record.appointment_configuration || {};
+  const setup = record && record.answers && record.answers.appointment_setup || {};
+  return Math.max(0, Math.floor(Number(
+    configuration.revision != null ? configuration.revision : setup.revision
+  ) || 0));
+}
+
+// Onboarding snapshots are append-only. A stale worker may append an unrelated
+// setup edit after a newer appointment-settings write. Timestamp order alone
+// would then hide the tenant's services. Keep the newest envelope, but restore
+// the highest appointment revision so the panel, Tempo/Atlas and Super Admin
+// all consume the same canonical rules.
+function reconcileOnboardingAppointmentState(records) {
+  const rows = (Array.isArray(records) ? records : []).filter(function (record) {
+    return record && record.answers && record.tenant_id;
+  });
+  if (!rows.length) return null;
+  const latest = rows[0];
+  if (latest.setup_deleted === true) return latest;
+  let appointmentSource = latest;
+  let highestRevision = appointmentRecordRevision(latest);
+  rows.slice(1).forEach(function (record) {
+    if (record.setup_deleted === true || record.tenant_id !== latest.tenant_id) return;
+    const revision = appointmentRecordRevision(record);
+    if (revision > highestRevision) {
+      highestRevision = revision;
+      appointmentSource = record;
+    }
+  });
+  if (appointmentSource === latest) return latest;
+  const reconciled = JSON.parse(JSON.stringify(latest));
+  reconciled.answers = reconciled.answers || {};
+  reconciled.answers.appointment_setup = Object.assign({}, reconciled.answers.appointment_setup || {});
+  const sourceSetup = appointmentSource.answers && appointmentSource.answers.appointment_setup || {};
+  APPOINTMENT_SETTINGS_FIELDS.forEach(function (field) {
+    if (Object.prototype.hasOwnProperty.call(sourceSetup, field)) {
+      reconciled.answers.appointment_setup[field] = sourceSetup[field] === undefined
+        ? undefined
+        : JSON.parse(JSON.stringify(sourceSetup[field]));
+    }
+  });
+  if (appointmentSource.appointment_configuration) {
+    reconciled.appointment_configuration = JSON.parse(JSON.stringify(appointmentSource.appointment_configuration));
+  }
+  return reconciled;
+}
+
 function buildCoverageConversationContext(record) {
   if (!record || !["submitted", "completed", "in_review", "ready"].includes(record.status) || !record.answers) return "";
   const operations = record.answers.operations || {};
@@ -1429,5 +1500,6 @@ module.exports = {
   normalizeOnboarding,
   normalizeSetupReview,
   onboardingCompletion,
-  pendingQuestionnaireItems
+  pendingQuestionnaireItems,
+  reconcileOnboardingAppointmentState
 };

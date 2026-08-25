@@ -278,6 +278,34 @@ async function seedAppointment(base, secret, agentId, customerName) {
         settings: {
           appointment_services: [{
             id: "draft-b",
+            name: "",
+            duration_minutes: 0,
+            modality: "in_person",
+            address: ""
+          }]
+        }
+      })
+    });
+    assert.strictEqual(response.status, 200, "the first autosave must preserve a blank-name service card");
+    const blankDraftB = await response.json();
+    assert.strictEqual(blankDraftB.persistence_verified, true);
+    assert.strictEqual(blankDraftB.settings.appointment_services.length, 1);
+    assert.strictEqual(blankDraftB.settings.appointment_services[0].id, "draft_b");
+
+    response = await fetch(base + "/admin/panel/appointment-settings", { headers: { cookie: cookieB } });
+    assert.strictEqual(response.status, 200);
+    const reloadedBlankDraftB = await response.json();
+    assert.strictEqual(reloadedBlankDraftB.settings.appointment_services[0].id, "draft_b",
+      "a reload during editing must not make the new service disappear");
+
+    response = await fetch(base + "/admin/panel/appointment-settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json", cookie: cookieB, origin: base },
+      body: JSON.stringify({
+        revision: reloadedBlankDraftB.revision,
+        settings: {
+          appointment_services: [{
+            id: "draft-b",
             name: "Servicio en construcción",
             duration_minutes: 0,
             modality: "in_person",

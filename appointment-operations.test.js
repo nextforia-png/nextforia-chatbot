@@ -27,6 +27,19 @@ const {
 
 const NOW = "2026-08-20T12:00:00.000Z";
 
+const emptyNamedDraft = normalizeAppointmentServices([{
+  id: "service-draft-while-typing",
+  name: "",
+  duration_minutes: 0,
+  modality: "in_person"
+}]);
+assert.strictEqual(emptyNamedDraft.length, 1,
+  "a panel-created service must survive autosave before the tenant finishes its name");
+assert.strictEqual(validateAppointmentService(emptyNamedDraft[0]).ok, false,
+  "an incomplete persisted draft must never become bookable");
+assert.match(compileAppointmentServices(emptyNamedDraft), /No hay servicios estructurados/,
+  "Tempo/Atlas must ignore incomplete drafts");
+
 assert.deepStrictEqual(timingOffsets("both"), [1440, 360]);
 assert.deepStrictEqual(timingOffsets("24 horas antes y 6 horas antes"), [1440, 360]);
 assert.deepStrictEqual(timingOffsets("2h"), [120]);

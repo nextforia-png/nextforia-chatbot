@@ -128,7 +128,8 @@ const {
   normalizeCustomerServiceConfiguration,
   normalizeCustomerSetupQuestionnaire,
   mergeCustomerSetupQuestionnaireHistory,
-  pendingQuestionnaireItems
+  pendingQuestionnaireItems,
+  reconcileOnboardingAppointmentState
 } = require("./client-onboarding");
 const {
   assertClientOnboardingRecordScope,
@@ -433,7 +434,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v463-appointment-deposits-desktop";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v464-appointment-services-save";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -10783,11 +10784,31 @@ async function loadClientOnboarding(force, tenantId) {
   let record = cached.record;
   const recordId = clientOnboardingRecordId(tenantId);
   if (SUPABASE_ENABLED) {
-    const rows = await supabaseFetchUserRecent(recordId, 1, tenantId);
-    if (rows) record = rows.map(normalizeTurnRow).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
+    // Read enough canonical snapshots to survive an unrelated stale writer,
+    // and use deterministic id ordering when timestamps are equal.
+    let rows = null;
+    try {
+      rows = await supabaseFetchUserToolRecent(recordId, CLIENT_ONBOARDING_TOOL, 25, { tenantId, strict: true });
+    } catch (error) {
+      // Preserve the existing audited fallback only when the canonical table
+      // itself is unavailable. Every other failure remains strict so tenant
+      // scoping and persistence errors can never be hidden.
+      if (!isMissingConversationLogsError(error)) throw error;
+    }
+    if (rows) {
+      const records = rows.map(normalizeTurnRow).map(function (turn) {
+        return parseClientOnboardingTurn(turn, tenantId);
+      }).filter(Boolean);
+      record = reconcileOnboardingAppointmentState(records) || record;
+    }
     if (!record) record = await fetchClientOnboardingAuditFallback(tenantId) || record;
   } else {
-    record = conversationLogs.slice().reverse().filter(function (turn) { return turn.userId === recordId; }).map(function (turn) { return parseClientOnboardingTurn(turn, tenantId); }).find(Boolean) || record;
+    const records = conversationLogs.slice().reverse().filter(function (turn) {
+      return turn.userId === recordId;
+    }).map(function (turn) {
+      return parseClientOnboardingTurn(turn, tenantId);
+    }).filter(Boolean).slice(0, 25);
+    record = reconcileOnboardingAppointmentState(records) || record;
   }
   if (!record) {
     record = createOnboardingRecord(defaultClientOnboarding(), {

@@ -82,6 +82,9 @@ function completedAnswers(company, email, marker) {
       brand_restrictions: "No inventar precios ni descuentos",
       data_consent: true
     },
+    appointment_setup: {
+      business_category: "Servicios y comercio " + marker
+    },
     commerce: {
       platform: "shopify",
       store_url: "https://store-" + String(marker).toLowerCase() + ".myshopify.com",

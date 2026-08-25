@@ -85,6 +85,9 @@ function completedAnswers() {
       brand_restrictions: "No inventar precios",
       data_consent: true
     },
+    appointment_setup: {
+      business_category: "Servicios empresariales"
+    },
     commerce: {
       platform: "none",
       integration_intent: "no"

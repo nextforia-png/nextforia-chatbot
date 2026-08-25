@@ -45,6 +45,10 @@ const legacyBusinessCategoryQuestionnaire = normalizeCustomerSetupQuestionnaire(
 const normalizedBusinessCategoryQuestion = legacyBusinessCategoryQuestionnaire.questions.find(function (question) { return question.id === "appointment_business_category"; });
 assert.strictEqual(normalizedBusinessCategoryQuestion.type, "text", "legacy Sí/No configuration must be upgraded to open text");
 assert.match(normalizedBusinessCategoryQuestion.placeholder, /clínica veterinaria/);
+const openBusinessCategoryAnswers = cloneDefaults();
+openBusinessCategoryAnswers.setup_goal = "customer_service";
+openBusinessCategoryAnswers.appointment_setup.business_category = "Peluquería y spa para mascotas";
+assert.strictEqual(normalizeOnboarding(openBusinessCategoryAnswers).appointment_setup.business_category, "Peluquería y spa para mascotas");
 assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) { return question.id === "whatsapp_integration_intent" && question.active === false && question.required === false; }));
 assert(CUSTOMER_SETUP_QUESTIONS.some(function (question) {
   return question.id === "appointment_calls_enabled" &&
@@ -150,6 +154,7 @@ completedAnswers.meta.whatsapp_integration_intent = "yes";
 completedAnswers.operations.support_hours = "Lunes a viernes";
 completedAnswers.customer_service_setup.business_offer_type = "products";
 completedAnswers.customer_service_setup.business_offer_description = "Juguetes educativos y regalos";
+completedAnswers.appointment_setup.business_category = "Tienda de juguetes y regalos";
 completedAnswers.customer_service_setup.ideal_customer = "Familias que buscan regalos";
 completedAnswers.customer_service_setup.value_proposition = "Curaduría y asesoría rápida";
 completedAnswers.customer_service_setup.bot_display_name = "Nextfor de Empresa Completa";

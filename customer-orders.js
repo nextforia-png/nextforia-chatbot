@@ -87,6 +87,9 @@ function normalizeOrder(input) {
     ? requestedShippingStatus
     : (shipping > 0 ? "priced" : "free");
   const subtotal = items.reduce(function (total, item) { return total + item.price * item.qty; }, 0);
+  const notification = input.tenant_order_notification && typeof input.tenant_order_notification === "object"
+    ? input.tenant_order_notification
+    : {};
   return {
     version: 1,
     id,
@@ -126,7 +129,18 @@ function normalizeOrder(input) {
     source: text(input.source, 80) || "bot_checkout",
     source_event_id: text(input.source_event_id, 500),
     last_action: text(input.last_action, 80),
-    last_actor: text(input.last_actor, 200)
+    last_actor: text(input.last_actor, 200),
+    tenant_order_notification: {
+      id: text(notification.id, 120),
+      status: ["pending", "sent", "failed", "not_configured"].includes(text(notification.status, 40))
+        ? text(notification.status, 40)
+        : "",
+      delivery_mode: text(notification.delivery_mode, 40),
+      recipient_suffix: text(notification.recipient_suffix, 24),
+      attempted_at: text(notification.attempted_at, 60),
+      delivered_at: text(notification.delivered_at, 60),
+      error: text(notification.error, 300)
+    }
   };
 }
 
@@ -294,7 +308,29 @@ function createCustomerOrderService(options) {
       next.revision = current.revision + 1;
       next.last_action = action;
       next.last_actor = text(actor, 200);
-      return store.append(next);
+      const saved = await store.append(next);
+      if (action !== "confirm_payment" || typeof options.notifyTenantOrder !== "function") return saved;
+
+      // The order is already confirmed before the external delivery begins.
+      // A Meta failure must be visible, but never undo the customer's order.
+      let notification;
+      try {
+        notification = await options.notifyTenantOrder(saved);
+      } catch (error) {
+        notification = {
+          status: "failed",
+          attempted_at: new Date().toISOString(),
+          error: text(error && error.message || error || "tenant_notification_failed", 300)
+        };
+      }
+      return store.append(Object.assign({}, saved, {
+        updated_at: new Date().toISOString(),
+        revision: saved.revision + 1,
+        tenant_order_notification: Object.assign({
+          status: "failed",
+          attempted_at: new Date().toISOString()
+        }, notification || {})
+      }));
     });
   }
 

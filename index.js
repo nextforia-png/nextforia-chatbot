@@ -432,7 +432,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v450-legacy-appointment-meet-repair";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v461-tenant-order-whatsapp-notifications";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -1446,8 +1446,79 @@ const customerNotificationService = createCustomerNotificationService({
     });
   }
 });
+
+function tenantOrderNotificationId(order) {
+  return "tenant-order-" + crypto.createHash("sha256")
+    .update([cleanTenantId(order && order.tenant_id), String(order && order.id || "")].join("\u001f"))
+    .digest("hex").slice(0, 40);
+}
+
+function tenantOrderNotificationRecipient(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 20 ? digits : "";
+}
+
+function tenantOrderNotificationText(order) {
+  const money = function (value) {
+    return Number(value || 0).toLocaleString("es-CO") + " " + (order.currency || "COP");
+  };
+  const products = (order.items || []).map(function (item) {
+    return (item.qty || 1) + " x " + (item.name || "Producto");
+  }).join("; ") || "Sin productos detallados";
+  const delivery = [order.address, order.address_line_2, order.neighborhood, order.city, order.state, order.country]
+    .filter(Boolean).join(", ") || order.location || "Por confirmar";
+  return [
+    "*Pedido confirmado*",
+    "Referencia: #" + (order.order_number || order.id),
+    "Cliente: " + (order.name || "Cliente"),
+    order.phone ? "Teléfono: " + order.phone : "",
+    order.email ? "Correo: " + order.email : "",
+    "Productos: " + products,
+    order.total == null ? "Total: por confirmar (envío pendiente)" : "Total: " + money(order.total),
+    "Entrega: " + delivery,
+    "Pago: " + (order.payment || "Por confirmar"),
+    order.payment_note ? "Nota: " + order.payment_note : "",
+    order.delivery_instructions ? "Indicaciones: " + order.delivery_instructions : "",
+    "Canal: " + (order.channel || "whatsapp")
+  ].filter(Boolean).join("\n");
+}
+
+async function notifyTenantConfirmedOrder(order) {
+  const tenantId = cleanTenantId(order && order.tenant_id);
+  const notificationId = tenantOrderNotificationId(order);
+  const attemptedAt = new Date().toISOString();
+  if (!tenantId || !order || !order.id) {
+    return { id: notificationId, status: "failed", attempted_at: attemptedAt, error: "order_scope_invalid" };
+  }
+  const onboarding = await loadClientOnboarding(false, tenantId);
+  const destination = tenantOrderNotificationRecipient(onboarding && onboarding.answers && onboarding.answers.team && onboarding.answers.team.notification_phone);
+  if (!destination) {
+    return { id: notificationId, status: "not_configured", attempted_at: attemptedAt, error: "tenant_notification_phone_missing" };
+  }
+  const recipientSuffix = destination.slice(-4);
+  const summary = tenantOrderNotificationText(order);
+  const template = await sendTemplate(destination, "tenant_order_notification", {
+    customer_name: order.name || "Cliente",
+    order_number: order.order_number || order.id,
+    total: order.total == null ? "Por confirmar" : Number(order.total).toLocaleString("es-CO") + " " + (order.currency || "COP"),
+    summary: (order.items || []).map(function (item) { return (item.qty || 1) + " x " + item.name; }).join(", ").slice(0, 900) || "Revisa el pedido en el panel."
+  }, { tenant_id: tenantId });
+  if (template && template.ok) {
+    return { id: notificationId, status: "sent", delivery_mode: "template", recipient_suffix: recipientSuffix, attempted_at: attemptedAt, delivered_at: new Date().toISOString() };
+  }
+  // A plain text message is valid inside the active WhatsApp service window.
+  // It also gives an already-active team the full operational detail immediately.
+  const sent = await sendText(destination, summary, { tenant_id: tenantId });
+  if (sent === true) {
+    return { id: notificationId, status: "sent", delivery_mode: "session_text", recipient_suffix: recipientSuffix, attempted_at: attemptedAt, delivered_at: new Date().toISOString() };
+  }
+  const templateError = template && template.error && (template.error.message || template.error.code) || "meta_delivery_failed";
+  return { id: notificationId, status: "failed", recipient_suffix: recipientSuffix, attempted_at: attemptedAt, error: String(templateError).slice(0, 300) };
+}
+
 const customerOrderService = createCustomerOrderService({
   store: SUPABASE_ENABLED ? persistentCustomerOrderStore : new InMemoryCustomerOrderStore(),
+  notifyTenantOrder: notifyTenantConfirmedOrder,
   sendTracking: async function (order, trackingNumber, trackingUrl) {
     if (!order.conversation_id) throw new CustomerOrderError("conversation_required", "Este pedido no tiene una conversación asociada.", 409);
     const message = "Tu pedido #" + order.order_number + " ya tiene guía 🚚\n\nNúmero de guía: " + trackingNumber + "\nRastrea tu envío aquí: " + trackingUrl + "\n\nAbre el enlace para consultar el avance con la transportadora.";
@@ -7294,36 +7365,15 @@ async function executeNotifyTeam(userId, stateId, tenantId, runtime, personality
   if (state.team_notified_at) {
     return { notified: true, duplicate: true, order_id: ensured.order.id, products_count: state.products.length };
   }
-  const d = state.data;
-  const totalAmount = ensured.amounts.total;
-  const currency = state.products[0].currency || "COP";
-  const formattedTotal = `${totalAmount.toLocaleString("es-CO")} ${currency}`;
-  const productsList = state.products.map((p, i) => `  ${i+1}. ${p.title} — ${p.price}\n     ${p.product_url}`).join("\n");
-  const customerChannel = channelLabel(userId);
-  const summary = [
-    "🚨 *NUEVA VENTA CERRADA* 🎉",
-    "",
-    `📦 Productos (${state.products.length}):`,
-    productsList,
-    "",
-    `🚚 Envío: ${ensured.amounts.amount.toLocaleString("es-CO")} ${currency}`,
-    `💰 *TOTAL: ${formattedTotal}*`,
-    "",
-    "👤 *Datos del cliente*",
-    "Nombre: " + d.nombre,
-    "Cédula: " + d.cedula,
-    "Dirección: " + d.direccion,
-    "Teléfono: " + d.telefono,
-    `${customerChannel}: ${channelContactLabel(userId)}`,
-    "",
-    "💳 Método de pago: " + d.metodo_pago,
-    "",
-    "Pendiente: confirmar pago y despachar pedido."
-  ].join("\n");
-  if (isRavTenantId(tenantId)) await notifyTeam(summary, userId);
   state.team_notified_at = new Date().toISOString();
-  console.log(`[Checkout ${maskedIdentifier(userId)}] Team notified — ${state.products.length} products, total ${formattedTotal}`);
-  return { notified: true, team_size: isRavTenantId(tenantId) ? NOTIFICATION_PHONES.length : 0, products_count: state.products.length, order_id: ensured.order.id };
+  console.log(`[Checkout ${maskedIdentifier(userId)}] Order awaiting payment confirmation — ${state.products.length} products`);
+  return {
+    notified: false,
+    pending_confirmation: true,
+    products_count: state.products.length,
+    order_id: ensured.order.id,
+    next_action: "El pedido quedó guardado para el equipo. No se envió una alerta de venta porque el pago aún debe confirmarse desde Pedidos. Al confirmarlo, el número operativo configurado por esta empresa recibirá la notificación por WhatsApp."
+  };
 }
 
 function customerHandoffNotificationId(tenantId, userId, reason, runtime) {

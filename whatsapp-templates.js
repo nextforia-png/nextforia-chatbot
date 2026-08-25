@@ -12,6 +12,18 @@ module.exports = [
     ]
   },
   {
+    name: "tenant_order_notification",
+    category: "UTILITY",
+    language: "es_CO",
+    useCase: "Avisar al equipo del negocio que un pedido fue confirmado.",
+    bodyVariables: [
+      { key: "customer_name", sample: "Maria" },
+      { key: "order_number", sample: "NX-1048" },
+      { key: "total", sample: "129.900 COP" },
+      { key: "summary", sample: "1 x Producto. Revisa el panel para entrega y pago." }
+    ]
+  },
+  {
     name: "order_confirmation_rav",
     category: "UTILITY",
     language: "es_CO",

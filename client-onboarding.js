@@ -192,7 +192,7 @@ const CUSTOMER_SETUP_QUESTIONS = Object.freeze([
   { id: "bot_communication_instructions", path: "operations.bot_instructions", section: "voice", order: 140, active: true, required: true, type: "textarea", label: "Instrucciones de comunicación del bot" },
   { id: "customer_service_data_consent", path: "customer_service_setup.data_consent", section: "voice", order: 150, active: true, required: true, type: "checkbox", label: "Consentimiento de tratamiento de datos" },
   { id: "appointment_business_name", path: "appointment_setup.business_name", section: "appointments_business", order: 200, active: true, required: true, type: "text", label: "¿Cómo se llama tu negocio?" },
-  { id: "appointment_business_category", path: "appointment_setup.business_category", section: "appointments_business", order: 210, active: true, required: true, type: "choice", label: "¿A qué se dedica?" },
+  { id: "appointment_business_category", path: "appointment_setup.business_category", section: "appointments_business", order: 210, active: true, required: true, type: "text", label: "¿A qué se dedica tu negocio?", placeholder: "Ej. Peluquería para mascotas, clínica veterinaria, tienda de ropa..." },
   { id: "appointment_target_customer", path: "appointment_setup.target_customer", section: "appointments_business", order: 220, active: true, required: true, type: "textarea", label: "¿A quién atiendes principalmente?" },
   { id: "appointment_business_description", path: "appointment_setup.business_description", section: "appointments_business", order: 230, active: true, required: true, type: "textarea", label: "¿Qué hace tu negocio?" },
   { id: "appointment_business_differentiator", path: "appointment_setup.business_differentiator", section: "appointments_business", order: 235, active: true, required: false, type: "textarea", label: "¿Qué hace especial tu forma de atender?" },
@@ -352,9 +352,9 @@ function normalizeCustomerSetupQuestionnaire(input, actor, now) {
       active: patch.active === false ? false : true,
       required: patch.required === false ? false : true,
       order: Number.isFinite(Number(patch.order)) ? Number(patch.order) : base.order,
-      type: normalizeQuestionType(patch.type, base.type),
+      type: base.id === "appointment_business_category" ? "text" : normalizeQuestionType(patch.type, base.type),
       label: text(patch.label, 220) || base.label,
-      placeholder: text(patch.placeholder, 500)
+      placeholder: text(patch.placeholder, 500) || base.placeholder || ""
     });
   });
   incoming.forEach(function (question) {

@@ -43,6 +43,9 @@ assert.match(html, /question\.path!=="setup_goal"&&questionApplies\(question\)/)
 assert.match(html, /grid\.querySelector\(fieldSelector\(question\.path\)\)/);
 assert.match(html, /customer_service_setup\.new_training_rule/);
 assert.match(html, /data-field="appointment_setup\.calls_enabled"/);
+assert.match(html, /<input data-field="appointment_setup\.business_category" maxlength="160" placeholder="Ej\. Peluquería para mascotas, clínica veterinaria, tienda de ropa\.\.\.">/);
+assert.doesNotMatch(html, /<select data-field="appointment_setup\.business_category">/);
+assert.doesNotMatch(html, /data-field="appointment_setup\.business_category_other"/);
 assert.match(html, /Sí, activar llamadas/);
 assert.match(html, /El número aparecerá en tu Customer Panel listo para compartir/);
 assert.match(html, /Nextfor asignará el número automáticamente/);

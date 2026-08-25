@@ -76,6 +76,22 @@ function sampleEvent(overrides) {
   assert.strictEqual(withRequirements.appointment_outcome, "no_show");
   assert.strictEqual(withRequirements.appointment_outcome_at, "2026-07-21T15:30:00.000Z");
   assert.strictEqual(withRequirements.appointment_outcome_by, "admin@tenant-a.test");
+  const depositAppointment = normalizeAppointment({
+    tenant_id: DERCO_TENANT_ID,
+    appointment_id: "deposit_001",
+    status: "requested",
+    deposit: { status: "pending", amount: 60000, currency: "USD", rule_label: "Monto fijo", blocks_confirmation: true, method: "cash" }
+  });
+  assert.deepEqual(depositAppointment.deposit, {
+    status: "pending", amount: 60000, currency: "COP", rule_label: "Monto fijo", blocks_confirmation: true, method: null
+  }, "pending deposits cannot contain a payment method");
+  const legacyVerifiedDeposit = normalizeAppointment({
+    tenant_id: DERCO_TENANT_ID,
+    appointment_id: "deposit_legacy",
+    status: "booked",
+    deposit_status: "verified"
+  });
+  assert.equal(legacyVerifiedDeposit.deposit.status, "received", "legacy verified state maps safely to human-received state");
 
   const persisted = [];
   const registry = new AppointmentRegistry({ onUpsert: async row => persisted.push(row) });

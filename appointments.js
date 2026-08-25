@@ -24,7 +24,7 @@ const APPOINTMENT_REMINDER_STATES = new Set([
   "cancelled",
   "blocked"
 ]);
-const DEPOSIT_STATUSES = new Set(["not_required", "pending", "customer_reported_paid", "verified"]);
+const DEPOSIT_STATUSES = new Set(["not_required", "pending", "customer_reported_paid", "received"]);
 
 function cleanText(value, max) {
   return String(value == null ? "" : value).trim().slice(0, max || 500);
@@ -48,7 +48,9 @@ function cleanStatus(value) {
 
 function cleanDepositStatus(value) {
   const status = cleanText(value, 40).toLowerCase().replace(/[\s-]+/g, "_");
-  return DEPOSIT_STATUSES.has(status) ? status : "not_required";
+  // `verified` was written by an older bot flow.  Keep existing records
+  // readable, but never let a bot claim that a payment was received.
+  return status === "verified" ? "received" : (DEPOSIT_STATUSES.has(status) ? status : "not_required");
 }
 
 function cleanAppointmentOutcome(value) {
@@ -74,6 +76,38 @@ function cleanReminderState(value) {
 function cleanNonNegativeInteger(value, fallback) {
   const number = Math.floor(Number(value));
   return Number.isFinite(number) && number >= 0 ? number : (fallback == null ? 0 : fallback);
+}
+
+function normalizeDeposit(input, legacyStatus) {
+  const source = input && typeof input === "object" ? input : {};
+  const status = cleanDepositStatus(source.status || legacyStatus);
+  const method = cleanText(source.method, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  const normalized = {
+    status,
+    amount: cleanNonNegativeInteger(source.amount, 0),
+    currency: "COP",
+    rule_label: cleanText(source.rule_label, 240),
+    blocks_confirmation: source.blocks_confirmation === true,
+    method: status === "received" && method ? method : null
+  };
+  const receivedAt = validIsoDate(source.received_at);
+  const receivedBy = cleanText(source.received_by, 160);
+  const note = cleanText(source.note, 1000);
+  if (receivedAt) normalized.received_at = receivedAt;
+  if (receivedBy) normalized.received_by = receivedBy;
+  if (note) normalized.note = note;
+  return normalized;
+}
+
+function normalizeDepositAudit(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-30).map(function (entry) {
+    const source = entry && typeof entry === "object" ? entry : {};
+    const at = validIsoDate(source.at || source.created_at);
+    const action = cleanText(source.action, 80);
+    if (!at || !action) return null;
+    return { at, action, actor: cleanText(source.actor, 160), method: cleanText(source.method, 40) };
+  }).filter(Boolean);
 }
 
 function normalizeReminderDelivery(input, index) {
@@ -278,9 +312,12 @@ function normalizeAppointment(input) {
   if (Object.prototype.hasOwnProperty.call(input, "booking_requirements_version")) {
     normalized.booking_requirements_version = Math.max(1, Math.min(100, Math.round(Number(input.booking_requirements_version) || 1)));
   }
-  if (Object.prototype.hasOwnProperty.call(input, "deposit_status")) {
-    normalized.deposit_status = cleanDepositStatus(input.deposit_status);
+  if (Object.prototype.hasOwnProperty.call(input, "deposit") || Object.prototype.hasOwnProperty.call(input, "deposit_status")) {
+    normalized.deposit = normalizeDeposit(input.deposit, input.deposit_status);
+    // Compatibility for older consumers. New code must read `deposit.status`.
+    normalized.deposit_status = normalized.deposit.status;
   }
+  if (Object.prototype.hasOwnProperty.call(input, "deposit_audit")) normalized.deposit_audit = normalizeDepositAudit(input.deposit_audit);
   const appointmentServiceId = cleanText(input.appointment_service_id, 80);
   if (appointmentServiceId) normalized.appointment_service_id = appointmentServiceId;
   const appointmentServiceName = cleanText(input.appointment_service_name, 160);
@@ -461,6 +498,8 @@ module.exports = {
   appointmentIdFromInput,
   appointmentCustomerPhone,
   cleanBookingFields,
+  normalizeDeposit,
+  normalizeDepositAudit,
   cleanReminderState,
   cleanReminderDeliveries,
   normalizeAppointment,

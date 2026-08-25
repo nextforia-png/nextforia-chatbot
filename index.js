@@ -433,7 +433,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v462-appointment-sidebar-state";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v463-appointment-deposits-desktop";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -7574,23 +7574,26 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
   if (selectedService && selectedService.modality !== "both" && requestedModality && requestedModality !== selectedService.modality) {
     return { ok: false, error: "appointment_modality_not_available", message: "La modalidad elegida no está disponible para este servicio." };
   }
-  const selectedPaymentMethod = selectedService && (selectedService.payment_methods || []).find(function (method) {
-    return method.active && method.id === String(input && input.deposit_payment_method_id || "");
-  });
-  if (selectedService && selectedService.deposit.required && String(input && input.deposit_status || "").toLowerCase() !== "verified") {
-    return {
-      ok: false,
-      error: "deposit_required",
-      message: "Se requiere verificar el anticipo antes de confirmar la cita.",
-      deposit: {
-        mode: selectedService.deposit.mode,
-        amount: selectedService.deposit.amount,
-        payment_methods: selectedService.payment_methods.filter(function (method) { return method.active; }).map(function (method) { return { id: method.id, label: method.label, instructions: method.instructions }; })
-      },
-      next_bot_instruction: "Informa el anticipo y los métodos configurados. No confirmes la cita hasta que el flujo autorizado verifique el pago."
-    };
-  }
-  if (selectedService && selectedService.deposit.required && !selectedPaymentMethod) return { ok: false, error: "deposit_payment_method_required", message: "Selecciona el método de pago configurado para este anticipo." };
+  // A customer message, proof or tool argument can never mark a deposit as
+  // paid. The appointment is held as pending and only an authenticated panel
+  // user can move it to received through the dedicated endpoint below.
+  const depositRequired = !!(selectedService && selectedService.deposit && selectedService.deposit.required);
+  const depositAmount = depositRequired
+    ? (selectedService.deposit.mode === "percentage"
+      ? Math.round((Number(selectedService.price_cop) || 0) * Number(selectedService.deposit.amount || 0) / 100)
+      : Number(selectedService.deposit.amount || 0))
+    : 0;
+  const appointmentDeposit = {
+    status: depositRequired ? "pending" : "not_required",
+    amount: Math.max(0, Math.round(depositAmount)),
+    currency: "COP",
+    rule_label: depositRequired
+      ? (selectedService.deposit.mode === "percentage"
+        ? String(selectedService.deposit.amount) + "% del valor de " + selectedService.name
+        : "Monto fijo del servicio · " + selectedService.name)
+      : "No aplica",
+    blocks_confirmation: depositRequired
+  };
   let knownProfile = normalizeCustomerMeta({});
   if (normalizeConversationUserId(userId)) {
     try { knownProfile = await loadCustomerMeta(userId, tenantId); }
@@ -7662,7 +7665,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     conversation_id: appointmentId,
     customer_conversation_id: customerConversationId,
     agent_id: "nextfor-appointment-chat",
-    status: "booked",
+    status: depositRequired ? "requested" : "booked",
     starts_at: startsAt.toISOString(),
     duration_minutes: durationMinutes,
     customer_name: cleanRuntimeText(input && input.customer_name, 160),
@@ -7684,7 +7687,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     appointment_readiness: selectedModality === "virtual" ? "requires_attention" : "ready",
     booking_fields: input.booking_fields,
     booking_requirements_version: 2,
-    deposit_status: selectedService && selectedService.deposit.required ? "verified" : "not_required",
+    deposit: appointmentDeposit,
     data_processing_consent: "authorized",
     transcript_summary: "Cita creada desde el bot Appointment por " + bookingChannel + ".",
     source: "nextfor_appointment_bot",
@@ -7692,7 +7695,9 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   }, false);
-  row = await applyAppointmentCalendarEffect(row, "sync", actor);
+  // A pending deposit deliberately has no calendar effect or confirmation.
+  // The authenticated owner action releases both after the money arrives.
+  if (!depositRequired) row = await applyAppointmentCalendarEffect(row, "sync", actor);
   await persistAppointment(row);
   await syncAppointmentReminderSchedule(tenantId, row);
   let notification = null;
@@ -7715,7 +7720,7 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     }
   }
   return {
-    ok: row.status === "booked",
+    ok: row.status === "booked" || row.deposit && row.deposit.status === "pending",
     appointment_id: row.appointment_id,
     status: row.status,
     starts_at: row.starts_at,
@@ -7725,6 +7730,11 @@ async function executeBookAppointment(userId, tenantId, input, actor) {
     virtual_meeting_link: row.virtual_meeting_link || "",
     notification_id: notification && notification.id || null,
     customer_confirmation_status: confirmation && confirmation.delivery && confirmation.delivery.status || confirmation && confirmation.reason || null,
+    deposit: row.deposit || null,
+    pending_deposit: row.deposit && row.deposit.status === "pending",
+    next_bot_instruction: row.deposit && row.deposit.status === "pending"
+      ? "Informa el monto y los métodos configurados. Di que el cupo queda pendiente hasta que la empresa registre el anticipo; nunca afirmes que el pago fue recibido ni confirmes la cita."
+      : undefined,
     error: row.appointment_readiness === "requires_attention" ? "virtual_link_requires_attention" : undefined
   };
 }
@@ -19721,6 +19731,74 @@ app.put("/admin/panel/appointments/:appointmentId/outcome", async (req, res) => 
   }
 });
 
+// This endpoint is deliberately the only transition to `received`.  It is
+// tenant-scoped from the signed panel session and never accepts a customer or
+// bot assertion as proof of payment.
+app.post("/admin/panel/appointments/:appointmentId/deposit/received", async (req, res) => {
+  if (!customerPanelAuthOk(req, "agent")) return res.status(401).json({ ok: false, error: "unauthorized" });
+  const auth = dashboardAuth(req);
+  const tenantId = customerTenantForAuth(auth);
+  const appointmentId = cleanRuntimeText(req.params && req.params.appointmentId, 160);
+  const method = cleanRuntimeText(req.body && req.body.method, 40).toLowerCase().replace(/[\s-]+/g, "_");
+  const note = cleanRuntimeText(req.body && req.body.note, 1000);
+  if (!appointmentId) return res.status(422).json({ ok: false, error: "appointment_id_required" });
+  if (!["nequi", "transfer", "payment_link", "cash", "other", "bank_transfer"].includes(method)) {
+    return res.status(422).json({ ok: false, error: "valid_deposit_method_required" });
+  }
+  await hydrateAppointmentsForTenant(tenantId);
+  const current = appointmentRegistry.get(tenantId, appointmentId);
+  if (!current) return res.status(404).json({ ok: false, error: "appointment_not_found" });
+  const deposit = current.deposit || { status: current.deposit_status || "not_required", amount: 0, currency: "COP" };
+  if (deposit.status === "not_required") return res.status(422).json({ ok: false, error: "appointment_has_no_deposit" });
+  // Idempotent retries are safe: they neither alter another tenant nor send a
+  // duplicate customer confirmation.
+  if (deposit.status === "received") return res.json({ ok: true, idempotent: true, appointment: current });
+  const actor = auth.name || auth.email || auth.username || "customer_panel";
+  const now = new Date().toISOString();
+  try {
+    let updated = await appointmentRegistry.upsert(Object.assign({}, current, {
+      deposit: Object.assign({}, deposit, {
+        status: "received",
+        method,
+        received_at: now,
+        received_by: actor,
+        note
+      }),
+      deposit_status: "received",
+      deposit_reminder_state: "stopped",
+      deposit_audit: (Array.isArray(current.deposit_audit) ? current.deposit_audit : []).concat([{
+        at: now,
+        action: "owner_marked_deposit_received",
+        actor,
+        method
+      }]).slice(-30),
+      updated_at: now
+    }), false);
+    // A deposit-blocked appointment is released only after this human action.
+    if (updated.deposit && updated.deposit.blocks_confirmation && updated.status === "requested") {
+      updated = await appointmentRegistry.applyPanelAction(tenantId, appointmentId, "confirm", { actor, persist: false });
+      updated = await applyAppointmentCalendarEffect(updated, "sync", actor);
+    }
+    await persistAppointment(updated);
+    await syncAppointmentReminderSchedule(tenantId, updated);
+    let confirmation = null;
+    if (updated.status === "booked" && APPOINTMENT_CONFIRMATIONS_ENABLED) {
+      confirmation = await appointmentConfirmationService.send(updated);
+      if (confirmation && confirmation.appointment) updated = confirmation.appointment;
+      await persistAppointment(updated);
+    }
+    log("info", "appointment_deposit_received_by_owner", {
+      tenant_id: cleanTenantId(tenantId),
+      appointment_id_suffix: appointmentId.slice(-12),
+      actor: cleanRuntimeText(actor, 120),
+      method
+    });
+    res.json({ ok: true, appointment: updated, customer_confirmation_status: confirmation && confirmation.delivery && confirmation.delivery.status || null });
+  } catch (error) {
+    res.status(422).json({ ok: false, error: String(error && (error.code || error.message) || "deposit_receive_failed") });
+  }
+});
+
 app.post("/admin/panel/appointments/action", async (req, res) => {
   if (!customerPanelAuthOk(req, "agent")) {
     res.status(401).json({ ok: false, error: "unauthorized" });
@@ -19759,6 +19837,10 @@ app.post("/admin/panel/appointments/action", async (req, res) => {
   const updated = [];
   try {
     for (const appointmentId of appointmentIds) {
+      const current = appointmentRegistry.get(tenantId, appointmentId);
+      if (action === "confirm" && current && current.deposit && current.deposit.blocks_confirmation && current.deposit.status !== "received") {
+        return res.status(422).json({ ok: false, error: "deposit_pending_blocks_confirmation", appointment_id: appointmentId });
+      }
       const row = await appointmentRegistry.applyPanelAction(tenantId, appointmentId, action, {
         actor,
         reason: body.reason,

@@ -444,7 +444,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v469-super-admin-ai-costs-real";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v470-super-admin-ai-costs-simple";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -811,6 +811,7 @@ const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
 const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const AI_USAGE_TOOL = "ai_usage_v1";
+const AI_USAGE_TRACKING_STARTED_AT = "2026-08-26T00:00:00.000Z";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const SUPABASE_STATE_CACHE_TTL_MS = boundedEnvInt("SUPABASE_STATE_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
 const CUSTOMER_CONFIGURATION_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_CONFIGURATION_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
@@ -5012,6 +5013,7 @@ function aiProviderOperationalStatus(runtimeKeyPresent, totals, official) {
   if (lastSuccess > 0) return "active";
   if (!runtimeKeyPresent) return "missing_key";
   if (official && official.status === "error" && official.error_code === "invalid_credentials") return "reporting_credentials_invalid";
+  if (official && official.status === "connected") return "ready";
   return "not_observed";
 }
 
@@ -5081,6 +5083,12 @@ async function buildAiCostsSnapshot(days) {
       tenantLabels[tenantId] = tenantId;
     }
   }));
+  const officialConnected = providers.filter(function (provider) {
+    return provider.official && provider.official.status === "connected";
+  });
+  const officialTotalUsd = officialConnected.reduce(function (sum, provider) {
+    return sum + (Number(provider.official.cost_usd) || 0);
+  }, 0);
   return {
     ok: true,
     generated_at: new Date().toISOString(),
@@ -5088,6 +5096,9 @@ async function buildAiCostsSnapshot(days) {
     since,
     source: stored.source,
     complete: stored.complete,
+    tracking_started_at: AI_USAGE_TRACKING_STARTED_AT,
+    official_total_usd: Math.round(officialTotalUsd * 1e6) / 1e6,
+    official_connected_count: officialConnected.length,
     note: "El costo por conversación es una estimación calculada con los tokens devueltos por cada llamada. El costo oficial total viene de cada proveedor cuando su llave administrativa está configurada.",
     balance_note: "Los proveedores administran créditos monetarios, no una bolsa fija de tokens. El saldo recargable se consulta y compra únicamente en sus portales oficiales.",
     usage,

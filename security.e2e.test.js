@@ -147,7 +147,7 @@ function waitForServer(child, port) {
     const aiCostsBody = await response.json();
     assert.strictEqual(aiCostsBody.ok, true);
     assert.strictEqual(aiCostsBody.period_days, 7);
-    assert.strictEqual(aiCostsBody.tracking_started_at, "2026-08-26T00:00:00.000Z");
+    assert.strictEqual(aiCostsBody.tracking_started_at, "2026-08-26T18:47:00.000Z");
     assert.strictEqual(typeof aiCostsBody.official_total_usd, "number");
     assert.strictEqual(typeof aiCostsBody.official_connected_count, "number");
     assert(!JSON.stringify(aiCostsBody).includes("e2e-not-used"), "AI cost response must never expose provider keys");

@@ -444,7 +444,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v470-super-admin-ai-costs-simple";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v471-super-admin-ai-costs-simple";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -811,7 +811,7 @@ const LEGACY_CLIENT_VISIBILITY_TOOL = "super_admin_legacy_client_visibility_v1";
 const LEGACY_CLIENT_VISIBILITY_RECORD_ID = "super-admin:legacy-client-visibility";
 const SUPER_ADMIN_SETUP_REVIEW_TOOL = "super_admin_setup_review_v1";
 const AI_USAGE_TOOL = "ai_usage_v1";
-const AI_USAGE_TRACKING_STARTED_AT = "2026-08-26T00:00:00.000Z";
+const AI_USAGE_TRACKING_STARTED_AT = "2026-08-26T18:47:00.000Z";
 const RETARGETING_EVENT_TOOL = "retargeting_event_v1";
 const SUPABASE_STATE_CACHE_TTL_MS = boundedEnvInt("SUPABASE_STATE_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);
 const CUSTOMER_CONFIGURATION_CACHE_TTL_MS = boundedEnvInt("CUSTOMER_CONFIGURATION_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 30 * 60 * 1000);

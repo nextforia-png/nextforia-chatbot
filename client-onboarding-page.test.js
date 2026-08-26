@@ -50,8 +50,13 @@ assert.doesNotMatch(html, /data-field="appointment_setup\.business_category_othe
 assert.doesNotMatch(html, /data-field="voice\.formality"/);
 assert.match(html, /data-customer-service-only/);
 assert.match(html, /data-both-redundant/);
+assert.match(html, /data-shared-consent-text/);
 assert.match(html, /<input data-field="operations\.services_products" type="hidden">/);
 assert.match(html, /function syncSharedSetupAnswers\(answers\)/);
+assert.match(html, /appointment_setup\.forbidden_topics/);
+assert.match(html, /appointment_setup\.business_hours/);
+assert.match(html, /appointment_setup\.faqs/);
+assert.match(html, /appointment_setup\.data_consent/);
 assert.match(html, /block\.hidden=type==="service"\?[^:]+:goal!=="appointments"/);
 assert.match(html, /Sí, activar llamadas/);
 assert.match(html, /El número aparecerá en tu Customer Panel listo para compartir/);

@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const vm = require("vm");
 const renderClientOnboarding = require("./client-onboarding-page");
 
 let html = "";
@@ -38,8 +39,8 @@ renderClientOnboarding(res, {
 
 assert.match(html, /function renderDynamicQuestions\(\)/);
 assert.match(html, /createQuestionField\(question\)/);
-assert.match(html, /question\.path!=="setup_goal"&&questionApplies\(question\)/);
-assert.match(html, /grid\.querySelector\(fieldSelector\(question\.path\)\)/);
+assert.match(html, /question\.path!=="setup_goal"&&!isSharedBusinessHoursPath\(question\.path\)&&questionApplies\(question\)/);
+assert.match(html, /document\.querySelector\(fieldSelector\(question\.path\)\)/);
 assert.match(html, /customer_service_setup\.new_training_rule/);
 assert.match(html, /data-field="appointment_setup\.calls_enabled"/);
 assert.match(html, /Sí, activar llamadas/);
@@ -55,6 +56,38 @@ assert.match(html, /class="setupPage goalStepMode hidden" id="setupPage"/);
 assert.match(html, /repeat\(auto-fit,minmax\(min\(100%,220px\),1fr\)\)/);
 assert.match(html, /@media\(max-width:1020px\) and \(min-width:861px\)/);
 assert.match(html, /startSetup"\)\.onclick=function\(\)\{[^}]*render\(\)/);
+assert.match(html, /Horario de atención/);
+assert.match(html, /\+ Agregar horario distinto/);
+assert.match(html, /data-field="operations\.business_hours_schedule"/);
+assert.match(html, /function syncBusinessHours\(answers\)/);
+assert.match(html, /scheduleGroupsValid\(\)/);
+assert.doesNotMatch(html, /Horario de atención humana/);
+assert.doesNotMatch(html, /Horario disponible para apoyo humano/);
+assert.doesNotMatch(html, /¿Cuál es el horario general de atención de tu negocio\?/);
+assert.doesNotMatch(html, /¿Qué días y horarios puede ofrecer Nextfor\?/);
+assert.strictEqual((html.match(/data-field="appointment_setup\.business_category"/g) || []).length, 1, "Appointment setup fields render once, even with the combined-bots journey");
+
+const scheduleScriptStart = html.indexOf("function setPath");
+const scheduleScriptEnd = html.indexOf("function esc", scheduleScriptStart);
+assert.ok(scheduleScriptStart >= 0 && scheduleScriptEnd > scheduleScriptStart, "The grouped schedule helpers are included in the setup page");
+const scheduleContext = {
+  document: { querySelectorAll: function () { return []; } }
+};
+vm.runInNewContext(html.slice(scheduleScriptStart, scheduleScriptEnd), scheduleContext);
+scheduleContext.scheduleGroups = [
+  { days: ["lunes", "martes", "miercoles", "jueves", "viernes"], closed: false, start: "08:00", end: "18:00" },
+  { days: ["sabado"], closed: false, start: "08:00", end: "14:00" },
+  { days: ["domingo"], closed: true, start: "", end: "" }
+];
+scheduleContext.scheduleTouched = true;
+const sharedScheduleAnswers = {};
+scheduleContext.syncBusinessHours(sharedScheduleAnswers);
+assert.match(sharedScheduleAnswers.operations.business_hours, /Lunes a viernes: 8:00 AM — 6:00 PM/);
+assert.strictEqual(sharedScheduleAnswers.operations.support_hours, sharedScheduleAnswers.operations.business_hours);
+assert.strictEqual(sharedScheduleAnswers.appointment_setup.human_support_hours, sharedScheduleAnswers.operations.business_hours);
+assert.strictEqual(sharedScheduleAnswers.appointment_setup.business_hours, sharedScheduleAnswers.operations.business_hours);
+assert.strictEqual(sharedScheduleAnswers.appointment_setup.availability_rules, sharedScheduleAnswers.operations.business_hours);
+assert.match(sharedScheduleAnswers.operations.business_hours_schedule, /"sabado"/);
 
 let partialCatalogHtml = "";
 renderClientOnboarding({

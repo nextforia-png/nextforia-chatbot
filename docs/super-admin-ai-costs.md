@@ -51,6 +51,8 @@ Los eventos se escriben cifrados en `conversation_logs` como registros internos 
 
 El Cost Report de Anthropic entrega importes en la unidad monetaria mínima. Para USD, el backend convierte los centavos reportados por Anthropic a dólares antes de mostrarlos en Super Admin.
 
+La vista empieza por una conclusión en lenguaje simple: gasto oficial total, proveedor con mayor participación y disponibilidad operativa. El detalle por cliente, bot y conversación se presenta por separado y deja claro que su cobertura comenzó el 26 de agosto de 2026.
+
 No requiere migración. Los eventos anteriores al despliegue no pueden reconstruirse por conversación; el total oficial sí puede cubrir el período histórico informado por cada proveedor.
 
 ## Despliegue y rollback

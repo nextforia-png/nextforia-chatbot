@@ -50,7 +50,13 @@ const normalized = normalizeOnboarding({
     shopify_pairing_expires_at: "2026-07-28T18:00:00.000Z",
     shopify_pairing_bot_id: "atencion-cliente"
   },
-  confirmations: { owns_information: true }
+  confirmations: { owns_information: true },
+  operations: {
+    business_hours_schedule: JSON.stringify([
+      { days: ["lunes", "martes", "miercoles", "jueves", "viernes"], closed: false, start: "08:00", end: "18:00" },
+      { days: ["sabado"], closed: true, start: "", end: "" }
+    ])
+  }
 });
 assert.strictEqual(normalized.business.brand_name, "Tienda Piloto");
 assert.strictEqual(normalized.business.contact_email, "admin@example.com");
@@ -64,6 +70,13 @@ assert.strictEqual(normalized.commerce.orders_required, false);
 assert.strictEqual(normalized.commerce.shopify_pairing_expires_at, "2026-07-28T18:00:00.000Z");
 assert.strictEqual(normalized.commerce.shopify_pairing_bot_id, "atencion-cliente");
 assert.strictEqual(normalized.confirmations.owns_information, true);
+assert.strictEqual(
+  normalized.operations.business_hours_schedule,
+  JSON.stringify([
+    { days: ["lunes", "martes", "miercoles", "jueves", "viernes"], closed: false, start: "08:00", end: "18:00" },
+    { days: ["sabado"], closed: true, start: "", end: "" }
+  ])
+);
 
 const normalizedAppointmentCalls = normalizeOnboarding({
   setup_goal: "appointments",

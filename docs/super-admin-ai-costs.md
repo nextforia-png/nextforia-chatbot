@@ -49,6 +49,8 @@ Portales oficiales:
 
 Los eventos se escriben cifrados en `conversation_logs` como registros internos `ai_usage_v1`, reutilizando el almacenamiento multi-tenant existente. Esos registros están excluidos de las bandejas de conversación del cliente y se agrupan por `tenant_id`. Solo una sesión `super_admin` puede consultar `GET /admin/ai-costs`.
 
+El Cost Report de Anthropic entrega importes en la unidad monetaria mínima. Para USD, el backend convierte los centavos reportados por Anthropic a dólares antes de mostrarlos en Super Admin.
+
 No requiere migración. Los eventos anteriores al despliegue no pueden reconstruirse por conversación; el total oficial sí puede cubrir el período histórico informado por cada proveedor.
 
 ## Despliegue y rollback

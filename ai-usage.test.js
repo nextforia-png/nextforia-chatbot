@@ -79,7 +79,8 @@ assert.strictEqual(aggregated.bots.length, 1);
 assert.strictEqual(aggregated.conversations.length, 1);
 assert.strictEqual(aggregated.drivers.length, 2);
 
-assert.strictEqual(sumAnthropicCostReport({ data: [{ results: [{ amount: "1.25", currency: "USD" }, { amount: "0.75", currency: "USD" }] }] }), 2);
+assert.strictEqual(sumAnthropicCostReport({ data: [{ results: [{ amount: "125", currency: "USD" }, { amount: "75", currency: "USD" }] }] }), 2);
+assert.strictEqual(sumAnthropicCostReport({ data: [{ results: [{ amount: "382.5", currency: "USD" }] }] }), 3.825);
 assert.strictEqual(sumOpenAiCostReport({ data: [{ results: [{ amount: { value: 1.1, currency: "usd" } }, { amount: { value: 0.2, currency: "usd" } }] }] }), 1.3);
 
 console.log("ai-usage.test.js ok");

@@ -245,13 +245,15 @@ function aggregateAiUsageEvents(events) {
 }
 
 function sumAnthropicCostReport(payload) {
-  let total = 0;
+  let totalInCents = 0;
   (payload && Array.isArray(payload.data) ? payload.data : []).forEach(function (bucket) {
     (Array.isArray(bucket && bucket.results) ? bucket.results : []).forEach(function (row) {
-      if (!row.currency || String(row.currency).toUpperCase() === "USD") total += finiteNonNegative(row.amount);
+      // Anthropic reports cost amounts as decimal strings in the currency's
+      // lowest unit. USD values are therefore cents, not dollars.
+      if (!row.currency || String(row.currency).toUpperCase() === "USD") totalInCents += finiteNonNegative(row.amount);
     });
   });
-  return Math.round(total * 1e6) / 1e6;
+  return Math.round((totalInCents / 100) * 1e6) / 1e6;
 }
 
 function sumOpenAiCostReport(payload) {

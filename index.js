@@ -1034,7 +1034,6 @@ const serviceAreaChecks = new Map();
 const processedMetaEventIds = new Set();
 const processedWhatsAppStatusEventIds = new Set();
 const recentManagedInstagramOutbound = new Map();
-const inboundMessageWindows = new Map();
 const adminMessageDeliveryRequests = new Map();
 const ADMIN_MESSAGE_IDEMPOTENCY_TTL_MS = 10 * 60 * 1000;
 const instagramRuntimeState = {
@@ -8293,27 +8292,6 @@ async function restoreConversationHistoryFromPersistence(userId, tenantId, state
 
 // ─── MAIN CONVERSATION LOOP ──────────────────────────────────────────────────
 
-function acceptInboundMessageRate(userId, now) {
-  now = now || Date.now();
-  const hourAgo = now - 60 * 60 * 1000;
-  const minuteAgo = now - 60 * 1000;
-  const timestamps = (inboundMessageWindows.get(userId) || []).filter(function (timestamp) { return timestamp > hourAgo; });
-  const lastMinute = timestamps.filter(function (timestamp) { return timestamp > minuteAgo; }).length;
-  if (timestamps.length >= 100 || lastMinute >= 20) {
-    inboundMessageWindows.set(userId, timestamps);
-    return false;
-  }
-  timestamps.push(now);
-  inboundMessageWindows.set(userId, timestamps);
-  if (inboundMessageWindows.size > 10000) {
-    for (const [key, values] of inboundMessageWindows) {
-      if (!values.length || values[values.length - 1] <= hourAgo) inboundMessageWindows.delete(key);
-      if (inboundMessageWindows.size <= 10000) break;
-    }
-  }
-  return true;
-}
-
 async function handleConversation(userId, userMessage, conversationMeta) {
   return conversationTurnContext.run(function () {
     return handleConversationInTurnContext(userId, userMessage, conversationMeta);
@@ -8374,11 +8352,6 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
     const rejection = "Tu mensaje es demasiado largo para procesarlo con seguridad. Envíalo en partes más cortas, por favor.";
     const sent = await sendBotReply(rejection);
     await recordTurn(userId, userMessage, rejection, sent ? "ok" : "error", conversationRuntime);
-    return;
-  }
-  if (!acceptInboundMessageRate(stateKey)) {
-    log("warn", "inbound_message_rejected", { user: maskedIdentifier(userId), reason: "rate_limit" });
-    await recordTurn(userId, userMessage, "", "rate_limited", conversationRuntime);
     return;
   }
   trackIncomingMessage(userId);
@@ -8639,7 +8612,12 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       channel: conversationRuntime.channel,
       reason: runtimePolicy.block_reason
     });
-    await recordTurn(userId, userMessage, "", "blocked", conversationRuntime);
+    const unavailableReply = "En este momento necesito que una persona del equipo revise la configuración antes de responderte con seguridad. Ya registré tu mensaje y el equipo continuará por este chat.";
+    await queueCustomerHandoffNotification(tenantId, userId, "tenant_configuration_required", {
+      source_event_id: conversationRuntime.sourceEventId || conversationRuntime.source_event_id
+    });
+    const unavailableSent = await sendBotReply(unavailableReply);
+    await recordTurn(userId, userMessage, unavailableReply, unavailableSent ? "blocked_replied" : "error", conversationRuntime);
     return;
   }
   const conversationSystemPrompt = "Eres el asistente oficial de este cliente de Nextfor IA. Sigue únicamente la configuración del tenant incluida abajo. Protege datos personales, no inventes información y escala si no puedes operar con seguridad.";
@@ -9081,11 +9059,11 @@ async function handleConversationInTurnContext(userId, userMessage, conversation
       if (shouldPresentAppointmentServicesRules) {
         reply = ensureAppointmentServicesRulesPresentation(reply, appointmentServicesRulesOverview);
       }
-      history.push({ role: "assistant", content: reply || "(sin texto)" });
+      const finalReply = reply || "No logré generar una respuesta útil en este intento. Por favor, envíame nuevamente tu solicitud y continuaré ayudándote.";
+      history.push({ role: "assistant", content: finalReply });
       conversations.set(stateKey, history.slice(-MAX_CONVERSATION_HISTORY));
-      const replySent = await sendBotReply(reply);
-      if (reply) await recordTurn(userId, userMessage, reply, replySent ? "ok" : "error", conversationRuntime);
-      else await recordTurn(userId, userMessage, "", "fallback", conversationRuntime);
+      const replySent = await sendBotReply(finalReply);
+      await recordTurn(userId, userMessage, finalReply, replySent ? (reply ? "ok" : "fallback_replied") : "error", conversationRuntime);
       if (reply && replySent && adaptiveBudget.reasons.includes("strong_purchase_intent")) {
         await createRetargetingJobForCustomer(tenantId, userId, "high_intent", (conversationMeta.source_event_id || "conversation:" + Date.now()) + ":high-intent", {
           source_at: conversationMeta.source_at || new Date().toISOString(),

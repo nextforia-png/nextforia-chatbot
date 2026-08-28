@@ -5,6 +5,7 @@ const { EventEmitter } = require("events");
 const path = require("path");
 const webPush = require("web-push");
 const { ElevenLabsClient } = require("@elevenlabs/elevenlabs-js");
+const { evaluateHumanHandoffState } = require("./human-handoff-state");
 const {
   createRateLimiter,
   decryptStoredText,
@@ -444,7 +445,7 @@ app.get("/admin/terms", (req, res) => res.type("html").send(renderTermsOfService
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────────
 const PRODUCT_NAME = "NextforIA Chatbot";
-const BOT_VERSION = "v471-super-admin-ai-costs-simple";  // bump cada release; usado por endpoints /admin/*
+const BOT_VERSION = "v472-handoff-expiry-recovery";  // bump cada release; usado por endpoints /admin/*
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "";
 const DASHBOARD_KEY = process.env.DASHBOARD_KEY || "";
 const DASHBOARD_SESSION_COOKIE = "nextforia_dashboard_session";
@@ -4846,26 +4847,22 @@ async function recordHumanPausedInbound(userId, message, runtime) {
 async function humanControlActiveFor(userId, tenantId) {
   const cleanTenant = cleanTenantId(tenantId) || DEFAULT_TENANT_ID;
   const instagramConversation = conversationChannel(userId) === "instagram";
-  if (hasHumanHandoff(userId, cleanTenant) && !instagramConversation) return true;
+  const cachedActive = hasHumanHandoff(userId, cleanTenant);
   if (instagramConversation) deleteHumanHandoff(userId, cleanTenant);
-  const rows = await supabaseFetchUserRecent(userId, 20, cleanTenant);
-  if (!rows || !rows.length) return false;
-  for (const row of rows) {
-    const tools = row.tools || [];
-    if (tools.includes("admin_release") || tools.includes("admin_resolve")) return false;
-    const adminHandoff = tools.includes("admin_takeover") || tools.includes("admin_send_message");
-    const botHandoff = tools.includes("request_human_handoff");
-    if (adminHandoff || botHandoff) {
-      const activatedAt = Date.parse(row.ts || row.created_at || "");
-      const ttl = adminHandoff ? ADMIN_HANDOFF_TTL_MS : BOT_HANDOFF_TTL_MS;
-      if (activatedAt && Date.now() - activatedAt > ttl) {
-        recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false, { tenant_id: cleanTenant });
-        if (conversationChannel(userId) === "instagram") instagramRuntimeState.last_handoff_auto_release_at = new Date().toISOString();
-        return false;
-      }
-      addHumanHandoff(userId, cleanTenant);
-      return true;
-    }
+  const rows = await supabaseFetchUserRecent(userId, 100, cleanTenant);
+  if (!rows) return cachedActive;
+  const state = evaluateHumanHandoffState(rows, {
+    botTtlMs: BOT_HANDOFF_TTL_MS,
+    adminTtlMs: ADMIN_HANDOFF_TTL_MS
+  });
+  if (state.active) {
+    addHumanHandoff(userId, cleanTenant);
+    return true;
+  }
+  deleteHumanHandoff(userId, cleanTenant);
+  if (state.expired) {
+    await recordAdminEvent(userId, "admin_release", "[Sistema] Handoff expirado automáticamente.", "ok", false, { tenant_id: cleanTenant });
+    if (instagramConversation) instagramRuntimeState.last_handoff_auto_release_at = new Date().toISOString();
   }
   return false;
 }

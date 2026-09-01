@@ -243,6 +243,7 @@ Activación y rollback de Staging: [`docs/staging-customer-access-v2.md`](docs/s
 ## 🧭 Operación y próximos pasos
 
 - Flujo de trabajo colaborativo: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Sistema compartido de agentes: [`AGENTS.md`](AGENTS.md) y [`.agents/README.md`](.agents/README.md)
 - Plantillas WhatsApp iniciales: [`docs/whatsapp-templates.md`](docs/whatsapp-templates.md)
 - Playbook comercial para asesoras: [`docs/commercial-playbook.md`](docs/commercial-playbook.md)
 - Onboarding comercial para futuros clientes: [`docs/commercial-onboarding.md`](docs/commercial-onboarding.md)

@@ -1,6 +1,6 @@
 # Colaboración en NextforIA
 
-Este repositorio despliega producción automáticamente cuando cambia `main`. Por esa razón, todo cambio debe llegar mediante una rama corta y un pull request (PR). Nadie —persona o agente— trabaja directamente sobre `main`.
+Este repositorio despliega producción automáticamente cuando cambia `main`. Por esa razón, todo cambio debe llegar mediante una rama corta y un pull request (PR). Nadie —persona o agente— trabaja directamente sobre `main`. Todos los agentes cumplen [`AGENTS.md`](AGENTS.md) y el registro compartido [`.agents/registry.json`](.agents/registry.json).
 
 ## Regla de oro
 
@@ -14,8 +14,8 @@ Una orden de trabajo equivale a un issue, una persona o agente responsable, una 
    git fetch origin --prune
    ```
 
-2. Revisa los issues y PR abiertos para confirmar que nadie trabaja ya en el mismo módulo.
-3. Crea o toma un issue y deja allí:
+2. Revisa los issues, PR y ramas abiertas para confirmar que nadie trabaja ya en el mismo módulo.
+3. Crea o toma un issue. Mientras Issues esté deshabilitado, abre un PR en borrador y usa [`.agents/TASK_TEMPLATE.md`](.agents/TASK_TEMPLATE.md). Deja allí:
    - responsable;
    - objetivo y criterios de aceptación;
    - archivos o módulos previstos;
@@ -34,6 +34,10 @@ Una orden de trabajo equivale a un issue, una persona o agente responsable, una 
 - `damian/<issue>-<descripcion>` para trabajo de Damián.
 - `santiago/<issue>-<descripcion>` para trabajo de Santiago.
 - `codex/<issue>-<descripcion>` para tareas ejecutadas por Codex.
+- `claude/<issue>-<descripcion>` para tareas ejecutadas por Claude.
+- `design/<issue>-<descripcion>` para Panel Design.
+- `customer-panel/<issue>-<descripcion>` para Customer Panel.
+- `qa/<issue>-<descripcion>` para correcciones de revisión independiente.
 - `fix/<issue>-<descripcion>` únicamente para correcciones urgentes coordinadas.
 
 Usa minúsculas, guiones y un solo objetivo por rama. No reutilices ramas que ya fueron integradas.
@@ -41,7 +45,7 @@ Usa minúsculas, guiones y un solo objetivo por rama. No reutilices ramas que ya
 ## Trabajo paralelo con personas y agentes
 
 - Cada agente usa una rama y, de ser posible, un worktree propios.
-- El issue es la fuente de verdad de la orden; los mensajes de chat no sustituyen el alcance escrito.
+- El issue o, mientras esté deshabilitado, el PR en borrador es la fuente de verdad; los mensajes de chat no sustituyen el alcance escrito.
 - Un responsable puede delegar subtareas, pero cada subagente debe recibir archivos o módulos que no se solapen con los de otro.
 - Si dos tareas necesitan el mismo archivo central (`index.js`, `package.json`, configuración, esquemas o migraciones), se define primero el orden de integración. La segunda rama se actualiza después de integrar la primera.
 - Las migraciones y los cambios de producción se serializan: solo puede existir un responsable activo para cada entorno.

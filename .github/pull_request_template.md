@@ -2,6 +2,8 @@
 
 - Issue: Closes #
 - Responsable:
+- Agente: `codex | claude | panel-design | customer-panel | qa-review`
+- Contrato: issue o `.agents/TASK_TEMPLATE.md` incluido en este PR
 - Rama base: `main`
 
 ## Objetivo y alcance
@@ -13,6 +15,7 @@ Describe qué cambia, qué criterio de aceptación cumple y qué queda expresame
 - [ ] Revisé issues y PR abiertos; no existe otra tarea sobre el mismo alcance.
 - [ ] Identifiqué los archivos o módulos compartidos con otras ramas activas.
 - [ ] La rama pertenece a una sola persona o agente responsable.
+- [ ] El agente siguió `AGENTS.md` y el prompt de rol registrado.
 - [ ] Si depende de otro PR, indiqué el orden de integración.
 
 ## Validación

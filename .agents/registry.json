@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "authority": "AGENTS.md",
+  "participants": [
+    {
+      "github": "nextforia-png",
+      "repository_role": "owner",
+      "may_assign_agents": true
+    },
+    {
+      "github": "damianscorrealesi",
+      "repository_role": "collaborator",
+      "may_assign_agents": true
+    }
+  ],
+  "development_agents": [
+    {
+      "id": "codex",
+      "display_name": "Codex Implementation",
+      "executor": "Codex",
+      "branch_prefix": "codex/",
+      "prompt": ".agents/prompts/codex.md",
+      "purposes": ["implementation", "modification", "correction", "tests", "documentation"]
+    },
+    {
+      "id": "claude",
+      "display_name": "Claude Implementation",
+      "executor": "Claude",
+      "branch_prefix": "claude/",
+      "prompt": ".agents/prompts/claude.md",
+      "purposes": ["implementation", "correction", "second_pass", "documentation"]
+    },
+    {
+      "id": "panel-design",
+      "display_name": "Panel Design",
+      "executor": "model_agnostic",
+      "branch_prefix": "design/",
+      "prompt": ".agents/prompts/panel-design.md",
+      "purposes": ["ui", "ux", "responsive_design", "accessibility"]
+    },
+    {
+      "id": "customer-panel",
+      "display_name": "Customer Panel Agent",
+      "executor": "model_agnostic",
+      "branch_prefix": "customer-panel/",
+      "prompt": ".agents/prompts/customer-panel.md",
+      "purposes": ["customer_panel", "tenant_experience", "panel_corrections"]
+    },
+    {
+      "id": "qa-review",
+      "display_name": "Independent QA and Security Review",
+      "executor": "model_agnostic",
+      "branch_prefix": "qa/",
+      "prompt": ".agents/prompts/qa-review.md",
+      "purposes": ["review", "test", "security", "regression_analysis"]
+    }
+  ],
+  "automation": [
+    {
+      "id": "dependabot",
+      "branch_prefix": "dependabot/",
+      "configuration": ".github/dependabot.yml",
+      "may_merge": false
+    }
+  ],
+  "runtime_agents": [
+    {
+      "id": "atlas-coordinator",
+      "implementation": "atlas-coordinator.js",
+      "kind": "customer_runtime_router"
+    },
+    {
+      "id": "multimodal-input",
+      "implementation": "multimodal-agent.js",
+      "kind": "customer_runtime_capability"
+    },
+    {
+      "id": "bot-ops",
+      "implementation": "bot-ops.js",
+      "kind": "operational_observer"
+    }
+  ],
+  "human_only_actions": [
+    "merge_to_main",
+    "production_deploy",
+    "production_rollback",
+    "production_migration",
+    "secret_rotation",
+    "real_customer_data_change"
+  ]
+}

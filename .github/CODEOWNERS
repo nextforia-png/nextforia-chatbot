@@ -1,0 +1,9 @@
+# Los dos socios revisan cambios que pueden llegar a producción.
+* @nextforia-png @damianscorrealesi
+
+# Cambios operativos y de seguridad requieren especial atención.
+/.github/ @nextforia-png @damianscorrealesi
+/docs/migrations/ @nextforia-png @damianscorrealesi
+/SECURITY.md @nextforia-png @damianscorrealesi
+/package.json @nextforia-png @damianscorrealesi
+/pnpm-lock.yaml @nextforia-png @damianscorrealesi
